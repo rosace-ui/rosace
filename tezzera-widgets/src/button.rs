@@ -3,6 +3,7 @@
 use tezzera_core::{element::Element, types::{Point, Rect, Size}};
 use tezzera_render::canvas::{Color, SkiaCanvas};
 use tezzera_render::FontCache;
+use tezzera_theme::ThemeData;
 
 /// Visual style variant for a [`Button`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -138,6 +139,72 @@ impl Button {
         }
     }
 
+    // ── Theme-aware color helpers ─────────────────────────────────────────────
+
+    /// Returns the background color for the current variant / disabled state,
+    /// reading values from the provided [`ThemeData`].
+    pub fn bg_color_themed(&self, theme: &ThemeData) -> Color {
+        if self.disabled {
+            return crate::theme_color_to_render(theme.colors.on_surface.with_alpha(0.38));
+        }
+        match self.variant {
+            ButtonVariant::Primary   => crate::theme_color_to_render(theme.colors.primary),
+            ButtonVariant::Secondary => crate::theme_color_to_render(theme.colors.secondary),
+            ButtonVariant::Danger    => crate::theme_color_to_render(theme.colors.error),
+            ButtonVariant::Ghost     => Color::TRANSPARENT,
+        }
+    }
+
+    /// Returns the label text color for the current variant / disabled state,
+    /// reading values from the provided [`ThemeData`].
+    pub fn text_color_themed(&self, theme: &ThemeData) -> Color {
+        if self.disabled {
+            return crate::theme_color_to_render(theme.colors.on_surface.with_alpha(0.38));
+        }
+        match self.variant {
+            ButtonVariant::Primary   => crate::theme_color_to_render(theme.colors.on_primary),
+            ButtonVariant::Secondary => crate::theme_color_to_render(theme.colors.on_secondary),
+            ButtonVariant::Danger    => crate::theme_color_to_render(theme.colors.on_error),
+            ButtonVariant::Ghost     => crate::theme_color_to_render(theme.colors.primary),
+        }
+    }
+
+    /// Renders the button using the supplied theme (or the built-in light theme
+    /// when `theme` is `None`). Adds a themed border for [`ButtonVariant::Ghost`].
+    pub fn render_themed(
+        &self,
+        canvas: &mut SkiaCanvas,
+        font: &FontCache,
+        x: f32,
+        y: f32,
+        theme: Option<&ThemeData>,
+    ) {
+        let default = tezzera_theme::built_in::light_theme();
+        let theme = theme.unwrap_or(&default);
+
+        let rect = Rect {
+            origin: Point { x, y },
+            size: Size { width: self.width, height: self.height },
+        };
+        canvas.fill_rect(rect, self.bg_color_themed(theme));
+
+        if self.variant == ButtonVariant::Ghost {
+            canvas.stroke_rect(rect, crate::theme_color_to_render(theme.colors.primary), 1.5);
+        }
+
+        let fs = self.label_font_size();
+        let lw = self.label.len() as f32 * fs * 0.55;
+        let tx = x + (self.width - lw) / 2.0;
+        let ty = y + (self.height - fs) / 2.0;
+        canvas.draw_text(
+            &self.label,
+            Point { x: tx, y: ty },
+            self.text_color_themed(theme),
+            font,
+            fs,
+        );
+    }
+
     // ── Font size (internal) ──────────────────────────────────────────────────
 
     fn label_font_size(&self) -> f32 {
@@ -249,5 +316,44 @@ mod tests {
             .disabled(true);
         btn.fire_press();
         assert!(!fired.load(Ordering::SeqCst));
+    }
+
+    // ── Theme-aware tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn button_primary_bg_uses_theme_primary_color() {
+        let theme = tezzera_theme::built_in::light_theme();
+        let b = Button::new("OK").variant(ButtonVariant::Primary);
+        let c = b.bg_color_themed(&theme);
+        // light theme primary is #6750A4 → r=103, g=80, b=164
+        let expected = tezzera_theme::Color::from_hex(0x6750A4);
+        assert_eq!(c.r, (expected.r * 255.0) as u8);
+        assert_eq!(c.g, (expected.g * 255.0) as u8);
+        assert_eq!(c.b, (expected.b * 255.0) as u8);
+        assert_eq!(c.a, 255);
+    }
+
+    #[test]
+    fn button_danger_bg_uses_theme_error_color() {
+        let theme = tezzera_theme::built_in::light_theme();
+        let b = Button::new("Delete").variant(ButtonVariant::Danger);
+        let c = b.bg_color_themed(&theme);
+        // light theme error is #B3261E → r=179, g=38, b=30
+        let expected = tezzera_theme::Color::from_hex(0xB3261E);
+        assert_eq!(c.r, (expected.r * 255.0) as u8);
+        assert_eq!(c.g, (expected.g * 255.0) as u8);
+        assert_eq!(c.b, (expected.b * 255.0) as u8);
+    }
+
+    #[test]
+    fn button_disabled_uses_muted_color() {
+        let theme = tezzera_theme::built_in::light_theme();
+        let b = Button::new("Disabled").disabled(true);
+        let bg = b.bg_color_themed(&theme);
+        let txt = b.text_color_themed(&theme);
+        // Both disabled colors carry on_surface with 0.38 alpha → alpha ≈ 97
+        let expected_alpha = (0.38 * 255.0) as u8;
+        assert_eq!(bg.a, expected_alpha);
+        assert_eq!(txt.a, expected_alpha);
     }
 }

@@ -3,14 +3,22 @@
 use tezzera_core::{element::Element, types::{Point, Size}};
 use tezzera_render::canvas::{Color, SkiaCanvas};
 use tezzera_render::FontCache;
+use tezzera_theme::ThemeData;
 
 /// A widget that displays a string of text.
 ///
 /// Supports both the Phase 1 placeholder rendering (`paint`) and the Phase 2
 /// real glyph rendering (`render` with a [`FontCache`]).
+///
+/// Theme-aware rendering is available via [`Text::render_themed`]. When
+/// `color_opt` is set it takes precedence; otherwise the theme's `on_surface`
+/// token is used.
 pub struct Text {
     pub content: String,
     pub color: Color,
+    /// Explicit color override used by [`Text::render_themed`].
+    /// When `None`, `render_themed` falls back to the theme's `on_surface` color.
+    pub color_opt: Option<Color>,
     /// Font size in pixels (used by [`Text::render`]).
     pub size: f32,
     /// Optional maximum width for wrapping or clamping.
@@ -23,14 +31,23 @@ impl Text {
         Self {
             content: content.into(),
             color: Color::rgb(240, 242, 255),
+            color_opt: None,
             size: 14.0,
             max_width: None,
         }
     }
 
-    /// Sets the color used to render the text.
+    /// Sets the color used to render the text (legacy / Phase 1 `paint` path).
     pub fn color(mut self, c: Color) -> Self {
         self.color = c;
+        self
+    }
+
+    /// Sets an explicit color override used by [`Text::render_themed`].
+    ///
+    /// When set, this color takes precedence over the theme's `on_surface` token.
+    pub fn color_opt(mut self, c: Color) -> Self {
+        self.color_opt = Some(c);
         self
     }
 
@@ -71,6 +88,28 @@ impl Text {
     pub fn render(&self, canvas: &mut SkiaCanvas, font: &FontCache, x: f32, y: f32) {
         canvas.draw_text(&self.content, Point { x, y }, self.color, font, self.size);
     }
+
+    /// Renders the text using the supplied theme (or the built-in light theme
+    /// when `theme` is `None`).
+    ///
+    /// Color resolution order:
+    /// 1. `color_opt` if explicitly set via [`Text::color_opt`].
+    /// 2. The theme's `on_surface` semantic color.
+    pub fn render_themed(
+        &self,
+        canvas: &mut SkiaCanvas,
+        font: &FontCache,
+        x: f32,
+        y: f32,
+        theme: Option<&ThemeData>,
+    ) {
+        let default = tezzera_theme::built_in::light_theme();
+        let t = theme.unwrap_or(&default);
+        let color = self
+            .color_opt
+            .unwrap_or_else(|| crate::theme_color_to_render(t.colors.on_surface));
+        canvas.draw_text(&self.content, Point { x, y }, color, font, self.size);
+    }
 }
 
 impl From<Text> for Element {
@@ -108,5 +147,50 @@ mod tests {
         let short = Text::new("Hi").natural_size();
         let long = Text::new("Hello World").natural_size();
         assert!(long.width > short.width);
+    }
+
+    // ── Theme-aware tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn text_render_themed_uses_on_surface_by_default() {
+        let theme = tezzera_theme::built_in::light_theme();
+        // Light theme on_surface is #1C1B1F
+        let expected = crate::theme_color_to_render(theme.colors.on_surface);
+
+        // Text with no color_opt should fall back to on_surface.
+        let t = Text::new("Hello");
+        assert!(t.color_opt.is_none());
+
+        // Verify the resolved color matches without needing canvas pixel checks.
+        let default_theme = tezzera_theme::built_in::light_theme();
+        let resolved = t
+            .color_opt
+            .unwrap_or_else(|| crate::theme_color_to_render(default_theme.colors.on_surface));
+        assert_eq!(resolved.r, expected.r);
+        assert_eq!(resolved.g, expected.g);
+        assert_eq!(resolved.b, expected.b);
+        assert_eq!(resolved.a, expected.a);
+    }
+
+    #[test]
+    fn text_color_opt_builder_overrides_theme_color() {
+        let override_color = Color::rgb(200, 100, 50);
+        let t = Text::new("Test").color_opt(override_color);
+        assert!(t.color_opt.is_some());
+        let c = t.color_opt.unwrap();
+        assert_eq!(c.r, 200);
+        assert_eq!(c.g, 100);
+        assert_eq!(c.b, 50);
+    }
+
+    #[test]
+    fn text_render_themed_does_not_panic() {
+        use tezzera_render::canvas::SkiaCanvas;
+        use tezzera_render::FontCache;
+
+        let theme = tezzera_theme::built_in::light_theme();
+        let mut canvas = SkiaCanvas::new(200, 50);
+        let font = FontCache::system_mono().expect("system font required for this test");
+        Text::new("Hello themed").render_themed(&mut canvas, &font, 10.0, 20.0, Some(&theme));
     }
 }
