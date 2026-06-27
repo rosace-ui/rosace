@@ -6,4 +6,10 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "tzr"
+path = "src/main.rs"
+
 [dependencies]
+tezzera-trace = { path = "../tezzera-trace" }
+tezzera-core  = { path = "../tezzera-core" }
