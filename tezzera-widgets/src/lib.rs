@@ -22,12 +22,19 @@
 //! let btn = Button::new("Save").variant(ButtonVariant::Primary);
 //! ```
 
+pub mod avatar;
+pub mod badge;
 pub mod button;
 pub mod center;
+pub mod checkbox;
+pub mod chip;
 pub mod counter_app;
 pub mod divider;
 pub mod padding;
 pub mod prelude;
+pub mod progress_bar;
+pub mod slider;
+pub mod switch;
 pub mod text;
 pub mod text_input;
 
