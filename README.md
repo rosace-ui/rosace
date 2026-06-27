@@ -1,30 +1,31 @@
-# TEZZERA
+<div align="center">
+  <img src="logos/tezzera-josefin.svg" alt="Tezzera" width="420"/>
 
-```
- ████████╗███████╗███████╗███████╗███████╗██████╗  █████╗
-    ██╔══╝██╔════╝╚══███╔╝╚══███╔╝██╔════╝██╔══██╗██╔══██╗
-    ██║   █████╗    ███╔╝   ███╔╝ █████╗  ██████╔╝███████║
-    ██║   ██╔══╝   ███╔╝   ███╔╝  ██╔══╝  ██╔══██╗██╔══██║
-    ██║   ███████╗███████╗███████╗███████╗██║  ██║██║  ██║
-    ╚═╝   ╚══════╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
-```
+  <br/><br/>
 
-**Fast by nature. Beautiful by design.**
+  <p><em>Fast by nature. Beautiful by design.</em></p>
 
-![Build](https://img.shields.io/badge/build-passing-brightgreen)
-![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue)
-![Phase](https://img.shields.io/badge/phase-1%20complete-success)
-![Language](https://img.shields.io/badge/language-Rust-orange)
+  <br/>
+
+  ![Status](https://img.shields.io/badge/status-work%20in%20progress-orange)
+  ![Phase](https://img.shields.io/badge/phase-1%20foundation-yellow)
+  ![Language](https://img.shields.io/badge/language-Rust-orange?logo=rust)
+  ![License](https://img.shields.io/badge/license-proprietary-red)
+</div>
 
 ---
 
-## What is TEZZERA?
+> **Work in Progress** — this framework is under active development. APIs are unstable, things will break, and large parts are still being built. Not ready for production use.
 
-TEZZERA is a declarative UI framework written in pure Rust. The name comes from *tessera* — the individual tiles that form a mosaic. Every component in TEZZERA is a tessera tile: self-contained, composable, and precise. Assembled together they form the full picture of your application.
+---
 
-Write your UI once in Rust. Run it on desktop, web (WASM), iOS, and Android at up to 120fps.
+## What is Tezzera?
 
-TEZZERA draws inspiration from Flutter, Jetpack Compose, SwiftUI, and React, then tightens everything up with Rust's type system: no null pointer surprises, no runtime layout panics, no undefined behaviour.
+Tezzera is a declarative UI framework written in pure Rust. The name comes from *tessera* — the individual tiles that form a mosaic. Every component is a tessera tile: self-contained, composable, and precise. Assembled together they form the full picture of your application.
+
+Write your UI once in Rust. Run it on desktop, web (WASM), iOS, and Android — targeting 120fps by default.
+
+Tezzera draws inspiration from Flutter, Jetpack Compose, SwiftUI, and React, tightened up with Rust's type system: no null pointer surprises, no runtime layout panics, no undefined behaviour.
 
 ---
 
@@ -53,42 +54,33 @@ Data flows downward (props); state changes propagate upward through reactive ato
 
 ## Getting Started
 
-### Prerequisites
+> The project is in early development. These steps work today but will evolve as the framework stabilises.
 
-- Rust 1.78+ (stable)
-- `cargo` in your PATH
-
-### Run the examples
+**Prerequisites:** Rust 1.78+ (stable), `cargo` in your PATH.
 
 ```bash
-# Static PNG renders — produce output images in the working directory
+# Clone the repo
+git clone https://github.com/your-org/tezzera.git
+cd tezzera
+
+# Build the workspace
+cargo build
+
+# Run the examples
+cargo run -p tezzera-examples --bin counter_window
 cargo run -p tezzera-examples --bin dashboard
 cargo run -p tezzera-examples --bin photo_gallery
 cargo run -p tezzera-examples --bin profile_card
-
-# Interactive windowed counter app (opens a native window)
-cargo run -p tezzera-examples --bin counter_window
-```
-
-### Build the workspace
-
-```bash
-cargo build            # debug
-cargo build --release  # release — zero warnings, zero unsafe
-cargo test             # full test suite
 ```
 
 ### tzr CLI
 
 ```bash
+# Install the developer CLI
+cargo install --path tezzera-cli
+
 tzr dev                      # start dev server with hot reload
 tzr build --target desktop   # produce a desktop binary
-```
-
-Install the CLI with:
-
-```bash
-cargo install --path tezzera-cli
 ```
 
 ---
@@ -105,41 +97,52 @@ cargo install --path tezzera-cli
 | `tezzera-render` | tiny-skia render pipeline, dirty regions, layer compositor, `FontCache` |
 | `tezzera-widgets` | Built-in widget library |
 | `tezzera-platform` | Windowing abstraction (winit + softbuffer) |
-| `tezzera-examples` | Example applications |
 | `tezzera-cli` | `tzr` command-line tool |
+| `tezzera-examples` | Example applications |
 
 ---
 
-## Phase 1 Status
+## Phase 1 Progress
 
-All Phase 1 exit criteria are met.
+Goal: a working desktop counter app at 60fps with state, layout, and tracing.
 
-- [x] Counter app renders at 60fps on desktop
-- [x] Reactive state — `Atom<T>` with `use_atom()`, `atom!()`, `GlobalAtom`
+- [x] Reactive state — `Atom<T>`, `use_atom()`, `GlobalAtom`, batched updates
 - [x] Layout engine — Column, Row, Stack, Flex, Grid, Wrap, SizedBox, AspectRatio
-- [x] Real font rendering via fontdue (`FontCache` + `draw_text()`)
+- [x] Render pipeline — tiny-skia, dirty regions, layer compositor
+- [x] Font rendering — fontdue `FontCache` + `draw_text()`
 - [x] Lifecycle hooks — `on_mount`, `on_update`, `on_unmount`
 - [x] `ErrorBoundary` with panic catching
 - [x] `TezzeraTrace` event bus with ring buffer
-- [x] `tzr dev` and `tzr build --target desktop` CLI commands
-- [x] Zero warnings in release builds
-- [x] Zero unsafe code
+- [x] `tzr dev` and `tzr build --target desktop`
+- [ ] Phase 2 — web/WASM target
+- [ ] Phase 3 — mobile (iOS / Android)
 
 ---
 
 ## Contributing
 
-Architectural decisions that govern the project are recorded in `.steering/DECISIONS.md`. Read that file before opening a pull request — decisions labelled LOCKED are not open for debate unless a new decision supersedes them.
+Tezzera is not yet open for general contributions while the foundation is being laid. That said:
 
-Other steering documents in `.steering/` cover the phase roadmap, crate responsibilities, and coding conventions.
+- **Bug reports** — open an issue with steps to reproduce
+- **Feature requests & ideas** — open a discussion issue before building anything
+- **Pull requests** — please open an issue first so we can align on scope and approach; keep PRs small and focused
+
+Architectural decisions that govern the project are recorded in `.steering/DECISIONS.md`. Read that before opening a PR — decisions marked `LOCKED` are not open for debate unless a new decision supersedes them.
+
+A formal contributor guide will be added before the first public release.
 
 ---
 
 ## License
 
-Licensed under either of
+Copyright (c) 2026 Godwin Joseph.
 
-- MIT License ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+This source code is provided for viewing and personal exploration only. You may **not** use, copy, modify, merge, publish, distribute, sublicense, or sell copies of this software, or any derivative works, without explicit written permission from the author.
 
-at your option.
+> **Note:** This license is a placeholder. Tezzera will transition to an open-source license (MIT and/or Apache 2.0) prior to its first public release.
+
+---
+
+<div align="center">
+  <sub>Built with Rust. Designed with care.</sub>
+</div>
