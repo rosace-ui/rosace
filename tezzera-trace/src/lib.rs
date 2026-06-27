@@ -85,19 +85,19 @@ mod tests {
 
     #[test]
     fn multiple_events_all_captured() {
+        // Use a local bus to avoid interference from parallel tests sharing TRACING_BUS.
+        use crate::bus::TracingBus;
+        let local_bus = TracingBus::new();
         let buf = Arc::new(RingBufferSubscriber::new(1000));
-        TRACING_BUS.add_subscriber(buf.clone());
+        local_bus.add_subscriber(buf.clone());
 
-        let start = buf.len();
         for i in 0..10u64 {
-            trace!(TezzeraTrace::AtomRead {
+            local_bus.emit(TezzeraTrace::AtomRead {
                 atom: crate::event::AtomId(i),
                 component: ComponentId(0),
             });
         }
 
-        assert_eq!(buf.len() - start, 10);
-
-        TRACING_BUS.clear_subscribers();
+        assert_eq!(buf.len(), 10);
     }
 }

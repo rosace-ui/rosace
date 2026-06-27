@@ -110,6 +110,10 @@ checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
 [[package]]
 name = "tezzera-cli"
 version = "0.1.0"
+dependencies = [
+ "tezzera-core",
+ "tezzera-trace",
+]
 
 [[package]]
 name = "tezzera-core"
@@ -155,6 +159,13 @@ version = "0.1.0"
 [[package]]
 name = "tezzera-widgets"
 version = "0.1.0"
+dependencies = [
+ "tezzera-core",
+ "tezzera-layout",
+ "tezzera-render",
+ "tezzera-state",
+ "tezzera-trace",
+]
 
 [[package]]
 name = "tiny-skia"
