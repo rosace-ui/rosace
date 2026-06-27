@@ -1406,6 +1406,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tezzera-animate"
+version = "0.1.0"
+dependencies = [
+ "tezzera-core",
+ "tezzera-state",
+ "tezzera-trace",
+]
+
+[[package]]
 name = "tezzera-cli"
 version = "0.1.0"
 dependencies = [
@@ -1475,6 +1484,15 @@ dependencies = [
 name = "tezzera-state"
 version = "0.1.0"
 dependencies = [
+ "tezzera-trace",
+]
+
+[[package]]
+name = "tezzera-theme"
+version = "0.1.0"
+dependencies = [
+ "tezzera-core",
+ "tezzera-state",
  "tezzera-trace",
 ]
 

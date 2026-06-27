@@ -6,10 +6,12 @@ members = [
     "tezzera-state",
     "tezzera-layout",
     "tezzera-render",
+    "tezzera-theme",
     "tezzera-widgets",
     "tezzera-cli",
     "tezzera-examples",
     "tezzera-platform",
+    "tezzera-animate",
 ]
 resolver = "2"
 
