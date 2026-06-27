@@ -11,5 +11,6 @@ name = "tzr"
 path = "src/main.rs"
 
 [dependencies]
-tezzera-trace = { path = "../tezzera-trace" }
-tezzera-core  = { path = "../tezzera-core" }
+tezzera-trace      = { path = "../tezzera-trace" }
+tezzera-core       = { path = "../tezzera-core" }
+tezzera-hot-reload = { path = "../tezzera-hot-reload" }

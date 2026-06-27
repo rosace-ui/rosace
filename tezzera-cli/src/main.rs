@@ -97,6 +97,7 @@ fn print_usage() {
     println!("OPTIONS (dev):");
     println!("  --target web      Build WASM and serve at http://localhost:3000");
     println!("  --port <n>        Port for web dev server (default: 3000)");
+    println!("  --watch           Rebuild on source changes");
     println!();
     println!("OPTIONS (build):");
     println!("  --target <target> Build target: desktop | web");

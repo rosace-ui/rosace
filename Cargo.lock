@@ -1430,6 +1430,7 @@ name = "tezzera-cli"
 version = "0.1.0"
 dependencies = [
  "tezzera-core",
+ "tezzera-hot-reload",
  "tezzera-trace",
 ]
 

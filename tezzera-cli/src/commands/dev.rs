@@ -11,11 +11,12 @@ pub enum DevTarget {
     Web,
 }
 
-/// Options parsed from `tzr dev [--target <target>] [--port <n>]`.
+/// Options parsed from `tzr dev [--target <target>] [--port <n>] [--watch]`.
 #[derive(Debug, Clone)]
 pub struct DevOptions {
     pub target: DevTarget,
     pub port: u16,
+    pub watch: bool,
 }
 
 impl DevOptions {
@@ -26,6 +27,7 @@ impl DevOptions {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
         let mut target = DevTarget::Desktop;
         let mut port = 3000u16;
+        let mut watch = false;
 
         let mut i = 0;
         while i < args.len() {
@@ -49,6 +51,10 @@ impl DevOptions {
                         .map_err(|_| format!("invalid port: {}", args[i + 1]))?;
                     i += 2;
                 }
+                "--watch" => {
+                    watch = true;
+                    i += 1;
+                }
                 other if other.starts_with("--target=") => {
                     let t = other.trim_start_matches("--target=");
                     target = match t {
@@ -69,16 +75,45 @@ impl DevOptions {
             }
         }
 
-        Ok(Self { target, port })
+        Ok(Self { target, port, watch })
     }
 }
 
 /// Run the dev command.
 pub fn run(opts: DevOptions) -> Result<(), String> {
+    if opts.watch {
+        start_watcher(&opts);
+    }
     match opts.target {
         DevTarget::Desktop => run_desktop(),
         DevTarget::Web => run_web(opts.port),
     }
+}
+
+fn start_watcher(opts: &DevOptions) {
+    use tezzera_hot_reload::{FileWatcher, RebuildRunner, RebuildTarget};
+
+    let rebuild_target = match opts.target {
+        DevTarget::Desktop => RebuildTarget::Desktop,
+        DevTarget::Web => RebuildTarget::Web,
+    };
+
+    let (watcher, rx) = FileWatcher::new();
+    // Watch src/ if it exists, else current directory
+    if std::path::Path::new("src").exists() {
+        watcher.watch("src");
+    } else {
+        watcher.watch(".");
+    }
+
+    println!("  [watch] Watching src/ for changes...");
+
+    let runner = RebuildRunner::new().target(rebuild_target);
+    std::thread::spawn(move || {
+        // Keep watcher alive by moving it into the thread
+        let _watcher = watcher;
+        runner.run_loop(rx);
+    });
 }
 
 fn run_desktop() -> Result<(), String> {
@@ -298,8 +333,29 @@ mod tests {
     }
 
     #[test]
-    fn dev_opts_unknown_flag_errors() {
+    fn dev_opts_watch_flag() {
         let args = vec!["--watch".to_string()];
+        let opts = DevOptions::from_args(&args).unwrap();
+        assert!(opts.watch);
+    }
+
+    #[test]
+    fn dev_opts_default_no_watch() {
+        let opts = DevOptions::from_args(&[]).unwrap();
+        assert!(!opts.watch);
+    }
+
+    #[test]
+    fn dev_opts_watch_with_target() {
+        let args = vec!["--target".to_string(), "web".to_string(), "--watch".to_string()];
+        let opts = DevOptions::from_args(&args).unwrap();
+        assert_eq!(opts.target, DevTarget::Web);
+        assert!(opts.watch);
+    }
+
+    #[test]
+    fn dev_opts_unknown_flag_errors() {
+        let args = vec!["--foo".to_string()];
         assert!(DevOptions::from_args(&args).is_err());
     }
 
