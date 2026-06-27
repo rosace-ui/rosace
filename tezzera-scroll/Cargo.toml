@@ -1,0 +1,14 @@
+[package]
+name = "tezzera-scroll"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tezzera-core   = { path = "../tezzera-core" }
+tezzera-state  = { path = "../tezzera-state" }
+tezzera-layout = { path = "../tezzera-layout" }
+tezzera-render = { path = "../tezzera-render" }
+tezzera-trace  = { path = "../tezzera-trace" }

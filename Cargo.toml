@@ -12,6 +12,7 @@ members = [
     "tezzera-examples",
     "tezzera-platform",
     "tezzera-animate",
+    "tezzera-scroll",
 ]
 resolver = "2"
 
