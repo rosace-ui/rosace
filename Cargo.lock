@@ -1443,6 +1443,11 @@ dependencies = [
 [[package]]
 name = "tezzera-macros"
 version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "tezzera-platform"
