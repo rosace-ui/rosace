@@ -1,6 +1,7 @@
 mod commands;
 
 use commands::{build, dev, new};
+use commands::package;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -11,8 +12,18 @@ fn main() {
 
     match subcommand {
         Some("dev") => {
-            let opts = dev::DevOptions::from_args(rest);
-            dev::run(opts);
+            match dev::DevOptions::from_args(rest) {
+                Ok(opts) => {
+                    if let Err(e) = dev::run(opts) {
+                        eprintln!("error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Some("build") => {
             match build::BuildOptions::from_args(rest) {
@@ -26,6 +37,20 @@ fn main() {
                     eprintln!("error: {}", e);
                     eprintln!();
                     print_usage();
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("package") => {
+            match package::PackageOptions::from_args(rest) {
+                Ok(opts) => {
+                    if let Err(e) = package::run(opts) {
+                        eprintln!("error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
                     std::process::exit(1);
                 }
             }
@@ -66,6 +91,7 @@ fn print_usage() {
     println!("  new <name>        Scaffold a new TEZZERA app project");
     println!("  dev               Start dev server with terminal trace output");
     println!("  build             Build the app for a target platform");
+    println!("  package           Bundle for distribution (.app / .deb / .exe)");
     println!("  help              Print this message");
     println!();
     println!("OPTIONS (dev):");
@@ -73,6 +99,11 @@ fn print_usage() {
     println!();
     println!("OPTIONS (build):");
     println!("  --target <target> Build target: desktop | web");
+    println!();
+    println!("OPTIONS (package):");
+    println!("  --name <name>     App name (default: from Cargo.toml)");
+    println!("  --version <ver>   App version (default: from Cargo.toml)");
+    println!("  --out <dir>       Output directory (default: dist/)");
     println!();
     println!("EXAMPLES:");
     println!("  tzr dev --trace=state");

@@ -4,3 +4,5 @@ pub mod build;
 pub mod dev;
 /// `tzr new` — scaffold a new TEZZERA app project.
 pub mod new;
+/// `tzr package` — bundle for distribution (.app / .deb / .exe).
+pub mod package;
