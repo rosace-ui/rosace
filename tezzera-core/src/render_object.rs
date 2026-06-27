@@ -68,6 +68,40 @@ impl Constraints {
             max_height: AxisBound::Unbounded,
         }
     }
+
+    /// Returns the maximum width as `f32`, or [`f32::INFINITY`] if the axis is
+    /// unbounded or shrink-to-fit.
+    pub fn max_width_f32(&self) -> f32 {
+        match &self.max_width {
+            AxisBound::Bounded(v) => *v,
+            _ => f32::INFINITY,
+        }
+    }
+
+    /// Returns the maximum height as `f32`, or [`f32::INFINITY`] if the axis is
+    /// unbounded or shrink-to-fit.
+    pub fn max_height_f32(&self) -> f32 {
+        match &self.max_height {
+            AxisBound::Bounded(v) => *v,
+            _ => f32::INFINITY,
+        }
+    }
+
+    /// Clamp `size` so that it satisfies these constraints.
+    ///
+    /// Width and height are each clamped to `[min, max]`.
+    pub fn constrain(&self, size: Size) -> Size {
+        let width = size.width.max(self.min_width).min(self.max_width_f32());
+        let height = size.height.max(self.min_height).min(self.max_height_f32());
+        Size { width, height }
+    }
+
+    /// Returns `true` when both axes are tightly bounded (`min == max`).
+    pub fn is_tight(&self) -> bool {
+        let w_tight = matches!(&self.max_width, AxisBound::Bounded(v) if (v - self.min_width).abs() < f32::EPSILON);
+        let h_tight = matches!(&self.max_height, AxisBound::Bounded(v) if (v - self.min_height).abs() < f32::EPSILON);
+        w_tight && h_tight
+    }
 }
 
 /// The core trait implemented by every node in the render tree.
