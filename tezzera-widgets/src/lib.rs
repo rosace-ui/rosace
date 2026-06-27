@@ -33,6 +33,17 @@ pub mod text_input;
 
 pub use prelude::*;
 
+/// Converts a `tezzera_theme::Color` (f32 RGBA 0.0–1.0) to the
+/// `tezzera_render::canvas::Color` (u8 RGBA 0–255) used by drawing methods.
+pub(crate) fn theme_color_to_render(c: tezzera_theme::Color) -> tezzera_render::canvas::Color {
+    tezzera_render::canvas::Color::rgba(
+        (c.r * 255.0) as u8,
+        (c.g * 255.0) as u8,
+        (c.b * 255.0) as u8,
+        (c.a * 255.0) as u8,
+    )
+}
+
 // Phase 1 integration demo — kept for backward compatibility.
 pub use counter_app::{render_counter_frame, run_counter_simulation};
 
