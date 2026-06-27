@@ -6,7 +6,7 @@
 
 use tezzera_core::types::{Point, Rect, Size};
 use tezzera_layout::{Constraints, Row};
-use tezzera_render::{Color, SkiaCanvas};
+use tezzera_render::{Color, FontCache, SkiaCanvas};
 
 const W: u32 = 720;
 const H: u32 = 560;
@@ -39,11 +39,7 @@ const TAG_TINTS: [Color; 6] = [
     Color::rgb( 20, 150, 150),
 ];
 
-fn bar(c: &mut SkiaCanvas, text: &str, x: f32, y: f32, color: Color, cw: f32, ch: f32) {
-    c.fill_rect(Rect { origin: Point { x, y }, size: Size { width: text.len() as f32 * cw, height: ch } }, color);
-}
-
-fn card(c: &mut SkiaCanvas, x: f32, y: f32, w: f32, h: f32, i: usize) {
+fn card(c: &mut SkiaCanvas, font: &FontCache, x: f32, y: f32, w: f32, h: f32, i: usize) {
     // drop-shadow
     c.fill_rect(Rect { origin: Point { x: x+3.0, y: y+3.0 }, size: Size { width: w, height: h } }, Color::rgba(0,0,0,22));
     // card body
@@ -62,24 +58,26 @@ fn card(c: &mut SkiaCanvas, x: f32, y: f32, w: f32, h: f32, i: usize) {
     c.fill_circle(Point { x: x + w - 15.0, y: y + 15.0 }, 9.0, Color::rgba(0,0,0,90));
 
     let ty = y + img_h + 10.0;
-    bar(c, LABELS[i], x + 10.0, ty, TITLE_TEXT, 7.0, 12.0);
+    c.draw_text(LABELS[i], Point { x: x + 10.0, y: ty }, TITLE_TEXT, font, 12.0);
 
-    // tag badge
+    // tag badge — keep rect width estimate based on char count
     let bw = TAGS[i].len() as f32 * 6.5 + 12.0;
     c.fill_rect(Rect { origin: Point { x: x+10.0, y: ty+18.0 }, size: Size { width: bw, height: 15.0 } }, TAG_TINTS[i]);
-    bar(c, TAGS[i], x+14.0, ty+20.5, Color::WHITE, 6.0, 10.0);
+    c.draw_text(TAGS[i], Point { x: x+14.0, y: ty+20.5 }, Color::WHITE, font, 10.0);
     // like count
-    bar(c, "142 likes", x + w - 72.0, ty+20.0, MUTED, 5.5, 10.0);
+    c.draw_text("142 likes", Point { x: x + w - 72.0, y: ty+20.0 }, MUTED, font, 10.0);
 }
 
 fn main() {
+    let font = FontCache::system_mono().expect("no system font");
+
     let mut c = SkiaCanvas::new(W, H);
     c.clear(BG);
 
     // Header
     c.fill_rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: W as f32, height: 52.0 } }, HEADER_BG);
-    bar(&mut c, "TEZZERA  Gallery", 24.0, 18.0, HEADER_TEXT, 8.5, 16.0);
-    bar(&mut c, "Grid  List  Filter", W as f32 - 168.0, 20.0, Color::rgba(200,200,220,190), 6.5, 12.0);
+    c.draw_text("TEZZERA  Gallery",    Point { x: 24.0,              y: 18.0 }, HEADER_TEXT,                 &font, 16.0);
+    c.draw_text("Grid  List  Filter",  Point { x: W as f32 - 168.0,  y: 20.0 }, Color::rgba(200,200,220,190), &font, 12.0);
 
     // 3-column × 2-row grid
     let cw = 208.0_f32;
@@ -99,7 +97,7 @@ fn main() {
         let ry = oy + row as f32 * (ch + gap);
         for col in 0..3usize {
             let p = layout.child_positions[col];
-            card(&mut c, ox + p.x, ry + p.y, cw, ch, row * 3 + col);
+            card(&mut c, &font, ox + p.x, ry + p.y, cw, ch, row * 3 + col);
         }
     }
 
@@ -107,7 +105,7 @@ fn main() {
     let fy = H as f32 - 34.0;
     c.fill_rect(Rect { origin: Point { x: 0.0, y: fy }, size: Size { width: W as f32, height: 34.0 } }, Color::rgb(250,250,255));
     c.stroke_rect(Rect { origin: Point { x: 0.0, y: fy }, size: Size { width: W as f32, height: 1.0 } }, CARD_BORDER, 1.0);
-    bar(&mut c, "6 photos  •  TEZZERA UI Framework  •  Phase 1 Demo", 24.0, fy + 11.0, FOOTER_TEXT, 6.0, 11.0);
+    c.draw_text("6 photos  •  TEZZERA UI Framework  •  Phase 1 Demo", Point { x: 24.0, y: fy + 11.0 }, FOOTER_TEXT, &font, 11.0);
 
     let png = c.encode_png().expect("encode png");
     std::fs::write("photo_gallery.png", png).expect("write png");
