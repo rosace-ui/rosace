@@ -7,3 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+tezzera-trace  = { path = "../tezzera-trace" }
+tezzera-core   = { path = "../tezzera-core" }
+tezzera-layout = { path = "../tezzera-layout" }
+tiny-skia      = "0.11"
