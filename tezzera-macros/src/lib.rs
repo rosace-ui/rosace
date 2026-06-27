@@ -1,6 +1,7 @@
 extern crate proc_macro;
 
 mod component;
+mod view;
 
 use proc_macro::TokenStream;
 
@@ -24,6 +25,37 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     component::expand(attr.into(), item.into()).into()
 }
 
+/// Declarative macro for building element trees.
+///
+/// ```text
+/// view! {
+///     Column {
+///         Text { content: "Hello" }
+///         Button { label: "Click" on_click: handle_click }
+///     }
+/// }
+/// ```
+///
+/// Expands to builder calls:
+///
+/// ```rust,ignore
+/// Column::new()
+///     .child(Text::new().content("Hello"))
+///     .child(Button::new().label("Click").on_click(handle_click))
+/// ```
+///
+/// ## Syntax rules
+/// - `key: value` — sets a prop; the value is any Rust expression (struct
+///   literals must be wrapped in parentheses or assigned to a variable first
+///   to avoid parsing ambiguity with child element syntax).
+/// - `Name { … }` — a child element; generates a `.child(…)` call.
+/// - Props and children may be interleaved in any order.
+/// - An optional comma may follow each `key: value` pair.
+#[proc_macro]
+pub fn view(input: TokenStream) -> TokenStream {
+    view::expand(input.into()).into()
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
@@ -32,6 +64,8 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
 mod tests {
     use proc_macro2::TokenStream;
     use quote::quote;
+
+    // -- #[component] --------------------------------------------------------
 
     #[test]
     fn component_generates_struct_and_impl() {
@@ -83,5 +117,75 @@ mod tests {
             out.contains("compile_error"),
             "expected compile_error, got: {out}"
         );
+    }
+
+    // -- view! ---------------------------------------------------------------
+
+    #[test]
+    fn view_single_empty_element() {
+        let input = quote! { Column { } };
+        let out = crate::view::expand(input).to_string();
+        assert!(
+            out.contains("Column") && out.contains("new"),
+            "unexpected output: {out}"
+        );
+    }
+
+    #[test]
+    fn view_element_with_props() {
+        let input = quote! { Text { content: "Hello" } };
+        let out = crate::view::expand(input).to_string();
+        assert!(out.contains("content"), "prop missing: {out}");
+        assert!(out.contains("Hello"), "prop value missing: {out}");
+    }
+
+    #[test]
+    fn view_nested_children() {
+        let input = quote! {
+            Column {
+                Text { content: "Hello" }
+            }
+        };
+        let out = crate::view::expand(input).to_string();
+        assert!(out.contains("child"), ".child() call missing: {out}");
+        assert!(out.contains("Text"), "child name missing: {out}");
+    }
+
+    #[test]
+    fn view_multiple_children() {
+        let input = quote! {
+            Column {
+                Text { content: "First" }
+                Text { content: "Second" }
+            }
+        };
+        let out = crate::view::expand(input).to_string();
+        assert_eq!(out.matches("child").count(), 2, "expected 2 child calls: {out}");
+    }
+
+    #[test]
+    fn view_multiple_props() {
+        let input = quote! {
+            Button { label: "Click" on_click: my_handler }
+        };
+        let out = crate::view::expand(input).to_string();
+        assert!(out.contains("label"), "label missing: {out}");
+        assert!(out.contains("on_click"), "on_click missing: {out}");
+        assert!(out.contains("my_handler"), "handler missing: {out}");
+    }
+
+    #[test]
+    fn view_deeply_nested() {
+        let input = quote! {
+            Stack {
+                Column {
+                    Text { content: "deep" }
+                }
+            }
+        };
+        let out = crate::view::expand(input).to_string();
+        assert!(out.contains("Stack"), "{out}");
+        assert!(out.contains("Column"), "{out}");
+        assert!(out.contains("Text"), "{out}");
     }
 }
