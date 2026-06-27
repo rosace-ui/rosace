@@ -33,8 +33,13 @@
   <!-- LINE -->
   <path d="M110,112 Q210,114 310,112 Q210,110 110,112 Z" fill="url(#g)"/>
 
-  <!-- WORDMARK: Josefin Sans -->
-  <text font-family="Josefin Sans, sans-serif" font-size="52" font-weight="100" letter-spacing="10" text-anchor="middle" x="210" y="178" fill="#E8F4FF">
-    <tspan>TE</tspan><tspan fill="#00CFFF">ZZ</tspan><tspan fill="#E8F4FF">ERA</tspan>
-  </text>
+  <!-- WORDMARK: Josefin Sans — move g translate to re-centre -->
+  <g transform="translate(0,0)">
+    <text font-family="Josefin Sans, sans-serif" font-size="52" font-weight="100" letter-spacing="10" text-anchor="middle" x="210" y="178" fill="#E8F4FF">
+      <tspan>TE</tspan><tspan fill="none">Z</tspan><tspan fill="#00CFFF">Z</tspan><tspan fill="#E8F4FF">ERA</tspan>
+    </text>
+    <g transform="translate(330,0) scale(-1,1)">
+      <text font-family="Josefin Sans, sans-serif" font-size="52" font-weight="100" letter-spacing="10" text-anchor="middle" x="175" y="178" fill="#00CFFF">Z</text>
+    </g>
+  </g>
 </svg>
