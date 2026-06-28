@@ -45,6 +45,10 @@ path = "src/bin/phase5_demo.rs"
 name = "phase6_demo"
 path = "src/bin/phase6_demo.rs"
 
+[[bin]]
+name = "phase7_demo"
+path = "src/bin/phase7_demo.rs"
+
 [dependencies]
 tezzera-core     = { path = "../tezzera-core" }
 tezzera-layout   = { path = "../tezzera-layout" }
@@ -61,4 +65,6 @@ tezzera-nav-anim = { path = "../tezzera-nav-anim" }
 tezzera-gesture  = { path = "../tezzera-gesture" }
 tezzera-text     = { path = "../tezzera-text" }
 tezzera-net      = { path = "../tezzera-net" }
-tezzera-i18n     = { path = "../tezzera-i18n" }
+tezzera-i18n      = { path = "../tezzera-i18n" }
+tezzera-clipboard = { path = "../tezzera-clipboard" }
+tezzera-ws        = { path = "../tezzera-ws" }

@@ -1470,6 +1470,7 @@ name = "tezzera-examples"
 version = "0.1.0"
 dependencies = [
  "tezzera-animate",
+ "tezzera-clipboard",
  "tezzera-core",
  "tezzera-forms",
  "tezzera-gesture",
@@ -1485,6 +1486,7 @@ dependencies = [
  "tezzera-text",
  "tezzera-theme",
  "tezzera-widgets",
+ "tezzera-ws",
 ]
 
 [[package]]
