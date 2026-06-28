@@ -1590,6 +1590,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tezzera-renderer"
+version = "0.1.0"
+dependencies = [
+ "tezzera-core",
+ "tezzera-render",
+]
+
+[[package]]
 name = "tezzera-scroll"
 version = "0.1.0"
 dependencies = [

@@ -6,6 +6,7 @@ members = [
     "tezzera-state",
     "tezzera-layout",
     "tezzera-render",
+    "tezzera-renderer",
     "tezzera-theme",
     "tezzera-widgets",
     "tezzera-cli",
