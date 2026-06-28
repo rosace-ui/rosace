@@ -88,7 +88,8 @@ fn print_usage() {
     println!("  tzr <COMMAND> [OPTIONS]");
     println!();
     println!("COMMANDS:");
-    println!("  new <name>        Scaffold a new TEZZERA app project");
+    println!("  new <name>          Scaffold a new TEZZERA app project
+    --template <name> Template: counter (default), nav-app, form-app, dashboard");
     println!("  dev               Start desktop app in dev mode (cargo run)");
     println!("  build             Build the app for a target platform");
     println!("  package           Bundle for distribution (.app / .deb / .exe)");
