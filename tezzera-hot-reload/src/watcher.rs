@@ -18,6 +18,7 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
 /// Watches registered directories recursively for `.rs` file changes.
 /// Runs a background thread; results are delivered via a channel.
 pub struct FileWatcher {
+    #[allow(dead_code)]
     sender: Sender<ChangeEvent>,
     watched: Arc<Mutex<Vec<PathBuf>>>,
     stop: Arc<Mutex<bool>>,

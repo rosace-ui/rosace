@@ -15,10 +15,10 @@ use tezzera_render::{Color, FontCache, SkiaCanvas};
 // ── New Phase 6 crate imports ─────────────────────────────────────────────────
 
 // Gesture recognizers
-use tezzera_gesture::{DragRecognizer, GestureRecognizer, SwipeRecognizer, TapRecognizer};
+use tezzera_gesture::{DragRecognizer, SwipeRecognizer, TapRecognizer};
 
 // Rich text
-use tezzera_text::word_wrap;
+use tezzera_text::word_wrap_simple;
 
 // Network images
 use tezzera_net::LoadState;
@@ -213,7 +213,7 @@ fn panel_rich_text(c: &mut SkiaCanvas, font: &FontCache, x: f32, y: f32) {
         cy += 14.0;
 
         let sentence = "The quick brown fox jumps over the lazy dog near the riverbank";
-        let lines = word_wrap(sentence, 300.0, 8.0);
+        let lines = word_wrap_simple(sentence, 300.0, 8.0);
         for line in &lines {
             c.draw_text(line, Point { x: ix, y: cy }, TEXT_PRIMARY, font, 13.0);
             cy += 18.0;

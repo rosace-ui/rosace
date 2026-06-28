@@ -42,4 +42,14 @@ impl FontCache {
     pub fn rasterize(&self, c: char, px: f32) -> (fontdue::Metrics, Vec<u8>) {
         self.font.rasterize(c, px)
     }
+
+    /// Pixel advance width of a single character at `px` size.
+    pub fn advance_width(&self, c: char, px: f32) -> f32 {
+        self.font.metrics(c, px).advance_width
+    }
+
+    /// Total pixel width of a string at `px` size (sum of advance widths).
+    pub fn measure_text(&self, text: &str, px: f32) -> f32 {
+        text.chars().map(|c| self.font.metrics(c, px).advance_width).sum()
+    }
 }

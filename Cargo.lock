@@ -1483,6 +1483,8 @@ dependencies = [
 name = "tezzera-examples"
 version = "0.1.0"
 dependencies = [
+ "tezzera-a11y",
+ "tezzera-anim",
  "tezzera-animate",
  "tezzera-bidi",
  "tezzera-clipboard",
@@ -1503,6 +1505,7 @@ dependencies = [
  "tezzera-shaping",
  "tezzera-state",
  "tezzera-style",
+ "tezzera-test-utils",
  "tezzera-text",
  "tezzera-theme",
  "tezzera-widgets",

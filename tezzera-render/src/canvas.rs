@@ -152,32 +152,48 @@ impl SkiaCanvas {
 
     /// Draw real text glyphs at `origin` using `font` at `px` size.
     ///
-    /// Each character is rasterized individually and blended onto the canvas.
-    /// This replaces `draw_text_placeholder` for Phase 2.
+    /// `origin` is the top-left of the glyph bounding box (top-of-cap-height
+    /// convention). Each character is rasterized and alpha-blended onto the canvas.
     pub fn draw_text(&mut self, text: &str, origin: Point, color: Color, font: &crate::font::FontCache, px: f32) {
+        let canvas_w = self.pixmap.width();
+        let canvas_h = self.pixmap.height();
         let mut cursor_x = origin.x;
+
         for ch in text.chars() {
             let (metrics, bitmap) = font.rasterize(ch, px);
+
+            // Zero-size glyphs (space, control chars): still advance the cursor.
             if metrics.width == 0 || metrics.height == 0 {
-                cursor_x += px * 0.3;
+                cursor_x += metrics.advance_width;
                 continue;
             }
+
+            let mut paint = tiny_skia::Paint::default();
+            paint.anti_alias = false;
+            paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+
             for row in 0..metrics.height {
+                // Top-of-glyph convention: row 0 maps to origin.y.
+                // xmin shifts the bitmap horizontally from the pen position.
+                let py = origin.y as i32 + row as i32;
+                if py < 0 || py as u32 >= canvas_h { continue; }
+
                 for col in 0..metrics.width {
                     let coverage = bitmap[row * metrics.width + col];
                     if coverage == 0 { continue; }
-                    let px_x = (cursor_x as i32 + col as i32 + metrics.xmin) as u32;
-                    let px_y = (origin.y as i32 + row as i32 - metrics.ymin) as u32;
-                    if px_x >= self.pixmap.width() || px_y >= self.pixmap.height() { continue; }
+
+                    let px_xi = cursor_x as i32 + col as i32 + metrics.xmin;
+                    if px_xi < 0 || px_xi as u32 >= canvas_w { continue; }
+
                     let alpha = (coverage as u32 * color.a as u32 / 255) as u8;
-                    let mut paint = tiny_skia::Paint::default();
                     paint.set_color_rgba8(color.r, color.g, color.b, alpha);
-                    paint.anti_alias = false;
-                    if let Some(r) = tiny_skia::Rect::from_xywh(px_x as f32, px_y as f32, 1.0, 1.0) {
+
+                    if let Some(r) = tiny_skia::Rect::from_xywh(px_xi as f32, py as f32, 1.0, 1.0) {
                         self.pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), None);
                     }
                 }
             }
+
             cursor_x += metrics.advance_width;
         }
     }
