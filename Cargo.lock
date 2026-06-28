@@ -1467,6 +1467,7 @@ dependencies = [
  "tezzera-forms",
  "tezzera-layout",
  "tezzera-nav",
+ "tezzera-nav-anim",
  "tezzera-platform",
  "tezzera-render",
  "tezzera-scroll",
@@ -1480,6 +1481,14 @@ name = "tezzera-forms"
 version = "0.1.0"
 dependencies = [
  "tezzera-state",
+ "tezzera-trace",
+]
+
+[[package]]
+name = "tezzera-gesture"
+version = "0.1.0"
+dependencies = [
+ "tezzera-platform",
  "tezzera-trace",
 ]
 
