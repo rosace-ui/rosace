@@ -2,6 +2,7 @@ mod commands;
 
 use commands::{build, dev, new};
 use commands::package;
+use commands::workspace;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -69,6 +70,36 @@ fn main() {
                 }
             }
         }
+        Some("check") => {
+            let verbose = rest.iter().any(|a| a == "--verbose" || a == "-v");
+            let result = workspace::run_check(verbose);
+            print!("{}", result.stdout);
+            eprint!("{}", result.stderr);
+            println!("{}", result.summary());
+            std::process::exit(result.exit_code);
+        }
+        Some("test") => {
+            let filter = rest.first().map(String::as_str);
+            let result = workspace::run_test(filter);
+            print!("{}", result.stdout);
+            eprint!("{}", result.stderr);
+            println!("{}", result.summary());
+            std::process::exit(result.exit_code);
+        }
+        Some("lint") => {
+            let result = workspace::run_lint();
+            print!("{}", result.stdout);
+            eprint!("{}", result.stderr);
+            println!("{}", result.summary());
+            std::process::exit(result.exit_code);
+        }
+        Some("fmt") => {
+            let result = workspace::run_fmt_check();
+            print!("{}", result.stdout);
+            eprint!("{}", result.stderr);
+            println!("{}", result.summary());
+            std::process::exit(result.exit_code);
+        }
         Some("help") | Some("--help") | Some("-h") | None => {
             print_usage();
         }
@@ -93,6 +124,10 @@ fn print_usage() {
     println!("  dev               Start desktop app in dev mode (cargo run)");
     println!("  build             Build the app for a target platform");
     println!("  package           Bundle for distribution (.app / .deb / .exe)");
+    println!("  check             Run `cargo check --workspace`");
+    println!("  test [filter]     Run `cargo test --workspace` (optional test filter)");
+    println!("  lint              Run `cargo clippy --workspace -- -D warnings`");
+    println!("  fmt               Run `cargo fmt --workspace --check`");
     println!("  help              Print this message");
     println!();
     println!("OPTIONS (dev):");

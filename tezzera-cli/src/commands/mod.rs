@@ -6,3 +6,5 @@ pub mod dev;
 pub mod new;
 /// `tzr package` — bundle for distribution (.app / .deb / .exe).
 pub mod package;
+/// `tzr check`, `tzr test`, `tzr lint`, `tzr fmt` — workspace quality commands.
+pub mod workspace;
