@@ -1,128 +1,76 @@
 use crate::role::Role;
 
-/// A single accessibility node in the tree.
+/// A node in the accessibility tree.
 #[derive(Debug, Clone)]
 pub struct A11yNode {
-    /// Unique ID within the tree (assigned by A11yTree::add).
     pub id: u64,
     pub role: Role,
-    /// Short accessible label (e.g. button text, image alt text).
-    pub label: String,
-    /// Longer description (optional).
+    pub label: Option<String>,
     pub description: Option<String>,
-    /// Whether this node can receive keyboard focus.
-    pub focusable: bool,
-    /// Whether this node currently has focus.
-    pub focused: bool,
-    /// Whether this node is disabled (not interactive).
-    pub disabled: bool,
-    /// Current value for range inputs (Slider, ProgressBar).
-    pub value: Option<f32>,
-    /// Min/max for range inputs.
-    pub value_min: Option<f32>,
-    pub value_max: Option<f32>,
-    /// Checked state for Checkbox/Switch (None = not applicable).
-    pub checked: Option<bool>,
-    /// Child node IDs.
     pub children: Vec<u64>,
+    pub parent: Option<u64>,
+    pub focusable: bool,
+    pub checked: Option<bool>,
+    pub disabled: bool,
+    pub expanded: Option<bool>,
+    pub value: Option<String>,
 }
 
 impl A11yNode {
-    pub fn new(role: Role, label: impl Into<String>) -> Self {
+    pub fn new(id: u64, role: Role) -> Self {
         Self {
-            id: 0,
+            id,
             role,
-            label: label.into(),
+            label: None,
             description: None,
-            focusable: false,
-            focused: false,
-            disabled: false,
-            value: None,
-            value_min: None,
-            value_max: None,
-            checked: None,
             children: Vec::new(),
+            parent: None,
+            focusable: role.is_interactive(),
+            checked: None,
+            disabled: false,
+            expanded: None,
+            value: None,
         }
     }
 
-    pub fn focusable(mut self, f: bool) -> Self {
-        self.focusable = f;
-        self
-    }
-    pub fn disabled(mut self, d: bool) -> Self {
-        self.disabled = d;
-        self
-    }
-    pub fn description(mut self, d: impl Into<String>) -> Self {
-        self.description = Some(d.into());
-        self
-    }
-    pub fn value(mut self, v: f32, min: f32, max: f32) -> Self {
-        self.value = Some(v);
-        self.value_min = Some(min);
-        self.value_max = Some(max);
-        self
-    }
-    pub fn checked(mut self, c: bool) -> Self {
-        self.checked = Some(c);
-        self
-    }
-    pub fn child(mut self, id: u64) -> Self {
-        self.children.push(id);
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
         self
     }
 
-    /// Emit this node as a JSON object string (no serde dep — hand-written).
-    pub fn to_json(&self) -> String {
-        let desc = self
-            .description
-            .as_deref()
-            .map(|d| format!(r#","description":"{}""#, escape_json(d)))
-            .unwrap_or_default();
-        let val = self
-            .value
-            .map(|v| {
-                format!(
-                    r#","aria-valuenow":{},"aria-valuemin":{},"aria-valuemax":{}"#,
-                    v,
-                    self.value_min.unwrap_or(0.0),
-                    self.value_max.unwrap_or(1.0),
-                )
-            })
-            .unwrap_or_default();
-        let checked = self
-            .checked
-            .map(|c| format!(r#","aria-checked":{}"#, c))
-            .unwrap_or_default();
-        let level = self
-            .role
-            .aria_level()
-            .map(|l| format!(r#","aria-level":{}"#, l))
-            .unwrap_or_default();
-        let disabled = if self.disabled {
-            r#","aria-disabled":true"#
-        } else {
-            ""
-        };
-        format!(
-            r#"{{"id":{},"role":"{}","aria-label":"{}","focusable":{}"#,
-            self.id,
-            self.role.aria_role(),
-            escape_json(&self.label),
-            self.focusable
-        ) + &desc
-            + &val
-            + &checked
-            + &level
-            + disabled
-            + "}"
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
     }
-}
 
-fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
+    pub fn with_checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
+    }
+
+    pub fn with_disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
+
+    pub fn add_child(&mut self, child_id: u64) {
+        if !self.children.contains(&child_id) {
+            self.children.push(child_id);
+        }
+    }
+
+    pub fn is_focusable(&self) -> bool {
+        self.focusable && !self.disabled
+    }
+
+    pub fn accessible_name(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -130,63 +78,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_new_defaults() {
-        let n = A11yNode::new(Role::Button, "Click me");
-        assert_eq!(n.id, 0);
-        assert_eq!(n.label, "Click me");
-        assert!(!n.focusable);
-        assert!(!n.focused);
-        assert!(!n.disabled);
-        assert!(n.description.is_none());
-        assert!(n.value.is_none());
-        assert!(n.checked.is_none());
-        assert!(n.children.is_empty());
+    fn node_new_button_is_focusable() {
+        let n = A11yNode::new(1, Role::Button);
+        assert!(n.is_focusable());
     }
 
     #[test]
-    fn node_focusable_setter() {
-        let n = A11yNode::new(Role::Button, "OK").focusable(true);
-        assert!(n.focusable);
+    fn node_new_text_not_focusable() {
+        let n = A11yNode::new(2, Role::Text);
+        assert!(!n.is_focusable());
     }
 
     #[test]
-    fn node_disabled_setter() {
-        let n = A11yNode::new(Role::Button, "Disabled").disabled(true);
-        assert!(n.disabled);
+    fn node_with_label() {
+        let n = A11yNode::new(1, Role::Button).with_label("Save");
+        assert_eq!(n.label.as_deref(), Some("Save"));
     }
 
     #[test]
-    fn node_value_setter() {
-        let n = A11yNode::new(Role::Slider, "Volume").value(0.5, 0.0, 1.0);
-        assert_eq!(n.value, Some(0.5));
-        assert_eq!(n.value_min, Some(0.0));
-        assert_eq!(n.value_max, Some(1.0));
-    }
-
-    #[test]
-    fn node_checked_setter() {
-        let n = A11yNode::new(Role::Checkbox, "Accept").checked(true);
+    fn node_with_checked() {
+        let n = A11yNode::new(1, Role::Checkbox).with_checked(true);
         assert_eq!(n.checked, Some(true));
     }
 
     #[test]
-    fn node_to_json_contains_role() {
-        let n = A11yNode::new(Role::Button, "Submit");
-        let json = n.to_json();
-        assert!(json.contains(r#""role":"button""#));
+    fn node_with_disabled_blocks_focus() {
+        let n = A11yNode::new(1, Role::Button).with_disabled(true);
+        assert!(!n.is_focusable());
     }
 
     #[test]
-    fn node_to_json_contains_label() {
-        let n = A11yNode::new(Role::Button, "Submit");
-        let json = n.to_json();
-        assert!(json.contains(r#""aria-label":"Submit""#));
+    fn node_with_value() {
+        let n = A11yNode::new(1, Role::Slider).with_value("50");
+        assert_eq!(n.value.as_deref(), Some("50"));
     }
 
     #[test]
-    fn node_to_json_escape_quotes() {
-        let n = A11yNode::new(Role::Button, r#"Say "hello""#);
-        let json = n.to_json();
-        assert!(json.contains(r#"Say \"hello\""#));
+    fn node_add_child_no_duplicate() {
+        let mut n = A11yNode::new(1, Role::Dialog);
+        n.add_child(2);
+        n.add_child(2);
+        assert_eq!(n.children.len(), 1);
+    }
+
+    #[test]
+    fn node_accessible_name_some() {
+        let n = A11yNode::new(1, Role::Button).with_label("OK");
+        assert_eq!(n.accessible_name(), Some("OK"));
+    }
+
+    #[test]
+    fn node_accessible_name_none() {
+        let n = A11yNode::new(1, Role::Button);
+        assert_eq!(n.accessible_name(), None);
+    }
+
+    #[test]
+    fn node_with_description() {
+        let n = A11yNode::new(1, Role::Image).with_description("A sunset photo");
+        assert_eq!(n.description.as_deref(), Some("A sunset photo"));
     }
 }

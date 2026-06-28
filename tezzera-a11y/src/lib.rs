@@ -1,19 +1,24 @@
-//! Accessibility (a11y) support for TEZZERA — Phase 5 stubs.
+//! Accessibility semantic tree for TEZZERA.
 //!
-//! Provides a data model for WAI-ARIA roles, accessible node trees,
-//! and keyboard focus management. Screen reader integration is Phase 6+.
+//! Provides `A11yTree`, `A11yNode`, `FocusManager`, and `Role` —
+//! a data model for screen-reader integration and keyboard navigation.
+//! Platform AT-SPI/UIA bindings are deferred to v1.0.
 //!
 //! # Example
 //! ```rust,ignore
-//! use tezzera_a11y::{A11yNode, A11yTree, FocusManager, Role};
+//! use tezzera_a11y::{A11yTree, A11yNode, Role, FocusManager};
 //!
-//! let mut tree = A11yTree::new();
-//! let btn = tree.add(A11yNode::new(Role::Button, "Submit").focusable(true));
-//! let inp = tree.add(A11yNode::new(Role::TextInput, "Email").focusable(true));
+//! let mut tree = A11yTree::new(0);
+//! let root = A11yNode::new(0, Role::Dialog).with_label("Settings");
+//! tree.add_node(root);
+//! tree.add_child(0, A11yNode::new(1, Role::Button).with_label("Save"));
+//! tree.add_child(0, A11yNode::new(2, Role::Button).with_label("Cancel"));
 //!
 //! let mut focus = FocusManager::new();
-//! focus.focus_next(&mut tree);
-//! assert_eq!(focus.focused_id(), Some(btn));
+//! focus.sync(&tree);
+//! assert_eq!(focus.focus_next(), Some(1));
+//! assert_eq!(focus.focus_next(), Some(2));
+//! assert_eq!(focus.focus_next(), Some(1)); // wraps
 //! ```
 
 pub mod focus;

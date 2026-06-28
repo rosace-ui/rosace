@@ -1668,6 +1668,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tezzera-test-utils"
+version = "0.1.0"
+dependencies = [
+ "tezzera-core",
+ "tezzera-platform",
+ "tezzera-render",
+]
+
+[[package]]
 name = "tezzera-text"
 version = "0.1.0"
 dependencies = [

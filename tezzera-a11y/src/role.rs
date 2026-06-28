@@ -1,55 +1,56 @@
-/// Semantic role of a UI element, following WAI-ARIA conventions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// ARIA-inspired role for accessibility tree nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     Button,
-    TextInput,
     Checkbox,
-    Switch,
-    Slider,
-    ProgressBar,
-    Image,
-    Heading { level: u8 }, // 1–6
-    Label,
     Link,
+    Heading,
+    Image,
+    Text,
+    TextInput,
     List,
     ListItem,
     Dialog,
-    Alert,
-    Navigation,
-    Main,
+    Menu,
+    MenuItem,
+    ProgressBar,
+    Slider,
+    Tab,
+    TabPanel,
     None,
 }
 
 impl Role {
-    /// ARIA role string for web output.
-    pub fn aria_role(&self) -> &'static str {
-        match self {
-            Role::Button => "button",
-            Role::TextInput => "textbox",
-            Role::Checkbox => "checkbox",
-            Role::Switch => "switch",
-            Role::Slider => "slider",
-            Role::ProgressBar => "progressbar",
-            Role::Image => "img",
-            Role::Heading { .. } => "heading",
-            Role::Label => "label",
-            Role::Link => "link",
-            Role::List => "list",
-            Role::ListItem => "listitem",
-            Role::Dialog => "dialog",
-            Role::Alert => "alert",
-            Role::Navigation => "navigation",
-            Role::Main => "main",
-            Role::None => "none",
-        }
+    pub fn is_interactive(&self) -> bool {
+        matches!(self,
+            Role::Button | Role::Checkbox | Role::Link | Role::TextInput
+            | Role::MenuItem | Role::Slider | Role::Tab
+        )
     }
 
-    /// ARIA level attribute (only relevant for Heading).
-    pub fn aria_level(&self) -> Option<u8> {
-        if let Role::Heading { level } = self {
-            Some(*level)
-        } else {
-            None
+    pub fn is_container(&self) -> bool {
+        matches!(self, Role::List | Role::Dialog | Role::Menu | Role::TabPanel)
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Role::Button      => "button",
+            Role::Checkbox    => "checkbox",
+            Role::Link        => "link",
+            Role::Heading     => "heading",
+            Role::Image       => "img",
+            Role::Text        => "text",
+            Role::TextInput   => "textbox",
+            Role::List        => "list",
+            Role::ListItem    => "listitem",
+            Role::Dialog      => "dialog",
+            Role::Menu        => "menu",
+            Role::MenuItem    => "menuitem",
+            Role::ProgressBar => "progressbar",
+            Role::Slider      => "slider",
+            Role::Tab         => "tab",
+            Role::TabPanel    => "tabpanel",
+            Role::None        => "none",
         }
     }
 }
@@ -59,42 +60,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn role_button_aria_role() {
-        assert_eq!(Role::Button.aria_role(), "button");
+    fn role_is_interactive_button() {
+        assert!(Role::Button.is_interactive());
     }
 
     #[test]
-    fn role_heading_aria_role() {
-        assert_eq!(Role::Heading { level: 2 }.aria_role(), "heading");
+    fn role_is_interactive_text_is_false() {
+        assert!(!Role::Text.is_interactive());
     }
 
     #[test]
-    fn role_heading_aria_level() {
-        assert_eq!(Role::Heading { level: 3 }.aria_level(), Some(3));
+    fn role_is_container_list() {
+        assert!(Role::List.is_container());
     }
 
     #[test]
-    fn role_slider_aria_role() {
-        assert_eq!(Role::Slider.aria_role(), "slider");
+    fn role_is_container_button_is_false() {
+        assert!(!Role::Button.is_container());
     }
 
     #[test]
-    fn role_none_has_no_level() {
-        assert_eq!(Role::None.aria_level(), Option::<u8>::None);
+    fn role_name_button() {
+        assert_eq!(Role::Button.name(), "button");
     }
 
     #[test]
-    fn role_eq() {
-        assert_eq!(Role::Button, Role::Button);
-        assert_ne!(Role::Button, Role::Link);
-        assert_eq!(Role::Heading { level: 1 }, Role::Heading { level: 1 });
-        assert_ne!(Role::Heading { level: 1 }, Role::Heading { level: 2 });
+    fn role_name_textbox() {
+        assert_eq!(Role::TextInput.name(), "textbox");
     }
 
     #[test]
-    fn role_clone() {
-        let r = Role::Heading { level: 4 };
-        let r2 = r.clone();
-        assert_eq!(r, r2);
+    fn role_name_none() {
+        assert_eq!(Role::None.name(), "none");
+    }
+
+    #[test]
+    fn role_debug() {
+        let s = format!("{:?}", Role::Button);
+        assert_eq!(s, "Button");
     }
 }

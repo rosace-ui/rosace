@@ -32,6 +32,7 @@ members = [
     "tezzera-ws",
     "tezzera-ime",
     "tezzera-media",
+    "tezzera-test-utils",
 ]
 resolver = "2"
 
