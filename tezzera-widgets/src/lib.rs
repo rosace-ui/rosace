@@ -24,6 +24,7 @@
 
 pub mod avatar;
 pub mod badge;
+pub mod painter;
 pub mod button;
 pub mod center;
 pub mod checkbox;
@@ -42,6 +43,7 @@ pub mod text_input;
 
 pub use image::{ImageCache, ImageFit, ImageSource, ImageWidget};
 pub use overlay::{Dialog, Modal, Toast, ToastQueue};
+pub use painter::{CustomPainter, PainterContext, PainterWidget};
 
 pub use prelude::*;
 
