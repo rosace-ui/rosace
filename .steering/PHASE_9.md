@@ -1,6 +1,6 @@
 # Phase 9 — Text Shaping, Style System, CLI Polish
 
-> Status: IN PROGRESS
+> Status: COMPLETE
 > Target: v1.0 readiness — shaping prep, CSS-like styles, CLI completeness
 
 ## Steps
