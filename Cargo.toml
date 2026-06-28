@@ -21,6 +21,8 @@ members = [
     "tezzera-a11y",
     "tezzera-gesture",
     "tezzera-net",
+    "tezzera-text",
+    "tezzera-i18n",
 ]
 resolver = "2"
 

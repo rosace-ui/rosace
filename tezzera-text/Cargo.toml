@@ -1,0 +1,12 @@
+[package]
+name = "tezzera-text"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tezzera-core   = { path = "../tezzera-core" }
+tezzera-render = { path = "../tezzera-render" }
+tezzera-theme  = { path = "../tezzera-theme" }
