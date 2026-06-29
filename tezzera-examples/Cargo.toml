@@ -6,20 +6,12 @@ authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "photo_gallery"
-path = "src/bin/photo_gallery.rs"
+name = "counter"
+path = "src/bin/counter.rs"
 
 [[bin]]
-name = "profile_card"
-path = "src/bin/profile_card.rs"
-
-[[bin]]
-name = "dashboard"
-path = "src/bin/dashboard.rs"
-
-[[bin]]
-name = "counter_window"
-path = "src/bin/counter_window.rs"
+name = "app_showcase"
+path = "src/bin/app_showcase.rs"
 
 [[bin]]
 name = "animated_counter"
@@ -29,67 +21,6 @@ path = "src/bin/animated_counter.rs"
 name = "phase2_demo"
 path = "src/bin/phase2_demo.rs"
 
-[[bin]]
-name = "nav_demo"
-path = "src/bin/nav_demo.rs"
-
-[[bin]]
-name = "phase4_demo"
-path = "src/bin/phase4_demo.rs"
-
-[[bin]]
-name = "phase5_demo"
-path = "src/bin/phase5_demo.rs"
-
-[[bin]]
-name = "phase6_demo"
-path = "src/bin/phase6_demo.rs"
-
-[[bin]]
-name = "phase7_demo"
-path = "src/bin/phase7_demo.rs"
-
-[[bin]]
-name = "phase8_demo"
-path = "src/bin/phase8_demo.rs"
-
-[[bin]]
-name = "phase9_demo"
-path = "src/bin/phase9_demo.rs"
-
-[[bin]]
-name = "phase10_demo"
-path = "src/bin/phase10_demo.rs"
-
-[[bin]]
-name = "phase11_demo"
-path = "src/bin/phase11_demo.rs"
-
 [dependencies]
-tezzera-core     = { path = "../tezzera-core" }
-tezzera-layout   = { path = "../tezzera-layout" }
-tezzera-render   = { path = "../tezzera-render" }
-tezzera-state    = { path = "../tezzera-state" }
-tezzera-platform = { path = "../tezzera-platform" }
-tezzera-animate  = { path = "../tezzera-animate" }
-tezzera-theme    = { path = "../tezzera-theme" }
-tezzera-scroll   = { path = "../tezzera-scroll" }
-tezzera-widgets  = { path = "../tezzera-widgets" }
-tezzera-nav      = { path = "../tezzera-nav" }
-tezzera-forms    = { path = "../tezzera-forms" }
-tezzera-nav-anim = { path = "../tezzera-nav-anim" }
-tezzera-gesture  = { path = "../tezzera-gesture" }
-tezzera-text     = { path = "../tezzera-text" }
-tezzera-net      = { path = "../tezzera-net" }
-tezzera-i18n      = { path = "../tezzera-i18n" }
-tezzera-clipboard = { path = "../tezzera-clipboard" }
-tezzera-ws        = { path = "../tezzera-ws" }
-tezzera-renderer  = { path = "../tezzera-renderer" }
-tezzera-ime       = { path = "../tezzera-ime" }
-tezzera-bidi      = { path = "../tezzera-bidi" }
-tezzera-media     = { path = "../tezzera-media" }
-tezzera-shaping      = { path = "../tezzera-shaping" }
-tezzera-style        = { path = "../tezzera-style" }
-tezzera-anim         = { path = "../tezzera-anim" }
-tezzera-a11y         = { path = "../tezzera-a11y" }
-tezzera-test-utils   = { path = "../tezzera-test-utils" }
+tezzera        = { path = "../tezzera" }
+tezzera-state  = { path = "../tezzera-state" }
