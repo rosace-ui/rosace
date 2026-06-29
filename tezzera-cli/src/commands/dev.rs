@@ -11,12 +11,14 @@ pub enum DevTarget {
     Web,
 }
 
-/// Options parsed from `tzr dev [--target <target>] [--port <n>] [--watch]`.
+/// Options parsed from `tzr dev [--target <target>] [--port <n>] [--watch] [--bin <name>]`.
 #[derive(Debug, Clone)]
 pub struct DevOptions {
     pub target: DevTarget,
     pub port: u16,
     pub watch: bool,
+    /// Optional binary name (for workspaces with multiple `[[bin]]` entries).
+    pub bin: Option<String>,
 }
 
 impl DevOptions {
@@ -28,6 +30,7 @@ impl DevOptions {
         let mut target = DevTarget::Desktop;
         let mut port = 3000u16;
         let mut watch = false;
+        let mut bin: Option<String> = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -51,6 +54,10 @@ impl DevOptions {
                         .map_err(|_| format!("invalid port: {}", args[i + 1]))?;
                     i += 2;
                 }
+                "--bin" if i + 1 < args.len() => {
+                    bin = Some(args[i + 1].clone());
+                    i += 2;
+                }
                 "--watch" => {
                     watch = true;
                     i += 1;
@@ -71,11 +78,15 @@ impl DevOptions {
                         .map_err(|_| format!("invalid port: {}", p))?;
                     i += 1;
                 }
+                other if other.starts_with("--bin=") => {
+                    bin = Some(other.trim_start_matches("--bin=").to_string());
+                    i += 1;
+                }
                 other => return Err(format!("unknown flag: {}", other)),
             }
         }
 
-        Ok(Self { target, port, watch })
+        Ok(Self { target, port, watch, bin })
     }
 }
 
@@ -85,7 +96,7 @@ pub fn run(opts: DevOptions) -> Result<(), String> {
         start_watcher(&opts);
     }
     match opts.target {
-        DevTarget::Desktop => run_desktop(),
+        DevTarget::Desktop => run_desktop(opts.bin.as_deref()),
         DevTarget::Web => run_web(opts.port),
     }
 }
@@ -116,17 +127,81 @@ fn start_watcher(opts: &DevOptions) {
     });
 }
 
-fn run_desktop() -> Result<(), String> {
+fn run_desktop(bin: Option<&str>) -> Result<(), String> {
     println!("Starting TEZZERA dev server (desktop)...");
     println!();
-    let status = Command::new("cargo")
-        .args(["run"])
+
+    // Auto-detect the binary name when none is specified.
+    let bin_name: Option<String> = match bin {
+        Some(name) => Some(name.to_string()),
+        None => detect_single_bin(),
+    };
+
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run");
+    if let Some(ref name) = bin_name {
+        cmd.args(["--bin", name]);
+        println!("  Binary: {}", name);
+    }
+    let status = cmd
         .status()
         .map_err(|e| format!("failed to invoke cargo: {}", e))?;
     if !status.success() {
         return Err("cargo run failed".to_string());
     }
     Ok(())
+}
+
+/// Read Cargo.toml and return the binary name only when exactly one [[bin]]
+/// is defined. Returns `None` when there are zero or multiple binaries so
+/// Cargo's own error (or the `--bin` flag) handles the ambiguity.
+fn detect_single_bin() -> Option<String> {
+    let cargo_toml = std::fs::read_to_string("Cargo.toml").ok()?;
+    let bins: Vec<&str> = cargo_toml
+        .lines()
+        .filter_map(|line| {
+            let t = line.trim();
+            if t.starts_with("name") && t.contains('=') {
+                // Only collect names that appear after a [[bin]] header, which
+                // we do by counting [[bin]] sections below.
+                Some(t)
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Count [[bin]] sections — a simpler marker than full TOML parsing.
+    let bin_sections = cargo_toml.matches("[[bin]]").count();
+    if bin_sections != 1 {
+        if bin_sections > 1 {
+            eprintln!(
+                "  Hint: this package has {} binaries. Use --bin <name> to pick one.",
+                bin_sections
+            );
+            eprintln!("  Example: tzr dev --bin {}", extract_first_bin_name(&cargo_toml).unwrap_or("my-app".to_string()));
+        }
+        return None;
+    }
+    // Single binary — extract its name.
+    let _ = bins; // suppress unused warning
+    extract_first_bin_name(&cargo_toml)
+}
+
+fn extract_first_bin_name(toml: &str) -> Option<String> {
+    let mut in_bin = false;
+    for line in toml.lines() {
+        let t = line.trim();
+        if t == "[[bin]]" { in_bin = true; continue; }
+        if in_bin && t.starts_with("name") {
+            if let Some(val) = t.splitn(2, '=').nth(1) {
+                let name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !name.is_empty() { return Some(name); }
+            }
+        }
+        // Another section starts — stop scanning
+        if in_bin && t.starts_with('[') && t != "[[bin]]" { break; }
+    }
+    None
 }
 
 fn run_web(port: u16) -> Result<(), String> {

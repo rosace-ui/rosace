@@ -15,15 +15,17 @@ pub struct AtomEntry {
     pub display: String,
 }
 
-/// Inspects and records Atom state snapshots.
+/// Inspects and records Atom state snapshots with time-travel cursor.
 pub struct AtomInspector {
     history: Vec<AtomSnapshot>,
     max_snapshots: usize,
+    /// Current time-travel position. `history.len() - 1` = latest frame.
+    cursor: usize,
 }
 
 impl AtomInspector {
     pub fn new() -> Self {
-        Self { history: Vec::new(), max_snapshots: 60 }
+        Self { history: Vec::new(), max_snapshots: 60, cursor: 0 }
     }
 
     pub fn max_snapshots(mut self, n: usize) -> Self {
@@ -31,12 +33,55 @@ impl AtomInspector {
         self
     }
 
-    /// Record a new snapshot.
+    /// Record a new snapshot and advance cursor to the latest frame.
     pub fn record(&mut self, snapshot: AtomSnapshot) {
         if self.history.len() >= self.max_snapshots {
             self.history.remove(0);
         }
         self.history.push(snapshot);
+        self.cursor = self.history.len().saturating_sub(1);
+    }
+
+    // ── Time-travel cursor API ────────────────────────────────────────────
+
+    pub fn cursor(&self) -> usize { self.cursor }
+
+    /// Jump to a specific snapshot by index.
+    pub fn travel_to(&mut self, index: usize) {
+        if index < self.history.len() { self.cursor = index; }
+    }
+
+    /// Step one frame backward (toward older snapshots).
+    pub fn step_back(&mut self) { self.cursor = self.cursor.saturating_sub(1); }
+
+    /// Step one frame forward (toward the latest snapshot).
+    pub fn step_forward(&mut self) {
+        if self.cursor + 1 < self.history.len() { self.cursor += 1; }
+    }
+
+    /// Snapshot at the current cursor position.
+    pub fn current(&self) -> Option<&AtomSnapshot> { self.history.get(self.cursor) }
+
+    /// Render the snapshot at the cursor as an ASCII table.
+    pub fn render_at_cursor(&self) -> String {
+        match self.current() {
+            None => "┌─ ATOMS ─────────────────────────────────────────\n│  (no snapshot yet)\n└─────────────────────────────────────────────────\n".to_string(),
+            Some(snap) => {
+                let mut out = format!(
+                    "┌─ ATOMS  frame {}/{} ──────────────────────────────\n",
+                    self.cursor + 1, self.history.len()
+                );
+                let mut ids: Vec<u64> = snap.entries.keys().copied().collect();
+                ids.sort();
+                for id in ids {
+                    if let Some(e) = snap.entries.get(&id) {
+                        out.push_str(&format!("│  [{:>6}] {} = {}\n", e.atom_id, e.type_name, e.display));
+                    }
+                }
+                out.push_str("└─────────────────────────────────────────────────\n");
+                out
+            }
+        }
     }
 
     /// How many snapshots are stored.

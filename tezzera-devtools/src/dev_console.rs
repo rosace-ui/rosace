@@ -1,22 +1,25 @@
 use crate::atom_inspector::AtomInspector;
+use crate::component_inspector::ComponentInspector;
 use crate::frame_profiler::FrameProfiler;
 use crate::trace_viewer::TraceViewer;
 
 /// Aggregates all dev tools into a single console.
 pub struct DevConsole {
-    pub trace: TraceViewer,
-    pub atoms: AtomInspector,
-    pub profiler: FrameProfiler,
-    pub enabled: bool,
+    pub trace:     TraceViewer,
+    pub atoms:     AtomInspector,
+    pub profiler:  FrameProfiler,
+    pub layout:    ComponentInspector,
+    pub enabled:   bool,
 }
 
 impl DevConsole {
     pub fn new() -> Self {
         Self {
-            trace: TraceViewer::new(),
-            atoms: AtomInspector::new(),
+            trace:    TraceViewer::new(),
+            atoms:    AtomInspector::new(),
             profiler: FrameProfiler::new(),
-            enabled: true,
+            layout:   ComponentInspector::new(),
+            enabled:  true,
         }
     }
 
@@ -28,7 +31,8 @@ impl DevConsole {
         let mut out = String::new();
         out.push_str(&self.profiler.render());
         out.push_str(&self.trace.render());
-        out.push_str(&self.atoms.render_latest());
+        out.push_str(&self.atoms.render_at_cursor());
+        out.push_str(&self.layout.render());
         out
     }
 
