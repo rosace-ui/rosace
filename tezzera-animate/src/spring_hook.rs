@@ -115,9 +115,24 @@ pub fn use_spring(ctx: &mut Context, initial: f32) -> (Animated, SpringControlle
     let value_atom: Atom<f32>         = ctx.state(initial);
 
     // Advance spring by one frame if it has not settled.
+    // Cap dt to 1/60 s: Euler integration diverges at large steps (stiffness=200
+    // requires dt < ~0.032 s for stability), so in slow debug builds we sub-step.
     let s = state_atom.get();
     if !s.is_settled() {
-        let next = s.step(1.0 / 60.0);
+        let raw_dt = crate::frame_dt();
+        let max_dt = 1.0_f32 / 60.0;
+        let next = if raw_dt <= max_dt {
+            s.step(raw_dt)
+        } else {
+            // Take multiple fixed-size steps to cover the real elapsed time.
+            let steps = (raw_dt / max_dt).ceil() as u32;
+            let sub_dt = raw_dt / steps as f32;
+            let mut cur = s.clone();
+            for _ in 0..steps {
+                cur = cur.step(sub_dt);
+            }
+            cur
+        };
         value_atom.set(next.position);
         state_atom.set(next);
     }
