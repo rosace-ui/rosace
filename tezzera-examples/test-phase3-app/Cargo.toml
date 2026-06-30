@@ -1,0 +1,18 @@
+[package]
+name = "test-phase3-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "test-phase3-app"
+path = "src/main.rs"
+
+[dependencies]
+tezzera-core     = { git = "https://github.com/tezzera-ui/tezzera" }
+tezzera-layout   = { git = "https://github.com/tezzera-ui/tezzera" }
+tezzera-render   = { git = "https://github.com/tezzera-ui/tezzera" }
+tezzera-state    = { git = "https://github.com/tezzera-ui/tezzera" }
+tezzera-platform = { git = "https://github.com/tezzera-ui/tezzera" }
+tezzera-theme    = { git = "https://github.com/tezzera-ui/tezzera" }
+tezzera-widgets  = { git = "https://github.com/tezzera-ui/tezzera" }
+tezzera-animate  = { git = "https://github.com/tezzera-ui/tezzera" }
