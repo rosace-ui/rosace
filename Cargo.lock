@@ -1417,10 +1417,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "tezzera"
+version = "0.1.0"
+dependencies = [
+ "tezzera-a11y",
+ "tezzera-anim",
+ "tezzera-animate",
+ "tezzera-bidi",
+ "tezzera-clipboard",
+ "tezzera-core",
+ "tezzera-devtools",
+ "tezzera-forms",
+ "tezzera-gesture",
+ "tezzera-hot-reload",
+ "tezzera-i18n",
+ "tezzera-ime",
+ "tezzera-layout",
+ "tezzera-macros",
+ "tezzera-media",
+ "tezzera-nav",
+ "tezzera-nav-anim",
+ "tezzera-net",
+ "tezzera-platform",
+ "tezzera-render",
+ "tezzera-scroll",
+ "tezzera-shaping",
+ "tezzera-state",
+ "tezzera-style",
+ "tezzera-test-utils",
+ "tezzera-text",
+ "tezzera-theme",
+ "tezzera-trace",
+ "tezzera-widgets",
+ "tezzera-ws",
+]
+
+[[package]]
 name = "tezzera-a11y"
 version = "0.1.0"
 dependencies = [
  "tezzera-core",
+ "tezzera-state",
 ]
 
 [[package]]
@@ -1483,33 +1520,9 @@ dependencies = [
 name = "tezzera-examples"
 version = "0.1.0"
 dependencies = [
- "tezzera-a11y",
- "tezzera-anim",
+ "tezzera",
  "tezzera-animate",
- "tezzera-bidi",
- "tezzera-clipboard",
- "tezzera-core",
- "tezzera-forms",
- "tezzera-gesture",
- "tezzera-i18n",
- "tezzera-ime",
- "tezzera-layout",
- "tezzera-media",
- "tezzera-nav",
- "tezzera-nav-anim",
- "tezzera-net",
- "tezzera-platform",
- "tezzera-render",
- "tezzera-renderer",
- "tezzera-scroll",
- "tezzera-shaping",
  "tezzera-state",
- "tezzera-style",
- "tezzera-test-utils",
- "tezzera-text",
- "tezzera-theme",
- "tezzera-widgets",
- "tezzera-ws",
 ]
 
 [[package]]
@@ -1607,8 +1620,10 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "softbuffer",
+ "tezzera-animate",
  "tezzera-core",
  "tezzera-render",
+ "tezzera-state",
  "tezzera-trace",
  "wasm-bindgen",
  "web-sys",
@@ -1624,14 +1639,6 @@ dependencies = [
  "tezzera-layout",
  "tezzera-trace",
  "tiny-skia",
-]
-
-[[package]]
-name = "tezzera-renderer"
-version = "0.1.0"
-dependencies = [
- "tezzera-core",
- "tezzera-render",
 ]
 
 [[package]]
@@ -1705,6 +1712,7 @@ version = "0.1.0"
 name = "tezzera-widgets"
 version = "0.1.0"
 dependencies = [
+ "tezzera-a11y",
  "tezzera-core",
  "tezzera-layout",
  "tezzera-render",

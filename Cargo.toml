@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "tezzera",
     "tezzera-macros",
     "tezzera-style",
     "tezzera-trace",
@@ -7,7 +8,6 @@ members = [
     "tezzera-state",
     "tezzera-layout",
     "tezzera-render",
-    "tezzera-renderer",
     "tezzera-theme",
     "tezzera-widgets",
     "tezzera-cli",

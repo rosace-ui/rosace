@@ -1,0 +1,64 @@
+[package]
+name = "tezzera"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TEZZERA UI framework — single-crate SDK entry point"
+
+# ── Dependency layer rules ────────────────────────────────────────────────────
+#
+# This crate sits at Layer 7 (top of the DAG). It re-exports everything but
+# NOTHING in the framework may depend on this crate — only app code does.
+#
+# Layer 0  tezzera-trace      zero deps
+# Layer 1  tezzera-state      → trace
+# Layer 2  tezzera-core       → trace, state
+# Layer 3  tezzera-layout     → core
+# Layer 4  tezzera-render     → core, layout
+#          tezzera-theme      → core, state, trace
+# Layer 5  (services)         → layers 0-4 only
+# Layer 6  tezzera-widgets    → layers 0-5
+# Layer 7  tezzera (this)     → everything
+#
+# Rule: a crate at layer N may only depend on crates at layers < N.
+# Enforced by keeping this list here and never adding tezzera as a dep
+# inside any sub-crate.
+
+[dependencies]
+# Core layers
+tezzera-trace   = { path = "../tezzera-trace" }
+tezzera-state   = { path = "../tezzera-state" }
+tezzera-core    = { path = "../tezzera-core" }
+tezzera-layout  = { path = "../tezzera-layout" }
+tezzera-render  = { path = "../tezzera-render" }
+tezzera-theme   = { path = "../tezzera-theme" }
+
+# Widget layer
+tezzera-widgets = { path = "../tezzera-widgets" }
+
+# Service layer
+tezzera-animate  = { path = "../tezzera-animate" }
+tezzera-anim     = { path = "../tezzera-anim" }
+tezzera-scroll   = { path = "../tezzera-scroll" }
+tezzera-nav      = { path = "../tezzera-nav" }
+tezzera-nav-anim = { path = "../tezzera-nav-anim" }
+tezzera-forms    = { path = "../tezzera-forms" }
+tezzera-gesture  = { path = "../tezzera-gesture" }
+tezzera-a11y     = { path = "../tezzera-a11y" }
+tezzera-text     = { path = "../tezzera-text" }
+tezzera-shaping  = { path = "../tezzera-shaping" }
+tezzera-style    = { path = "../tezzera-style" }
+tezzera-i18n     = { path = "../tezzera-i18n" }
+tezzera-net      = { path = "../tezzera-net" }
+tezzera-ws       = { path = "../tezzera-ws" }
+tezzera-clipboard = { path = "../tezzera-clipboard" }
+tezzera-platform  = { path = "../tezzera-platform" }
+tezzera-bidi      = { path = "../tezzera-bidi" }
+tezzera-ime       = { path = "../tezzera-ime" }
+tezzera-media     = { path = "../tezzera-media" }
+tezzera-macros    = { path = "../tezzera-macros" }
+tezzera-hot-reload = { path = "../tezzera-hot-reload" }
+tezzera-devtools   = { path = "../tezzera-devtools" }
+tezzera-test-utils = { path = "../tezzera-test-utils" }
