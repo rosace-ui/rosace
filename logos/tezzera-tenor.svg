@@ -1,0 +1,43 @@
+<svg width="420" height="220" viewBox="0 0 420 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>@import url('https://fonts.googleapis.com/css2?family=Tenor+Sans&amp;display=swap');</style>
+    <linearGradient id="g" x1="110" y1="0" x2="310" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#00A8FF" stop-opacity="0"/>
+      <stop offset="35%"  stop-color="#00CFFF" stop-opacity="0.85"/>
+      <stop offset="50%"  stop-color="#00EEFF" stop-opacity="1"/>
+      <stop offset="65%"  stop-color="#00CFFF" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#00A8FF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ROW 1 -->
+  <polygon points="124,8  144,28 124,48 104,28" fill="#00CFFF" opacity="0.22"/>
+  <polygon points="167,8  187,28 167,48 147,28" fill="#00CFFF" opacity="0.55"/>
+  <polygon points="210,8  230,28 210,48 190,28" fill="#00EEFF" opacity="1.0"/>
+  <polygon points="253,8  273,28 253,48 233,28" fill="#00CFFF" opacity="0.55"/>
+  <polygon points="296,8  316,28 296,48 276,28" fill="#00CFFF" opacity="0.22"/>
+  <!-- ROW 2 -->
+  <polygon points="102,31 122,51 102,71  82,51" fill="#00CFFF" opacity="0.10"/>
+  <polygon points="145,31 165,51 145,71 125,51" fill="#00CFFF" opacity="0.38"/>
+  <polygon points="188,31 208,51 188,71 168,51" fill="#00EEFF" opacity="0.85"/>
+  <polygon points="231,31 251,51 231,71 211,51" fill="#00EEFF" opacity="0.85"/>
+  <polygon points="274,31 294,51 274,71 254,51" fill="#00CFFF" opacity="0.38"/>
+  <polygon points="317,31 337,51 317,71 297,51" fill="#00CFFF" opacity="0.10"/>
+  <!-- ROW 3 -->
+  <polygon points="124,54 144,74 124,94 104,74" fill="#00CFFF" opacity="0.07"/>
+  <polygon points="167,54 187,74 167,94 147,74" fill="#00CFFF" opacity="0.25"/>
+  <polygon points="210,54 230,74 210,94 190,74" fill="#00EEFF" opacity="0.60"/>
+  <polygon points="253,54 273,74 253,94 233,74" fill="#00CFFF" opacity="0.25"/>
+  <polygon points="296,54 316,74 296,94 276,74" fill="#00CFFF" opacity="0.07"/>
+
+  <!-- LINE -->
+  <path d="M110,112 Q210,114 310,112 Q210,110 110,112 Z" fill="url(#g)"/>
+
+  <!-- WORDMARK: Tenor Sans -->
+  <text font-family="Tenor Sans, sans-serif" font-size="48" font-weight="400" letter-spacing="8" text-anchor="middle" x="210" y="176" fill="#E8F4FF">
+    <tspan>TE</tspan><tspan fill="none">Z</tspan><tspan fill="#00CFFF">Z</tspan><tspan fill="#E8F4FF">ERA</tspan>
+  </text>
+  <g transform="translate(330,0) scale(-1,1)">
+    <text font-family="Tenor Sans, sans-serif" font-size="48" font-weight="400" letter-spacing="8" text-anchor="middle" x="175" y="176" fill="#00CFFF">Z</text>
+  </g>
+</svg>
