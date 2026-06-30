@@ -1,102 +1,60 @@
 //! `tezzera-widgets` — built-in widgets for the TEZZERA UI framework.
-//!
-//! This crate is the "glue" layer: it implements concrete widgets by combining
-//! `tezzera-core` (traits and element tree), `tezzera-layout` (constraint-based
-//! layout), `tezzera-render` (pixel painting), and `tezzera-state` (atoms).
-//!
-//! # Phase 2 widget set
-//!
-//! | Widget | Description |
-//! |---|---|
-//! | [`Text`] | Plain text leaf — color and size |
-//! | [`Button`] | Clickable rectangle with label and variant styling |
-//! | [`TextInput`] | Single-line input with cursor and obscure mode |
-//! | [`Divider`] | Horizontal or vertical separator line |
-//! | [`Padding`] | Adds insets around a child widget |
-//! | [`Center`] | Centers a child inside its container |
-//!
-//! # Quick start
-//!
-//! ```rust,ignore
-//! use tezzera_widgets::prelude::*;
-//! let btn = Button::new("Save").variant(ButtonVariant::Primary);
-//! ```
 
-pub mod avatar;
-pub mod badge;
-pub mod painter;
-pub mod button;
-pub mod center;
-pub mod checkbox;
-pub mod chip;
-pub mod counter_app;
-pub mod divider;
+/// Composable widget tree system — the primary API for building TEZZERA apps.
+pub mod tree;
+
 pub mod image;
-pub mod overlay;
-pub mod padding;
 pub mod prelude;
-pub mod progress_bar;
-pub mod slider;
-pub mod switch;
-pub mod text;
-pub mod text_input;
+
+// ── Tree widget re-exports (canonical top-level names) ─────────────────────
+pub use tree::Widget;
+pub use tree::PaintCtx;
+pub use tree::BoxedWidget;
+pub use tree::WidgetApp;
+pub use tree::AppBar;
+pub use tree::Avatar;
+pub use tree::Badge;
+pub use tree::Button;
+pub use tree::ButtonVariant;
+pub use tree::Card;
+pub use tree::Center;
+pub use tree::Checkbox;
+pub use tree::Chip;
+pub use tree::ColoredBox;
+pub use tree::Column;
+pub use tree::Container;
+pub use tree::Divider;
+pub use tree::EdgeInsets;
+pub use tree::Expanded;
+pub use tree::Icon;
+pub use tree::IconKind;
+pub use tree::ListTile;
+pub use tree::ListView;
+pub use tree::NavItem;
+pub use tree::NavRail;
+pub use tree::Padding;
+pub use tree::ProgressBar;
+pub use tree::RectReader;
+pub use tree::{
+    OverlayEntry, LayerId, LayerPosition,
+    InputBehavior, FocusBehavior, ScrimConfig,
+    push_overlay, drain_overlays, clear_overlays,
+};
+pub use tree::{OverlayApi, OverlayKind};
+pub use tree::FocusApi;
+pub use tree::Row;
+pub use tree::Scaffold;
+pub use tree::ScrollView;
+pub use tree::SizedBox;
+pub use tree::Slider;
+pub use tree::Spacer;
+pub use tree::Stack;
+pub use tree::Switch;
+pub use tree::Tab;
+pub use tree::TabBar;
+pub use tree::{Text, TextAlign, FontWeight};
+pub use tree::TextInput;
+pub use tree::Image;
+pub use tree::Tooltip;
 
 pub use image::{ImageCache, ImageFit, ImageSource, ImageWidget};
-pub use overlay::{Dialog, Modal, Toast, ToastQueue};
-pub use painter::{CustomPainter, PainterContext, PainterWidget};
-
-pub use prelude::*;
-
-/// Converts a `tezzera_theme::Color` (f32 RGBA 0.0–1.0) to the
-/// `tezzera_render::canvas::Color` (u8 RGBA 0–255) used by drawing methods.
-pub(crate) fn theme_color_to_render(c: tezzera_theme::Color) -> tezzera_render::canvas::Color {
-    tezzera_render::canvas::Color::rgba(
-        (c.r * 255.0) as u8,
-        (c.g * 255.0) as u8,
-        (c.b * 255.0) as u8,
-        (c.a * 255.0) as u8,
-    )
-}
-
-// Phase 1 integration demo — kept for backward compatibility.
-pub use counter_app::{render_counter_frame, run_counter_simulation};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── counter_app integration tests (Phase 1) ───────────────────────────────
-
-    #[test]
-    fn counter_simulation_increments_correctly() {
-        let result = run_counter_simulation(5);
-        assert_eq!(result, 5);
-    }
-
-    #[test]
-    fn counter_simulation_starts_at_zero() {
-        let result = run_counter_simulation(0);
-        assert_eq!(result, 0);
-    }
-
-    #[test]
-    fn render_counter_frame_returns_correct_pixel_count() {
-        let pixels = render_counter_frame(0, 400, 300);
-        // RGBA = 4 bytes per pixel
-        assert_eq!(pixels.len(), 400 * 300 * 4);
-    }
-
-    #[test]
-    fn render_counter_frame_is_not_all_zeros() {
-        let pixels = render_counter_frame(3, 200, 200);
-        assert!(pixels.iter().any(|&b| b != 0));
-    }
-
-    #[test]
-    fn render_counter_frame_different_counts_produce_different_pixels() {
-        let frame_0 = render_counter_frame(0, 200, 100);
-        let frame_99 = render_counter_frame(99, 200, 100);
-        // "Count: 0" vs "Count: 99" — pixels must differ
-        assert_ne!(frame_0, frame_99);
-    }
-}
