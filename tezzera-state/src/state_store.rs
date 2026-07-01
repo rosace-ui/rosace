@@ -38,11 +38,15 @@ pub fn hook_state<T: Clone + Send + Sync + 'static>(
 
         if let Some(existing) = map.get(&key) {
             if let Some(atom) = existing.downcast_ref::<Atom<T>>() {
+                // Re-subscribe each frame so the subscriber list stays current.
+                atom.subscribe(component_id);
                 return atom.clone();
             }
         }
 
         let atom = use_atom(default);
+        // Register this component as a subscriber so atom.set() can mark it dirty.
+        atom.subscribe(component_id);
         map.insert(key, Box::new(atom.clone()));
         atom
     })

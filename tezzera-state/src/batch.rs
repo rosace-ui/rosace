@@ -45,13 +45,14 @@ pub fn batch<F: FnOnce()>(f: F) {
     f();
     BATCHING.with(|b| b.set(false));
 
-    let had_dirty = PENDING_DIRTY.with(|q| {
+    let pending: Vec<(AtomId, Vec<ComponentId>)> = PENDING_DIRTY.with(|q| {
         let mut q = q.borrow_mut();
-        let had = !q.is_empty();
-        q.clear();
-        had
+        std::mem::take(&mut *q)
     });
-    if had_dirty {
+    if !pending.is_empty() {
+        for (_atom_id, subs) in &pending {
+            crate::dirty_set::mark_dirty(subs);
+        }
         crate::frame_scheduler::request_frame();
     }
 }

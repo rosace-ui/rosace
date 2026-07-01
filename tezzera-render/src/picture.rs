@@ -5,6 +5,7 @@ use crate::draw_command::DrawCommand;
 /// A `Picture` can be replayed many times (scrolling, animations) without calling
 /// any widget's `paint()` method again — this is the foundation of the cached
 /// repaint model.
+#[derive(Clone)]
 pub struct Picture {
     pub commands: Vec<DrawCommand>,
 }

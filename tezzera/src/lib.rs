@@ -23,9 +23,13 @@
 //! }
 //! ```
 
+mod render_node;
+mod reconcile;
+
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use tezzera_theme::built_in;
 use tezzera_platform::PlatformWindow;
@@ -95,6 +99,18 @@ impl App {
         // ComponentIds assigned by DFS position; stable IDs mean state persists.
         let mut prev_mounted: HashSet<u64> = HashSet::new();
 
+        // ── Phase 13: persistent render cache ─────────────────────────────
+        // Cached build output per component ID — skips build() when the
+        // component's atoms haven't changed.
+        let mut element_cache: std::collections::HashMap<u64, tezzera_core::Element> =
+            std::collections::HashMap::new();
+        // Persistent RenderNode list (DFS order of native elements). Caches
+        // last layout size and painted Picture so unchanged widgets skip
+        // re-layout and re-paint.
+        let mut render_nodes: Vec<render_node::RenderNode> = Vec::new();
+        // First frame — all components are dirty.
+        tezzera_state::reset_to_global_dirty();
+
         // Set theme once at startup — not per-frame. Writing the theme atom
         // every frame triggers subscriber notifications and causes a render loop.
         tezzera_theme::set_theme(theme.clone());
@@ -103,6 +119,10 @@ impl App {
             .title(self.title)
             .size(width, height)
             .run(move |canvas, events| {
+                // ── Drain dirty-component set for this frame ───────────────
+                let global_dirty = tezzera_state::is_global_dirty();
+                let dirty_ids = tezzera_state::take_dirty_components();
+
                 // ── Build root ─────────────────────────────────────────────
                 let mut ctx = tezzera_core::Context::new(tezzera_core::types::ComponentId(0));
                 let element = root.build(&mut ctx);
@@ -139,12 +159,19 @@ impl App {
 
                 // ── Walk element tree — widgets record DrawCommands ────────
                 let mut position: u64 = 0;
+                let mut native_idx: usize = 0;
                 let mut new_mounted: HashSet<u64> = HashSet::new();
                 walk_element(
                     &element,
                     constraints,
                     &mut paint_ctx,
                     &mut position,
+                    &mut native_idx,
+                    &mut render_nodes,
+                    &dirty_ids,
+                    global_dirty,
+                    global_dirty,  // subtree_dirty: start with global_dirty
+                    &mut element_cache,
                     &mut new_mounted,
                 );
 
@@ -283,14 +310,25 @@ impl Default for App {
 /// Walk the element tree, assigning stable position-based [`ComponentId`]s,
 /// collecting mounted component IDs for the reconciler, and painting widgets.
 ///
-/// `position` is a DFS counter — each `Component` node consumes one slot so
-/// the same component always gets the same ID as long as the tree shape is
-/// stable across frames.
+/// `position` — DFS counter for Component nodes (determines ComponentId).
+/// `native_idx` — DFS counter for Native nodes (indexes into `render_nodes`).
+/// `render_nodes` — persistent RenderNode list; caches layout size + Picture.
+/// `dirty_ids` — component IDs whose atoms changed this frame.
+/// `global_dirty` — when true, skip cache and rebuild everything.
+/// `subtree_dirty` — an ancestor component rebuilt this frame; force re-paint.
+/// `element_cache` — cached build() output per ComponentId.
+#[allow(clippy::too_many_arguments)]
 fn walk_element(
     element: &tezzera_core::Element,
     constraints: tezzera_layout::Constraints,
     ctx: &mut tezzera_widgets::tree::PaintCtx,
     position: &mut u64,
+    native_idx: &mut usize,
+    render_nodes: &mut Vec<render_node::RenderNode>,
+    dirty_ids: &std::collections::HashSet<tezzera_core::types::ComponentId>,
+    global_dirty: bool,
+    subtree_dirty: bool,
+    element_cache: &mut std::collections::HashMap<u64, tezzera_core::Element>,
     new_mounted: &mut std::collections::HashSet<u64>,
 ) -> tezzera_core::types::Size {
     use tezzera_core::Element;
@@ -303,41 +341,150 @@ fn walk_element(
             *position += 1;
             new_mounted.insert(id.0);
 
-            let mut child_ctx = tezzera_core::Context::new(id);
+            let is_dirty = global_dirty || subtree_dirty || dirty_ids.contains(&id);
 
-            // Catch panics from Component::build so ErrorBoundary can show fallback.
-            let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                c.component.build(&mut child_ctx)
-            }));
-
-            match build_result {
-                Ok(child_element) => {
-                    walk_element(&child_element, constraints, ctx, position, new_mounted)
-                }
-                Err(_) => {
-                    #[cfg(debug_assertions)]
-                    {
-                        use tezzera_trace::{event::TezzeraTrace, trace};
-                        trace!(TezzeraTrace::ComponentUnmount {
-                            id,
-                            name: "ErrorBoundary::fallback",
-                        });
+            let (child_element, child_subtree_dirty) = if is_dirty {
+                // Build fresh and update cache.
+                let mut child_ctx = tezzera_core::Context::new(id);
+                let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    c.component.build(&mut child_ctx)
+                }));
+                let elem = match build_result {
+                    Ok(e) => e,
+                    Err(_) => {
+                        #[cfg(debug_assertions)]
+                        {
+                            use tezzera_trace::{event::TezzeraTrace, trace};
+                            trace!(TezzeraTrace::ComponentUnmount {
+                                id,
+                                name: "ErrorBoundary::fallback",
+                            });
+                        }
+                        tezzera_core::Element::text("⚠ component error")
                     }
-                    let fallback = tezzera_core::Element::text("⚠ component error");
-                    walk_element(&fallback, constraints, ctx, position, new_mounted)
-                }
-            }
+                };
+                element_cache.insert(id.0, elem.clone());
+                (elem, true)
+            } else if let Some(cached) = element_cache.get(&id.0) {
+                // Not dirty — reuse last frame's element tree, no subtree repaint.
+                (cached.clone(), false)
+            } else {
+                // No cache yet (first frame or tree shape change).
+                let mut child_ctx = tezzera_core::Context::new(id);
+                let elem = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    c.component.build(&mut child_ctx)
+                })).unwrap_or_else(|_| tezzera_core::Element::text("⚠ component error"));
+                element_cache.insert(id.0, elem.clone());
+                (elem, true)
+            };
+
+            walk_element(
+                &child_element,
+                constraints,
+                ctx,
+                position,
+                native_idx,
+                render_nodes,
+                dirty_ids,
+                global_dirty,
+                child_subtree_dirty,
+                element_cache,
+                new_mounted,
+            )
         }
 
         Element::Native(n) => {
             if let Some(wb) = n.payload.as_ref()
                 .and_then(|p| p.as_any().downcast_ref::<WidgetBox>())
             {
-                let lctx = ctx.layout_ctx(constraints);
-                let size = wb.0.layout(&lctx);
+                // ── Ensure RenderNode exists at this DFS position ──────────
+                let idx = *native_idx;
+                *native_idx += 1;
+                if render_nodes.len() <= idx {
+                    render_nodes.push(render_node::RenderNode::new(n.tag, n.key.clone()));
+                } else if render_nodes[idx].tag != n.tag {
+                    // Type mismatch — replace with a fresh dirty node.
+                    render_nodes[idx] = render_node::RenderNode::new(n.tag, n.key.clone());
+                }
+                let node = &mut render_nodes[idx];
+
+                // When the containing component rebuilt, force re-layout + re-paint.
+                if subtree_dirty {
+                    node.paint_dirty = true;
+                }
+
+                // ── Layout (skip if constraints unchanged and not dirty) ────
+                let size = if node.last_constraints == Some(constraints) && !node.paint_dirty
+                    && node.cached_size.is_some()
+                {
+                    node.cached_size.unwrap()
+                } else {
+                    let lctx = ctx.layout_ctx(constraints);
+                    let s = wb.0.layout(&lctx);
+                    node.last_constraints = Some(constraints);
+                    node.cached_size = Some(s);
+                    node.paint_dirty = true;
+                    s
+                };
+
                 let child_rect = Rect { origin: ctx.rect.origin, size };
-                let mut child_ctx = ctx.child(child_rect);
-                wb.0.paint(&mut child_ctx);
+
+                // ── Paint (skip if rect unchanged and not dirty) ───────────
+                if !node.paint_dirty
+                    && node.cached_picture.is_some()
+                    && node.cached_rect == Some(child_rect)
+                {
+                    // Replay cached display list — zero widget work.
+                    let pic = node.cached_picture.as_ref().unwrap();
+                    for cmd in &pic.commands {
+                        ctx.recorder.push(cmd.clone());
+                    }
+                    // Re-register cached hit handlers.
+                    let mut ht = ctx.hit_targets.borrow_mut();
+                    for h in &node.hit_handlers {
+                        ht.push(HitTarget {
+                            rect: child_rect,
+                            callback: h.clone(),
+                        });
+                    }
+                } else {
+                    // Fresh paint — record into a sub-recorder, then merge.
+                    let sub_hit: Rc<RefCell<Vec<HitTarget>>> =
+                        Rc::new(RefCell::new(Vec::new()));
+                    let mut sub_recorder = tezzera_render::PictureRecorder::new();
+                    {
+                        let mut child_ctx = tezzera_widgets::tree::PaintCtx {
+                            recorder: &mut sub_recorder,
+                            rect: child_rect,
+                            font: ctx.font,
+                            theme: ctx.theme.clone(),
+                            hit_targets: Rc::clone(&sub_hit),
+                        };
+                        wb.0.paint(&mut child_ctx);
+                    }
+                    let picture = sub_recorder.finish();
+
+                    // Merge sub-picture commands into main recorder.
+                    for cmd in &picture.commands {
+                        ctx.recorder.push(cmd.clone());
+                    }
+                    // Collect and cache hit handlers.
+                    let targets = sub_hit.borrow();
+                    node.hit_handlers = targets.iter()
+                        .map(|t| t.callback.clone())
+                        .collect();
+                    let mut ht = ctx.hit_targets.borrow_mut();
+                    for t in targets.iter() {
+                        ht.push(HitTarget { rect: t.rect, callback: t.callback.clone() });
+                    }
+                    drop(targets);
+
+                    // Cache the picture and clear dirty flag.
+                    node.cached_picture = Some(Arc::new(picture));
+                    node.cached_rect    = Some(child_rect);
+                    node.paint_dirty    = false;
+                }
+
                 size
             } else {
                 Size { width: 0.0, height: 0.0 }

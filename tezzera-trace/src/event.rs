@@ -20,21 +20,21 @@ pub struct Location {
 }
 
 /// 2D size in logical pixels.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Size {
     pub width: f32,
     pub height: f32,
 }
 
 /// 2D point in logical pixels.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
     pub x: f32,
     pub y: f32,
 }
 
 /// Axis-aligned rectangle in logical pixels.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
     pub origin: Point,
     pub size: Size,

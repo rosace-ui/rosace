@@ -570,11 +570,13 @@ Phase 12 additions (D062, D063):
   ✅ Co-location Overlay API — OverlayApi trait, WithOverlay<W>, .dropdown/.sheet/.dialog/.tooltip
   ✅ FocusNode graph — FocusNode(Arc), .request()/.release(), set_next/prev, FocusApi trait, WithFocus<W>
 
-Phase 13 (next):
-  ⬜ Persistent RenderNode tree
-  ⬜ Reconciler — match by type + position + key
-  ⬜ Dirty-flag layout + paint — only changed subtrees
-  ⬜ O(depth) hit testing
+Phase 13 additions (D065–D068):
+  ✅ Persistent RenderNode tree — cached last_constraints, cached_size, cached_picture, cached_rect, paint_dirty, hit_handlers
+  ✅ Reconciler — match by tag+position; keyed sibling groups matched by Key first
+  ✅ Dirty-flag layout + paint — constraints match → skip layout; !paint_dirty + rect match → replay Picture, skip widget.paint()
+  ✅ Dirty-component tracking — atom.set() → mark_dirty(subscribers) → element_cache skips build() for non-dirty components
+  ✅ subtree_dirty propagation — rebuilt components mark child native nodes for repaint
+  ✅ PartialEq on Size/Point/Rect — enables rect-equality cache check
 
 Phase 14:
   ⬜ RepaintBoundary — isolated PictureLayer per boundary
