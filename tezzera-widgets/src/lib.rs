@@ -46,7 +46,7 @@ pub use tree::{OverlayApi, OverlayKind};
 pub use tree::FocusApi;
 pub use tree::Row;
 pub use tree::Scaffold;
-pub use tree::ScrollView;
+pub use tree::{ScrollView, ScrollAxis};
 pub use tree::SizedBox;
 pub use tree::Slider;
 pub use tree::Spacer;

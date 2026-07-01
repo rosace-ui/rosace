@@ -574,7 +574,7 @@ pub use tezzera_widgets::{
     TransformLayer,
     OverlayEntry, LayerId, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
     push_overlay,
-    Row, Scaffold, ScrollView,
+    Row, Scaffold, ScrollView, ScrollAxis,
     SizedBox, Slider, Spacer, Stack, Switch,
     Tab, TabBar, Text, TextInput, Tooltip,
 };

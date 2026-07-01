@@ -75,7 +75,7 @@ pub use rect_reader::RectReader;
 pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
-pub use scroll_view::ScrollView;
+pub use scroll_view::{ScrollView, ScrollAxis};
 pub use sized_box::SizedBox;
 pub use slider::Slider;
 pub use spacer::{Expanded, Spacer};

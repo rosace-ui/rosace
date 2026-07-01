@@ -10,7 +10,7 @@ pub use crate::{
     Divider, EdgeInsets, Expanded, Icon, IconKind,
     ListTile, ListView, NavItem, NavRail, Padding, ProgressBar,
     RectReader, RepaintBoundary, TransformLayer,
-    Row, Scaffold, ScrollView, SizedBox, Slider, Spacer, Stack, Switch,
+    Row, Scaffold, ScrollView, ScrollAxis, SizedBox, Slider, Spacer, Stack, Switch,
     Tab, TabBar, Text, TextInput, Tooltip,
     Image, ImageCache, ImageFit, ImageSource, ImageWidget,
 };

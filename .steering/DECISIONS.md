@@ -1043,6 +1043,29 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 
 ---
 
+### D084 — ScrollView::live reactive constructor
+**Status**: LOCKED
+**Decision**: `ScrollView::live(child, atom: Atom<f32>)` is a second constructor that stores the atom. In `paint()`, if `live_offset` is `Some`, the atom value overrides the static `offset` field. The owning component subscribed to the atom via `ctx.state()`; when the atom changes the component rebuilds and `paint` reads the new offset. The static `ScrollView::new` + `.offset(n)` path is unchanged for snapshot scenarios.
+**Reason**: Reactive scrolling without gesture infrastructure. A button click writes the atom; the rebuild renders the new offset.
+**Affects**: `tezzera-widgets`
+
+---
+
+### D085 — N-layer compositor
+**Status**: LOCKED
+**Decision**: `present_layers` iterates an arbitrary `&[CompositorLayer]` slice — no hard cap on layer count. Each layer gets its own texture upload + render pass. Performance is O(N) render passes. Phase 19 will batch into a texture atlas.
+**Affects**: `tezzera-compositor`
+
+---
+
+### D086 — TransformLayer render-tree discovery deferred to Phase 19
+**Status**: DEFERRED
+**Decision**: Phase 18 does not add `PaintCtx.transform_layers`. TransformLayer uses the CPU-shift model from Phase 17. Full frozen-texture per layer (separate canvas capture, persistent GPU texture, uniform-only update) is Phase 19.
+**Reason**: Adding `PaintCtx.transform_layers` requires platform changes to allocate canvases before the render walk. Phase 18 ships the reactive ScrollView win without that complexity.
+**Affects**: `tezzera-widgets`, `tezzera-platform`
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

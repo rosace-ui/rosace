@@ -81,6 +81,10 @@ path = "src/bin/phase16_demo.rs"
 name = "phase17_demo"
 path = "src/bin/phase17_demo.rs"
 
+[[bin]]
+name = "phase18_demo"
+path = "src/bin/phase18_demo.rs"
+
 [dependencies]
 tezzera         = { path = "../tezzera" }
 tezzera-animate = { path = "../tezzera-animate" }
