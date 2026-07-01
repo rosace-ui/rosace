@@ -60,6 +60,7 @@ mod tests {
             font,
             theme,
             hit_targets: Rc::new(RefCell::new(Vec::<HitTarget>::new())),
+            focus_nodes: Rc::new(RefCell::new(Vec::new())),
         }
     }
 

@@ -856,6 +856,89 @@ available so simple cases are simple and complex cases are possible.
 
 ---
 
+### D065 — Persistent RenderNode Tree
+**Status**: LOCKED
+**Question**: How do we avoid full-tree layout + paint every frame?
+**Decision**: Each native widget node in the tree is backed by a `RenderNode` that persists across frames. It caches `(last_constraints, cached_size, cached_picture, cached_rect, paint_dirty)`. On each frame, the reconciler diffs the new element tree against the existing RenderNode tree. Clean nodes (unchanged constraints + not paint_dirty) skip layout and reuse their cached Picture. Dirty nodes re-layout + re-paint and update their cache.
+**Reason**: Full-tree re-layout + re-paint on every atom change wastes CPU. Caching at the widget granularity gives surgical updates without requiring immutable widget props (we can always mark dirty when unsure).
+**Affects**: `tezzera` (umbrella — reconciler + render loop), `tezzera-render` (Picture must be Clone)
+
+---
+
+### D066 — Reconciler Algorithm
+**Status**: LOCKED
+**Question**: How does the reconciler match new elements to existing RenderNodes?
+**Decision**: DFS by position within sibling list. For each position: if `new.tag == old.tag` AND keys agree (both absent OR both present with same value) → stable node, inherit cache; else → replace (new node, paint_dirty=true). Keyed children within the same parent are matched by key first, then unkeyed by position. A mismatch always creates a fresh RenderNode (forces re-layout + re-paint).
+**Reason**: Type+position matching is O(n) DFS and handles the common case (stable tree). Key matching handles reordered lists without losing state.
+**Affects**: `tezzera` (umbrella — reconciler)
+
+---
+
+### D067 — Dirty-Flag Layout and Paint
+**Status**: LOCKED
+**Question**: When does a RenderNode skip vs redo layout/paint?
+**Decision**:
+- **Layout skip**: if `node.last_constraints == Some(incoming)` AND NOT `layout_dirty` → return `node.cached_size.unwrap()`, skip subtree.
+- **Layout redo**: else → call `widget.layout(ctx)`, store constraints + size, set `paint_dirty = true`.
+- **Paint skip**: if NOT `paint_dirty` AND `node.cached_picture.is_some()` → replay picture at `node.cached_rect`, no widget.paint() call.
+- **Paint redo**: else → record fresh Picture via widget.paint(), store picture + rect, clear `paint_dirty`.
+Layout-dirty is set by the reconciler when a node is replaced. Paint-dirty is set whenever layout reruns or the reconciler marks it dirty.
+**Reason**: Two-pass dirty tracking avoids painting layout-clean subtrees even when parent re-layouts due to sibling size changes.
+**Affects**: `tezzera` (umbrella — render loop)
+
+---
+
+### D068 — O(depth) Hit Testing
+**Status**: LOCKED
+**Question**: How do we replace the flat linear hit-target scan?
+**Decision**: Walk the RenderNode tree depth-first, visiting children before parent (post-order). For each node, check `cached_rect.contains(pointer)` and presence of `hit_handlers`. The first matching node wins. Overlay entries are checked first (top-to-bottom in insertion order) before the main tree.
+**Reason**: A DFS walk is O(depth × branching_factor) rather than O(n). For typical widget trees (depth ≈ 20, branching ≈ 4) this is ~80 checks vs hundreds. Deepest-child-first mirrors visual stacking — the frontmost widget wins.
+**Affects**: `tezzera` (umbrella — hit test)
+
+---
+
+### D069 — Focus System End-to-End Wiring
+**Status**: LOCKED
+**Question**: How does the FocusNode graph built in Phase 12 (D063) actually drive keyboard input?
+**Decision**: Extend `App::launch` to maintain a `FocusManager` state across frames. After each paint pass, call `focus_manager.sync(focusable_nodes)` to rebuild the Tab-order list from the current frame's focusable nodes. On `KeyboardInput { key: Tab }` event:
+- No Trap overlay → cycle globally through the Tab-order list
+- A Trap overlay active → cycle only within that overlay's focusable nodes
+`FocusManager::request(node_id)` → stores the active focus node ID; the widget for that node is rendered with `is_focused = true` via the focus context. `FocusManager::release()` → clears active focus.
+Implementation: Add `focused_id: Option<u64>` to App frame state. Pass a `FocusCtx { focused_id }` through the paint pass alongside `PaintCtx`. Widgets that implement `FocusApi` check `FocusCtx.is_focused(self_id)` to style themselves.
+**Reason**: The FocusNode graph defines connectivity (who is next/prev). The FocusManager drives it. Together they replace ad-hoc focus state in each widget.
+**Affects**: `tezzera` (umbrella), `tezzera-a11y`, `tezzera-widgets`
+
+---
+
+### D070 — Navigation Route Stack Wiring
+**Status**: LOCKED
+**Question**: How does `tezzera-nav` (Navigator, RouteStack) integrate with the App render loop?
+**Decision**: `Navigator` is a root-level component that holds a `Vec<Route>` in app state. Each `Route` wraps a `Box<dyn Component>`. `Navigator::build()` renders only the top route. Frozen routes are held in memory but not rebuilt.
+
+`push_route(component)` → creates a new Route entry, pushes to Vec, triggers rebuild.
+`pop_route()` → drops top route, fires `on_unmount`, clears atom state via `clear_component()`, triggers rebuild.
+
+Navigator stores the route stack in an `Atom<Vec<Arc<RouteEntry>>>`. Changes to this atom trigger a frame. Routes below the top are not walked by `walk_element` (frozen = invisible to layout, paint, and hit test).
+
+Integration: `tezzera-nav` already has the `stack.rs` stub. Phase 14 fills it in and adds `Navigator` as a first-class component in the prelude.
+**Reason**: D061 spec is fully described; this decision locks the wiring to the render loop. Route freezing happens at the element-walk level — non-top routes are simply not walked.
+**Affects**: `tezzera-nav`, `tezzera` (umbrella), `tezzera::prelude`
+
+---
+
+### D071 — RepaintBoundary Widget
+**Status**: LOCKED
+**Question**: How should isolated PictureLayer caching be exposed to users?
+**Decision**: `RepaintBoundary::new(child)` — a wrapper widget that maintains its own isolated `PictureRecorder`. On each paint pass, if the child's `paint_dirty` flag is false AND the boundary's cached Picture exists, the boundary replays only its own cached Picture into the parent recorder — zero widget.paint() calls inside the boundary.
+
+`RepaintBoundary` forces a subtree boundary in the RenderNode tree. Any `Atom` write that touches a widget inside a `RepaintBoundary` only invalidates that boundary's Picture, not sibling boundaries.
+
+Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundary"`. Its `RenderNode` stores `own_picture: Option<Arc<Picture>>` in addition to the normal fields. In `walk_element`, when the current native element has tag `"RepaintBoundary"` and `!paint_dirty`, it replays `own_picture` directly.
+**Reason**: Phase 13 caches Pictures per native widget position. RepaintBoundary formalizes the concept — a child subtree with its own isolated Picture whose invalidation is independent of siblings.
+**Affects**: `tezzera-widgets`, `tezzera` (umbrella)
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

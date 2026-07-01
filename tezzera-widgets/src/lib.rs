@@ -35,6 +35,7 @@ pub use tree::NavRail;
 pub use tree::Padding;
 pub use tree::ProgressBar;
 pub use tree::RectReader;
+pub use tree::RepaintBoundary;
 pub use tree::{
     OverlayEntry, LayerId, LayerPosition,
     InputBehavior, FocusBehavior, ScrimConfig,
