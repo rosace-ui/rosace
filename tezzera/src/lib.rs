@@ -99,6 +99,10 @@ impl App {
         // ComponentIds assigned by DFS position; stable IDs mean state persists.
         let mut prev_mounted: HashSet<u64> = HashSet::new();
 
+        // ── Phase 14: focus manager ────────────────────────────────────────
+        let mut focus_manager = tezzera_a11y::FocusManager::new();
+        let mut shift_held = false;
+
         // ── Phase 13: persistent render cache ─────────────────────────────
         // Cached build output per component ID — skips build() when the
         // component's atoms haven't changed.
@@ -138,6 +142,8 @@ impl App {
                 let mut recorder = tezzera_render::PictureRecorder::new();
                 let hit_targets: Rc<RefCell<Vec<HitTarget>>> =
                     Rc::new(RefCell::new(Vec::new()));
+                let focus_nodes: Rc<RefCell<Vec<tezzera_a11y::FocusNode>>> =
+                    Rc::new(RefCell::new(Vec::new()));
 
                 // Layout in logical pixels so widget sizes and font sizes are
                 // display-independent. play_picture scales to physical pixels.
@@ -153,6 +159,7 @@ impl App {
                     font: &font,
                     theme: theme.clone(),
                     hit_targets: Rc::clone(&hit_targets),
+                    focus_nodes: Rc::clone(&focus_nodes),
                 };
 
                 let constraints = tezzera_layout::Constraints::tight(win_w, win_h);
@@ -228,6 +235,7 @@ impl App {
                             font: &font,
                             theme: theme.clone(),
                             hit_targets: Rc::clone(&ov_hit_targets),
+                            focus_nodes: Rc::clone(&focus_nodes),
                         };
                         entry.widget.paint(&mut ov_ctx);
                     }
@@ -278,23 +286,47 @@ impl App {
                 }
                 prev_mounted = new_mounted;
 
-                // ── Route click events to hit targets ──────────────────────
+                // ── Sync focus manager with this frame's focusable nodes ───
+                {
+                    let collected = focus_nodes.borrow();
+                    focus_manager.sync_from_nodes(collected.clone());
+                }
+
+                // ── Route events to hit targets and focus ──────────────────
                 let targets = hit_targets.borrow();
                 for event in events {
-                    if let tezzera_platform::InputEvent::MouseDown {
-                        x, y, button: tezzera_platform::MouseButton::Left
-                    } = event {
-                        for t in targets.iter() {
-                            let r = &t.rect;
-                            if x >= &r.origin.x
-                                && x <= &(r.origin.x + r.size.width)
-                                && y >= &r.origin.y
-                                && y <= &(r.origin.y + r.size.height)
-                            {
-                                (t.callback)();
-                                break; // one click fires exactly one target
+                    match event {
+                        tezzera_platform::InputEvent::MouseDown {
+                            x, y, button: tezzera_platform::MouseButton::Left
+                        } => {
+                            for t in targets.iter() {
+                                let r = &t.rect;
+                                if x >= &r.origin.x
+                                    && x <= &(r.origin.x + r.size.width)
+                                    && y >= &r.origin.y
+                                    && y <= &(r.origin.y + r.size.height)
+                                {
+                                    (t.callback)();
+                                    break;
+                                }
                             }
                         }
+                        tezzera_platform::InputEvent::KeyDown {
+                            key: tezzera_platform::Key::Tab
+                        } => {
+                            if shift_held {
+                                focus_manager.focus_prev_node();
+                            } else {
+                                focus_manager.focus_next_node();
+                            }
+                        }
+                        tezzera_platform::InputEvent::KeyDown {
+                            key: tezzera_platform::Key::Shift
+                        } => { shift_held = true; }
+                        tezzera_platform::InputEvent::KeyUp {
+                            key: tezzera_platform::Key::Shift
+                        } => { shift_held = false; }
+                        _ => {}
                     }
                 }
             });
@@ -459,6 +491,7 @@ fn walk_element(
                             font: ctx.font,
                             theme: ctx.theme.clone(),
                             hit_targets: Rc::clone(&sub_hit),
+                            focus_nodes: Rc::clone(&ctx.focus_nodes),
                         };
                         wb.0.paint(&mut child_ctx);
                     }
@@ -535,6 +568,7 @@ pub use tezzera_widgets::{
     NavItem, NavRail,
     Padding, ProgressBar,
     RectReader,
+    RepaintBoundary,
     OverlayEntry, LayerId, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
     push_overlay,
     Row, Scaffold, ScrollView,
@@ -601,6 +635,8 @@ pub mod prelude {
     };
     pub use tezzera_a11y::FocusNode;
     pub use tezzera_widgets::FocusApi;
+    pub use tezzera_widgets::RepaintBoundary;
+    pub use tezzera_nav::ScreenNav;
     pub use tezzera_render::canvas::Color;
     pub use tezzera_theme::{ThemeData, ColorScheme};
     pub use tezzera_theme::built_in::{dark_theme, light_theme};

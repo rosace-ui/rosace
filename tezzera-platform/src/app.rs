@@ -290,6 +290,10 @@ impl<F: FnMut(&mut SkiaCanvas, &[InputEvent])> ApplicationHandler<FrameRequest> 
                         KeyCode::ArrowDown => Key::ArrowDown,
                         KeyCode::ArrowLeft => Key::ArrowLeft,
                         KeyCode::ArrowRight => Key::ArrowRight,
+                        KeyCode::ShiftLeft | KeyCode::ShiftRight => Key::Shift,
+                        KeyCode::ControlLeft | KeyCode::ControlRight => Key::Control,
+                        KeyCode::AltLeft | KeyCode::AltRight => Key::Alt,
+                        KeyCode::SuperLeft | KeyCode::SuperRight => Key::Meta,
                         _ => {
                             if let Some(text) = &event.text {
                                 if let Some(c) = text.chars().next() {

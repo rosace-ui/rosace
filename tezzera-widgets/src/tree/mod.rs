@@ -31,6 +31,7 @@ pub mod overlay_api;
 pub mod padding;
 pub mod progress_bar;
 pub mod rect_reader;
+pub mod repaint_boundary;
 pub mod row;
 pub mod scaffold;
 pub mod scroll_view;
@@ -70,6 +71,7 @@ pub use overlay_api::{OverlayApi, OverlayKind, WithOverlay};
 pub use padding::{EdgeInsets, Padding};
 pub use progress_bar::ProgressBar;
 pub use rect_reader::RectReader;
+pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
 pub use scroll_view::ScrollView;
@@ -114,6 +116,9 @@ pub struct PaintCtx<'a> {
     pub font: &'a FontCache,
     pub theme: ThemeData,
     pub hit_targets: Rc<RefCell<Vec<HitTarget>>>,
+    /// Focus nodes registered by `WithFocus<W>` during this paint pass.
+    /// Collected in DFS order; used by `FocusManager` to build the Tab cycle.
+    pub focus_nodes: Rc<RefCell<Vec<tezzera_a11y::FocusNode>>>,
 }
 
 impl<'a> PaintCtx<'a> {
@@ -125,7 +130,13 @@ impl<'a> PaintCtx<'a> {
             font: self.font,
             theme: self.theme.clone(),
             hit_targets: Rc::clone(&self.hit_targets),
+            focus_nodes: Rc::clone(&self.focus_nodes),
         }
+    }
+
+    /// Register a focus node for Tab-cycle inclusion (called from `WithFocus<W>::paint`).
+    pub fn register_focus(&self, node: tezzera_a11y::FocusNode) {
+        self.focus_nodes.borrow_mut().push(node);
     }
 
     /// Register a click callback for `self.rect`. Called from `Button::paint`.

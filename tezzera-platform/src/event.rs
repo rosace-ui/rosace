@@ -18,5 +18,6 @@ pub enum MouseButton { Left, Right, Middle }
 pub enum Key {
     Enter, Escape, Space, Backspace, Tab,
     ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
+    Shift, Control, Alt, Meta,
     Char(char),
 }

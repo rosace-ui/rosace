@@ -1,3 +1,4 @@
+use crate::focus_node::FocusNode;
 use crate::tree::A11yTree;
 
 /// Manages keyboard focus across the accessibility tree.
@@ -5,10 +6,76 @@ use crate::tree::A11yTree;
 pub struct FocusManager {
     pub focused: Option<u64>,
     focus_order: Vec<u64>,
+    /// Live node references for Tab cycling — rebuilt each frame by `sync_from_nodes`.
+    nodes: Vec<FocusNode>,
 }
 
 impl FocusManager {
     pub fn new() -> Self { Self::default() }
+
+    /// Rebuild Tab order from a flat list of `FocusNode`s collected during the
+    /// paint pass (DFS order). Releases focus from any node that no longer appears.
+    pub fn sync_from_nodes(&mut self, nodes: Vec<FocusNode>) {
+        let new_ids: Vec<u64> = nodes.iter().map(|n| n.id()).collect();
+        // Release focus from stale nodes.
+        if let Some(fid) = self.focused {
+            if !new_ids.contains(&fid) {
+                // Find old node and release it.
+                if let Some(old) = self.nodes.iter().find(|n| n.id() == fid) {
+                    old.release();
+                }
+                self.focused = None;
+            }
+        }
+        self.focus_order = new_ids;
+        self.nodes = nodes;
+    }
+
+    /// Advance focus to the next node in Tab order (wraps). Calls `request()`
+    /// on the new node and `release()` on the previous.
+    pub fn focus_next_node(&mut self) {
+        if self.nodes.is_empty() { return; }
+        let next_idx = match self.focused {
+            None => 0,
+            Some(cur) => {
+                let pos = self.focus_order.iter().position(|&id| id == cur);
+                match pos {
+                    None => 0,
+                    Some(i) => (i + 1) % self.nodes.len(),
+                }
+            }
+        };
+        self.activate(next_idx);
+    }
+
+    /// Move focus to the previous node (Shift+Tab, wraps).
+    pub fn focus_prev_node(&mut self) {
+        if self.nodes.is_empty() { return; }
+        let prev_idx = match self.focused {
+            None => self.nodes.len() - 1,
+            Some(cur) => {
+                let pos = self.focus_order.iter().position(|&id| id == cur);
+                match pos {
+                    None => self.nodes.len() - 1,
+                    Some(i) => if i == 0 { self.nodes.len() - 1 } else { i - 1 },
+                }
+            }
+        };
+        self.activate(prev_idx);
+    }
+
+    fn activate(&mut self, idx: usize) {
+        // Release current.
+        if let Some(fid) = self.focused {
+            if let Some(old) = self.nodes.iter().find(|n| n.id() == fid) {
+                old.release();
+            }
+        }
+        // Request next.
+        let node = &self.nodes[idx];
+        node.request();
+        self.focused = Some(node.id());
+    }
 
     /// Rebuild focus order from `tree` (BFS order of focusable nodes).
     pub fn sync(&mut self, tree: &A11yTree) {

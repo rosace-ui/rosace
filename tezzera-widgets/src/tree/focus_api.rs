@@ -43,6 +43,9 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithFocus<W> {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // Register in DFS order so FocusManager can build the Tab cycle.
+        ctx.register_focus(self.node.clone());
+
         self.inner.paint(ctx);
 
         // Draw a 2px focus ring when focused.

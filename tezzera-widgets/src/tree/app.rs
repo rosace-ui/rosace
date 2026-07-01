@@ -96,6 +96,7 @@ impl WidgetApp {
             font: &self.font,
             theme: self.theme.clone(),
             hit_targets: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            focus_nodes: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
         };
 
         root.paint(&mut ctx);
@@ -128,6 +129,7 @@ impl WidgetApp {
             font: &self.font,
             theme: self.theme.clone(),
             hit_targets: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            focus_nodes: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
         };
         root.paint(&mut ctx);
         let picture = recorder.finish();
