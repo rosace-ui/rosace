@@ -150,6 +150,8 @@ impl App {
                 let win_w = canvas.logical_width() as f32;
                 let win_h = canvas.logical_height() as f32;
 
+                let transform_entries: Rc<RefCell<Vec<tezzera_widgets::tree::TransformLayerEntry>>> =
+                    Rc::new(RefCell::new(Vec::new()));
                 let mut paint_ctx = tezzera_widgets::tree::PaintCtx {
                     recorder: &mut recorder,
                     rect: tezzera_core::types::Rect {
@@ -160,6 +162,7 @@ impl App {
                     theme: theme.clone(),
                     hit_targets: Rc::clone(&hit_targets),
                     focus_nodes: Rc::clone(&focus_nodes),
+                    transform_entries: Rc::clone(&transform_entries),
                 };
 
                 let constraints = tezzera_layout::Constraints::tight(win_w, win_h);
@@ -238,6 +241,7 @@ impl App {
                             theme: theme.clone(),
                             hit_targets: Rc::clone(&ov_hit_targets),
                             focus_nodes: Rc::clone(&focus_nodes),
+                            transform_entries: Rc::clone(&transform_entries),
                         };
                         entry.widget.paint(&mut ov_ctx);
                     }
@@ -254,6 +258,31 @@ impl App {
                             rect: t.rect,
                             callback: t.callback.clone(),
                         });
+                    }
+                }
+
+                // ── TransformLayer pass (D088) ─────────────────────────────
+                // Each TransformLayerEntry's child was recorded into a separate
+                // Picture. Replay each picture into the base canvas at the
+                // viewport position with the scroll offset applied.
+                {
+                    use tezzera_core::types::{Point, Rect};
+                    let entries = transform_entries.borrow();
+                    for entry in entries.iter() {
+                        // Build a shifted picture by translating commands
+                        // The child was recorded at (0,0). We need to place it
+                        // at viewport_rect.origin - (scroll_x, scroll_y).
+                        let vp = entry.viewport_rect;
+                        let dx = vp.origin.x - entry.scroll_x;
+                        let dy = vp.origin.y - entry.scroll_y;
+
+                        // Replay with offset: translate all draw commands
+                        let mut tl_recorder = tezzera_render::PictureRecorder::new();
+                        for cmd in &entry.picture.commands {
+                            tl_recorder.push(cmd.offset(dx, dy));
+                        }
+                        let tl_picture = tl_recorder.finish();
+                        canvas.play_picture(&tl_picture, &font);
                     }
                 }
 
@@ -494,6 +523,7 @@ fn walk_element(
                             theme: ctx.theme.clone(),
                             hit_targets: Rc::clone(&sub_hit),
                             focus_nodes: Rc::clone(&ctx.focus_nodes),
+                            transform_entries: Rc::clone(&ctx.transform_entries),
                         };
                         wb.0.paint(&mut child_ctx);
                     }

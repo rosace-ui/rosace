@@ -1,19 +1,19 @@
-use tezzera_core::types::Size;
+use tezzera_core::types::{Point, Rect, Size};
+use tezzera_layout::Constraints;
+use tezzera_render::PictureRecorder;
 use tezzera_state::Atom;
-use super::{Widget, LayoutCtx, PaintCtx};
+use super::{Widget, LayoutCtx, PaintCtx, TransformLayerEntry};
 
 /// Captures a child widget into an independent Picture and applies a 2D scroll
-/// offset on the GPU without re-rendering the child (D080, Phase 17).
+/// offset on the GPU without re-rendering the child (D080, Phase 17/19).
 ///
-/// When the scroll offset atom changes, only the GPU uniform is updated —
-/// no CPU re-render, no texture re-upload (after the first frame).
-///
-/// # Limitations
-/// Phase 17: content height is capped at `MAX_TRANSFORM_DIM` physical pixels.
-/// Content exceeding this cap falls back to CPU clip scroll.
+/// Phase 17: CPU shift in paint() — UV offset uniform wired in compositor.
+/// Phase 19: child is recorded into a separate PictureRecorder and pushed into
+/// PaintCtx.transform_entries (D087) for the platform to replay into its own
+/// SkiaCanvas and present as an extra GPU compositor layer (D088).
 pub struct TransformLayer<W: Widget + Send + Sync + 'static> {
     pub child:      W,
-    /// Scroll offset in **logical** pixels, positive = scroll down (content moves up).
+    /// Scroll offset in **logical** pixels, positive = scroll down.
     pub scroll_y:   Atom<f32>,
     /// Horizontal scroll offset in logical pixels.
     pub scroll_x:   Atom<f32>,
@@ -37,8 +37,10 @@ impl<W: Widget + Send + Sync + 'static> TransformLayer<W> {
 
 impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        // Report the VIEWPORT size — that's how much space we occupy in the tree.
-        let child_size = self.child.layout(ctx);
+        // Viewport size is what we occupy in the parent layout.
+        let unconstrained = Constraints::loose(ctx.constraints.max_width_f32(), f32::INFINITY);
+        let child_lctx = LayoutCtx::new(unconstrained, ctx.font, &ctx.theme);
+        let child_size = self.child.layout(&child_lctx);
         Size {
             width:  child_size.width,
             height: self.viewport_h.min(child_size.height),
@@ -46,39 +48,48 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        // In Phase 17 the full content is painted into the normal display list
-        // with a Y offset applied via translation, then clipped to the viewport.
-        // Full GPU-texture-per-scroll-layer is the Phase 18 optimization.
-        //
-        // Here we shift the origin by -scroll_y so content scrolls upward.
         let scroll_y = self.scroll_y.get();
         let scroll_x = self.scroll_x.get();
+        let vp_rect  = ctx.rect;
 
-        let orig_rect = ctx.rect;
+        // Measure child with unconstrained height to get its natural size.
+        let child_lctx = ctx.layout_ctx(Constraints::loose(vp_rect.size.width, f32::INFINITY));
+        let child_size = self.child.layout(&child_lctx);
 
-        // Clip to viewport: save rect sized to viewport
-        let clipped = tezzera_core::types::Rect {
-            origin: orig_rect.origin,
-            size: tezzera_core::types::Size {
-                width:  orig_rect.size.width,
-                height: self.viewport_h.min(orig_rect.size.height),
+        // Record child into a SEPARATE PictureRecorder (D087).
+        // The child is painted at (0,0) — the platform positions it on screen.
+        let mut sub_rec = PictureRecorder::new();
+        let child_origin = Point { x: 0.0, y: 0.0 };
+        let child_rect = Rect { origin: child_origin, size: child_size };
+
+        let mut sub_ctx = PaintCtx {
+            recorder: &mut sub_rec,
+            rect: child_rect,
+            font: ctx.font,
+            theme: ctx.theme.clone(),
+            hit_targets: ctx.hit_targets.clone(),
+            focus_nodes: ctx.focus_nodes.clone(),
+            transform_entries: ctx.transform_entries.clone(),
+        };
+        self.child.paint(&mut sub_ctx);
+        let picture = sub_rec.finish();
+
+        // Push the entry — platform will replay into a dedicated canvas (D088).
+        ctx.transform_entries.borrow_mut().push(TransformLayerEntry {
+            picture,
+            child_size,
+            viewport_rect: vp_rect,
+            scroll_x,
+            scroll_y,
+        });
+
+        // Update ctx.rect to the viewport size for sibling layout correctness.
+        ctx.rect = Rect {
+            origin: vp_rect.origin,
+            size: Size {
+                width:  vp_rect.size.width,
+                height: self.viewport_h.min(vp_rect.size.height),
             },
         };
-
-        // Paint child shifted by scroll offset.
-        ctx.rect = tezzera_core::types::Rect {
-            origin: tezzera_core::types::Point {
-                x: orig_rect.origin.x - scroll_x,
-                y: orig_rect.origin.y - scroll_y,
-            },
-            size: tezzera_core::types::Size {
-                width:  orig_rect.size.width,
-                height: orig_rect.size.height.max(self.viewport_h),
-            },
-        };
-        self.child.paint(ctx);
-
-        // Restore rect for sibling layout.
-        ctx.rect = clipped;
     }
 }

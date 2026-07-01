@@ -22,3 +22,25 @@ pub enum DrawCommand {
     /// Raw pre-decoded RGBA pixel blit. `pixels` must be `width × height × 4` bytes.
     BlitRgba   { pixels: Arc<Vec<u8>>, src_width: u32, src_height: u32, dest_rect: Rect },
 }
+
+impl DrawCommand {
+    /// Return a copy of this command translated by (dx, dy) in logical pixels (D088).
+    pub fn offset(&self, dx: f32, dy: f32) -> Self {
+        fn shift(r: Rect, dx: f32, dy: f32) -> Rect {
+            Rect {
+                origin: Point { x: r.origin.x + dx, y: r.origin.y + dy },
+                size: r.size,
+            }
+        }
+        match self.clone() {
+            Self::FillRect   { rect, color }           => Self::FillRect   { rect: shift(rect, dx, dy), color },
+            Self::StrokeRect { rect, color, width }    => Self::StrokeRect { rect: shift(rect, dx, dy), color, width },
+            Self::FillRRect  { rect, radius, color }   => Self::FillRRect  { rect: shift(rect, dx, dy), radius, color },
+            Self::FillCircle { center, radius, color } => Self::FillCircle { center: Point { x: center.x + dx, y: center.y + dy }, radius, color },
+            Self::DrawText   { text, origin, color, px } => Self::DrawText { text, origin: Point { x: origin.x + dx, y: origin.y + dy }, color, px },
+            Self::DrawShadow { rect, color, blur }     => Self::DrawShadow { rect: shift(rect, dx, dy), color, blur },
+            Self::BlitRgba   { pixels, src_width, src_height, dest_rect } =>
+                Self::BlitRgba { pixels, src_width, src_height, dest_rect: shift(dest_rect, dx, dy) },
+        }
+    }
+}

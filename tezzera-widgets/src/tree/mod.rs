@@ -94,7 +94,7 @@ use std::sync::Arc;
 use tezzera_core::types::{Point, Rect, Size};
 use tezzera_core::{Element, NativeElement, WidgetPayload};
 use tezzera_layout::Constraints;
-use tezzera_render::{Color, DrawCommand, FontCache, PictureRecorder};
+use tezzera_render::{Color, DrawCommand, FontCache, Picture, PictureRecorder};
 use tezzera_theme::ThemeData;
 
 // ── HitTarget ────────────────────────────────────────────────────────────────
@@ -103,6 +103,24 @@ use tezzera_theme::ThemeData;
 pub struct HitTarget {
     pub rect: Rect,
     pub callback: Arc<dyn Fn() + Send + Sync>,
+}
+
+// ── TransformLayerEntry ──────────────────────────────────────────────────────
+
+/// A captured TransformLayer — child content recorded into a separate Picture
+/// (D087) that the platform replays into its own SkiaCanvas and presents as an
+/// additional GPU compositor layer (D088).
+pub struct TransformLayerEntry {
+    /// Recorded child draw commands — replay-able independently of the main pass.
+    pub picture:       Picture,
+    /// Natural (unconstrained) size of the child content in logical pixels.
+    pub child_size:    Size,
+    /// Viewport rect in screen-space logical pixels.
+    pub viewport_rect: Rect,
+    /// Current horizontal scroll in logical pixels.
+    pub scroll_x:      f32,
+    /// Current vertical scroll in logical pixels.
+    pub scroll_y:      f32,
 }
 
 // ── PaintCtx ─────────────────────────────────────────────────────────────────
@@ -121,6 +139,10 @@ pub struct PaintCtx<'a> {
     /// Focus nodes registered by `WithFocus<W>` during this paint pass.
     /// Collected in DFS order; used by `FocusManager` to build the Tab cycle.
     pub focus_nodes: Rc<RefCell<Vec<tezzera_a11y::FocusNode>>>,
+    /// TransformLayer entries collected during this paint pass (D087).
+    /// The platform replays each into a separate canvas and presents as an
+    /// additional GPU compositor layer.
+    pub transform_entries: Rc<RefCell<Vec<TransformLayerEntry>>>,
 }
 
 impl<'a> PaintCtx<'a> {
@@ -133,6 +155,7 @@ impl<'a> PaintCtx<'a> {
             theme: self.theme.clone(),
             hit_targets: Rc::clone(&self.hit_targets),
             focus_nodes: Rc::clone(&self.focus_nodes),
+            transform_entries: Rc::clone(&self.transform_entries),
         }
     }
 

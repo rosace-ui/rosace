@@ -1066,6 +1066,34 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 
 ---
 
+### D087 — TransformLayerEntry in PaintCtx
+**Status**: LOCKED
+**Decision**: `PaintCtx` carries `transform_entries: Rc<RefCell<Vec<TransformLayerEntry>>>`. A `TransformLayerEntry` holds: `picture: Picture` (recorded child), `child_size: Size`, `viewport_rect: Rect`, `scroll_x: f32`, `scroll_y: f32`. `TransformLayer::paint()` records child into a sub-`PictureRecorder`, finishes it, and pushes the entry. It does NOT emit to the main recorder. The `transform_entries` vec is shared (Rc-cloned) through `child()` like `hit_targets`.
+**Affects**: `tezzera-widgets`, `tezzera-render`
+
+---
+
+### D088 — Platform TransformLayer replay (D088)
+**Status**: LOCKED
+**Decision**: After the main paint pass, `tezzera/src/lib.rs` iterates `transform_entries`. For each entry, it translates all DrawCommands by `(viewport.origin - scroll_offset)` using the new `DrawCommand::offset(dx, dy)` method, finishes a temporary PictureRecorder, and replays it onto the base canvas. This gives correct scroll positioning without a separate GPU layer per TransformLayer (that's Phase 20).
+**Affects**: `tezzera`, `tezzera-render`
+
+---
+
+### D089 — GPU texture caching
+**Status**: DEFERRED → Phase 20
+**Decision**: Full "zero re-upload on scroll" (persistent wgpu Texture keyed by layer, reused across frames) is Phase 20. Phase 19 re-plays the Picture each frame into a new pixel buffer. The architecture is correct; the caching layer is an optimization.
+**Affects**: `tezzera-compositor`
+
+---
+
+### D090 — ScrollView integration with TransformLayer
+**Status**: DEFERRED → Phase 20
+**Decision**: Phase 19 provides `TransformLayer<W>` as a direct-use widget. Phase 20 integrates it into `ScrollView::live` transparently.
+**Affects**: `tezzera-widgets`
+
+---
+
 ## DEFERRED DECISIONS
 
 ```
