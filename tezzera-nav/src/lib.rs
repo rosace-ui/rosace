@@ -26,12 +26,14 @@ pub mod guard;
 pub mod history;
 pub mod navigator;
 pub mod route;
+pub mod screen_nav;
 pub mod stack;
 
 pub use guard::{AllowAllGuard, BlockWhenGuard, NavigationGuard};
 pub use history::{HistoryEntry, KeepAliveRegistry};
 pub use navigator::Navigator;
 pub use route::{NavigationDecision, Route};
+pub use screen_nav::ScreenNav;
 pub use stack::NavigationStack;
 
 // ---------------------------------------------------------------------------

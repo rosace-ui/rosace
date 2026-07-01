@@ -148,6 +148,12 @@ impl<R: Route> NavigationStack<R> {
     pub fn stack(&self) -> Vec<R> {
         self.stack.get()
     }
+
+    /// Returns a clone of the backing atom so Navigator can subscribe to it
+    /// via `ctx.state(initial)` on first call.
+    pub fn atom(&self) -> tezzera_state::Atom<Vec<R>> {
+        self.stack.clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
