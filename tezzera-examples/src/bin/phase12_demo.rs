@@ -1,5 +1,6 @@
+use std::time::Duration;
 use tezzera::prelude::*;
-use tezzera_animate::{use_spring, SpringController};
+use tezzera_animate::{use_spring, use_animation, SpringController, AnimCtrl};
 use tezzera_state::Atom;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,6 +126,12 @@ impl Component for Phase12Demo {
                 let (animated, spring_ctrl) = use_spring(ctx, spring_val.get());
                 let val = animated.get();
 
+                let (anim_progress, anim_ctrl) = use_animation(ctx, Duration::from_millis(1500));
+                let anim_val = anim_progress.get();
+                let play_ctrl: AnimCtrl = anim_ctrl.clone();
+                let pause_ctrl: AnimCtrl = anim_ctrl.clone();
+                let reset_ctrl: AnimCtrl = anim_ctrl.clone();
+
                 let lo_ctrl: SpringController = spring_ctrl.clone();
                 let hi_ctrl: SpringController = spring_ctrl.clone();
 
@@ -137,12 +144,24 @@ impl Component for Phase12Demo {
                                 .child(Text::heading("D059 — Real wall-clock dt"))
                                 .child(Text::caption("Platform writes dt = now - last_frame before each render"))
                                 .child(Text::caption("tezzera_animate::set_frame_dt(dt) → FRAME_DT atomic"))
-                                .child(Text::caption("use_spring reads frame_dt() — never 1/60 hardcoded"))
+                                .child(Text::caption("use_spring and use_animation read frame_dt() — never 1/60 hardcoded"))
                                 .child(Text::caption("Frame-rate independent: same speed at 60Hz and 120Hz"))
                         ))
                         .child(Card::new(
                             Column::new().spacing(12.0)
-                                .child(Text::heading("Spring demo"))
+                                .child(Text::heading("use_animation — 1.5s progress bar"))
+                                .child(Text::caption(format!("Progress: {:.0}%", anim_val * 100.0)))
+                                .child(ProgressBar::new(anim_val))
+                                .child(
+                                    Row::new().spacing(8.0)
+                                        .child(Button::new("Play").on_press(move || play_ctrl.play()))
+                                        .child(Button::new("Pause").on_press(move || pause_ctrl.pause()))
+                                        .child(Button::new("Reset").on_press(move || reset_ctrl.reset()))
+                                )
+                        ))
+                        .child(Card::new(
+                            Column::new().spacing(12.0)
+                                .child(Text::heading("use_spring — physics-based bar"))
                                 .child(Text::caption(format!("Current value: {:.1}", val)))
                                 .child(ProgressBar::new(val / 100.0))
                                 .child(

@@ -560,6 +560,7 @@ Phase 12 (current):
   ✅ Accurate text measurement — real glyph metrics
   ✅ Display list recording — PictureRecorder in PaintCtx
   ✅ Animation VSync clock (D059) — FRAME_DT atomic, set_frame_dt, use_spring uses frame_dt()
+  ✅ use_animation hook — Progress, AnimCtrl, play/pause/reset, self-perpetuating frame loop
   ✅ Size cache — Column + Row cache measure() results by constraints
   ✅ Key mechanism (D055) — Key(u64), FNV hash, From impls, Element::with_key(), NativeElement.key
   ✅ RectReader (D057) — fires atom with window-pixel Rect during paint

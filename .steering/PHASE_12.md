@@ -1,7 +1,8 @@
 # Phase 12 — VSync, LayoutCtx, Coordinate System, Overlay Layer
 
-> Status: IN PROGRESS
+> Status: COMPLETE
 > Started: 2026-06-30
+> Completed: 2026-07-01
 > Target: Production render loop — zero idle CPU, real coordinates, overlay layer
 
 ## Why This Phase

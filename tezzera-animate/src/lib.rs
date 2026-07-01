@@ -1,3 +1,4 @@
+pub mod animation_hook;
 pub mod clock;
 pub mod controller;
 pub mod easing;
@@ -7,6 +8,7 @@ pub mod spring;
 pub mod tween;
 pub mod spring_hook;
 
+pub use animation_hook::{use_animation, AnimCtrl, Progress};
 pub use clock::{frame_dt, set_frame_dt};
 pub use controller::{AnimationController, AnimationState};
 pub use easing::Easing;

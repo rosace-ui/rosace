@@ -13,6 +13,7 @@ pub enum AnimationState {
 ///
 /// Call `tick(dt)` each frame with the elapsed time in seconds; it returns the
 /// current progress value in `[0, 1]`.
+#[derive(Clone)]
 pub struct AnimationController {
     pub duration: Duration,
     pub repeat: bool,
@@ -47,6 +48,14 @@ impl AnimationController {
     pub fn resume(&mut self) {
         if self.state == AnimationState::Paused {
             self.state = AnimationState::Running;
+        }
+    }
+
+    /// Play the animation: resume if paused, otherwise start from the beginning.
+    pub fn play(&mut self) {
+        match self.state {
+            AnimationState::Paused => self.state = AnimationState::Running,
+            _ => self.start(),
         }
     }
 
