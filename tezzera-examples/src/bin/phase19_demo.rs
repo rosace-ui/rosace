@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use tezzera::prelude::*;
 use tezzera_state::Atom;
 
@@ -16,21 +17,24 @@ use tezzera_state::Atom;
 const VIEWPORT_H: f32 = 380.0;
 const ITEM_H: f32 = 38.0;
 
+// Counts how many times Component::build() is called — NOT a reactive atom,
+// so writing it never triggers a dirty mark or a new frame.
+static BUILD_COUNT: AtomicU32 = AtomicU32::new(0);
+
 struct Phase19Demo;
 
 impl Component for Phase19Demo {
     fn build(&self, ctx: &mut Context) -> Element {
         let scroll_y:    Atom<f32> = ctx.state(0.0_f32);
-        let build_count: Atom<u32> = ctx.state(0_u32);
         let extra_items: Atom<u32> = ctx.state(0_u32);
 
         let item_count = 50 + extra_items.get();
         let max_scroll = (item_count as f32 * ITEM_H - VIEWPORT_H).max(0.0);
         let cur_scroll = scroll_y.get();
-        let builds     = build_count.get();
 
-        // Increment build count each time this function is called
-        build_count.set(builds + 1);
+        // Increment WITHOUT touching any reactive atom — prevents build() from
+        // marking ComponentId(0) dirty and causing an infinite rebuild loop.
+        let builds = BUILD_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
 
         let sy_up  = scroll_y.clone();
         let sy_dn  = scroll_y.clone();

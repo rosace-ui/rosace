@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use tezzera_core::types::{Point, Rect, Size};
 use tezzera_layout::Constraints;
 use tezzera_render::{Color, DrawCommand};
@@ -112,6 +113,17 @@ impl Widget for ScrollView {
         self.child.paint(&mut child_ctx);
 
         ctx.record(DrawCommand::PopClip);
+
+        // Register a scroll target so the event router can dispatch wheel events
+        // to this viewport. Only live-scrolling ScrollViews respond to wheel input.
+        if let Some(atom) = &self.live_offset {
+            let atom = atom.clone();
+            let max_scroll = (child_size.height - vp.size.height).max(0.0);
+            ctx.register_scroll_target(vp, Arc::new(move |delta_y| {
+                let new_val = (atom.get() - delta_y).clamp(0.0, max_scroll);
+                atom.set(new_val);
+            }));
+        }
 
         // Scrollbar drawn AFTER PopClip so it is not clipped by the viewport.
         if self.show_scrollbar && matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both) {

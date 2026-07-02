@@ -60,6 +60,7 @@ mod tests {
             font,
             theme,
             hit_targets: Rc::new(RefCell::new(Vec::<HitTarget>::new())),
+            scroll_targets: Rc::new(RefCell::new(Vec::new())),
             focus_nodes: Rc::new(RefCell::new(Vec::new())),
             transform_entries: Rc::new(RefCell::new(Vec::new())),
             clip_rect: None,

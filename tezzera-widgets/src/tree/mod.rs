@@ -105,11 +105,24 @@ pub struct HitTarget {
     pub callback: Arc<dyn Fn() + Send + Sync>,
 }
 
+// ── ScrollTarget ──────────────────────────────────────────────────────────────
+
+/// A scrollable viewport region registered during painting.
+///
+/// `ScrollView::paint` registers one per live scroll region. The event router
+/// dispatches `InputEvent::Scroll` to the target whose rect contains the cursor.
+/// The callback receives the delta in logical pixels (positive = content scrolls down).
+pub struct ScrollTarget {
+    pub rect: Rect,
+    pub callback: Arc<dyn Fn(f32) + Send + Sync>,
+}
+
 // ── TransformLayerEntry ──────────────────────────────────────────────────────
 
 /// A captured TransformLayer — child content recorded into a separate Picture
 /// (D087) that the platform replays into its own SkiaCanvas and presents as an
 /// additional GPU compositor layer (D088).
+#[derive(Clone)]
 pub struct TransformLayerEntry {
     /// Recorded child draw commands — replay-able independently of the main pass.
     pub picture:       Picture,
@@ -136,6 +149,8 @@ pub struct PaintCtx<'a> {
     pub font: &'a FontCache,
     pub theme: ThemeData,
     pub hit_targets: Rc<RefCell<Vec<HitTarget>>>,
+    /// Scroll targets registered by `ScrollView` widgets during this paint pass.
+    pub scroll_targets: Rc<RefCell<Vec<ScrollTarget>>>,
     /// Focus nodes registered by `WithFocus<W>` during this paint pass.
     /// Collected in DFS order; used by `FocusManager` to build the Tab cycle.
     pub focus_nodes: Rc<RefCell<Vec<tezzera_a11y::FocusNode>>>,
@@ -151,7 +166,7 @@ pub struct PaintCtx<'a> {
 
 impl<'a> PaintCtx<'a> {
     /// Derive a child context with a different rect (reborrowing the recorder).
-    /// `clip_rect` is propagated unchanged so it remains in world space.
+    /// `clip_rect` and `scroll_targets` are propagated unchanged.
     pub fn child(&mut self, rect: Rect) -> PaintCtx<'_> {
         PaintCtx {
             recorder: self.recorder,
@@ -159,10 +174,17 @@ impl<'a> PaintCtx<'a> {
             font: self.font,
             theme: self.theme.clone(),
             hit_targets: Rc::clone(&self.hit_targets),
+            scroll_targets: Rc::clone(&self.scroll_targets),
             focus_nodes: Rc::clone(&self.focus_nodes),
             transform_entries: Rc::clone(&self.transform_entries),
             clip_rect: self.clip_rect,
         }
+    }
+
+    /// Register a scroll viewport so the event router can dispatch wheel events
+    /// to the correct `ScrollView`. Called from `ScrollView::paint`.
+    pub fn register_scroll_target(&self, rect: Rect, callback: Arc<dyn Fn(f32) + Send + Sync>) {
+        self.scroll_targets.borrow_mut().push(ScrollTarget { rect, callback });
     }
 
     /// Register a focus node for Tab-cycle inclusion (called from `WithFocus<W>::paint`).

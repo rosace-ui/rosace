@@ -32,8 +32,21 @@ pub struct RenderNode {
 
     // ── Hit testing ───────────────────────────────────────────────────────
 
-    /// Click handlers registered during the last paint pass.
-    pub hit_handlers: Vec<Arc<dyn Fn() + Send + Sync>>,
+    /// Click handlers with their hit rects, registered during the last paint pass.
+    ///
+    /// Storing the rect alongside the callback is critical: on cache replay the
+    /// per-button positions are unknown unless cached here. Previously only the
+    /// callback was stored and `child_rect` (the full root widget rect) was used
+    /// on replay, making every click fire the first-registered button regardless
+    /// of where the user clicked.
+    pub hit_handlers: Vec<(Rect, Arc<dyn Fn() + Send + Sync>)>,
+
+    // ── Scroll dispatch ───────────────────────────────────────────────────
+
+    /// Scroll callbacks with their viewport rects, registered during the last
+    /// paint pass. `ScrollView::paint` registers one entry per live scroll region.
+    /// The f32 parameter is the scroll delta in logical pixels (positive = down).
+    pub scroll_handlers: Vec<(Rect, Arc<dyn Fn(f32) + Send + Sync>)>,
 
     // ── Tree structure ────────────────────────────────────────────────────
 
@@ -52,6 +65,7 @@ impl RenderNode {
             cached_rect:      None,
             paint_dirty:      true,
             hit_handlers:     Vec::new(),
+            scroll_handlers:  Vec::new(),
             children:         Vec::new(),
         }
     }

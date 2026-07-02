@@ -112,6 +112,11 @@ impl App {
         // last layout size and painted Picture so unchanged widgets skip
         // re-layout and re-paint.
         let mut render_nodes: Vec<render_node::RenderNode> = Vec::new();
+        // Cached TransformLayer entries from the last fresh paint. Replayed on
+        // every frame (including render-cache frames where TransformLayer::paint
+        // is not called) so the scroll list remains visible when nothing is dirty.
+        let mut cached_transform_entries: Vec<tezzera_widgets::tree::TransformLayerEntry> =
+            Vec::new();
         // First frame — all components are dirty.
         tezzera_state::reset_to_global_dirty();
 
@@ -127,9 +132,25 @@ impl App {
                 let global_dirty = tezzera_state::is_global_dirty();
                 let dirty_ids = tezzera_state::take_dirty_components();
 
-                // ── Build root ─────────────────────────────────────────────
-                let mut ctx = tezzera_core::Context::new(tezzera_core::types::ComponentId(0));
-                let element = root.build(&mut ctx);
+                // ── Build root (only when dirty) ───────────────────────────
+                //
+                // The root component (ComponentId(0)) owns all atoms created via
+                // ctx.state(). When any of those atoms change, ComponentId(0) lands
+                // in dirty_ids. We rebuild ONLY then; on clean frames the cached
+                // element is reused, keeping `build()` side-effects out of the
+                // render loop (e.g. an atom.set() inside build() would otherwise
+                // cause an infinite loop).
+                let root_component_id = tezzera_core::types::ComponentId(0);
+                let root_is_dirty = global_dirty || dirty_ids.contains(&root_component_id);
+
+                let element = if root_is_dirty || !element_cache.contains_key(&0) {
+                    let mut ctx = tezzera_core::Context::new(root_component_id);
+                    let el = root.build(&mut ctx);
+                    element_cache.insert(0, el.clone());
+                    el
+                } else {
+                    element_cache.get(&0).unwrap().clone()
+                };
 
                 // ── Clear overlay registry from prior frame ────────────────
                 clear_overlays();
@@ -152,6 +173,8 @@ impl App {
 
                 let transform_entries: Rc<RefCell<Vec<tezzera_widgets::tree::TransformLayerEntry>>> =
                     Rc::new(RefCell::new(Vec::new()));
+                let scroll_targets: Rc<RefCell<Vec<tezzera_widgets::tree::ScrollTarget>>> =
+                    Rc::new(RefCell::new(Vec::new()));
                 let mut paint_ctx = tezzera_widgets::tree::PaintCtx {
                     recorder: &mut recorder,
                     rect: tezzera_core::types::Rect {
@@ -161,6 +184,7 @@ impl App {
                     font: &font,
                     theme: theme.clone(),
                     hit_targets: Rc::clone(&hit_targets),
+                    scroll_targets: Rc::clone(&scroll_targets),
                     focus_nodes: Rc::clone(&focus_nodes),
                     transform_entries: Rc::clone(&transform_entries),
                     clip_rect: None,
@@ -181,7 +205,7 @@ impl App {
                     &mut render_nodes,
                     &dirty_ids,
                     global_dirty,
-                    global_dirty,  // subtree_dirty: start with global_dirty
+                    root_is_dirty,  // subtree_dirty: dirty if root component's atoms changed
                     &mut element_cache,
                     &mut new_mounted,
                 );
@@ -241,6 +265,7 @@ impl App {
                             font: &font,
                             theme: theme.clone(),
                             hit_targets: Rc::clone(&ov_hit_targets),
+                            scroll_targets: Rc::clone(&scroll_targets),
                             focus_nodes: Rc::clone(&focus_nodes),
                             transform_entries: Rc::clone(&transform_entries),
                             clip_rect: None,
@@ -267,18 +292,26 @@ impl App {
                 // Each TransformLayerEntry's child was recorded into a separate
                 // Picture. Replay each picture into the base canvas at the
                 // viewport position with the scroll offset applied.
+                //
+                // On cache-hit frames (nothing dirty) TransformLayer::paint is
+                // not called, so transform_entries is empty. We fall back to
+                // cached_transform_entries from the last fresh paint so the list
+                // remains visible even when nothing has changed.
                 {
-                    use tezzera_core::types::{Point, Rect};
-                    let entries = transform_entries.borrow();
-                    for entry in entries.iter() {
-                        // Build a shifted picture by translating commands
-                        // The child was recorded at (0,0). We need to place it
-                        // at viewport_rect.origin - (scroll_x, scroll_y).
+                    let fresh = transform_entries.borrow();
+                    if !fresh.is_empty() {
+                        cached_transform_entries = fresh.clone();
+                    }
+                    let entries_to_draw = if fresh.is_empty() {
+                        &cached_transform_entries[..]
+                    } else {
+                        &fresh[..]
+                    };
+                    for entry in entries_to_draw {
                         let vp = entry.viewport_rect;
                         let dx = vp.origin.x - entry.scroll_x;
                         let dy = vp.origin.y - entry.scroll_y;
 
-                        // Replay with offset: translate all draw commands
                         let mut tl_recorder = tezzera_render::PictureRecorder::new();
                         for cmd in &entry.picture.commands {
                             tl_recorder.push(cmd.offset(dx, dy));
@@ -327,6 +360,7 @@ impl App {
 
                 // ── Route events to hit targets and focus ──────────────────
                 let targets = hit_targets.borrow();
+                let scrolls = scroll_targets.borrow();
                 for event in events {
                     match event {
                         tezzera_platform::InputEvent::MouseDown {
@@ -340,6 +374,19 @@ impl App {
                                     && y <= &(r.origin.y + r.size.height)
                                 {
                                     (t.callback)();
+                                    break;
+                                }
+                            }
+                        }
+                        tezzera_platform::InputEvent::Scroll { x, y, delta_y } => {
+                            for s in scrolls.iter() {
+                                let r = &s.rect;
+                                if x >= &r.origin.x
+                                    && x <= &(r.origin.x + r.size.width)
+                                    && y >= &r.origin.y
+                                    && y <= &(r.origin.y + r.size.height)
+                                {
+                                    (s.callback)(*delta_y);
                                     break;
                                 }
                             }
@@ -504,17 +551,25 @@ fn walk_element(
                     for cmd in &pic.commands {
                         ctx.recorder.push(cmd.clone());
                     }
-                    // Re-register cached hit handlers.
+                    // Re-register cached hit handlers with their original rects.
+                    // Each entry stores (rect, callback) so we don't fall back
+                    // to child_rect (the root widget's full-window rect), which
+                    // would make every click fire the first-registered button.
                     let mut ht = ctx.hit_targets.borrow_mut();
-                    for h in &node.hit_handlers {
-                        ht.push(HitTarget {
-                            rect: child_rect,
-                            callback: h.clone(),
-                        });
+                    for (rect, cb) in &node.hit_handlers {
+                        ht.push(HitTarget { rect: *rect, callback: cb.clone() });
+                    }
+                    drop(ht);
+                    // Re-register cached scroll targets similarly.
+                    let mut st = ctx.scroll_targets.borrow_mut();
+                    for (rect, cb) in &node.scroll_handlers {
+                        st.push(tezzera_widgets::tree::ScrollTarget { rect: *rect, callback: cb.clone() });
                     }
                 } else {
                     // Fresh paint — record into a sub-recorder, then merge.
                     let sub_hit: Rc<RefCell<Vec<HitTarget>>> =
+                        Rc::new(RefCell::new(Vec::new()));
+                    let sub_scroll: Rc<RefCell<Vec<tezzera_widgets::tree::ScrollTarget>>> =
                         Rc::new(RefCell::new(Vec::new()));
                     let mut sub_recorder = tezzera_render::PictureRecorder::new();
                     {
@@ -524,6 +579,7 @@ fn walk_element(
                             font: ctx.font,
                             theme: ctx.theme.clone(),
                             hit_targets: Rc::clone(&sub_hit),
+                            scroll_targets: Rc::clone(&sub_scroll),
                             focus_nodes: Rc::clone(&ctx.focus_nodes),
                             transform_entries: Rc::clone(&ctx.transform_entries),
                             clip_rect: ctx.clip_rect,
@@ -536,16 +592,26 @@ fn walk_element(
                     for cmd in &picture.commands {
                         ctx.recorder.push(cmd.clone());
                     }
-                    // Collect and cache hit handlers.
+                    // Collect and cache hit handlers with their rects.
                     let targets = sub_hit.borrow();
                     node.hit_handlers = targets.iter()
-                        .map(|t| t.callback.clone())
+                        .map(|t| (t.rect, t.callback.clone()))
                         .collect();
                     let mut ht = ctx.hit_targets.borrow_mut();
                     for t in targets.iter() {
                         ht.push(HitTarget { rect: t.rect, callback: t.callback.clone() });
                     }
                     drop(targets);
+                    // Collect and cache scroll handlers.
+                    let scrolls = sub_scroll.borrow();
+                    node.scroll_handlers = scrolls.iter()
+                        .map(|s| (s.rect, s.callback.clone()))
+                        .collect();
+                    let mut st = ctx.scroll_targets.borrow_mut();
+                    for s in scrolls.iter() {
+                        st.push(tezzera_widgets::tree::ScrollTarget { rect: s.rect, callback: s.callback.clone() });
+                    }
+                    drop(scrolls);
 
                     // Cache the picture and clear dirty flag.
                     node.cached_picture = Some(Arc::new(picture));

@@ -68,6 +68,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
             font: ctx.font,
             theme: ctx.theme.clone(),
             hit_targets: ctx.hit_targets.clone(),
+            scroll_targets: ctx.scroll_targets.clone(),
             focus_nodes: ctx.focus_nodes.clone(),
             transform_entries: ctx.transform_entries.clone(),
             clip_rect: None,
