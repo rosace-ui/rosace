@@ -1,5 +1,17 @@
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
+use std::collections::HashMap;
+
+use tiny_skia::{FillRule, Mask, Paint, PathBuilder, Pixmap, Transform};
 use tezzera_core::types::{Point, Rect, Size};
+
+/// Cubic Bézier circle-approximation constant (4/3 · tan(π/8)).
+const KAPPA: f32 = 0.552_285;
+
+/// Exact-rounding division by 255 without an integer divide.
+#[inline(always)]
+fn d255(x: u32) -> u32 {
+    let t = x + 128;
+    (t + (t >> 8)) >> 8
+}
 
 /// TEZZERA's 2D drawing canvas backed by tiny-skia.
 ///
@@ -18,6 +30,22 @@ pub struct SkiaCanvas {
     /// Active clip rect in PHYSICAL pixel coordinates, stored as (x, y, right, bottom)
     /// right-exclusive. `None` means no clipping. Managed by `play_picture`.
     clip: Option<(i32, i32, i32, i32)>,
+    /// Rasterized clip masks for path fills (circles, rounded rects), keyed by
+    /// the clip tuple. Built lazily on first path fill under a given clip and
+    /// reused for the lifetime of the canvas (viewport clips are stable).
+    clip_masks: HashMap<(i32, i32, i32, i32), Mask>,
+    /// Blurred shadow masks keyed by (width, height, blur) in physical pixels.
+    /// A shadow is blurred once per unique geometry, then replayed as a blit.
+    shadow_cache: HashMap<(u32, u32, u32), ShadowMask>,
+}
+
+/// A pre-blurred shadow coverage mask (single channel).
+struct ShadowMask {
+    w: usize,
+    h: usize,
+    /// Blur margin in pixels on each side of the nominal rect.
+    margin: i32,
+    data: Vec<u8>,
 }
 
 /// An RGBA color value.
@@ -82,6 +110,105 @@ fn overlaps_clip(x: f32, y: f32, w: f32, h: f32, clip: (i32, i32, i32, i32)) -> 
     x + w > cx as f32 && y + h > cy as f32 && x < cr as f32 && y < cb as f32
 }
 
+/// Build (or fetch) the rasterized mask for `clip`, storing it in `masks`.
+///
+/// Free function (not a method) so callers can hold a `&Mask` from `masks`
+/// while mutably borrowing `pixmap` — disjoint field borrows.
+fn ensure_clip_mask(
+    masks: &mut HashMap<(i32, i32, i32, i32), Mask>,
+    clip: (i32, i32, i32, i32),
+    width: u32,
+    height: u32,
+) {
+    if masks.contains_key(&clip) {
+        return;
+    }
+    let Some(mut mask) = Mask::new(width, height) else { return };
+    let (x0, y0, x1, y1) = clip;
+    let mut pb = PathBuilder::new();
+    if let Some(r) = tiny_skia::Rect::from_ltrb(x0 as f32, y0 as f32, x1 as f32, y1 as f32) {
+        pb.push_rect(r);
+    }
+    if let Some(path) = pb.finish() {
+        mask.fill_path(&path, FillRule::Winding, false, Transform::identity());
+        masks.insert(clip, mask);
+    }
+}
+
+/// Build a rounded-rect path with proper cubic Bézier corner arcs.
+fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
+    let k = KAPPA * r;
+    let (x1, y1) = (x + w, y + h);
+    let mut pb = PathBuilder::new();
+    pb.move_to(x + r, y);
+    pb.line_to(x1 - r, y);
+    pb.cubic_to(x1 - r + k, y, x1, y + r - k, x1, y + r);
+    pb.line_to(x1, y1 - r);
+    pb.cubic_to(x1, y1 - r + k, x1 - r + k, y1, x1 - r, y1);
+    pb.line_to(x + r, y1);
+    pb.cubic_to(x + r - k, y1, x, y1 - r + k, x, y1 - r);
+    pb.line_to(x, y + r);
+    pb.cubic_to(x, y + r - k, x + r - k, y, x + r, y);
+    pb.close();
+    pb.finish()
+}
+
+/// One horizontal sliding-window box-blur pass with clamp-to-edge sampling.
+fn box_blur_h(src: &[u8], dst: &mut [u8], w: usize, h: usize, r: usize) {
+    let norm = (2 * r + 1) as u32;
+    for y in 0..h {
+        let row = y * w;
+        let mut acc: u32 = src[row] as u32 * r as u32;
+        for i in 0..=r {
+            acc += src[row + i.min(w - 1)] as u32;
+        }
+        for x in 0..w {
+            dst[row + x] = (acc / norm) as u8;
+            let add = src[row + (x + r + 1).min(w - 1)] as u32;
+            let sub = src[row + x.saturating_sub(r)] as u32;
+            acc = acc + add - sub;
+        }
+    }
+}
+
+/// One vertical sliding-window box-blur pass with clamp-to-edge sampling.
+fn box_blur_v(src: &[u8], dst: &mut [u8], w: usize, h: usize, r: usize) {
+    let norm = (2 * r + 1) as u32;
+    for x in 0..w {
+        let mut acc: u32 = src[x] as u32 * r as u32;
+        for i in 0..=r {
+            acc += src[i.min(h - 1) * w + x] as u32;
+        }
+        for y in 0..h {
+            dst[y * w + x] = (acc / norm) as u8;
+            let add = src[(y + r + 1).min(h - 1) * w + x] as u32;
+            let sub = src[y.saturating_sub(r) * w + x] as u32;
+            acc = acc + add - sub;
+        }
+    }
+}
+
+/// Rasterize and blur a shadow coverage mask for a `w`×`h` rect at `blur` px.
+///
+/// Three box-blur passes per axis approximate a Gaussian (σ ≈ blur/2).
+fn build_shadow_mask(w: u32, h: u32, blur: u32) -> ShadowMask {
+    let margin = (2 * blur) as i32 + 1;
+    let mw = w as usize + 2 * margin as usize;
+    let mh = h as usize + 2 * margin as usize;
+    let mut data = vec![0u8; mw * mh];
+    for row in margin as usize..margin as usize + h as usize {
+        let s = row * mw + margin as usize;
+        data[s..s + w as usize].fill(255);
+    }
+    let r = (blur as usize / 2).max(1);
+    let mut tmp = vec![0u8; mw * mh];
+    for _ in 0..3 {
+        box_blur_h(&data, &mut tmp, mw, mh, r);
+        box_blur_v(&tmp, &mut data, mw, mh, r);
+    }
+    ShadowMask { w: mw, h: mh, margin, data }
+}
+
 impl SkiaCanvas {
     /// Create a canvas at physical pixel size with a device pixel ratio of 1.0.
     pub fn new(width: u32, height: u32) -> Self {
@@ -100,6 +227,8 @@ impl SkiaCanvas {
             scale: scale.max(1.0),
             has_drawn: false,
             clip: None,
+            clip_masks: HashMap::new(),
+            shadow_cache: HashMap::new(),
         }
     }
 
@@ -153,6 +282,10 @@ impl SkiaCanvas {
     }
 
     /// Fill a rectangle with a solid color.
+    ///
+    /// Edges are snapped to the physical pixel grid: adjacent widgets that
+    /// share a computed edge land on the same pixel column/row, so there are
+    /// no hairline seams and no sub-pixel shimmer during layout changes.
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
         if color.a == 0 { return; }
         let (mut x, mut y, mut w, mut h) = (rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
@@ -165,10 +298,17 @@ impl SkiaCanvas {
             }
         }
 
+        // Snap edges (not origin+size) so both sides of a shared boundary
+        // round identically. Guarantee at least 1px after snapping.
+        let x0 = x.round();
+        let y0 = y.round();
+        let x1 = (x + w).round().max(x0 + 1.0);
+        let y1 = (y + h).round().max(y0 + 1.0);
+
         let mut paint = Paint::default();
         paint.set_color_rgba8(color.r, color.g, color.b, color.a);
         paint.anti_alias = false;
-        if let Some(r) = tiny_skia::Rect::from_xywh(x, y, w, h) {
+        if let Some(r) = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1) {
             self.pixmap.fill_rect(r, &paint, Transform::identity(), None);
         }
         self.has_drawn = true;
@@ -181,6 +321,7 @@ impl SkiaCanvas {
             if !overlaps_clip(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, clip) {
                 return;
             }
+            ensure_clip_mask(&mut self.clip_masks, clip, self.pixmap.width(), self.pixmap.height());
         }
         let mut paint = Paint::default();
         paint.set_color_rgba8(color.r, color.g, color.b, color.a);
@@ -198,8 +339,9 @@ impl SkiaCanvas {
             width: stroke_width,
             ..Default::default()
         };
+        let mask = self.clip.and_then(|c| self.clip_masks.get(&c));
         self.pixmap
-            .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            .stroke_path(&path, &paint, &stroke, Transform::identity(), mask);
         self.has_drawn = true;
     }
 
@@ -210,6 +352,7 @@ impl SkiaCanvas {
             if !overlaps_clip(center.x - radius, center.y - radius, radius * 2.0, radius * 2.0, clip) {
                 return;
             }
+            ensure_clip_mask(&mut self.clip_masks, clip, self.pixmap.width(), self.pixmap.height());
         }
         let mut paint = Paint::default();
         paint.set_color_rgba8(color.r, color.g, color.b, color.a);
@@ -217,12 +360,13 @@ impl SkiaCanvas {
         let mut pb = PathBuilder::new();
         pb.push_circle(center.x, center.y, radius);
         if let Some(path) = pb.finish() {
+            let mask = self.clip.and_then(|c| self.clip_masks.get(&c));
             self.pixmap.fill_path(
                 &path,
                 &paint,
                 FillRule::Winding,
                 Transform::identity(),
-                None,
+                mask,
             );
         }
         self.has_drawn = true;
@@ -243,9 +387,10 @@ impl SkiaCanvas {
 
     /// Draw real text glyphs at `origin` using `font` at `px` size.
     ///
-    /// `origin` is the top-left of the glyph bounding box. Each character is
-    /// rasterized and alpha-blended directly into the pixel buffer — no per-pixel
-    /// fill_rect overhead.
+    /// `origin` is the top-left of the glyph bounding box. Glyph x positions
+    /// are rounded (not truncated) and kerning pairs are applied, matching
+    /// [`FontCache::measure_text`]. Blending uses an exact divide-free
+    /// source-over with a straight-store fast path for opaque pixels.
     pub fn draw_text(&mut self, text: &str, origin: Point, color: Color, font: &crate::font::FontCache, px: f32) {
         if color.a == 0 || text.is_empty() { return; }
 
@@ -253,55 +398,70 @@ impl SkiaCanvas {
         let canvas_h = self.pixmap.height() as i32;
         let ascender = font.ascender(px);
 
-        // Resolve clip bounds in pixel coordinates once.
+        // Resolve clip bounds clamped to the canvas so the inner loop needs
+        // no per-pixel buffer-length check.
         let (clip_x0, clip_y0, clip_x1, clip_y1) = match self.clip {
-            Some((cx, cy, cr, cb)) => (cx, cy, cr, cb),
+            Some((cx, cy, cr, cb)) => (cx.max(0), cy.max(0), cr.min(canvas_w), cb.min(canvas_h)),
             None                   => (0, 0, canvas_w, canvas_h),
         };
+        if clip_x1 <= clip_x0 || clip_y1 <= clip_y0 { return; }
 
+        let base_y = origin.y.round() as i32 + ascender;
         let mut cursor_x = origin.x;
+        let mut prev: Option<char> = None;
+        let color_a = color.a as u32;
 
         // Obtain a mutable slice of the pixel buffer. Because `font` is a
         // separate argument (not a field of SkiaCanvas), holding `dst` and
-        // calling `font.rasterize` in the loop has no borrow conflict.
+        // calling `font.glyph` in the loop has no borrow conflict.
         let dst = self.pixmap.data_mut();
 
         for ch in text.chars() {
-            let (metrics, bitmap) = font.rasterize(ch, px);
+            if let Some(p) = prev {
+                cursor_x += font.kern(p, ch, px);
+            }
+            prev = Some(ch);
+
+            let glyph = font.glyph(ch, px);
+            let (metrics, bitmap) = (&glyph.0, &glyph.1);
 
             if metrics.width == 0 || metrics.height == 0 {
                 cursor_x += metrics.advance_width;
                 continue;
             }
 
+            let gx = cursor_x.round() as i32 + metrics.xmin;
+            let gy = base_y - metrics.ymin - metrics.height as i32;
+
             for row in 0..metrics.height {
-                // Place glyph relative to the shared baseline.
-                let py = origin.y as i32 + ascender
-                    - metrics.ymin
-                    - metrics.height as i32
-                    + row as i32;
+                let py = gy + row as i32;
                 if py < clip_y0 || py >= clip_y1 { continue; }
+                let row_base = (py * canvas_w) as usize * 4;
+                let src_row = row * metrics.width;
 
                 for col in 0..metrics.width {
-                    let coverage = bitmap[row * metrics.width + col];
+                    let coverage = bitmap[src_row + col] as u32;
                     if coverage == 0 { continue; }
 
-                    let px_xi = cursor_x as i32 + col as i32 + metrics.xmin;
+                    let px_xi = gx + col as i32;
                     if px_xi < clip_x0 || px_xi >= clip_x1 { continue; }
 
-                    // Premultiplied source-over blend into tiny_skia's premul buffer.
-                    let src_a = (coverage as u32 * color.a as u32) / 255;
-                    let src_r = color.r as u32 * src_a / 255;
-                    let src_g = color.g as u32 * src_a / 255;
-                    let src_b = color.b as u32 * src_a / 255;
-                    let inv   = 255 - src_a;
-
-                    let di = (py * canvas_w + px_xi) as usize * 4;
-                    if di + 3 >= dst.len() { continue; }
-                    dst[di]     = (src_r + dst[di]     as u32 * inv / 255) as u8;
-                    dst[di + 1] = (src_g + dst[di + 1] as u32 * inv / 255) as u8;
-                    dst[di + 2] = (src_b + dst[di + 2] as u32 * inv / 255) as u8;
-                    dst[di + 3] = (src_a + dst[di + 3] as u32 * inv / 255) as u8;
+                    let di = row_base + px_xi as usize * 4;
+                    if coverage == 255 && color_a == 255 {
+                        // Fully-covered opaque pixel — straight store.
+                        dst[di]     = color.r;
+                        dst[di + 1] = color.g;
+                        dst[di + 2] = color.b;
+                        dst[di + 3] = 255;
+                    } else {
+                        // Premultiplied source-over blend into the premul buffer.
+                        let src_a = d255(coverage * color_a);
+                        let inv   = 255 - src_a;
+                        dst[di]     = (d255(color.r as u32 * src_a) + d255(dst[di]     as u32 * inv)) as u8;
+                        dst[di + 1] = (d255(color.g as u32 * src_a) + d255(dst[di + 1] as u32 * inv)) as u8;
+                        dst[di + 2] = (d255(color.b as u32 * src_a) + d255(dst[di + 2] as u32 * inv)) as u8;
+                        dst[di + 3] = (src_a + d255(dst[di + 3] as u32 * inv)) as u8;
+                    }
                 }
             }
 
@@ -310,30 +470,98 @@ impl SkiaCanvas {
         self.has_drawn = true;
     }
 
-    /// Fill a rounded rectangle using three overlapping rects and four corner circles.
+    /// Fill a rounded rectangle as a single anti-aliased path.
+    ///
+    /// One path fill — no seams between corner and edge geometry, and
+    /// translucent colors blend exactly once per pixel.
     pub fn fill_rrect(&mut self, rect: Rect, radius: f32, color: Color) {
         if color.a == 0 { return; }
-        // Early cull — skip if completely outside clip.
         if let Some(clip) = self.clip {
             if !overlaps_clip(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, clip) {
                 return;
             }
+            ensure_clip_mask(&mut self.clip_masks, clip, self.pixmap.width(), self.pixmap.height());
         }
         let r = radius.min(rect.size.width / 2.0).min(rect.size.height / 2.0);
         if r < 0.5 {
             self.fill_rect(rect, color);
             return;
         }
-        let x = rect.origin.x;
-        let y = rect.origin.y;
-        let w = rect.size.width;
-        let h = rect.size.height;
-        self.fill_rect(Rect { origin: Point { x: x + r, y }, size: Size { width: w - r * 2.0, height: h } }, color);
-        self.fill_rect(Rect { origin: Point { x, y: y + r }, size: Size { width: w, height: h - r * 2.0 } }, color);
-        self.fill_circle(Point { x: x + r,     y: y + r     }, r, color);
-        self.fill_circle(Point { x: x + w - r, y: y + r     }, r, color);
-        self.fill_circle(Point { x: x + r,     y: y + h - r }, r, color);
-        self.fill_circle(Point { x: x + w - r, y: y + h - r }, r, color);
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+        paint.anti_alias = true;
+        if let Some(path) = rounded_rect_path(
+            rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, r,
+        ) {
+            let mask = self.clip.and_then(|c| self.clip_masks.get(&c));
+            self.pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                mask,
+            );
+        }
+        self.has_drawn = true;
+    }
+
+    /// Draw a soft drop shadow for `rect` with a Gaussian-approximate blur.
+    ///
+    /// The blurred coverage mask is computed once per unique
+    /// (width, height, blur) and cached; subsequent draws are a tinted blit.
+    pub fn draw_shadow(&mut self, rect: Rect, color: Color, blur: f32) {
+        if color.a == 0 { return; }
+        let blur = blur.max(0.0);
+        if blur < 0.5 {
+            self.fill_rect(rect, color);
+            return;
+        }
+        let w = rect.size.width.round().max(1.0) as u32;
+        let h = rect.size.height.round().max(1.0) as u32;
+        let b = blur.round() as u32;
+        let key = (w, h, b);
+        self.shadow_cache
+            .entry(key)
+            .or_insert_with(|| build_shadow_mask(w, h, b));
+
+        let canvas_w = self.pixmap.width() as i32;
+        let canvas_h = self.pixmap.height() as i32;
+        let (clip_x0, clip_y0, clip_x1, clip_y1) = match self.clip {
+            Some((cx, cy, cr, cb)) => (cx.max(0), cy.max(0), cr.min(canvas_w), cb.min(canvas_h)),
+            None                   => (0, 0, canvas_w, canvas_h),
+        };
+        if clip_x1 <= clip_x0 || clip_y1 <= clip_y0 { return; }
+
+        let mask = &self.shadow_cache[&key];
+        let ox = rect.origin.x.round() as i32 - mask.margin;
+        let oy = rect.origin.y.round() as i32 - mask.margin;
+        let color_a = color.a as u32;
+        let dst = self.pixmap.data_mut();
+
+        for row in 0..mask.h {
+            let py = oy + row as i32;
+            if py < clip_y0 || py >= clip_y1 { continue; }
+            let row_base = (py * canvas_w) as usize * 4;
+            let src_row = row * mask.w;
+
+            for col in 0..mask.w {
+                let coverage = mask.data[src_row + col] as u32;
+                if coverage == 0 { continue; }
+
+                let px_xi = ox + col as i32;
+                if px_xi < clip_x0 || px_xi >= clip_x1 { continue; }
+
+                let src_a = d255(coverage * color_a);
+                if src_a == 0 { continue; }
+                let inv = 255 - src_a;
+                let di = row_base + px_xi as usize * 4;
+                dst[di]     = (d255(color.r as u32 * src_a) + d255(dst[di]     as u32 * inv)) as u8;
+                dst[di + 1] = (d255(color.g as u32 * src_a) + d255(dst[di + 1] as u32 * inv)) as u8;
+                dst[di + 2] = (d255(color.b as u32 * src_a) + d255(dst[di + 2] as u32 * inv)) as u8;
+                dst[di + 3] = (src_a + d255(dst[di + 3] as u32 * inv)) as u8;
+            }
+        }
+        self.has_drawn = true;
     }
 
     /// Replay a [`Picture`] (display list) onto this canvas.
@@ -394,17 +622,7 @@ impl SkiaCanvas {
                     self.draw_text(text, sp(*origin), *color, font, *px * s);
                 }
                 DrawCommand::DrawShadow { rect, color, blur } => {
-                    let steps = (*blur as u32).min(8).max(1);
-                    for i in 0..steps {
-                        let alpha = (color.a as f32 * (1.0 - i as f32 / steps as f32) / steps as f32) as u8;
-                        let spread = i as f32 * *blur / steps as f32 * s;
-                        let scaled = sr(*rect);
-                        let shifted = Rect {
-                            origin: Point { x: scaled.origin.x + spread, y: scaled.origin.y + spread },
-                            size: scaled.size,
-                        };
-                        self.fill_rect(shifted, Color::rgba(color.r, color.g, color.b, alpha));
-                    }
+                    self.draw_shadow(sr(*rect), *color, *blur * s);
                 }
                 DrawCommand::BlitRgba { pixels, src_width, src_height, dest_rect } => {
                     self.blit_rgba(pixels, *src_width, *src_height, sr(*dest_rect));
@@ -418,42 +636,77 @@ impl SkiaCanvas {
 
     /// Blit pre-decoded RGBA pixel data into `dest_rect`.
     ///
-    /// `pixels` must be `src_width × src_height × 4` bytes (RGBA). The source
-    /// is scaled to fill `dest_rect` using nearest-neighbour sampling. Pixels
-    /// outside the canvas bounds (and current clip) are skipped.
+    /// `pixels` must be `src_width × src_height × 4` bytes (straight RGBA).
+    /// 1:1 blits take a direct row path; scaled blits are sampled bilinearly.
+    /// Pixels outside the canvas bounds (and current clip) are skipped.
     pub fn blit_rgba(&mut self, pixels: &[u8], src_w: u32, src_h: u32, dest: Rect) {
+        if src_w == 0 || src_h == 0 { return; }
         let cw = self.pixmap.width() as i32;
         let ch = self.pixmap.height() as i32;
 
-        let dx = dest.origin.x as i32;
-        let dy = dest.origin.y as i32;
-        let dw = dest.size.width as i32;
-        let dh = dest.size.height as i32;
+        let dx = dest.origin.x.round() as i32;
+        let dy = dest.origin.y.round() as i32;
+        let dw = dest.size.width.round() as i32;
+        let dh = dest.size.height.round() as i32;
+        if dw <= 0 || dh <= 0 { return; }
 
         // Merge canvas bounds with active clip into a single test region.
         let (cx0, cy0, cx1, cy1) = match self.clip {
             Some((cx, cy, cr, cb)) => (cx.max(0), cy.max(0), cr.min(cw), cb.min(ch)),
             None                   => (0, 0, cw, ch),
         };
+        if cx1 <= cx0 || cy1 <= cy0 { return; }
 
+        let exact = dw == src_w as i32 && dh == src_h as i32;
         let dst = self.pixmap.data_mut();
 
         for row in 0..dh {
-            let src_row = (row * src_h as i32 / dw.max(1)) as u32;
             let py = dy + row;
             if py < cy0 || py >= cy1 { continue; }
+            let row_base = (py * cw) as usize * 4;
+
+            // Vertical source coordinate (bilinear when scaling).
+            let (sy0, sy1, wy) = if exact {
+                (row as usize, row as usize, 0.0f32)
+            } else {
+                let fy = ((row as f32 + 0.5) * src_h as f32 / dh as f32 - 0.5)
+                    .clamp(0.0, (src_h - 1) as f32);
+                let y0 = fy as usize;
+                (y0, (y0 + 1).min(src_h as usize - 1), fy - y0 as f32)
+            };
+
             for col in 0..dw {
-                let src_col = (col * src_w as i32 / dw.max(1)) as u32;
                 let px = dx + col;
                 if px < cx0 || px >= cx1 { continue; }
-                let si = (src_row * src_w + src_col) as usize * 4;
-                let di = (py * cw + px) as usize * 4;
-                if si + 3 >= pixels.len() || di + 3 >= dst.len() { continue; }
-                let alpha = pixels[si + 3] as u32;
+
+                let (r, g, b, a) = if exact {
+                    let si = (sy0 * src_w as usize + col as usize) * 4;
+                    (pixels[si] as f32, pixels[si + 1] as f32, pixels[si + 2] as f32, pixels[si + 3] as f32)
+                } else {
+                    // Bilinear sample of the four surrounding texels.
+                    let fx = ((col as f32 + 0.5) * src_w as f32 / dw as f32 - 0.5)
+                        .clamp(0.0, (src_w - 1) as f32);
+                    let x0 = fx as usize;
+                    let x1 = (x0 + 1).min(src_w as usize - 1);
+                    let wx = fx - x0 as f32;
+
+                    let idx = |sx: usize, sy: usize| (sy * src_w as usize + sx) * 4;
+                    let (i00, i10, i01, i11) = (idx(x0, sy0), idx(x1, sy0), idx(x0, sy1), idx(x1, sy1));
+                    let lerp2 = |c: usize| {
+                        let top = pixels[i00 + c] as f32 * (1.0 - wx) + pixels[i10 + c] as f32 * wx;
+                        let bot = pixels[i01 + c] as f32 * (1.0 - wx) + pixels[i11 + c] as f32 * wx;
+                        top * (1.0 - wy) + bot * wy
+                    };
+                    (lerp2(0), lerp2(1), lerp2(2), lerp2(3))
+                };
+
+                let alpha = a as u32;
+                if alpha == 0 { continue; }
                 let inv = 255 - alpha;
-                dst[di]     = ((pixels[si]     as u32 * alpha + dst[di]     as u32 * inv) / 255) as u8;
-                dst[di + 1] = ((pixels[si + 1] as u32 * alpha + dst[di + 1] as u32 * inv) / 255) as u8;
-                dst[di + 2] = ((pixels[si + 2] as u32 * alpha + dst[di + 2] as u32 * inv) / 255) as u8;
+                let di = row_base + px as usize * 4;
+                dst[di]     = d255(r as u32 * alpha + dst[di]     as u32 * inv) as u8;
+                dst[di + 1] = d255(g as u32 * alpha + dst[di + 1] as u32 * inv) as u8;
+                dst[di + 2] = d255(b as u32 * alpha + dst[di + 2] as u32 * inv) as u8;
                 dst[di + 3] = 255;
             }
         }

@@ -1,15 +1,19 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use fontdue::{Font, FontSettings};
 
 type GlyphKey = (char, u32); // (char, px.to_bits())
+/// Shared rasterized glyph: metrics + coverage bitmap.
+pub type CachedGlyph = Arc<(fontdue::Metrics, Vec<u8>)>;
 
 pub struct FontCache {
     pub(crate) font: Font,
-    // Caches (metrics, coverage_bitmap) keyed by (char, px.to_bits()).
-    // RefCell so callers only need &self.
-    glyph_cache: RefCell<HashMap<GlyphKey, (fontdue::Metrics, Vec<u8>)>>,
+    // Caches CachedGlyph keyed by (char, px.to_bits()).
+    // Arc so draw_text gets a cheap handle instead of cloning the bitmap
+    // Vec on every glyph draw. RefCell so callers only need &self.
+    glyph_cache: RefCell<HashMap<GlyphKey, CachedGlyph>>,
     // Caches advance_width per (char, px.to_bits()).
     metrics_cache: RefCell<HashMap<GlyphKey, f32>>,
 }
@@ -68,19 +72,36 @@ impl FontCache {
         None
     }
 
-    /// Rasterize a single character at the given px size.
-    /// Returns (metrics, coverage_bitmap). Result is cached after first call.
-    pub fn rasterize(&self, c: char, px: f32) -> (fontdue::Metrics, Vec<u8>) {
+    /// Shared handle to the cached glyph for `c` at `px` size.
+    ///
+    /// Rasterizes on first use; afterwards returns an `Arc` clone (no bitmap
+    /// copy). This is the hot path used by `SkiaCanvas::draw_text`.
+    pub fn glyph(&self, c: char, px: f32) -> CachedGlyph {
         let key = (c, px.to_bits());
         {
             let cache = self.glyph_cache.borrow();
             if let Some(entry) = cache.get(&key) {
-                return entry.clone();
+                return Arc::clone(entry);
             }
         }
-        let entry = self.font.rasterize(c, px);
-        self.glyph_cache.borrow_mut().insert(key, entry.clone());
+        let entry = Arc::new(self.font.rasterize(c, px));
+        self.glyph_cache.borrow_mut().insert(key, Arc::clone(&entry));
         entry
+    }
+
+    /// Rasterize a single character at the given px size.
+    /// Returns (metrics, coverage_bitmap). Result is cached after first call.
+    ///
+    /// Copies the bitmap — prefer [`FontCache::glyph`] in hot paths.
+    pub fn rasterize(&self, c: char, px: f32) -> (fontdue::Metrics, Vec<u8>) {
+        let glyph = self.glyph(c, px);
+        (glyph.0, glyph.1.clone())
+    }
+
+    /// Kerning adjustment in pixels between `left` and `right` at `px` size.
+    /// Zero when the font defines no kerning pair.
+    pub fn kern(&self, left: char, right: char, px: f32) -> f32 {
+        self.font.horizontal_kern(left, right, px).unwrap_or(0.0)
     }
 
     /// Pixel advance width of a single character at `px` size. Cached.
@@ -97,9 +118,21 @@ impl FontCache {
         w
     }
 
-    /// Total pixel width of a string at `px` size (sum of advance widths).
+    /// Total pixel width of a string at `px` size.
+    ///
+    /// Sums advance widths plus kerning pairs — must stay in lockstep with
+    /// `SkiaCanvas::draw_text` so measured and painted widths agree.
     pub fn measure_text(&self, text: &str, px: f32) -> f32 {
-        text.chars().map(|c| self.advance_width(c, px)).sum()
+        let mut width = 0.0;
+        let mut prev: Option<char> = None;
+        for c in text.chars() {
+            if let Some(p) = prev {
+                width += self.kern(p, c, px);
+            }
+            width += self.advance_width(c, px);
+            prev = Some(c);
+        }
+        width
     }
 
     /// Distance from the top of the line box to the text baseline, in pixels.
