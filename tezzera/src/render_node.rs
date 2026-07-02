@@ -45,8 +45,8 @@ pub struct RenderNode {
 
     /// Scroll callbacks with their viewport rects, registered during the last
     /// paint pass. `ScrollView::paint` registers one entry per live scroll region.
-    /// The f32 parameter is the scroll delta in logical pixels (positive = down).
-    pub scroll_handlers: Vec<(Rect, Arc<dyn Fn(f32) + Send + Sync>)>,
+    /// Parameters are `(delta_x, delta_y)` in logical pixels (positive = right/down).
+    pub scroll_handlers: Vec<(Rect, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
 
     // ── Tree structure ────────────────────────────────────────────────────
 

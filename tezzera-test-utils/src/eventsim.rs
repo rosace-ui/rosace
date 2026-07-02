@@ -33,7 +33,7 @@ impl EventSim {
 
     /// Generate a Scroll event at `(x, y)` with vertical `delta`.
     pub fn scroll(x: f32, y: f32, delta: f32) -> Vec<InputEvent> {
-        vec![InputEvent::Scroll { x, y, delta_y: delta }]
+        vec![InputEvent::Scroll { x, y, delta_x: 0.0, delta_y: delta }]
     }
 
     /// Generate a mouse move event.

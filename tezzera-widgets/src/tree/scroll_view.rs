@@ -62,6 +62,14 @@ impl ScrollView {
     }
 
     pub fn offset(mut self, o: f32) -> Self { self.offset = o; self }
+
+    /// Drive horizontal scrolling from an `Atom<f32>`. Use together with
+    /// [`ScrollAxis::Horizontal`] or [`ScrollAxis::Both`].
+    pub fn live_x(mut self, scroll_x: Atom<f32>) -> Self {
+        self.live_offset_x = Some(scroll_x);
+        self
+    }
+
     pub fn axis(mut self, a: ScrollAxis) -> Self { self.axis = a; self }
     pub fn no_scrollbar(mut self) -> Self { self.show_scrollbar = false; self }
     pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar_color = c; self }
@@ -116,16 +124,22 @@ impl Widget for ScrollView {
 
         // Register a scroll target so the event router can dispatch wheel events
         // to this viewport. Only live-scrolling ScrollViews respond to wheel input.
-        if let Some(atom) = &self.live_offset {
-            let atom = atom.clone();
-            let max_scroll = (child_size.height - vp.size.height).max(0.0);
-            ctx.register_scroll_target(vp, Arc::new(move |delta_y| {
-                let new_val = (atom.get() - delta_y).clamp(0.0, max_scroll);
-                atom.set(new_val);
+        if self.live_offset.is_some() || self.live_offset_x.is_some() {
+            let atom_y = self.live_offset.clone();
+            let atom_x = self.live_offset_x.clone();
+            let max_scroll_y = (child_size.height - vp.size.height).max(0.0);
+            let max_scroll_x = (child_size.width - vp.size.width).max(0.0);
+            ctx.register_scroll_target(vp, Arc::new(move |delta_x, delta_y| {
+                if let Some(a) = &atom_y {
+                    a.set((a.get() - delta_y).clamp(0.0, max_scroll_y));
+                }
+                if let Some(a) = &atom_x {
+                    a.set((a.get() - delta_x).clamp(0.0, max_scroll_x));
+                }
             }));
         }
 
-        // Scrollbar drawn AFTER PopClip so it is not clipped by the viewport.
+        // Scrollbars drawn AFTER PopClip so they are not clipped by the viewport.
         if self.show_scrollbar && matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both) {
             let ratio = (vp.size.height / child_size.height.max(1.0)).min(1.0);
             if ratio < 1.0 {
@@ -134,6 +148,17 @@ impl Widget for ScrollView {
                 ctx.fill_rect(Rect {
                     origin: Point { x: vp.origin.x + vp.size.width - 4.0, y: bar_y },
                     size: Size { width: 3.0, height: bar_h },
+                }, self.scrollbar_color);
+            }
+        }
+        if self.show_scrollbar && matches!(self.axis, ScrollAxis::Horizontal | ScrollAxis::Both) {
+            let ratio = (vp.size.width / child_size.width.max(1.0)).min(1.0);
+            if ratio < 1.0 {
+                let bar_w = vp.size.width * ratio;
+                let bar_x = vp.origin.x + (scroll_x / child_size.width) * vp.size.width;
+                ctx.fill_rect(Rect {
+                    origin: Point { x: bar_x, y: vp.origin.y + vp.size.height - 4.0 },
+                    size: Size { width: bar_w, height: 3.0 },
                 }, self.scrollbar_color);
             }
         }

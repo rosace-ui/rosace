@@ -111,10 +111,11 @@ pub struct HitTarget {
 ///
 /// `ScrollView::paint` registers one per live scroll region. The event router
 /// dispatches `InputEvent::Scroll` to the target whose rect contains the cursor.
-/// The callback receives the delta in logical pixels (positive = content scrolls down).
+/// The callback receives `(delta_x, delta_y)` in logical pixels
+/// (positive = content scrolls right / down).
 pub struct ScrollTarget {
     pub rect: Rect,
-    pub callback: Arc<dyn Fn(f32) + Send + Sync>,
+    pub callback: Arc<dyn Fn(f32, f32) + Send + Sync>,
 }
 
 // ── TransformLayerEntry ──────────────────────────────────────────────────────
@@ -182,8 +183,9 @@ impl<'a> PaintCtx<'a> {
     }
 
     /// Register a scroll viewport so the event router can dispatch wheel events
-    /// to the correct `ScrollView`. Called from `ScrollView::paint`.
-    pub fn register_scroll_target(&self, rect: Rect, callback: Arc<dyn Fn(f32) + Send + Sync>) {
+    /// to the correct `ScrollView`. Called from `ScrollView::paint`. The
+    /// callback receives `(delta_x, delta_y)` in logical pixels.
+    pub fn register_scroll_target(&self, rect: Rect, callback: Arc<dyn Fn(f32, f32) + Send + Sync>) {
         self.scroll_targets.borrow_mut().push(ScrollTarget { rect, callback });
     }
 

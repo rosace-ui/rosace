@@ -15,6 +15,11 @@ impl Component for AppDemo {
     fn build(&self, ctx: &mut Context) -> Element {
         let is_dark: Atom<bool> = ctx.state(true);
         let dark = is_dark.get();
+        // Scroll position must live in component state (not the widget) so it
+        // survives rebuilds. ScrollView::live registers the wheel handler;
+        // ScrollView::new is a fixed-offset snapshot view and does not scroll.
+        let scroll_y: Atom<f32> = ctx.state(0.0f32);
+        let scroll_x: Atom<f32> = ctx.state(0.0f32);
 
         // Toggle label
         let label = if dark { "☀ Light" } else { "🌙 Dark" };
@@ -22,7 +27,7 @@ impl Component for AppDemo {
 
         Scaffold::new(
             // ── Body ─────────────────────────────────────────────────────────
-            ScrollView::new(
+            ScrollView::live(
                 Column::new()
                     .spacing(20.0)
                     .padding(EdgeInsets::all(24.0))
@@ -60,8 +65,11 @@ impl Component for AppDemo {
                             .child(Image::placeholder(Color::rgb(70, 100, 170)).width(180.0).height(120.0))
                             .child(Image::placeholder(Color::rgb(170, 70, 100)).width(180.0).height(120.0))
                             .child(Image::placeholder(Color::rgb(70, 170, 100)).width(180.0).height(120.0))
-                    )
+                    ),
+                scroll_y,
             )
+            .live_x(scroll_x)
+            .axis(ScrollAxis::Both)
         )
         .app_bar(
             AppBar::new("My App")

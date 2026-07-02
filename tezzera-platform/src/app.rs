@@ -341,13 +341,14 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                let dy = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y * 20.0,
-                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                let (dx, dy) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
+                    winit::event::MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
                 };
                 self.pending_events.push(InputEvent::Scroll {
                     x: self.cursor_x,
                     y: self.cursor_y,
+                    delta_x: dx,
                     delta_y: dy,
                 });
                 if let Some(w) = &self.window {

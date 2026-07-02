@@ -80,12 +80,23 @@ impl App {
     /// Builder variant — use when you need to configure title/size/theme first.
     pub fn launch<C: tezzera_core::Component>(self, root: C) {
         // ── Wire ConsoleSubscriber so trace events appear in the terminal ──
+        //
+        // Opt-in via TEZZERA_TRACE=all|state|network|perf. Printing every
+        // trace event to stderr costs more than the entire render pass —
+        // AtomRead fires on every atom.get() during paint — so the default
+        // is no console subscriber at all.
         #[cfg(debug_assertions)]
-        {
+        if let Ok(filter) = std::env::var("TEZZERA_TRACE") {
             use std::sync::Arc;
             use tezzera_trace::TRACING_BUS;
-            use tezzera_trace::subscribers::console::ConsoleSubscriber;
-            TRACING_BUS.add_subscriber(Arc::new(ConsoleSubscriber::new()));
+            use tezzera_trace::subscribers::console::{ConsoleFilter, ConsoleSubscriber};
+            let filter = match filter.as_str() {
+                "state"   => ConsoleFilter::State,
+                "network" => ConsoleFilter::Network,
+                "perf"    => ConsoleFilter::Performance,
+                _         => ConsoleFilter::All,
+            };
+            TRACING_BUS.add_subscriber(Arc::new(ConsoleSubscriber::with_filter(filter)));
         }
 
         let font = tezzera_render::FontCache::system_ui()
@@ -383,7 +394,7 @@ impl App {
                                 }
                             }
                         }
-                        tezzera_platform::InputEvent::Scroll { x, y, delta_y } => {
+                        tezzera_platform::InputEvent::Scroll { x, y, delta_x, delta_y } => {
                             for s in scrolls.iter() {
                                 let r = &s.rect;
                                 if x >= &r.origin.x
@@ -391,7 +402,7 @@ impl App {
                                     && y >= &r.origin.y
                                     && y <= &(r.origin.y + r.size.height)
                                 {
-                                    (s.callback)(*delta_y);
+                                    (s.callback)(*delta_x, *delta_y);
                                     break;
                                 }
                             }

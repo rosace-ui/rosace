@@ -46,7 +46,7 @@ impl GestureRecognizer for PinchRecognizer {
                 self.last_mouse_y = *y;
                 None
             }
-            InputEvent::Scroll { x, y, delta_y } => {
+            InputEvent::Scroll { x, y, delta_y, .. } => {
                 let scale = (1.0 - delta_y * self.sensitivity).clamp(0.1, 10.0);
                 self.accumulated_scale = (self.accumulated_scale * scale).clamp(0.1, 10.0);
                 Some(GestureEvent::Pinch { scale, center_x: *x, center_y: *y })
@@ -68,7 +68,7 @@ mod tests {
     use tezzera_platform::InputEvent;
 
     fn scroll(x: f32, y: f32, delta_y: f32) -> InputEvent {
-        InputEvent::Scroll { x, y, delta_y }
+        InputEvent::Scroll { x, y, delta_x: 0.0, delta_y }
     }
 
     #[test]
