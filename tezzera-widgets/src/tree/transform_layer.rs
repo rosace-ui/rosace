@@ -62,22 +62,22 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
         let child_origin = Point { x: 0.0, y: 0.0 };
         let child_rect = Rect { origin: child_origin, size: child_size };
 
+        let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
         let mut sub_ctx = PaintCtx {
             recorder: &mut sub_rec,
             rect: child_rect,
             font: ctx.font,
             theme: ctx.theme.clone(),
-            hit_targets: ctx.hit_targets.clone(),
-            scroll_targets: ctx.scroll_targets.clone(),
-            focus_nodes: ctx.focus_nodes.clone(),
-            transform_entries: ctx.transform_entries.clone(),
+            tree: ctx.tree.clone(),
+            node: sub_node,
             clip_rect: None,
         };
         self.child.paint(&mut sub_ctx);
         let picture = sub_rec.finish();
 
-        // Push the entry — platform will replay into a dedicated canvas (D088).
-        ctx.transform_entries.borrow_mut().push(TransformLayerEntry {
+        // Attach the entry to this node — the platform replays it into a
+        // dedicated canvas (D088); it persists across clean frames (D091).
+        ctx.attach_transform(TransformLayerEntry {
             picture,
             child_size,
             viewport_rect: vp_rect,

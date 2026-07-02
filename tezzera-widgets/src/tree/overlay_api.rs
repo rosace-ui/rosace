@@ -4,7 +4,7 @@ use tezzera_render::Color;
 use tezzera_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget};
 use super::overlay::{
-    FocusBehavior, InputBehavior, LayerPosition, OverlayEntry, ScrimConfig, push_overlay,
+    FocusBehavior, InputBehavior, LayerPosition, OverlayEntry, ScrimConfig,
 };
 
 // ── OverlayKind ───────────────────────────────────────────────────────────────
@@ -153,7 +153,10 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                 }
             };
 
-            push_overlay(entry);
+            // Attach to the render-tree node (D091): the entry persists across
+            // cache-hit frames and is cleared when this node repaints — an
+            // open dialog can no longer vanish on the MouseUp frame.
+            ctx.attach_overlay(entry);
         }
     }
 

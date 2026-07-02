@@ -1,8 +1,18 @@
 # Phase 20 — RenderTree Unification: Retained State, Structural Hit Testing, Damage Repaint
 
-> Status: PLANNED
-> Started: —
+> Status: IN PROGRESS
+> Started: 2026-07-02
 > Completed: —
+>
+> Progress: Steps 2–4 landed together as the RenderTree arena (see
+> `tezzera-widgets/src/tree/render_tree.rs`): hit/scroll regions, focus
+> nodes, overlay entries, and transform layers all live on persistent
+> nodes; dispatch is a structural tree walk; the strip/insert-at-0
+> workarounds and all three bolt-on caches are deleted. Node identity is
+> positional per parent (safe: paint recursion is all-or-nothing per
+> subtree; only the walker skips, and it consumes slots without reset).
+> Step 1 remains partial — the keyed reconciler is still unused and the
+> flat RenderNode list still owns picture caching. Steps 5–6 not started.
 
 ## Why This Phase
 

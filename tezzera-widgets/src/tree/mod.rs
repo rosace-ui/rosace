@@ -33,6 +33,7 @@ pub mod overlay_api;
 pub mod padding;
 pub mod progress_bar;
 pub mod rect_reader;
+pub mod render_tree;
 pub mod repaint_boundary;
 pub mod row;
 pub mod scaffold;
@@ -80,6 +81,7 @@ pub use overlay_api::{OverlayApi, OverlayKind, WithOverlay};
 pub use padding::{EdgeInsets, Padding};
 pub use progress_bar::ProgressBar;
 pub use rect_reader::RectReader;
+pub use render_tree::{NodeId, RenderTree, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
@@ -157,16 +159,13 @@ pub struct PaintCtx<'a> {
     pub rect: Rect,
     pub font: &'a FontCache,
     pub theme: ThemeData,
-    pub hit_targets: Rc<RefCell<Vec<HitTarget>>>,
-    /// Scroll targets registered by `ScrollView` widgets during this paint pass.
-    pub scroll_targets: Rc<RefCell<Vec<ScrollTarget>>>,
-    /// Focus nodes registered by `WithFocus<W>` during this paint pass.
-    /// Collected in DFS order; used by `FocusManager` to build the Tab cycle.
-    pub focus_nodes: Rc<RefCell<Vec<tezzera_a11y::FocusNode>>>,
-    /// TransformLayer entries collected during this paint pass (D087).
-    /// The platform replays each into a separate canvas and presents as an
-    /// additional GPU compositor layer.
-    pub transform_entries: Rc<RefCell<Vec<TransformLayerEntry>>>,
+    /// The persistent render tree (D091) — sole owner of retained per-node
+    /// state. Widgets *declare* hit/scroll regions, focus nodes, overlays,
+    /// and transform layers onto `node`; the frame pipeline derives dispatch
+    /// order and the overlay stack from the tree.
+    pub tree: Rc<RefCell<RenderTree>>,
+    /// The tree node this widget declares onto.
+    pub node: NodeId,
     /// Current clip viewport in world-space logical pixels. `None` means no clip.
     /// Set by `ScrollView` so that `register_hit` ignores targets outside the
     /// visible area, preventing phantom clicks in other panels below the fold.
@@ -174,18 +173,40 @@ pub struct PaintCtx<'a> {
 }
 
 impl<'a> PaintCtx<'a> {
+    /// Root context for a standalone paint pass (golden tests, overlay pass).
+    /// Starts a frame on `tree` and paints into the root node. Windowed frame
+    /// loops that interleave cached subtrees manage the tree explicitly instead.
+    pub fn root(
+        recorder: &'a mut PictureRecorder,
+        rect: Rect,
+        font: &'a FontCache,
+        theme: ThemeData,
+        tree: Rc<RefCell<RenderTree>>,
+    ) -> PaintCtx<'a> {
+        tree.borrow_mut().start_frame();
+        PaintCtx {
+            recorder,
+            rect,
+            font,
+            theme,
+            tree,
+            node: RenderTree::ROOT,
+            clip_rect: None,
+        }
+    }
+
     /// Derive a child context with a different rect (reborrowing the recorder).
-    /// `clip_rect` and `scroll_targets` are propagated unchanged.
+    /// Consumes the next child slot of this node — the child's previously
+    /// declared regions are cleared for re-declaration. `clip_rect` propagates.
     pub fn child(&mut self, rect: Rect) -> PaintCtx<'_> {
+        let node = self.tree.borrow_mut().slot(self.node, true);
         PaintCtx {
             recorder: self.recorder,
             rect,
             font: self.font,
             theme: self.theme.clone(),
-            hit_targets: Rc::clone(&self.hit_targets),
-            scroll_targets: Rc::clone(&self.scroll_targets),
-            focus_nodes: Rc::clone(&self.focus_nodes),
-            transform_entries: Rc::clone(&self.transform_entries),
+            tree: Rc::clone(&self.tree),
+            node,
             clip_rect: self.clip_rect,
         }
     }
@@ -194,12 +215,12 @@ impl<'a> PaintCtx<'a> {
     /// to the correct `ScrollView`. Called from `ScrollView::paint`. The
     /// callback receives `(delta_x, delta_y)` in logical pixels.
     pub fn register_scroll_target(&self, rect: Rect, callback: Arc<dyn Fn(f32, f32) + Send + Sync>) {
-        self.scroll_targets.borrow_mut().push(ScrollTarget { rect, callback });
+        self.tree.borrow_mut().node_mut(self.node).scrolls.push((rect, callback));
     }
 
     /// Register a focus node for Tab-cycle inclusion (called from `WithFocus<W>::paint`).
     pub fn register_focus(&self, node: tezzera_a11y::FocusNode) {
-        self.focus_nodes.borrow_mut().push(node);
+        self.tree.borrow_mut().node_mut(self.node).focus.push(node);
     }
 
     /// Register a click callback for `self.rect`.
@@ -216,7 +237,20 @@ impl<'a> PaintCtx<'a> {
         } else {
             self.rect
         };
-        self.hit_targets.borrow_mut().push(HitTarget { rect: hit_rect, callback });
+        self.tree.borrow_mut().node_mut(self.node).hits.push((hit_rect, callback));
+    }
+
+    /// Attach an overlay entry to this node (called from `WithOverlay::paint`).
+    /// The entry persists on the node across cache-hit frames and is cleared
+    /// when the node repaints — open overlays cannot vanish on clean frames.
+    pub fn attach_overlay(&self, entry: OverlayEntry) {
+        self.tree.borrow_mut().node_mut(self.node).overlays.push(entry);
+    }
+
+    /// Attach a transform-layer entry to this node (called from
+    /// `TransformLayer::paint`). Persists like overlays (D087/D091).
+    pub fn attach_transform(&self, entry: TransformLayerEntry) {
+        self.tree.borrow_mut().node_mut(self.node).transforms.push(entry);
     }
 
     /// Convert a theme color (f32 0.0–1.0) to a render color (u8 0–255).

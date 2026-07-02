@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use tezzera_theme::built_in;
 use tezzera_platform::PlatformWindow;
-use tezzera_widgets::tree::{HitTarget, WidgetBox, clear_overlays, drain_overlays};
+use tezzera_widgets::tree::{WidgetBox, clear_overlays, drain_overlays};
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
@@ -123,19 +123,15 @@ impl App {
         // last layout size and painted Picture so unchanged widgets skip
         // re-layout and re-paint.
         let mut render_nodes: Vec<render_node::RenderNode> = Vec::new();
-        // Cached TransformLayer entries from the last fresh paint. Replayed on
-        // every frame (including render-cache frames where TransformLayer::paint
-        // is not called) so the scroll list remains visible when nothing is dirty.
-        let mut cached_transform_entries: Vec<tezzera_widgets::tree::TransformLayerEntry> =
-            Vec::new();
-        // Cached overlay entries — same problem as transform entries (D088):
-        // WithOverlay::paint only runs on dirty frames, so on cache-hit frames
-        // drain_overlays() is empty even though an overlay's open atom is still
-        // true. Without this cache the dialog vanishes (and loses its input
-        // blocking) on the very next clean frame — e.g. the MouseUp that
-        // follows every click — letting taps reach the buttons underneath.
-        let mut cached_overlay_entries: Vec<tezzera_widgets::tree::OverlayEntry> =
-            Vec::new();
+        // ── Phase 20: persistent render tree (D091) ────────────────────────
+        // Single owner of per-node retained state: hit/scroll regions, focus
+        // nodes, overlay attachments, transform layers. State declared during
+        // paint persists on cache-hit frames by construction — this replaces
+        // the per-concern caches (hit_handlers, cached_transform_entries,
+        // cached_overlay_entries) that each fixed one instance of the same
+        // vanishing-state bug.
+        let render_tree: Rc<RefCell<tezzera_widgets::tree::RenderTree>> =
+            Rc::new(RefCell::new(tezzera_widgets::tree::RenderTree::new()));
         // First frame — all components are dirty.
         tezzera_state::reset_to_global_dirty();
 
@@ -185,20 +181,15 @@ impl App {
 
                 // ── Set up main display-list recording ─────────────────────
                 let mut recorder = tezzera_render::PictureRecorder::new();
-                let hit_targets: Rc<RefCell<Vec<HitTarget>>> =
-                    Rc::new(RefCell::new(Vec::new()));
-                let focus_nodes: Rc<RefCell<Vec<tezzera_a11y::FocusNode>>> =
-                    Rc::new(RefCell::new(Vec::new()));
 
                 // Layout in logical pixels so widget sizes and font sizes are
                 // display-independent. play_picture scales to physical pixels.
                 let win_w = canvas.logical_width() as f32;
                 let win_h = canvas.logical_height() as f32;
 
-                let transform_entries: Rc<RefCell<Vec<tezzera_widgets::tree::TransformLayerEntry>>> =
-                    Rc::new(RefCell::new(Vec::new()));
-                let scroll_targets: Rc<RefCell<Vec<tezzera_widgets::tree::ScrollTarget>>> =
-                    Rc::new(RefCell::new(Vec::new()));
+                // Begin the persistent render tree frame (D091). Repainted
+                // nodes re-declare their regions; skipped subtrees keep theirs.
+                render_tree.borrow_mut().start_frame();
                 let mut paint_ctx = tezzera_widgets::tree::PaintCtx {
                     recorder: &mut recorder,
                     rect: tezzera_core::types::Rect {
@@ -207,10 +198,8 @@ impl App {
                     },
                     font: &font,
                     theme: current_theme.clone(),
-                    hit_targets: Rc::clone(&hit_targets),
-                    scroll_targets: Rc::clone(&scroll_targets),
-                    focus_nodes: Rc::clone(&focus_nodes),
-                    transform_entries: Rc::clone(&transform_entries),
+                    tree: Rc::clone(&render_tree),
+                    node: tezzera_widgets::tree::RenderTree::ROOT,
                     clip_rect: None,
                 };
 
@@ -233,158 +222,110 @@ impl App {
                     &mut element_cache,
                     &mut new_mounted,
                 );
+                render_tree.borrow_mut().finalize();
 
                 // ── Replay the main display list onto the canvas ───────────
                 let picture = recorder.finish();
                 canvas.play_picture(&picture, &font);
 
                 // ── Overlay pass — second recorder into overlay_canvas (D076) ─
-                // The platform already cleared overlay_canvas to transparent
-                // before calling this closure (D078). We record overlay widgets
-                // into a separate PictureRecorder and play into overlay_canvas,
-                // which the platform uploads as a second GPU texture layer.
-                let fresh_overlays = drain_overlays();
-                // A rebuild happened → fresh_overlays is authoritative (it is
-                // empty when every overlay closed). On clean frames keep the
-                // cache so open overlays survive cache-hit repaints.
-                let frame_rebuilt = global_dirty || !dirty_ids.is_empty();
-                if !fresh_overlays.is_empty() {
-                    cached_overlay_entries = fresh_overlays;
-                } else if frame_rebuilt {
-                    cached_overlay_entries.clear();
-                }
-
-                let ov_hit_targets: Rc<RefCell<Vec<HitTarget>>> =
-                    Rc::new(RefCell::new(Vec::new()));
-
-                if !cached_overlay_entries.is_empty() {
+                // Entries come from the render tree (D091 — they persist on
+                // clean frames and clear when their owner repaints), plus the
+                // legacy thread-local registry for direct push_overlay users.
+                // Overlay widgets repaint every frame; each gets a throwaway
+                // per-entry tree whose regions become an OverlayRoute for
+                // structural input routing (D092) — no scrim hit strips.
+                let legacy_overlays = drain_overlays();
+                let mut overlay_routes: Vec<OverlayRoute> = Vec::new();
+                {
                     use tezzera_core::types::{Point, Rect, Size};
                     use tezzera_widgets::tree::LayerPosition;
-                    let mut ov_recorder = tezzera_render::PictureRecorder::new();
 
-                    for entry in &cached_overlay_entries {
-                        if let Some(scrim) = &entry.scrim {
-                            let scrim_rect = Rect {
-                                origin: Point { x: 0.0, y: 0.0 },
-                                size: Size { width: win_w, height: win_h },
+                    let tree_ref = render_tree.borrow();
+                    let overlay_ids = tree_ref.overlay_ids();
+
+                    if !overlay_ids.is_empty() || !legacy_overlays.is_empty() {
+                        let mut ov_recorder = tezzera_render::PictureRecorder::new();
+
+                        let entries = overlay_ids.iter()
+                            .map(|&(n, i)| &tree_ref.node(n).overlays[i])
+                            .chain(legacy_overlays.iter());
+
+                        for entry in entries {
+                            if let Some(scrim) = &entry.scrim {
+                                let scrim_rect = Rect {
+                                    origin: Point { x: 0.0, y: 0.0 },
+                                    size: Size { width: win_w, height: win_h },
+                                };
+                                ov_recorder.push(tezzera_render::DrawCommand::FillRect {
+                                    rect: scrim_rect,
+                                    color: scrim.color,
+                                });
+                            }
+
+                            let loose_c = tezzera_layout::Constraints::loose(win_w, win_h);
+                            let lctx = tezzera_widgets::tree::LayoutCtx::new(
+                                loose_c, &font, &current_theme,
+                            );
+                            let widget_size = entry.widget.layout(&lctx);
+                            let origin = match &entry.position {
+                                LayerPosition::Absolute(p) => *p,
+                                LayerPosition::Centered => Point {
+                                    x: ((win_w - widget_size.width) / 2.0).max(0.0),
+                                    y: ((win_h - widget_size.height) / 2.0).max(0.0),
+                                },
+                                LayerPosition::BottomAnchored => Point {
+                                    x: 0.0,
+                                    y: (win_h - widget_size.height).max(0.0),
+                                },
+                                LayerPosition::BottomCenter => Point {
+                                    x: ((win_w - widget_size.width) / 2.0).max(0.0),
+                                    y: (win_h - widget_size.height - 24.0).max(0.0),
+                                },
+                                LayerPosition::Fill => Point { x: 0.0, y: 0.0 },
                             };
-                            ov_recorder.push(tezzera_render::DrawCommand::FillRect {
-                                rect: scrim_rect,
-                                color: scrim.color,
+                            let widget_rect = Rect { origin, size: widget_size };
+
+                            // Paint into a per-entry throwaway tree; its regions
+                            // are flattened into the entry's dispatch route.
+                            let ov_tree = Rc::new(RefCell::new(
+                                tezzera_widgets::tree::RenderTree::new(),
+                            ));
+                            let mut ov_ctx = tezzera_widgets::tree::PaintCtx::root(
+                                &mut ov_recorder,
+                                widget_rect,
+                                &font,
+                                current_theme.clone(),
+                                Rc::clone(&ov_tree),
+                            );
+                            entry.widget.paint(&mut ov_ctx);
+                            drop(ov_ctx);
+
+                            let ov_tree = ov_tree.borrow();
+                            overlay_routes.push(OverlayRoute {
+                                rect: widget_rect,
+                                input: entry.input,
+                                on_tap: entry.scrim.as_ref().and_then(|s| s.on_tap.clone()),
+                                hits: ov_tree.collect_hits(),
+                                scrolls: ov_tree.collect_scrolls(),
                             });
                         }
 
-                        let loose_c = tezzera_layout::Constraints::loose(win_w, win_h);
-                        let lctx = tezzera_widgets::tree::LayoutCtx::new(
-                            loose_c, &font, &current_theme,
-                        );
-                        let widget_size = entry.widget.layout(&lctx);
-                        let origin = match &entry.position {
-                            LayerPosition::Absolute(p) => *p,
-                            LayerPosition::Centered => Point {
-                                x: ((win_w - widget_size.width) / 2.0).max(0.0),
-                                y: ((win_h - widget_size.height) / 2.0).max(0.0),
-                            },
-                            LayerPosition::BottomAnchored => Point {
-                                x: 0.0,
-                                y: (win_h - widget_size.height).max(0.0),
-                            },
-                            LayerPosition::BottomCenter => Point {
-                                x: ((win_w - widget_size.width) / 2.0).max(0.0),
-                                y: (win_h - widget_size.height - 24.0).max(0.0),
-                            },
-                            LayerPosition::Fill => Point { x: 0.0, y: 0.0 },
-                        };
-                        let widget_rect = Rect { origin, size: widget_size };
-
-                        // ── Input routing for this entry (D058) ────────────
-                        //
-                        // Hit targets are pushed in reverse-priority order here
-                        // because the merge below inserts each at index 0,
-                        // reversing the list: the widget's own targets (pushed
-                        // last, during paint) end up checked first, then the
-                        // scrim strips, then the Block absorber.
-                        {
-                            let mut ht = ov_hit_targets.borrow_mut();
-                            let full = Rect {
-                                origin: Point { x: 0.0, y: 0.0 },
-                                size: Size { width: win_w, height: win_h },
-                            };
-                            if entry.input == tezzera_widgets::tree::InputBehavior::Block {
-                                // Absorb any tap not claimed by scrim or widget.
-                                ht.push(HitTarget { rect: full, callback: std::sync::Arc::new(|| {}) });
-                            }
-                            if let Some(on_tap) = entry.scrim.as_ref().and_then(|s| s.on_tap.clone()) {
-                                // Four strips around widget_rect: fires only for
-                                // taps outside the widget (dialog itself is safe).
-                                let r = widget_rect;
-                                let strips = [
-                                    Rect { origin: Point { x: 0.0, y: 0.0 },
-                                           size: Size { width: win_w, height: r.origin.y } },
-                                    Rect { origin: Point { x: 0.0, y: r.origin.y + r.size.height },
-                                           size: Size { width: win_w, height: (win_h - r.origin.y - r.size.height).max(0.0) } },
-                                    Rect { origin: Point { x: 0.0, y: r.origin.y },
-                                           size: Size { width: r.origin.x, height: r.size.height } },
-                                    Rect { origin: Point { x: r.origin.x + r.size.width, y: r.origin.y },
-                                           size: Size { width: (win_w - r.origin.x - r.size.width).max(0.0), height: r.size.height } },
-                                ];
-                                for s in strips {
-                                    if s.size.width > 0.0 && s.size.height > 0.0 {
-                                        ht.push(HitTarget { rect: s, callback: on_tap.clone() });
-                                    }
-                                }
-                            }
-                        }
-
-                        let mut ov_ctx = tezzera_widgets::tree::PaintCtx {
-                            recorder: &mut ov_recorder,
-                            rect: widget_rect,
-                            font: &font,
-                            theme: current_theme.clone(),
-                            hit_targets: Rc::clone(&ov_hit_targets),
-                            scroll_targets: Rc::clone(&scroll_targets),
-                            focus_nodes: Rc::clone(&focus_nodes),
-                            transform_entries: Rc::clone(&transform_entries),
-                            clip_rect: None,
-                        };
-                        entry.widget.paint(&mut ov_ctx);
-                    }
-
-                    // Play overlay picture into the dedicated overlay canvas (D078).
-                    let ov_picture = ov_recorder.finish();
-                    overlay_canvas.play_picture(&ov_picture, &font);
-
-                    // Merge overlay hit targets — overlay checked first (D079).
-                    let ov_targets = ov_hit_targets.borrow();
-                    let mut main_targets = hit_targets.borrow_mut();
-                    for t in ov_targets.iter() {
-                        main_targets.insert(0, tezzera_widgets::tree::HitTarget {
-                            rect: t.rect,
-                            callback: t.callback.clone(),
-                        });
+                        // Play overlay picture into the dedicated overlay canvas (D078).
+                        let ov_picture = ov_recorder.finish();
+                        overlay_canvas.play_picture(&ov_picture, &font);
                     }
                 }
 
                 // ── TransformLayer pass (D088) ─────────────────────────────
-                // Each TransformLayerEntry's child was recorded into a separate
-                // Picture. Replay each picture into the base canvas at the
-                // viewport position with the scroll offset applied.
-                //
-                // On cache-hit frames (nothing dirty) TransformLayer::paint is
-                // not called, so transform_entries is empty. We fall back to
-                // cached_transform_entries from the last fresh paint so the list
-                // remains visible even when nothing has changed.
+                // Entries live on the render tree (D091): re-declared when the
+                // owning TransformLayer repaints, persisting otherwise — so the
+                // scrolled content stays visible on cache-hit frames without a
+                // separate entry cache.
                 {
-                    let fresh = transform_entries.borrow();
-                    if !fresh.is_empty() {
-                        cached_transform_entries = fresh.clone();
-                    }
-                    let entries_to_draw = if fresh.is_empty() {
-                        &cached_transform_entries[..]
-                    } else {
-                        &fresh[..]
-                    };
-                    for entry in entries_to_draw {
+                    let tree_ref = render_tree.borrow();
+                    for (n, i) in tree_ref.transform_ids() {
+                        let entry = &tree_ref.node(n).transforms[i];
                         let vp = entry.viewport_rect;
                         let dx = vp.origin.x - entry.scroll_x;
                         let dy = vp.origin.y - entry.scroll_y;
@@ -429,42 +370,73 @@ impl App {
                 }
                 prev_mounted = new_mounted;
 
-                // ── Sync focus manager with this frame's focusable nodes ───
-                {
-                    let collected = focus_nodes.borrow();
-                    focus_manager.sync_from_nodes(collected.clone());
-                }
+                // ── Sync focus manager from the render tree ────────────────
+                // Collected from persistent nodes, so the Tab cycle survives
+                // cache-hit frames where no widget repainted.
+                focus_manager.sync_from_nodes(render_tree.borrow().collect_focus());
 
-                // ── Route events to hit targets and focus ──────────────────
-                let targets = hit_targets.borrow();
-                let scrolls = scroll_targets.borrow();
+                // ── Route events — structural z-order (D092) ───────────────
+                // Overlay routes first (topmost entry first): the entry's own
+                // regions win; its surface absorbs; outside taps fire the scrim
+                // dismiss or are swallowed by Block; PassThrough falls through.
+                // Anything unclaimed goes to the render-tree walk, where later
+                // siblings (painted on top) win structurally.
                 for event in events {
                     match event {
                         tezzera_platform::InputEvent::MouseDown {
                             x, y, button: tezzera_platform::MouseButton::Left
                         } => {
-                            for t in targets.iter() {
-                                let r = &t.rect;
-                                if x >= &r.origin.x
-                                    && x <= &(r.origin.x + r.size.width)
-                                    && y >= &r.origin.y
-                                    && y <= &(r.origin.y + r.size.height)
+                            let mut handled = false;
+                            for route in overlay_routes.iter().rev() {
+                                if let Some((_, cb)) = route.hits.iter().rev()
+                                    .find(|(r, _)| rect_contains(r, *x, *y))
                                 {
-                                    (t.callback)();
+                                    cb();
+                                    handled = true;
                                     break;
+                                }
+                                if rect_contains(&route.rect, *x, *y) {
+                                    handled = true; // overlay surface absorbs
+                                    break;
+                                }
+                                if let Some(on_tap) = &route.on_tap {
+                                    on_tap();
+                                    handled = true;
+                                    break;
+                                }
+                                if route.input == tezzera_widgets::tree::InputBehavior::Block {
+                                    handled = true;
+                                    break;
+                                }
+                            }
+                            if !handled {
+                                let cb = render_tree.borrow().hit_test(*x, *y);
+                                if let Some(cb) = cb {
+                                    cb();
                                 }
                             }
                         }
                         tezzera_platform::InputEvent::Scroll { x, y, delta_x, delta_y } => {
-                            for s in scrolls.iter() {
-                                let r = &s.rect;
-                                if x >= &r.origin.x
-                                    && x <= &(r.origin.x + r.size.width)
-                                    && y >= &r.origin.y
-                                    && y <= &(r.origin.y + r.size.height)
+                            let mut handled = false;
+                            for route in overlay_routes.iter().rev() {
+                                if let Some((_, cb)) = route.scrolls.iter().rev()
+                                    .find(|(r, _)| rect_contains(r, *x, *y))
                                 {
-                                    (s.callback)(*delta_x, *delta_y);
+                                    cb(*delta_x, *delta_y);
+                                    handled = true;
                                     break;
+                                }
+                                if rect_contains(&route.rect, *x, *y)
+                                    && route.input == tezzera_widgets::tree::InputBehavior::Block
+                                {
+                                    handled = true;
+                                    break;
+                                }
+                            }
+                            if !handled {
+                                let cb = render_tree.borrow().scroll_test(*x, *y);
+                                if let Some(cb) = cb {
+                                    cb(*delta_x, *delta_y);
                                 }
                             }
                         }
@@ -623,31 +595,20 @@ fn walk_element(
                     && node.cached_picture.is_some()
                     && node.cached_rect == Some(child_rect)
                 {
-                    // Replay cached display list — zero widget work.
+                    // Replay cached display list — zero widget work. Consume
+                    // the tree slot WITHOUT resetting it (D091): the subtree's
+                    // declared hit/scroll/overlay/focus state persists, and
+                    // sibling slots stay positionally aligned.
+                    ctx.tree.borrow_mut().slot(ctx.node, false);
                     let pic = node.cached_picture.as_ref().unwrap();
                     for cmd in &pic.commands {
                         ctx.recorder.push(cmd.clone());
                     }
-                    // Re-register cached hit handlers with their original rects.
-                    // Each entry stores (rect, callback) so we don't fall back
-                    // to child_rect (the root widget's full-window rect), which
-                    // would make every click fire the first-registered button.
-                    let mut ht = ctx.hit_targets.borrow_mut();
-                    for (rect, cb) in &node.hit_handlers {
-                        ht.push(HitTarget { rect: *rect, callback: cb.clone() });
-                    }
-                    drop(ht);
-                    // Re-register cached scroll targets similarly.
-                    let mut st = ctx.scroll_targets.borrow_mut();
-                    for (rect, cb) in &node.scroll_handlers {
-                        st.push(tezzera_widgets::tree::ScrollTarget { rect: *rect, callback: cb.clone() });
-                    }
                 } else {
                     // Fresh paint — record into a sub-recorder, then merge.
-                    let sub_hit: Rc<RefCell<Vec<HitTarget>>> =
-                        Rc::new(RefCell::new(Vec::new()));
-                    let sub_scroll: Rc<RefCell<Vec<tezzera_widgets::tree::ScrollTarget>>> =
-                        Rc::new(RefCell::new(Vec::new()));
+                    // The reset slot clears the subtree's previously declared
+                    // regions; the widget re-declares them during paint.
+                    let tree_node = ctx.tree.borrow_mut().slot(ctx.node, true);
                     let mut sub_recorder = tezzera_render::PictureRecorder::new();
                     {
                         let mut child_ctx = tezzera_widgets::tree::PaintCtx {
@@ -655,10 +616,8 @@ fn walk_element(
                             rect: child_rect,
                             font: ctx.font,
                             theme: ctx.theme.clone(),
-                            hit_targets: Rc::clone(&sub_hit),
-                            scroll_targets: Rc::clone(&sub_scroll),
-                            focus_nodes: Rc::clone(&ctx.focus_nodes),
-                            transform_entries: Rc::clone(&ctx.transform_entries),
+                            tree: Rc::clone(&ctx.tree),
+                            node: tree_node,
                             clip_rect: ctx.clip_rect,
                         };
                         wb.0.paint(&mut child_ctx);
@@ -669,26 +628,6 @@ fn walk_element(
                     for cmd in &picture.commands {
                         ctx.recorder.push(cmd.clone());
                     }
-                    // Collect and cache hit handlers with their rects.
-                    let targets = sub_hit.borrow();
-                    node.hit_handlers = targets.iter()
-                        .map(|t| (t.rect, t.callback.clone()))
-                        .collect();
-                    let mut ht = ctx.hit_targets.borrow_mut();
-                    for t in targets.iter() {
-                        ht.push(HitTarget { rect: t.rect, callback: t.callback.clone() });
-                    }
-                    drop(targets);
-                    // Collect and cache scroll handlers.
-                    let scrolls = sub_scroll.borrow();
-                    node.scroll_handlers = scrolls.iter()
-                        .map(|s| (s.rect, s.callback.clone()))
-                        .collect();
-                    let mut st = ctx.scroll_targets.borrow_mut();
-                    for s in scrolls.iter() {
-                        st.push(tezzera_widgets::tree::ScrollTarget { rect: s.rect, callback: s.callback.clone() });
-                    }
-                    drop(scrolls);
 
                     // Cache the picture and clear dirty flag.
                     node.cached_picture = Some(Arc::new(picture));
@@ -714,6 +653,24 @@ fn walk_element(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Flattened dispatch data for one overlay entry (D092). Built by the overlay
+/// pass each frame from the entry's per-entry render tree.
+struct OverlayRoute {
+    rect: tezzera_core::types::Rect,
+    input: tezzera_widgets::tree::InputBehavior,
+    on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
+    hits: Vec<(tezzera_core::types::Rect, Arc<dyn Fn() + Send + Sync>)>,
+    scrolls: Vec<(tezzera_core::types::Rect, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
+}
+
+#[inline]
+fn rect_contains(r: &tezzera_core::types::Rect, x: f32, y: f32) -> bool {
+    x >= r.origin.x
+        && x <= r.origin.x + r.size.width
+        && y >= r.origin.y
+        && y <= r.origin.y + r.size.height
+}
 
 fn theme_color(c: &tezzera_theme::Color) -> Color {
     Color::rgba(

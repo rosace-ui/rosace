@@ -44,27 +44,25 @@ mod tests {
     use tezzera_theme::built_in;
     use std::rc::Rc;
     use std::cell::RefCell;
-    use crate::tree::{HitTarget, Text};
+    use crate::tree::{RenderTree, Text};
 
     fn make_paint_ctx<'a>(
         recorder: &'a mut PictureRecorder,
         font: &'a FontCache,
     ) -> PaintCtx<'a> {
         let theme = built_in::dark_theme();
-        PaintCtx {
+        let mut ctx = PaintCtx::root(
             recorder,
-            rect: Rect {
+            Rect {
                 origin: Point { x: 10.0, y: 20.0 },
                 size: Size { width: 100.0, height: 50.0 },
             },
             font,
             theme,
-            hit_targets: Rc::new(RefCell::new(Vec::<HitTarget>::new())),
-            scroll_targets: Rc::new(RefCell::new(Vec::new())),
-            focus_nodes: Rc::new(RefCell::new(Vec::new())),
-            transform_entries: Rc::new(RefCell::new(Vec::new())),
-            clip_rect: None,
-        }
+            Rc::new(RefCell::new(RenderTree::new())),
+        );
+        ctx.clip_rect = None;
+        ctx
     }
 
     #[test]

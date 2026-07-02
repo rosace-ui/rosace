@@ -112,9 +112,8 @@ fn reconcile_one(node: &mut RenderNode, element: &Element) {
     };
 
     if type_matches && key_matches {
-        // Stable node — clear hit handlers so they are re-registered on paint.
-        // Leave layout + paint caches intact; the paint pass decides if dirty.
-        node.hit_handlers.clear();
+        // Stable node — leave layout + paint caches intact; the paint pass
+        // decides if dirty. Hit/scroll regions live on the render tree (D091).
         // Recurse into children.
         reconcile_children_of(node, element);
     } else {

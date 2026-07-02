@@ -84,23 +84,19 @@ impl WidgetApp {
         let size = root.layout(&lctx);
 
         let mut recorder = PictureRecorder::new();
-        let mut ctx = PaintCtx {
-            recorder: &mut recorder,
-            rect: Rect {
+        let mut ctx = PaintCtx::root(
+            &mut recorder,
+            Rect {
                 origin: Point { x: 0.0, y: 0.0 },
                 size: Size {
                     width:  size.width.min(self.width as f32),
                     height: size.height.min(self.height as f32),
                 },
             },
-            font: &self.font,
-            theme: self.theme.clone(),
-            hit_targets: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            scroll_targets: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            focus_nodes: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            transform_entries: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            clip_rect: None,
-        };
+            &self.font,
+            self.theme.clone(),
+            std::rc::Rc::new(std::cell::RefCell::new(super::RenderTree::new())),
+        );
 
         root.paint(&mut ctx);
         let picture = recorder.finish();
@@ -120,23 +116,19 @@ impl WidgetApp {
         let size = root.layout(&lctx);
 
         let mut recorder = PictureRecorder::new();
-        let mut ctx = PaintCtx {
-            recorder: &mut recorder,
-            rect: Rect {
+        let mut ctx = PaintCtx::root(
+            &mut recorder,
+            Rect {
                 origin: Point { x: 0.0, y: 0.0 },
                 size: Size {
                     width:  size.width.min(w),
                     height: size.height.min(h),
                 },
             },
-            font: &self.font,
-            theme: self.theme.clone(),
-            hit_targets: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            scroll_targets: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            focus_nodes: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            transform_entries: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            clip_rect: None,
-        };
+            &self.font,
+            self.theme.clone(),
+            std::rc::Rc::new(std::cell::RefCell::new(super::RenderTree::new())),
+        );
         root.paint(&mut ctx);
         let picture = recorder.finish();
         canvas.play_picture(&picture, &self.font);
