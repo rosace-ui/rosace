@@ -128,6 +128,14 @@ impl App {
         // is not called) so the scroll list remains visible when nothing is dirty.
         let mut cached_transform_entries: Vec<tezzera_widgets::tree::TransformLayerEntry> =
             Vec::new();
+        // Cached overlay entries — same problem as transform entries (D088):
+        // WithOverlay::paint only runs on dirty frames, so on cache-hit frames
+        // drain_overlays() is empty even though an overlay's open atom is still
+        // true. Without this cache the dialog vanishes (and loses its input
+        // blocking) on the very next clean frame — e.g. the MouseUp that
+        // follows every click — letting taps reach the buttons underneath.
+        let mut cached_overlay_entries: Vec<tezzera_widgets::tree::OverlayEntry> =
+            Vec::new();
         // First frame — all components are dirty.
         tezzera_state::reset_to_global_dirty();
 
@@ -235,16 +243,26 @@ impl App {
                 // before calling this closure (D078). We record overlay widgets
                 // into a separate PictureRecorder and play into overlay_canvas,
                 // which the platform uploads as a second GPU texture layer.
-                let entries = drain_overlays();
+                let fresh_overlays = drain_overlays();
+                // A rebuild happened → fresh_overlays is authoritative (it is
+                // empty when every overlay closed). On clean frames keep the
+                // cache so open overlays survive cache-hit repaints.
+                let frame_rebuilt = global_dirty || !dirty_ids.is_empty();
+                if !fresh_overlays.is_empty() {
+                    cached_overlay_entries = fresh_overlays;
+                } else if frame_rebuilt {
+                    cached_overlay_entries.clear();
+                }
+
                 let ov_hit_targets: Rc<RefCell<Vec<HitTarget>>> =
                     Rc::new(RefCell::new(Vec::new()));
 
-                if !entries.is_empty() {
+                if !cached_overlay_entries.is_empty() {
                     use tezzera_core::types::{Point, Rect, Size};
                     use tezzera_widgets::tree::LayerPosition;
                     let mut ov_recorder = tezzera_render::PictureRecorder::new();
 
-                    for entry in entries {
+                    for entry in &cached_overlay_entries {
                         if let Some(scrim) = &entry.scrim {
                             let scrim_rect = Rect {
                                 origin: Point { x: 0.0, y: 0.0 },
@@ -271,9 +289,52 @@ impl App {
                                 x: 0.0,
                                 y: (win_h - widget_size.height).max(0.0),
                             },
+                            LayerPosition::BottomCenter => Point {
+                                x: ((win_w - widget_size.width) / 2.0).max(0.0),
+                                y: (win_h - widget_size.height - 24.0).max(0.0),
+                            },
                             LayerPosition::Fill => Point { x: 0.0, y: 0.0 },
                         };
                         let widget_rect = Rect { origin, size: widget_size };
+
+                        // ── Input routing for this entry (D058) ────────────
+                        //
+                        // Hit targets are pushed in reverse-priority order here
+                        // because the merge below inserts each at index 0,
+                        // reversing the list: the widget's own targets (pushed
+                        // last, during paint) end up checked first, then the
+                        // scrim strips, then the Block absorber.
+                        {
+                            let mut ht = ov_hit_targets.borrow_mut();
+                            let full = Rect {
+                                origin: Point { x: 0.0, y: 0.0 },
+                                size: Size { width: win_w, height: win_h },
+                            };
+                            if entry.input == tezzera_widgets::tree::InputBehavior::Block {
+                                // Absorb any tap not claimed by scrim or widget.
+                                ht.push(HitTarget { rect: full, callback: std::sync::Arc::new(|| {}) });
+                            }
+                            if let Some(on_tap) = entry.scrim.as_ref().and_then(|s| s.on_tap.clone()) {
+                                // Four strips around widget_rect: fires only for
+                                // taps outside the widget (dialog itself is safe).
+                                let r = widget_rect;
+                                let strips = [
+                                    Rect { origin: Point { x: 0.0, y: 0.0 },
+                                           size: Size { width: win_w, height: r.origin.y } },
+                                    Rect { origin: Point { x: 0.0, y: r.origin.y + r.size.height },
+                                           size: Size { width: win_w, height: (win_h - r.origin.y - r.size.height).max(0.0) } },
+                                    Rect { origin: Point { x: 0.0, y: r.origin.y },
+                                           size: Size { width: r.origin.x, height: r.size.height } },
+                                    Rect { origin: Point { x: r.origin.x + r.size.width, y: r.origin.y },
+                                           size: Size { width: (win_w - r.origin.x - r.size.width).max(0.0), height: r.size.height } },
+                                ];
+                                for s in strips {
+                                    if s.size.width > 0.0 && s.size.height > 0.0 {
+                                        ht.push(HitTarget { rect: s, callback: on_tap.clone() });
+                                    }
+                                }
+                            }
+                        }
 
                         let mut ov_ctx = tezzera_widgets::tree::PaintCtx {
                             recorder: &mut ov_recorder,
@@ -679,19 +740,19 @@ pub use tezzera_widgets::{
     AppBar, Avatar, Badge,
     Button, ButtonVariant,
     Card, Center, Checkbox, Chip,
-    ColoredBox, Column, Container, Divider,
+    ColoredBox, Column, Container, Dialog, Divider,
     EdgeInsets, Expanded, Icon, IconKind,
     Image, ListTile, ListView,
-    NavItem, NavRail,
+    Menu, NavItem, NavRail,
     Padding, ProgressBar,
     RectReader,
     RepaintBoundary,
     TransformLayer,
     OverlayEntry, LayerId, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
     push_overlay,
-    Row, Scaffold, ScrollView, ScrollAxis,
+    Row, Scaffold, ScrollView, ScrollAxis, Sheet,
     SizedBox, Slider, Spacer, Stack, Switch,
-    Tab, TabBar, Text, TextInput, Tooltip,
+    Tab, TabBar, Text, TextInput, Toast, ToastKind, Tooltip,
 };
 
 // Text styling

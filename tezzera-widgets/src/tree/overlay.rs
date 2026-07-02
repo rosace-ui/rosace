@@ -30,6 +30,8 @@ pub enum LayerPosition {
     Centered,
     /// Anchored to the bottom edge, full-width. Widget chooses height.
     BottomAnchored,
+    /// Horizontally centered, floating 24px above the bottom edge (toasts).
+    BottomCenter,
     /// Fills the entire window.
     Fill,
 }

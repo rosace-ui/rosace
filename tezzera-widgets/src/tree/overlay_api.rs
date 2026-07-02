@@ -19,6 +19,8 @@ pub enum OverlayKind {
     Dialog,
     /// Anchored at trigger top-right. PassThrough. Inert. No scrim.
     Tooltip,
+    /// Floating above the bottom edge, centered. PassThrough. Inert. No scrim.
+    Toast,
 }
 
 // ── Overlay config entry ──────────────────────────────────────────────────────
@@ -74,6 +76,15 @@ impl<W: Widget + 'static> WithOverlay<W> {
         // Tooltip uses a permanent-true open atom — visibility is controlled by hover (Phase 14)
         let open = tezzera_state::use_atom(true);
         self.push(OverlayKind::Tooltip, open, content)
+    }
+
+    /// Attach a toast overlay to this widget. Use [`Toast::show`] to open it
+    /// with auto-dismiss.
+    ///
+    /// [`Toast::show`]: super::toast::Toast::show
+    pub fn toast(self, open: Atom<bool>,
+                 content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
+        self.push(OverlayKind::Toast, open, content)
     }
 }
 
@@ -134,6 +145,12 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                         .input(InputBehavior::PassThrough)
                         .focus(FocusBehavior::Inert)
                 }
+
+                OverlayKind::Toast => {
+                    OverlayEntry::new(LayerPosition::BottomCenter, content)
+                        .input(InputBehavior::PassThrough)
+                        .focus(FocusBehavior::Inert)
+                }
             };
 
             push_overlay(entry);
@@ -181,6 +198,11 @@ pub trait OverlayApi: Widget + Sized + Send + Sync + 'static {
     fn tooltip(self,
                content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> WithOverlay<Self> {
         WithOverlay::new(self).tooltip(content)
+    }
+
+    fn toast(self, open: Atom<bool>,
+             content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> WithOverlay<Self> {
+        WithOverlay::new(self).toast(open, content)
     }
 }
 
