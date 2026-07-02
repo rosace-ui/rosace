@@ -155,8 +155,13 @@ impl App {
                 // ── Clear overlay registry from prior frame ────────────────
                 clear_overlays();
 
+                // ── Read active theme each frame so set_theme() takes effect ──
+                // Widgets call set_theme() from button callbacks; the change is
+                // picked up here on the very next frame.
+                let current_theme = tezzera_theme::use_theme();
+
                 // ── Clear background (direct canvas write — not recorded) ──
-                let bg = theme_color(&theme.colors.background);
+                let bg = theme_color(&current_theme.colors.background);
                 canvas.clear(bg);
 
                 // ── Set up main display-list recording ─────────────────────
@@ -182,7 +187,7 @@ impl App {
                         size: tezzera_core::types::Size { width: win_w, height: win_h },
                     },
                     font: &font,
-                    theme: theme.clone(),
+                    theme: current_theme.clone(),
                     hit_targets: Rc::clone(&hit_targets),
                     scroll_targets: Rc::clone(&scroll_targets),
                     focus_nodes: Rc::clone(&focus_nodes),
@@ -242,7 +247,7 @@ impl App {
 
                         let loose_c = tezzera_layout::Constraints::loose(win_w, win_h);
                         let lctx = tezzera_widgets::tree::LayoutCtx::new(
-                            loose_c, &font, &theme,
+                            loose_c, &font, &current_theme,
                         );
                         let widget_size = entry.widget.layout(&lctx);
                         let origin = match &entry.position {
@@ -263,7 +268,7 @@ impl App {
                             recorder: &mut ov_recorder,
                             rect: widget_rect,
                             font: &font,
-                            theme: theme.clone(),
+                            theme: current_theme.clone(),
                             hit_targets: Rc::clone(&ov_hit_targets),
                             scroll_targets: Rc::clone(&scroll_targets),
                             focus_nodes: Rc::clone(&focus_nodes),
