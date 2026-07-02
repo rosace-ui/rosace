@@ -1094,6 +1094,21 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 
 ---
 
+### D091 — RenderTree owns all per-node retained state
+**Status**: LOCKED
+**Decision**: The persistent render tree (`RenderNode`) is the single owner of everything a widget produces that must outlive one frame: layout cache, cached Picture, hit regions, scroll regions, focus nodes, overlay attachments, and transform layers. `paint()` becomes side-effect free with respect to the frame: it records commands and *declares* regions/attachments onto its own RenderNode. The frame pipeline then derives the display list, hit-test order, focus cycle, overlay stack, and compositor layers from the tree — nothing is re-emitted per frame through `Rc<RefCell<Vec>>` side channels or thread-locals.
+**Reason**: Three independent bugs came from the same disease: state produced only during `paint()` dies on cache-hit frames (hit handlers → fixed a1e91b8; TransformLayerEntries → D088 cache; overlay entries → cached_overlay_entries). Each got its own bolt-on cache. D091 makes the bug class unrepresentable and is the foundation for damage-rect repainting and real RepaintBoundary caching. The existing keyed reconciler (`tezzera/src/reconcile.rs`) becomes the actual tree-update mechanism (it is currently dead code — `walk_element` inlines its own tag matching).
+**Affects**: `tezzera`, `tezzera-widgets`, `tezzera-a11y`
+
+---
+
+### D092 — Tree-walk hit testing with structural z-order
+**Status**: LOCKED
+**Decision**: Input dispatch walks the RenderTree back-to-front (overlay roots first, then main root; within a node, children in reverse paint order) instead of scanning a flat `Vec<HitTarget>` with insert-at-0 ordering tricks. A node can consume, pass through, or transform events (scroll offset translation). Scrims become ordinary nodes that consume misses — replacing the four-strip hit-rect workaround. Z-order is structural, not an artifact of registration order.
+**Affects**: `tezzera`, `tezzera-widgets`, `tezzera-gesture`
+
+---
+
 ## DEFERRED DECISIONS
 
 ```
