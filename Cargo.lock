@@ -2369,6 +2369,7 @@ dependencies = [
  "tezzera-layout",
  "tezzera-render",
  "tezzera-state",
+ "tezzera-text",
  "tezzera-theme",
  "tezzera-trace",
  "tiny-skia",

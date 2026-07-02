@@ -52,11 +52,48 @@ impl Text {
     pub fn max_lines(mut self, n: usize) -> Self { self.max_lines = Some(n); self }
 }
 
+impl Text {
+    /// Break the text into lines that fit `max_w` pixels.
+    ///
+    /// Explicit `\n` breaks are honored first, then each paragraph is
+    /// greedily word-wrapped via [`tezzera_text::word_wrap`] with real font
+    /// metrics. `max_lines` truncates the result. A text that fits on one
+    /// line (the common case) skips the per-word measuring entirely.
+    fn wrap_lines(&self, font: &tezzera_render::FontCache, max_w: f32) -> Vec<String> {
+        let single_paragraph = !self.text.contains('\n');
+        if single_paragraph
+            && (!max_w.is_finite() || font.measure_text(&self.text, self.size) <= max_w)
+        {
+            return vec![self.text.clone()];
+        }
+
+        let mut lines = Vec::new();
+        for paragraph in self.text.split('\n') {
+            if paragraph.is_empty() {
+                lines.push(String::new());
+            } else {
+                lines.extend(tezzera_text::word_wrap(paragraph, max_w, |s| {
+                    font.measure_text(s, self.size)
+                }));
+            }
+        }
+        if let Some(n) = self.max_lines {
+            lines.truncate(n);
+        }
+        lines
+    }
+}
+
 impl Widget for Text {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let text_w = ctx.font.measure_text(&self.text, self.size);
         let line_h = ctx.font.line_height(self.size);
-        ctx.constraints.constrain(Size { width: text_w, height: line_h })
+        let lines = self.wrap_lines(ctx.font, ctx.constraints.max_width_f32());
+        let text_w = lines
+            .iter()
+            .map(|l| ctx.font.measure_text(l, self.size))
+            .fold(0.0_f32, f32::max);
+        let text_h = line_h * lines.len().max(1) as f32;
+        ctx.constraints.constrain(Size { width: text_w, height: text_h })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -66,16 +103,20 @@ impl Widget for Text {
         let color = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.on_surface));
 
         let line_h = ctx.font.line_height(self.size);
-        let text_w = ctx.font.measure_text(&self.text, self.size);
+        let lines = self.wrap_lines(ctx.font, ctx.rect.size.width);
+        let total_h = line_h * lines.len() as f32;
+        let y_base = ((ctx.rect.size.height - total_h) / 2.0).max(0.0);
 
-        let x_off = match self.align {
-            TextAlign::Left   => 0.0,
-            TextAlign::Center => ((ctx.rect.size.width - text_w) / 2.0).max(0.0),
-            TextAlign::Right  => (ctx.rect.size.width - text_w).max(0.0),
-        };
-
-        let y_off = ((ctx.rect.size.height - line_h) / 2.0).max(0.0);
-        ctx.text(&self.text, x_off, y_off, color, self.size);
+        for (i, line) in lines.iter().enumerate() {
+            if line.is_empty() { continue; }
+            let line_w = ctx.font.measure_text(line, self.size);
+            let x_off = match self.align {
+                TextAlign::Left   => 0.0,
+                TextAlign::Center => ((ctx.rect.size.width - line_w) / 2.0).max(0.0),
+                TextAlign::Right  => (ctx.rect.size.width - line_w).max(0.0),
+            };
+            ctx.text(line, x_off, y_base + i as f32 * line_h, color, self.size);
+        }
     }
 }
 
