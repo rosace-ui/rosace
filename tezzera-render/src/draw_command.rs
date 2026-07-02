@@ -21,6 +21,11 @@ pub enum DrawCommand {
     DrawShadow { rect: Rect, color: Color, blur: f32 },
     /// Raw pre-decoded RGBA pixel blit. `pixels` must be `width × height × 4` bytes.
     BlitRgba   { pixels: Arc<Vec<u8>>, src_width: u32, src_height: u32, dest_rect: Rect },
+    /// Push a clip rect — subsequent commands are confined to `rect` (intersected
+    /// with any already-active clip). Must be paired with [`DrawCommand::PopClip`].
+    PushClip   { rect: Rect },
+    /// Restore the clip rect that was active before the matching [`DrawCommand::PushClip`].
+    PopClip,
 }
 
 impl DrawCommand {
@@ -41,6 +46,8 @@ impl DrawCommand {
             Self::DrawShadow { rect, color, blur }     => Self::DrawShadow { rect: shift(rect, dx, dy), color, blur },
             Self::BlitRgba   { pixels, src_width, src_height, dest_rect } =>
                 Self::BlitRgba { pixels, src_width, src_height, dest_rect: shift(dest_rect, dx, dy) },
+            Self::PushClip   { rect }                  => Self::PushClip   { rect: shift(rect, dx, dy) },
+            Self::PopClip                              => Self::PopClip,
         }
     }
 }

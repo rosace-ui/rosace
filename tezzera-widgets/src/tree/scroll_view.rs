@@ -1,8 +1,8 @@
 use tezzera_core::types::{Point, Rect, Size};
 use tezzera_layout::Constraints;
-use tezzera_render::Color;
+use tezzera_render::{Color, DrawCommand};
 use tezzera_state::Atom;
-use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h};
+use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h, intersect_rect};
 
 /// Scroll direction.
 #[derive(Debug, Clone, Copy, Default)]
@@ -96,9 +96,24 @@ impl Widget for ScrollView {
             origin: Point { x: vp.origin.x + ox, y: vp.origin.y + oy },
             size: child_size,
         };
-        self.child.paint(&mut ctx.child(child_rect));
 
-        // Scrollbar (vertical)
+        // Clip child paint output to the viewport so scrolled-off content
+        // is not visible and does not receive hit events in other panels.
+        ctx.record(DrawCommand::PushClip { rect: vp });
+
+        // Compute effective clip for hit-testing: intersect parent clip (if any)
+        // with our viewport so nested ScrollViews clip correctly.
+        let effective_clip = ctx.clip_rect
+            .and_then(|parent| intersect_rect(parent, vp))
+            .unwrap_or(vp);
+
+        let mut child_ctx = ctx.child(child_rect);
+        child_ctx.clip_rect = Some(effective_clip);
+        self.child.paint(&mut child_ctx);
+
+        ctx.record(DrawCommand::PopClip);
+
+        // Scrollbar drawn AFTER PopClip so it is not clipped by the viewport.
         if self.show_scrollbar && matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both) {
             let ratio = (vp.size.height / child_size.height.max(1.0)).min(1.0);
             if ratio < 1.0 {

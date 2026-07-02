@@ -245,27 +245,37 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                         ),
                     ]);
                 } else if let Some(surface) = &mut self.surface {
-                    // Softbuffer fallback: CPU-blit base canvas to buffer.
-                    // Overlay is CPU-composited on top (same as pre-Phase 16
-                    // behaviour — overlay was already drawn into main canvas).
-                    let base_pixels    = self.canvas.pixels();
-                    let overlay_pixels = self.overlay_canvas.pixels();
+                    let base_pixels = self.canvas.pixels();
                     let mut buffer = surface.buffer_mut().unwrap();
-                    for (i, pixel) in buffer.iter_mut().enumerate() {
-                        let bi = i * 4;
-                        let br = base_pixels[bi]     as u32;
-                        let bg = base_pixels[bi + 1] as u32;
-                        let bb = base_pixels[bi + 2] as u32;
-                        let oa = overlay_pixels[bi + 3] as u32;
-                        let or_ = overlay_pixels[bi]     as u32;
-                        let og  = overlay_pixels[bi + 1] as u32;
-                        let ob  = overlay_pixels[bi + 2] as u32;
-                        // Porter-Duff "over" in integer arithmetic.
-                        let inv = 255 - oa;
-                        let r = (or_ * oa + br * inv) / 255;
-                        let g = (og  * oa + bg * inv) / 255;
-                        let b = (ob  * oa + bb * inv) / 255;
-                        *pixel = (r << 16) | (g << 8) | b;
+
+                    if self.overlay_canvas.has_drawn() {
+                        // Overlay has content — Porter-Duff "over" blend.
+                        let overlay_pixels = self.overlay_canvas.pixels();
+                        for (i, pixel) in buffer.iter_mut().enumerate() {
+                            let bi = i * 4;
+                            let br  = base_pixels[bi]     as u32;
+                            let bg  = base_pixels[bi + 1] as u32;
+                            let bb  = base_pixels[bi + 2] as u32;
+                            let oa  = overlay_pixels[bi + 3] as u32;
+                            let or_ = overlay_pixels[bi]     as u32;
+                            let og  = overlay_pixels[bi + 1] as u32;
+                            let ob  = overlay_pixels[bi + 2] as u32;
+                            let inv = 255 - oa;
+                            let r = (or_ * oa + br * inv) / 255;
+                            let g = (og  * oa + bg * inv) / 255;
+                            let b = (ob  * oa + bb * inv) / 255;
+                            *pixel = (r << 16) | (g << 8) | b;
+                        }
+                    } else {
+                        // No overlay — fast path: copy base pixels directly,
+                        // avoiding O(pixels) multiply/divide every frame.
+                        for (i, pixel) in buffer.iter_mut().enumerate() {
+                            let bi = i * 4;
+                            let r = base_pixels[bi]     as u32;
+                            let g = base_pixels[bi + 1] as u32;
+                            let b = base_pixels[bi + 2] as u32;
+                            *pixel = (r << 16) | (g << 8) | b;
+                        }
                     }
                     buffer.present().unwrap();
                 }

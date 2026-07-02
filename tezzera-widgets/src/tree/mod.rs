@@ -143,10 +143,15 @@ pub struct PaintCtx<'a> {
     /// The platform replays each into a separate canvas and presents as an
     /// additional GPU compositor layer.
     pub transform_entries: Rc<RefCell<Vec<TransformLayerEntry>>>,
+    /// Current clip viewport in world-space logical pixels. `None` means no clip.
+    /// Set by `ScrollView` so that `register_hit` ignores targets outside the
+    /// visible area, preventing phantom clicks in other panels below the fold.
+    pub clip_rect: Option<Rect>,
 }
 
 impl<'a> PaintCtx<'a> {
     /// Derive a child context with a different rect (reborrowing the recorder).
+    /// `clip_rect` is propagated unchanged so it remains in world space.
     pub fn child(&mut self, rect: Rect) -> PaintCtx<'_> {
         PaintCtx {
             recorder: self.recorder,
@@ -156,6 +161,7 @@ impl<'a> PaintCtx<'a> {
             hit_targets: Rc::clone(&self.hit_targets),
             focus_nodes: Rc::clone(&self.focus_nodes),
             transform_entries: Rc::clone(&self.transform_entries),
+            clip_rect: self.clip_rect,
         }
     }
 
@@ -164,12 +170,21 @@ impl<'a> PaintCtx<'a> {
         self.focus_nodes.borrow_mut().push(node);
     }
 
-    /// Register a click callback for `self.rect`. Called from `Button::paint`.
+    /// Register a click callback for `self.rect`.
+    ///
+    /// If a `clip_rect` is active (set by `ScrollView`), the hit target is
+    /// intersected with it. Targets fully outside the clip are silently dropped
+    /// so they cannot intercept clicks in other panels below the fold.
     pub fn register_hit(&self, callback: Arc<dyn Fn() + Send + Sync>) {
-        self.hit_targets.borrow_mut().push(HitTarget {
-            rect: self.rect,
-            callback,
-        });
+        let hit_rect = if let Some(clip) = self.clip_rect {
+            match intersect_rect(self.rect, clip) {
+                Some(r) => r,
+                None    => return, // widget is outside the visible scroll viewport
+            }
+        } else {
+            self.rect
+        };
+        self.hit_targets.borrow_mut().push(HitTarget { rect: hit_rect, callback });
     }
 
     /// Convert a theme color (f32 0.0–1.0) to a render color (u8 0–255).
@@ -342,4 +357,17 @@ pub(crate) fn rect_at(origin: Point, size: Size) -> Rect {
 /// Offset a point relative to a parent rect's origin.
 pub(crate) fn offset(base: Point, dx: f32, dy: f32) -> Point {
     Point { x: base.x + dx, y: base.y + dy }
+}
+
+/// Intersect two world-space rects. Returns `None` if they do not overlap.
+pub(crate) fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let x0 = a.origin.x.max(b.origin.x);
+    let y0 = a.origin.y.max(b.origin.y);
+    let x1 = (a.origin.x + a.size.width).min(b.origin.x + b.size.width);
+    let y1 = (a.origin.y + a.size.height).min(b.origin.y + b.size.height);
+    if x1 > x0 && y1 > y0 {
+        Some(Rect { origin: Point { x: x0, y: y0 }, size: Size { width: x1 - x0, height: y1 - y0 } })
+    } else {
+        None
+    }
 }

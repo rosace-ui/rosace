@@ -98,6 +98,7 @@ impl WidgetApp {
             hit_targets: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             focus_nodes: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             transform_entries: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            clip_rect: None,
         };
 
         root.paint(&mut ctx);
@@ -132,6 +133,7 @@ impl WidgetApp {
             hit_targets: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             focus_nodes: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             transform_entries: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            clip_rect: None,
         };
         root.paint(&mut ctx);
         let picture = recorder.finish();

@@ -70,6 +70,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
             hit_targets: ctx.hit_targets.clone(),
             focus_nodes: ctx.focus_nodes.clone(),
             transform_entries: ctx.transform_entries.clone(),
+            clip_rect: None,
         };
         self.child.paint(&mut sub_ctx);
         let picture = sub_rec.finish();

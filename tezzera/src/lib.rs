@@ -163,6 +163,7 @@ impl App {
                     hit_targets: Rc::clone(&hit_targets),
                     focus_nodes: Rc::clone(&focus_nodes),
                     transform_entries: Rc::clone(&transform_entries),
+                    clip_rect: None,
                 };
 
                 let constraints = tezzera_layout::Constraints::tight(win_w, win_h);
@@ -242,6 +243,7 @@ impl App {
                             hit_targets: Rc::clone(&ov_hit_targets),
                             focus_nodes: Rc::clone(&focus_nodes),
                             transform_entries: Rc::clone(&transform_entries),
+                            clip_rect: None,
                         };
                         entry.widget.paint(&mut ov_ctx);
                     }
@@ -524,6 +526,7 @@ fn walk_element(
                             hit_targets: Rc::clone(&sub_hit),
                             focus_nodes: Rc::clone(&ctx.focus_nodes),
                             transform_entries: Rc::clone(&ctx.transform_entries),
+                            clip_rect: ctx.clip_rect,
                         };
                         wb.0.paint(&mut child_ctx);
                     }
