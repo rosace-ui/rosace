@@ -34,9 +34,9 @@ pub struct SkiaCanvas {
     /// the clip tuple. Built lazily on first path fill under a given clip and
     /// reused for the lifetime of the canvas (viewport clips are stable).
     clip_masks: HashMap<(i32, i32, i32, i32), Mask>,
-    /// Blurred shadow masks keyed by (width, height, blur) in physical pixels.
-    /// A shadow is blurred once per unique geometry, then replayed as a blit.
-    shadow_cache: HashMap<(u32, u32, u32), ShadowMask>,
+    /// Blurred shadow masks keyed by (width, height, blur, corner radius) in
+    /// physical pixels. Blurred once per unique geometry, replayed as a blit.
+    shadow_cache: HashMap<(u32, u32, u32, u32), ShadowMask>,
 }
 
 /// A pre-blurred shadow coverage mask (single channel).
@@ -188,10 +188,13 @@ fn box_blur_v(src: &[u8], dst: &mut [u8], w: usize, h: usize, r: usize) {
     }
 }
 
-/// Rasterize and blur a shadow coverage mask for a `w`×`h` rect at `blur` px.
+/// Rasterize and blur a shadow coverage mask for a `w`×`h` rounded rect
+/// (corner `radius` px) at `blur` px.
 ///
+/// The source shape matches the widget's rounded geometry so the blurred
+/// shadow hugs the corners instead of leaking square corner triangles.
 /// Three box-blur passes per axis approximate a Gaussian (σ ≈ blur/2).
-fn build_shadow_mask(w: u32, h: u32, blur: u32) -> ShadowMask {
+fn build_shadow_mask(w: u32, h: u32, blur: u32, radius: u32) -> ShadowMask {
     let margin = (2 * blur) as i32 + 1;
     let mw = w as usize + 2 * margin as usize;
     let mh = h as usize + 2 * margin as usize;
@@ -200,11 +203,43 @@ fn build_shadow_mask(w: u32, h: u32, blur: u32) -> ShadowMask {
         let s = row * mw + margin as usize;
         data[s..s + w as usize].fill(255);
     }
-    let r = (blur as usize / 2).max(1);
+
+    // Carve the corners with distance-based coverage. Exactness is not
+    // critical — the blur softens the edge — but the corner mass must go.
+    let r = (radius as f32).min(w as f32 / 2.0).min(h as f32 / 2.0);
+    if r >= 1.0 {
+        let m = margin as f32;
+        let centers = [
+            (m + r,             m + r),
+            (m + w as f32 - r,  m + r),
+            (m + r,             m + h as f32 - r),
+            (m + w as f32 - r,  m + h as f32 - r),
+        ];
+        let corners = [
+            (m,                m,                m + r,            m + r),
+            (m + w as f32 - r, m,                m + w as f32,     m + r),
+            (m,                m + h as f32 - r, m + r,            m + h as f32),
+            (m + w as f32 - r, m + h as f32 - r, m + w as f32,     m + h as f32),
+        ];
+        for (i, &(x0, y0, x1, y1)) in corners.iter().enumerate() {
+            let (cx, cy) = centers[i];
+            for py in y0 as usize..(y1.ceil() as usize).min(mh) {
+                for px in x0 as usize..(x1.ceil() as usize).min(mw) {
+                    let dx = px as f32 + 0.5 - cx;
+                    let dy = py as f32 + 0.5 - cy;
+                    let d = (dx * dx + dy * dy).sqrt();
+                    let coverage = (r + 0.5 - d).clamp(0.0, 1.0);
+                    data[py * mw + px] = (coverage * 255.0) as u8;
+                }
+            }
+        }
+    }
+
+    let br = (blur as usize / 2).max(1);
     let mut tmp = vec![0u8; mw * mh];
     for _ in 0..3 {
-        box_blur_h(&data, &mut tmp, mw, mh, r);
-        box_blur_v(&tmp, &mut data, mw, mh, r);
+        box_blur_h(&data, &mut tmp, mw, mh, br);
+        box_blur_v(&tmp, &mut data, mw, mh, br);
     }
     ShadowMask { w: mw, h: mh, margin, data }
 }
@@ -505,24 +540,55 @@ impl SkiaCanvas {
         self.has_drawn = true;
     }
 
-    /// Draw a soft drop shadow for `rect` with a Gaussian-approximate blur.
+    /// Stroke a rounded-rectangle outline along the same path geometry as
+    /// [`SkiaCanvas::fill_rrect`], so borders hug rounded fills exactly.
+    pub fn stroke_rrect(&mut self, rect: Rect, radius: f32, color: Color, stroke_width: f32) {
+        if color.a == 0 { return; }
+        if let Some(clip) = self.clip {
+            if !overlaps_clip(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, clip) {
+                return;
+            }
+            ensure_clip_mask(&mut self.clip_masks, clip, self.pixmap.width(), self.pixmap.height());
+        }
+        let r = radius.min(rect.size.width / 2.0).min(rect.size.height / 2.0);
+        if r < 0.5 {
+            self.stroke_rect(rect, color, stroke_width);
+            return;
+        }
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+        paint.anti_alias = true;
+        if let Some(path) = rounded_rect_path(
+            rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, r,
+        ) {
+            let stroke = tiny_skia::Stroke { width: stroke_width, ..Default::default() };
+            let mask = self.clip.and_then(|c| self.clip_masks.get(&c));
+            self.pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), mask);
+        }
+        self.has_drawn = true;
+    }
+
+    /// Draw a soft drop shadow for a rounded rect with a Gaussian-approximate
+    /// blur. `radius` must match the widget's corner radius so the shadow hugs
+    /// the rounded shape.
     ///
     /// The blurred coverage mask is computed once per unique
-    /// (width, height, blur) and cached; subsequent draws are a tinted blit.
-    pub fn draw_shadow(&mut self, rect: Rect, color: Color, blur: f32) {
+    /// (width, height, blur, radius) and cached; draws are a tinted blit.
+    pub fn draw_shadow(&mut self, rect: Rect, radius: f32, color: Color, blur: f32) {
         if color.a == 0 { return; }
         let blur = blur.max(0.0);
         if blur < 0.5 {
-            self.fill_rect(rect, color);
+            self.fill_rrect(rect, radius, color);
             return;
         }
         let w = rect.size.width.round().max(1.0) as u32;
         let h = rect.size.height.round().max(1.0) as u32;
         let b = blur.round() as u32;
-        let key = (w, h, b);
+        let rad = radius.max(0.0).round() as u32;
+        let key = (w, h, b, rad);
         self.shadow_cache
             .entry(key)
-            .or_insert_with(|| build_shadow_mask(w, h, b));
+            .or_insert_with(|| build_shadow_mask(w, h, b, rad));
 
         let canvas_w = self.pixmap.width() as i32;
         let canvas_h = self.pixmap.height() as i32;
@@ -617,12 +683,15 @@ impl SkiaCanvas {
                 DrawCommand::FillRect { rect, color } => self.fill_rect(sr(*rect), *color),
                 DrawCommand::StrokeRect { rect, color, width } => self.stroke_rect(sr(*rect), *color, *width * s),
                 DrawCommand::FillRRect { rect, radius, color } => self.fill_rrect(sr(*rect), *radius * s, *color),
+                DrawCommand::StrokeRRect { rect, radius, color, width } => {
+                    self.stroke_rrect(sr(*rect), *radius * s, *color, *width * s);
+                }
                 DrawCommand::FillCircle { center, radius, color } => self.fill_circle(sp(*center), *radius * s, *color),
                 DrawCommand::DrawText { text, origin, color, px } => {
                     self.draw_text(text, sp(*origin), *color, font, *px * s);
                 }
-                DrawCommand::DrawShadow { rect, color, blur } => {
-                    self.draw_shadow(sr(*rect), *color, *blur * s);
+                DrawCommand::DrawShadow { rect, radius, color, blur } => {
+                    self.draw_shadow(sr(*rect), *radius * s, *color, *blur * s);
                 }
                 DrawCommand::BlitRgba { pixels, src_width, src_height, dest_rect } => {
                     self.blit_rgba(pixels, *src_width, *src_height, sr(*dest_rect));

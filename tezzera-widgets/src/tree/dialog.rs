@@ -118,7 +118,7 @@ impl Widget for Dialog {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let r = ctx.rect;
-        ctx.fill_shadow(r, Color::rgba(0, 0, 0, 100), 16.0);
+        ctx.fill_shadow_rrect(r, self.radius, Color::rgba(0, 0, 0, 100), 16.0);
         draw_rounded_rect_pub(ctx, r, ctx.tc(ctx.theme.colors.surface), self.radius);
 
         let inner_rect = EdgeInsets::all(PADDING).shrink(r);

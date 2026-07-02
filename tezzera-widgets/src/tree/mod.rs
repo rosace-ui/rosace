@@ -313,9 +313,20 @@ impl<'a> PaintCtx<'a> {
         self.recorder.push(DrawCommand::DrawText { text: s.to_string(), origin, color, px });
     }
 
-    /// Emit a multi-step drop shadow behind `rect`.
+    /// Emit a blurred drop shadow behind a square-cornered `rect`.
     pub fn fill_shadow(&mut self, rect: Rect, color: Color, blur: f32) {
-        self.recorder.push(DrawCommand::DrawShadow { rect, color, blur });
+        self.recorder.push(DrawCommand::DrawShadow { rect, radius: 0.0, color, blur });
+    }
+
+    /// Emit a blurred drop shadow behind a rounded rect. `radius` must match
+    /// the widget's corner radius so the shadow hugs the rounded shape.
+    pub fn fill_shadow_rrect(&mut self, rect: Rect, radius: f32, color: Color, blur: f32) {
+        self.recorder.push(DrawCommand::DrawShadow { rect, radius, color, blur });
+    }
+
+    /// Stroke a rounded-rect outline matching [`PaintCtx::fill_rrect`] geometry.
+    pub fn stroke_rrect(&mut self, rect: Rect, radius: f32, color: Color, width: f32) {
+        self.recorder.push(DrawCommand::StrokeRRect { rect, radius, color, width });
     }
 
     /// Push a raw [`DrawCommand`] for advanced use.

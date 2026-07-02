@@ -132,7 +132,7 @@ fn home_content(
         ))
         // Horizontal carousel — scroll sideways (trackpad swipe / shift+wheel).
         .child(Text::heading("Feature carousel — scrolls horizontally"))
-        .child(SizedBox::new().height(120.0).child(
+        .child(SizedBox::new().height(140.0).child(
             ScrollView::new(
                 Row::new().spacing(12.0)
                     .child(feature_card("Reactive", "Atom<T> state — zero overhead on idle frames"))

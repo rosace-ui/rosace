@@ -103,7 +103,14 @@ impl Widget for Text {
         let color = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.on_surface));
 
         let line_h = ctx.font.line_height(self.size);
-        let lines = self.wrap_lines(ctx.font, ctx.rect.size.width);
+        let mut lines = self.wrap_lines(ctx.font, ctx.rect.size.width);
+
+        // Honor the allocated rect: paint only the lines that fit. layout()
+        // reports the wrapped height, but a parent may allot less (constrained
+        // container) — painting past the rect would bleed into siblings.
+        let fit = ((ctx.rect.size.height / line_h).floor() as usize).max(1);
+        lines.truncate(fit);
+
         let total_h = line_h * lines.len() as f32;
         let y_base = ((ctx.rect.size.height - total_h) / 2.0).max(0.0);
 

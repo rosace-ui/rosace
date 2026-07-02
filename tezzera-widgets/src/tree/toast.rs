@@ -82,7 +82,7 @@ impl Widget for Toast {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let r = ctx.rect;
-        ctx.fill_shadow(r, Color::rgba(0, 0, 0, 90), 10.0);
+        ctx.fill_shadow_rrect(r, r.size.height / 2.0, Color::rgba(0, 0, 0, 90), 10.0);
         draw_rounded_rect_pub(ctx, r, ctx.tc(ctx.theme.colors.surface_variant), r.size.height / 2.0);
 
         let accent = self.accent(ctx);

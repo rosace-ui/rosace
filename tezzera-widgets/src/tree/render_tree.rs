@@ -22,6 +22,11 @@ use super::TransformLayerEntry;
 
 pub type NodeId = usize;
 
+/// A click callback with its hit rect in window-space logical pixels.
+pub type HitRegion = (Rect, Arc<dyn Fn() + Send + Sync>);
+/// A `(delta_x, delta_y)` scroll callback with its viewport rect.
+pub type ScrollRegion = (Rect, Arc<dyn Fn(f32, f32) + Send + Sync>);
+
 /// One render-tree node. Declared data is cleared when the node is repainted
 /// (`begin`) and persists untouched otherwise.
 #[derive(Default)]
@@ -33,8 +38,8 @@ pub struct TreeNode {
     begun: bool,
 
     // ── Declared per-paint data (D091) ────────────────────────────────────
-    pub hits:       Vec<(Rect, Arc<dyn Fn() + Send + Sync>)>,
-    pub scrolls:    Vec<(Rect, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
+    pub hits:       Vec<HitRegion>,
+    pub scrolls:    Vec<ScrollRegion>,
     pub focus:      Vec<tezzera_a11y::FocusNode>,
     pub overlays:   Vec<OverlayEntry>,
     pub transforms: Vec<TransformLayerEntry>,
@@ -168,13 +173,13 @@ impl RenderTree {
 
     /// All hit regions in tree (paint) order — used by the overlay pass to
     /// flatten a per-entry subtree into a dispatch list.
-    pub fn collect_hits(&self) -> Vec<(Rect, Arc<dyn Fn() + Send + Sync>)> {
+    pub fn collect_hits(&self) -> Vec<HitRegion> {
         let mut out = Vec::new();
         self.collect_hits_node(Self::ROOT, &mut out);
         out
     }
 
-    fn collect_hits_node(&self, id: NodeId, out: &mut Vec<(Rect, Arc<dyn Fn() + Send + Sync>)>) {
+    fn collect_hits_node(&self, id: NodeId, out: &mut Vec<HitRegion>) {
         let n = &self.nodes[id];
         out.extend(n.hits.iter().cloned());
         for &child in &n.children {
@@ -183,13 +188,13 @@ impl RenderTree {
     }
 
     /// All scroll regions in tree (paint) order.
-    pub fn collect_scrolls(&self) -> Vec<(Rect, Arc<dyn Fn(f32, f32) + Send + Sync>)> {
+    pub fn collect_scrolls(&self) -> Vec<ScrollRegion> {
         let mut out = Vec::new();
         self.collect_scrolls_node(Self::ROOT, &mut out);
         out
     }
 
-    fn collect_scrolls_node(&self, id: NodeId, out: &mut Vec<(Rect, Arc<dyn Fn(f32, f32) + Send + Sync>)>) {
+    fn collect_scrolls_node(&self, id: NodeId, out: &mut Vec<ScrollRegion>) {
         let n = &self.nodes[id];
         out.extend(n.scrolls.iter().cloned());
         for &child in &n.children {

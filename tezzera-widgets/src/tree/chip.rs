@@ -43,7 +43,7 @@ impl Widget for Chip {
         let fg = if self.selected { self.selected_text_color } else { self.text_color };
         draw_rounded_rect_pub(ctx, r, bg, 12.0);
         let border = if self.selected { Color::rgb(110, 75, 210) } else { Color::rgb(32, 35, 58) };
-        ctx.stroke_rect(r, border, 1.0);
+        ctx.stroke_rrect(r, 12.0, border, 1.0);
         let text_w = ctx.font.measure_text(&self.label, self.font_size);
         let tx = ((r.size.width - text_w) / 2.0).max(0.0);
         let line_h = ctx.font.line_height(self.font_size);

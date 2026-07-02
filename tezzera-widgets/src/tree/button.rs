@@ -89,7 +89,7 @@ impl Widget for Button {
         super::container::draw_rounded_rect_pub(ctx, r, bg, self.radius);
 
         if let Some(bc) = border {
-            ctx.stroke_rect(r, bc, 1.0);
+            ctx.stroke_rrect(r, self.radius, bc, 1.0);
         }
 
         let text_w = ctx.font.measure_text(&self.label, self.font_size);

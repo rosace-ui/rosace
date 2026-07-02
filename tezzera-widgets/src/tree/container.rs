@@ -90,9 +90,9 @@ impl Widget for Container {
     fn paint(&self, ctx: &mut PaintCtx) {
         let rect = ctx.rect;
 
-        // Drop shadow
+        // Drop shadow — source shape matches the (possibly rounded) background.
         if self.shadow_blur > 0.5 {
-            ctx.fill_shadow(rect, self.shadow_color, self.shadow_blur);
+            ctx.fill_shadow_rrect(rect, self.border_radius, self.shadow_color, self.shadow_blur);
         }
 
         // Background
@@ -104,9 +104,13 @@ impl Widget for Container {
             }
         }
 
-        // Border
+        // Border — follows the same corner geometry as the background.
         if let Some(bc) = self.border_color {
-            ctx.stroke_rect(rect, bc, self.border_width);
+            if self.border_radius > 0.5 {
+                ctx.stroke_rrect(rect, self.border_radius, bc, self.border_width);
+            } else {
+                ctx.stroke_rect(rect, bc, self.border_width);
+            }
         }
 
         // Child

@@ -59,7 +59,7 @@ impl Widget for Card {
         let r = ctx.rect;
 
         if self.elevation > 0.5 {
-            ctx.fill_shadow(r, Color::rgba(0, 0, 0, 80), self.elevation);
+            ctx.fill_shadow_rrect(r, self.radius, Color::rgba(0, 0, 0, 80), self.elevation);
         }
 
         let bg = if self.background.a == 0 {
@@ -71,7 +71,7 @@ impl Widget for Card {
 
         if let Some(bc) = self.border_color {
             let bc = if bc.a == 0 { ctx.tc(ctx.theme.colors.outline) } else { bc };
-            ctx.stroke_rect(r, bc, 1.0);
+            ctx.stroke_rrect(r, self.radius, bc, 1.0);
         }
 
         // Child

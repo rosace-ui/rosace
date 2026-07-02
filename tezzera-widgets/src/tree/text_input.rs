@@ -55,7 +55,7 @@ impl Widget for TextInput {
         let border = if self.focused { Color::rgb(110, 75, 210) } else { Color::rgb(32, 35, 58) };
 
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
-        ctx.stroke_rect(r, border, if self.focused { 1.5 } else { 1.0 });
+        ctx.stroke_rrect(r, self.radius, border, if self.focused { 1.5 } else { 1.0 });
 
         let has_value = !self.value.is_empty();
         let display = if has_value {
