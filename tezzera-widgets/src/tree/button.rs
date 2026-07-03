@@ -71,6 +71,7 @@ impl Widget for Button {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Button).label(&self.label));
         let t = &ctx.theme.colors;
         let variant = if self.disabled { ButtonVariant::Secondary } else { self.variant };
 

@@ -30,6 +30,8 @@ impl Widget for Switch {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Switch)
+            .value(if self.on { "on" } else { "off" }));
         let r = ctx.rect;
         let track_color = if self.on { self.on_color } else { self.off_color };
         draw_rounded_rect_pub(ctx, r, track_color, 10.0);

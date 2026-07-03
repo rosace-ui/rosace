@@ -98,6 +98,7 @@ impl Widget for Text {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         if self.text.is_empty() { return; }
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Text).label(&self.text));
 
         // Fall back to theme on_surface when no explicit color is set.
         let color = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.on_surface));

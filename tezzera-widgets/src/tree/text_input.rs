@@ -50,6 +50,8 @@ impl Widget for TextInput {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::TextInput)
+            .label(&self.placeholder).value(&self.value));
         let r = ctx.rect;
         let bg = Color::rgb(15, 16, 28);
         let border = if self.focused { Color::rgb(110, 75, 210) } else { Color::rgb(32, 35, 58) };

@@ -7,6 +7,11 @@ pub enum Role {
     Slider,
     Alert,
     Dialog,
+    Checkbox,
+    Switch,
+    TextInput,
+    MenuItem,
+    ProgressBar,
     Unknown,
 }
 

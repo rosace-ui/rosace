@@ -117,6 +117,7 @@ impl Widget for Dialog {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Dialog).label(&self.title));
         let r = ctx.rect;
         ctx.fill_shadow_rrect(r, self.radius, Color::rgba(0, 0, 0, 100), 16.0);
         draw_rounded_rect_pub(ctx, r, ctx.tc(ctx.theme.colors.surface), self.radius);

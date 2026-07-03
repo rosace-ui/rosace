@@ -42,6 +42,8 @@ impl Widget for Slider {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Slider)
+            .value(format!("{:.2}", self.value)));
         let r = ctx.rect;
         let track_h = 4.0;
         let cy = r.origin.y + r.size.height / 2.0;

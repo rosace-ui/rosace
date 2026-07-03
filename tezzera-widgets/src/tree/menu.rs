@@ -77,6 +77,7 @@ impl Widget for Menu {
         let line_h = ctx.font.line_height(self.font_size);
 
         for (i, (label, cb)) in self.items.iter().enumerate() {
+            ctx.semantics(super::Semantics::new(tezzera_core::Role::MenuItem).label(label));
             let row = Rect {
                 origin: tezzera_core::types::Point {
                     x: r.origin.x,

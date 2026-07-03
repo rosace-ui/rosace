@@ -117,6 +117,26 @@ pub(crate) fn shrink_axis(b: AxisBound, by: f32) -> AxisBound {
 use tezzera_render::{Color, DrawCommand, FontCache, Picture, PictureRecorder};
 use tezzera_theme::ThemeData;
 
+// ── Semantics ────────────────────────────────────────────────────────────────
+
+/// A declarative semantics entry (D099). Widgets push these during paint via
+/// [`PaintCtx::semantics`]; the frame derives the accessibility tree from the
+/// render tree. Roles come from `tezzera_core::Role`.
+#[derive(Clone, Debug)]
+pub struct Semantics {
+    pub role: tezzera_core::Role,
+    pub label: Option<String>,
+    pub value: Option<String>,
+}
+
+impl Semantics {
+    pub fn new(role: tezzera_core::Role) -> Self {
+        Self { role, label: None, value: None }
+    }
+    pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
+    pub fn value(mut self, v: impl Into<String>) -> Self { self.value = Some(v.into()); self }
+}
+
 // ── HitTarget ────────────────────────────────────────────────────────────────
 
 /// A clickable region registered during painting.
@@ -248,6 +268,27 @@ impl<'a> PaintCtx<'a> {
             self.rect
         };
         self.tree.borrow_mut().node_mut(self.node).hits.push((hit_rect, callback));
+    }
+
+    /// Declare that this widget's rect responds to left-click (D099).
+    /// Sugar over [`PaintCtx::register_hit`] — clip-aware, z-order and
+    /// persistence handled by the render tree.
+    pub fn on_press(&self, f: impl Fn() + Send + Sync + 'static) {
+        self.register_hit(Arc::new(f));
+    }
+
+    /// Declare that this widget's rect responds to scroll wheel/trackpad.
+    /// The callback receives `(delta_x, delta_y)` in logical pixels.
+    pub fn on_scroll(&self, f: impl Fn(f32, f32) + Send + Sync + 'static) {
+        self.register_scroll_target(self.rect, Arc::new(f));
+    }
+
+    /// Declare semantics for this widget (D099): role, label, value.
+    /// Written to the render-tree node — persists on clean frames, cleared
+    /// on repaint, like every other declaration. The a11y tree is derived
+    /// from the render tree each frame.
+    pub fn semantics(&self, s: Semantics) {
+        self.tree.borrow_mut().node_mut(self.node).semantics.push(s);
     }
 
     /// Attach an overlay entry to this node (called from `WithOverlay::paint`).

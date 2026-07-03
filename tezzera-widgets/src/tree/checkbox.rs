@@ -40,6 +40,8 @@ impl Widget for Checkbox {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Checkbox)
+            .value(if self.checked { "checked" } else { "unchecked" }));
         let r = ctx.rect;
         let box_rect = Rect {
             origin: r.origin,

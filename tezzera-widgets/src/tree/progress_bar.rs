@@ -39,6 +39,8 @@ impl Widget for ProgressBar {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::ProgressBar)
+            .value(format!("{:.0}%", self.value * 100.0)));
         use super::container::draw_rounded_rect_pub;
         let r = ctx.rect;
         // Track

@@ -43,6 +43,7 @@ pub struct TreeNode {
     pub focus:      Vec<tezzera_a11y::FocusNode>,
     pub overlays:   Vec<OverlayEntry>,
     pub transforms: Vec<TransformLayerEntry>,
+    pub semantics:  Vec<super::Semantics>,
 }
 
 /// Arena-allocated persistent render tree. Node 0 is always the root.
@@ -81,6 +82,7 @@ impl RenderTree {
         n.focus.clear();
         n.overlays.clear();
         n.transforms.clear();
+        n.semantics.clear();
         self.begun_this_frame.push(node);
     }
 
@@ -218,6 +220,36 @@ impl RenderTree {
         }
     }
 
+    /// Derive the accessibility tree (D099): semantics entries in paint
+    /// order, nested by render-tree structure. Branches with no semantic
+    /// content anywhere below them are pruned.
+    pub fn collect_semantics(&self) -> tezzera_core::SemanticNode {
+        let mut root = tezzera_core::SemanticNode::new();
+        self.collect_semantics_node(Self::ROOT, &mut root);
+        root
+    }
+
+    fn collect_semantics_node(&self, id: NodeId, parent: &mut tezzera_core::SemanticNode) {
+        let n = &self.nodes[id];
+        for s in &n.semantics {
+            let mut sn = tezzera_core::SemanticNode::new().role(s.role.clone());
+            if let Some(l) = &s.label { sn = sn.label(l.clone()); }
+            parent.children.push(sn);
+        }
+        // Children nest under THIS node's last semantic entry when it declared
+        // one (a Button's inner Text belongs to the Button); nodes with no
+        // semantics of their own flatten their children into the parent.
+        let target: &mut tezzera_core::SemanticNode = if n.semantics.is_empty() {
+            parent
+        } else {
+            let last = parent.children.len() - 1;
+            &mut parent.children[last]
+        };
+        for &child in &n.children {
+            self.collect_semantics_node(child, target);
+        }
+    }
+
     /// All overlay entries in tree order (insertion order = z-order, D058).
     pub fn overlay_ids(&self) -> Vec<(NodeId, usize)> {
         let mut out = Vec::new();
@@ -324,6 +356,29 @@ mod tests {
         let cb = t.hit_test(5.0, 5.0).unwrap();
         cb();
         assert!(!hit_first.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn semantics_tree_nests_under_declaring_node() {
+        use tezzera_core::Role;
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let button = t.slot(RenderTree::ROOT, true);
+        t.node_mut(button).semantics.push(
+            crate::tree::Semantics::new(Role::Button).label("Save"),
+        );
+        // Button's inner text node — must nest under the Button.
+        let label = t.slot(button, true);
+        t.node_mut(label).semantics.push(
+            crate::tree::Semantics::new(Role::Text).label("Save"),
+        );
+        t.finalize();
+
+        let sem = t.collect_semantics();
+        assert_eq!(sem.children.len(), 1, "one top-level semantic node");
+        assert_eq!(sem.children[0].role, Role::Button);
+        assert_eq!(sem.children[0].children.len(), 1);
+        assert_eq!(sem.children[0].children[0].role, Role::Text);
     }
 
     #[test]
