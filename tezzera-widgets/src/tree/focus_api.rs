@@ -38,8 +38,8 @@ impl<W: Widget + 'static> WithFocus<W> {
 }
 
 impl<W: Widget + Send + Sync + 'static> Widget for WithFocus<W> {
-    fn layout(&self, ctx: &LayoutCtx) -> Size {
-        self.inner.layout(ctx)
+    fn children(&self) -> super::Children<'_> {
+        super::Children::One(&self.inner)
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -58,8 +58,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithFocus<W> {
             });
         }
     }
-
-    fn flex_factor(&self) -> f32 { self.inner.flex_factor() }
+    // layout, flex_factor: protocol defaults delegate to the child.
 }
 
 // ── FocusApi trait — blanket impl for all widgets ─────────────────────────────

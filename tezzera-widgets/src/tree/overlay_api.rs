@@ -89,8 +89,8 @@ impl<W: Widget + 'static> WithOverlay<W> {
 }
 
 impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
-    fn layout(&self, ctx: &LayoutCtx) -> Size {
-        self.inner.layout(ctx)
+    fn children(&self) -> super::Children<'_> {
+        super::Children::One(&self.inner)
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -159,8 +159,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
             ctx.attach_overlay(entry);
         }
     }
-
-    fn flex_factor(&self) -> f32 { self.inner.flex_factor() }
+    // layout, flex_factor: protocol defaults delegate to the child.
 }
 
 // ── OverlayApi trait — blanket impl for all widgets ───────────────────────────

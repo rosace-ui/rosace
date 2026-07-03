@@ -22,16 +22,16 @@ impl RectReader {
 }
 
 impl Widget for RectReader {
-    fn layout(&self, ctx: &LayoutCtx) -> Size {
-        self.child.layout(ctx)
+    fn children(&self) -> super::Children<'_> {
+        super::Children::One(&*self.child)
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        self.child.paint(ctx);
-        self.atom.set(Some(ctx.rect));
+        let r = ctx.rect;
+        self.child.paint(&mut ctx.child(r));
+        self.atom.set(Some(r));
     }
-
-    fn flex_factor(&self) -> f32 { self.child.flex_factor() }
+    // layout, flex_factor: protocol defaults delegate to the child.
 }
 
 #[cfg(test)]

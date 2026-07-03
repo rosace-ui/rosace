@@ -7,7 +7,7 @@ pub mod image;
 pub mod prelude;
 
 // ── Tree widget re-exports (canonical top-level names) ─────────────────────
-pub use tree::Widget;
+pub use tree::{Children, Widget};
 pub use tree::PaintCtx;
 pub use tree::{HitTarget, ScrollTarget};
 pub use tree::BoxedWidget;

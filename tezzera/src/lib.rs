@@ -693,7 +693,7 @@ pub use tezzera_widgets::{FocusApi, OverlayApi, OverlayKind};
 
 // Widgets
 pub use tezzera_widgets::{
-    Widget, WidgetApp, PaintCtx, BoxedWidget,
+    Children, Widget, WidgetApp, PaintCtx, BoxedWidget,
     AppBar, Avatar, Badge,
     Button, ButtonVariant,
     Card, Center, Checkbox, Chip,

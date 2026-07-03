@@ -41,20 +41,15 @@ impl Expanded {
 }
 
 impl Widget for Expanded {
-    fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let constraints = ctx.constraints;
-        if let Some(child) = &self.child {
-            child.layout(ctx)
-        } else {
-            Size { width: constraints.max_width_f32().min(0.0), height: constraints.max_height_f32().min(0.0) }
+    fn children(&self) -> super::Children<'_> {
+        match &self.child {
+            Some(c) => super::Children::One(&**c),
+            None => super::Children::None,
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCtx) {
-        if let Some(child) = &self.child {
-            child.paint(ctx);
-        }
-    }
+    // layout, paint: protocol defaults (delegate to the child; empty
+    // Expanded is sized entirely by the flex pool).
 
     fn flex_factor(&self) -> f32 { self.factor }
 }

@@ -22,17 +22,10 @@ impl<W: Widget + Send + Sync + 'static> RepaintBoundary<W> {
 }
 
 impl<W: Widget + Send + Sync + 'static> Widget for RepaintBoundary<W> {
-    fn layout(&self, ctx: &LayoutCtx) -> Size {
-        self.child.layout(ctx)
+    fn children(&self) -> super::Children<'_> {
+        super::Children::One(&self.child)
     }
-
-    fn paint(&self, ctx: &mut PaintCtx) {
-        self.child.paint(ctx);
-    }
-
-    fn flex_factor(&self) -> f32 {
-        self.child.flex_factor()
-    }
+    // layout, paint, flex_factor: protocol defaults delegate to the child.
 }
 
 #[cfg(test)]

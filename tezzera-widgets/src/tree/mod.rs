@@ -373,10 +373,73 @@ impl<'a> LayoutCtx<'a> {
 /// `Widget` is the render/paint concern — layout + draw. It is NOT what users
 /// implement to compose UI; that's [`tezzera_core::Component`].
 /// Custom widgets can implement `Widget` for low-level control.
+/// How a widget exposes its structure to the framework (D098).
+///
+/// This is the taxonomy: a leaf keeps the default (`None`), a single-child
+/// wrapper returns `One`, a container returns `Many`. Every [`Widget`]
+/// default below keys off this, so a wrapper only implements the one
+/// method it actually changes.
+pub enum Children<'a> {
+    /// Leaf — draws content, has no children.
+    None,
+    /// Single-child wrapper — decorates or constrains one child.
+    One(&'a dyn Widget),
+    /// Multi-child container — arranges several children.
+    Many(&'a [BoxedWidget]),
+}
+
 pub trait Widget: Send + Sync {
-    fn layout(&self, ctx: &LayoutCtx) -> Size;
-    fn paint(&self, ctx: &mut PaintCtx);
-    fn flex_factor(&self) -> f32 { 0.0 }
+    /// Declare this widget's children. Drives every default below.
+    fn children(&self) -> Children<'_> { Children::None }
+
+    /// Measure under `ctx.constraints` and return a size within them.
+    ///
+    /// Defaults: leaf → smallest allowed size; `One` → the child's size;
+    /// `Many` → stack-like (max of children) — real containers override.
+    fn layout(&self, ctx: &LayoutCtx) -> Size {
+        match self.children() {
+            Children::None => ctx.constraints.constrain(Size { width: 0.0, height: 0.0 }),
+            Children::One(c) => c.layout(ctx),
+            Children::Many(cs) => {
+                let mut s = Size { width: 0.0, height: 0.0 };
+                for c in cs {
+                    let cz = c.layout(ctx);
+                    s.width = s.width.max(cz.width);
+                    s.height = s.height.max(cz.height);
+                }
+                ctx.constraints.constrain(s)
+            }
+        }
+    }
+
+    /// Record draw commands for `ctx.rect`.
+    ///
+    /// Defaults: leaf → nothing; `One` → paint the child in this rect;
+    /// `Many` → stack-like (all children in this rect) — containers that
+    /// position children override.
+    fn paint(&self, ctx: &mut PaintCtx) {
+        match self.children() {
+            Children::None => {}
+            Children::One(c) => {
+                let r = ctx.rect;
+                c.paint(&mut ctx.child(r));
+            }
+            Children::Many(cs) => {
+                let r = ctx.rect;
+                for c in cs {
+                    c.paint(&mut ctx.child(r));
+                }
+            }
+        }
+    }
+
+    /// Flex weight inside Row/Column. Wrappers are transparent by default.
+    fn flex_factor(&self) -> f32 {
+        match self.children() {
+            Children::One(c) => c.flex_factor(),
+            _ => 0.0,
+        }
+    }
 
     /// Wrap this widget in an [`Element`] so it can be returned from
     /// `Component::build()`.
