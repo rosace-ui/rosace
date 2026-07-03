@@ -1,8 +1,24 @@
 # Phase 21 — Widget Protocol: Children, Contexts, Semantics
 
-> Status: PLANNED
-> Started: —
+> Status: IN PROGRESS (Steps 1–5 landed 2026-07-03)
+> Started: 2026-07-03
 > Completed: —
+>
+> Progress notes:
+> - Step 1 ✅ Children accessor + defaults (d070844)
+> - Step 2 ✅ scoped: unbounded-axis doctrine live (min=viewport ScrollView,
+>   defined flex + warning, min-preservation, paint reuses layout's sizes —
+>   fd2de5f). The FULL framework child-geometry (layout_child memoized on
+>   the tree + position_child) is DEFERRED: cross-frame memo is unsafe
+>   until widget reconciliation exists (Phase 20 Step 1) — content can
+>   change under identical constraints. Do them together.
+> - Step 3 ✅ scoped: on_press/on_scroll declaration sugar (a3a997e).
+>   Custom-shape hit() override deferred to the two-pass walker.
+> - Step 4 ✅ semantics hook + derived a11y tree + 9 widget declarations
+> - Step 5 ✅ CustomPaint (71b4914)
+> - Step 6 DEFERRED until after Phase 22 — writing the authoring guide
+>   before the consistency sweep would document builder names that are
+>   about to change.
 > Decisions: D098 (two-concept model, taxonomy by defaults),
 > D099 (framework-owned child geometry, declarative semantics),
 > D100 (CustomPaint as recorded Leaf)
