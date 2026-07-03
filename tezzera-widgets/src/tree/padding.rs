@@ -42,34 +42,3 @@ impl EdgeInsets {
     }
 }
 
-/// Wraps a child with uniform or asymmetric insets.
-pub struct Padding {
-    pub insets: EdgeInsets,
-    pub child: BoxedWidget,
-}
-
-impl Padding {
-    pub fn all(v: f32, child: impl Widget + 'static) -> Self {
-        Self { insets: EdgeInsets::all(v), child: Box::new(child) }
-    }
-
-    pub fn new(insets: EdgeInsets, child: impl Widget + 'static) -> Self {
-        Self { insets, child: Box::new(child) }
-    }
-}
-
-impl Widget for Padding {
-    fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let constraints = ctx.constraints;
-        let inner = Constraints::loose(
-            (avail_w(constraints) - self.insets.total_h()).max(0.0),
-            (avail_h(constraints) - self.insets.total_v()).max(0.0),
-        );
-        self.insets.grow(self.child.layout(&ctx.with_constraints(inner)))
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx) {
-        let inner_rect = self.insets.shrink(ctx.rect);
-        self.child.paint(&mut ctx.child(inner_rect));
-    }
-}

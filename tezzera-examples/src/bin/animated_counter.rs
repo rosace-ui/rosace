@@ -15,17 +15,17 @@ impl Component for AnimatedCounter {
 
         Scaffold::new(
             Column::new()
-                .child(SizedBox::gap(0.0, 80.0))
+                .child(Spacer::gap(0.0, 80.0))
                 .child(
                     Text::display(&displayed)
                         .align(TextAlign::Center),
                 )
-                .child(SizedBox::gap(0.0, 8.0))
+                .child(Spacer::gap(0.0, 8.0))
                 .child(
                     Text::new("spring-animated counter")
                         .align(TextAlign::Center),
                 )
-                .child(SizedBox::gap(0.0, 40.0))
+                .child(Spacer::gap(0.0, 40.0))
                 .child(
                     Row::new()
                         .main_axis_alignment(MainAxisAlignment::Center)

@@ -14,10 +14,8 @@ pub mod avatar;
 pub mod badge;
 pub mod button;
 pub mod card;
-pub mod center;
 pub mod checkbox;
 pub mod chip;
-pub mod colored_box;
 pub mod column;
 pub mod container;
 pub mod custom_paint;
@@ -40,7 +38,6 @@ pub mod row;
 pub mod scaffold;
 pub mod scroll_view;
 pub mod sheet;
-pub mod sized_box;
 pub mod slider;
 pub mod spacer;
 pub mod stack;
@@ -58,10 +55,8 @@ pub use avatar::Avatar;
 pub use badge::Badge;
 pub use button::{Button, ButtonVariant};
 pub use card::Card;
-pub use center::Center;
 pub use checkbox::Checkbox;
 pub use chip::Chip;
-pub use colored_box::ColoredBox;
 pub use column::Column;
 pub use container::Container;
 pub use custom_paint::CustomPaint;
@@ -73,14 +68,14 @@ pub use divider::Divider;
 pub use focus_api::{FocusApi, WithFocus};
 pub use icon::{Icon, IconKind};
 pub use image::Image;
-pub use list_tile::{ListTile, ListView};
+pub use list_tile::ListTile;
 pub use nav_rail::{NavItem, NavRail};
 pub use overlay::{
     LayerId, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
     OverlayEntry, push_overlay, drain_overlays, clear_overlays,
 };
 pub use overlay_api::{OverlayApi, OverlayKind, WithOverlay};
-pub use padding::{EdgeInsets, Padding};
+pub use padding::EdgeInsets;
 pub use progress_bar::ProgressBar;
 pub use rect_reader::RectReader;
 pub use render_tree::{NodeId, RenderTree, TreeNode};
@@ -88,7 +83,6 @@ pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
 pub use scroll_view::{ScrollView, ScrollAxis};
-pub use sized_box::SizedBox;
 pub use slider::Slider;
 pub use spacer::{Expanded, Spacer};
 pub use stack::Stack;
@@ -118,6 +112,38 @@ pub(crate) fn shrink_axis(b: AxisBound, by: f32) -> AxisBound {
 }
 use tezzera_render::{Color, DrawCommand, FontCache, Picture, PictureRecorder};
 use tezzera_theme::ThemeData;
+
+// ── Alignment ────────────────────────────────────────────────────────────────
+
+/// Where a single child sits inside its parent's rect (D095).
+/// Setting an alignment on [`Container`] makes it fill the available space
+/// (Flutter semantics) — otherwise there is nothing to align within.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Alignment {
+    TopLeft,    TopCenter,    TopRight,
+    CenterLeft, #[default] Center, CenterRight,
+    BottomLeft, BottomCenter, BottomRight,
+}
+
+impl Alignment {
+    /// Child offset within a container for this alignment.
+    pub fn offset(&self, container: Size, child: Size) -> Point {
+        let fx = match self {
+            Alignment::TopLeft | Alignment::CenterLeft | Alignment::BottomLeft => 0.0,
+            Alignment::TopCenter | Alignment::Center | Alignment::BottomCenter => 0.5,
+            Alignment::TopRight | Alignment::CenterRight | Alignment::BottomRight => 1.0,
+        };
+        let fy = match self {
+            Alignment::TopLeft | Alignment::TopCenter | Alignment::TopRight => 0.0,
+            Alignment::CenterLeft | Alignment::Center | Alignment::CenterRight => 0.5,
+            Alignment::BottomLeft | Alignment::BottomCenter | Alignment::BottomRight => 1.0,
+        };
+        Point {
+            x: ((container.width - child.width) * fx).max(0.0),
+            y: ((container.height - child.height) * fy).max(0.0),
+        }
+    }
+}
 
 // ── Semantics ────────────────────────────────────────────────────────────────
 

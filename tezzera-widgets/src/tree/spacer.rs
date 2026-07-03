@@ -11,6 +11,8 @@ impl Spacer {
     pub fn new(size: f32) -> Self { Self { width: size, height: size } }
     pub fn w(width: f32) -> Self { Self { width, height: 0.0 } }
     pub fn h(height: f32) -> Self { Self { width: 0.0, height } }
+    /// A fixed w x h gap (absorbs SizedBox::gap - D095).
+    pub fn gap(width: f32, height: f32) -> Self { Self { width, height } }
 }
 
 impl Widget for Spacer {

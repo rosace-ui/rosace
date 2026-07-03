@@ -41,15 +41,14 @@ fn sidebar() -> impl Widget {
         .width(232.0)
         .background(SIDEBAR_BG)
         .widget(
-            Padding::new(EdgeInsets::all(16.0),
-                Row::new()
+            Container::new().padding(EdgeInsets::all(16.0)).child(Row::new()
                     .spacing(10.0)
                     .child(
                         Container::new()
                             .background(ACCENT)
                             .size(24.0, 24.0)
                             .radius(4.0)
-                            .child(Center::new(Text::new("M").color(TEXT).size(13.0)))
+                            .child(Container::new().align(Alignment::Center).child(Text::new("M").color(TEXT).size(13.0)))
                     )
                     .child(Text::new("Mosaic").color(TEXT).size(13.0))
             )
@@ -77,16 +76,14 @@ fn sidebar() -> impl Widget {
         .separator()
         .section("LABELS")
         .widget(
-            Padding::new(EdgeInsets::only(4.0, 8.0, 4.0, 14.0),
-                Row::new().spacing(6.0)
+            Container::new().padding(EdgeInsets::only(4.0, 8.0, 4.0, 14.0)).child(Row::new().spacing(6.0)
                     .child(Chip::new("dev").selected())
                     .child(Chip::new("design"))
                     .child(Chip::new("planning"))
             )
         )
         .widget(
-            Padding::new(EdgeInsets::only(4.0, 8.0, 8.0, 14.0),
-                Row::new().spacing(6.0)
+            Container::new().padding(EdgeInsets::only(4.0, 8.0, 8.0, 14.0)).child(Row::new().spacing(6.0)
                     .child(Chip::new("urgent").color(Color::rgb(50, 15, 15)).selected_color(Color::rgb(80, 24, 24)))
                     .child(Chip::new("writing"))
             )
@@ -95,8 +92,7 @@ fn sidebar() -> impl Widget {
         .widget(Expanded::empty())
         .separator()
         .widget(
-            Padding::new(EdgeInsets::symmetric(16.0, 12.0),
-                Row::new().spacing(10.0)
+            Container::new().padding(EdgeInsets::symmetric(16.0, 12.0)).child(Row::new().spacing(10.0)
                     .child(Avatar::new("G").size(32.0))
                     .child(
                         Column::new().spacing(2.0)
@@ -117,8 +113,7 @@ fn task_row(title: &str, done: bool, tags: &[(&str, Color, Color)], selected: bo
             Container::new()
                 .background(bg)
                 .child(
-                    Padding::new(EdgeInsets::symmetric(14.0, 10.0),
-                        Row::new().spacing(10.0)
+                    Container::new().padding(EdgeInsets::symmetric(14.0, 10.0)).child(Row::new().spacing(10.0)
                             .cross_axis_alignment(tezzera::layout::CrossAxisAlignment::Center)
                             .child(Checkbox::new(done)
                                 .color(if done { GREEN } else { ACCENT }))
@@ -152,14 +147,12 @@ fn task_row(title: &str, done: bool, tags: &[(&str, Color, Color)], selected: bo
 fn main_panel() -> impl Widget {
     Column::new()
         .child(
-            Padding::new(EdgeInsets::symmetric(16.0, 12.0),
-                TextInput::new()
+            Container::new().padding(EdgeInsets::symmetric(16.0, 12.0)).child(TextInput::new()
                     .placeholder("Search tasks...")
             )
         )
         .child(
-            Padding::new(EdgeInsets::only(0.0, 16.0, 8.0, 16.0),
-                Row::new().spacing(6.0)
+            Container::new().padding(EdgeInsets::only(0.0, 16.0, 8.0, 16.0)).child(Row::new().spacing(6.0)
                     .child(Chip::new("All"))
                     .child(Chip::new("Today").selected())
                     .child(Chip::new("High priority"))
@@ -171,8 +164,7 @@ fn main_panel() -> impl Widget {
             ScrollView::new(
                 Column::new()
                     .child(
-                        Padding::new(EdgeInsets::only(8.0, 16.0, 0.0, 14.0),
-                            Row::new().spacing(8.0)
+                        Container::new().padding(EdgeInsets::only(8.0, 16.0, 0.0, 14.0)).child(Row::new().spacing(8.0)
                                 .child(Text::new("Today").color(TEXT_SUB).size(9.0))
                                 .child(Badge::count(4).color(BORDER).text_color(TEXT_DIM))
                         )
@@ -185,10 +177,9 @@ fn main_panel() -> impl Widget {
                         &[("dev", BLUE, BLUE_DIM), ("design", PINK, PINK_DIM)], true))
                     .child(task_row("Update steering docs to COMPLETE", false,
                         &[("planning", ACCENT, ACCENT_DIM)], false))
-                    .child(SizedBox::gap(0.0, 12.0))
+                    .child(Spacer::gap(0.0, 12.0))
                     .child(
-                        Padding::new(EdgeInsets::only(8.0, 16.0, 0.0, 14.0),
-                            Row::new().spacing(8.0)
+                        Container::new().padding(EdgeInsets::only(8.0, 16.0, 0.0, 14.0)).child(Row::new().spacing(8.0)
                                 .child(Text::new("Upcoming").color(TEXT_SUB).size(9.0))
                                 .child(Badge::count(5).color(BORDER).text_color(TEXT_DIM))
                         )
@@ -214,11 +205,10 @@ fn detail_panel() -> impl Widget {
         .background(DETAIL_BG)
         .child(
             ScrollView::new(
-                Padding::new(EdgeInsets::all(20.0),
-                    Column::new().spacing(0.0)
+                Container::new().padding(EdgeInsets::all(20.0)).child(Column::new().spacing(0.0)
                         // Title
                         .child(Text::new("Write Mosaic showcase demo").color(TEXT).size(14.0))
-                        .child(SizedBox::gap(0.0, 6.0))
+                        .child(Spacer::gap(0.0, 6.0))
                         // Breadcrumb
                         .child(
                             Row::new().spacing(6.0)
@@ -226,54 +216,54 @@ fn detail_panel() -> impl Widget {
                                 .child(Text::new("/").color(TEXT_DIM).size(9.0))
                                 .child(Text::new("Today").color(ACCENT).size(9.0))
                         )
-                        .child(SizedBox::gap(0.0, 14.0))
+                        .child(Spacer::gap(0.0, 14.0))
                         .child(Divider::horizontal().color(BORDER))
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         // Status badges
                         .child(
                             Row::new().spacing(8.0)
                                 .child(Badge::label("In Progress").color(Color::rgb(80,48,16)).text_color(ORANGE))
                                 .child(Badge::label("Medium").color(BLUE_DIM).text_color(BLUE))
                         )
-                        .child(SizedBox::gap(0.0, 14.0))
+                        .child(Spacer::gap(0.0, 14.0))
                         .child(Divider::horizontal().color(BORDER))
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         // Metadata
                         .child(meta_row("Assigned to", "Godwin Joseph", TEXT))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(meta_row("Due date", "Jun 30, 2026", ORANGE))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(meta_row("Project", "TEZZERA", ACCENT))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(meta_row("Created", "Jun 28, 2026", TEXT_DIM))
-                        .child(SizedBox::gap(0.0, 14.0))
+                        .child(Spacer::gap(0.0, 14.0))
                         .child(Divider::horizontal().color(BORDER))
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         // Description
                         .child(Text::new("Description").color(TEXT_DIM).size(9.0))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Text::new("Build a polished Mosaic app screenshot").color(TEXT_SUB).size(9.5))
-                        .child(SizedBox::gap(0.0, 3.0))
+                        .child(Spacer::gap(0.0, 3.0))
                         .child(Text::new("using TEZZERA's real widget tree pipeline.").color(TEXT_SUB).size(9.5))
-                        .child(SizedBox::gap(0.0, 3.0))
+                        .child(Spacer::gap(0.0, 3.0))
                         .child(Text::new("Scaffold, NavRail, Column, Row, Card, Text,").color(TEXT_SUB).size(9.5))
-                        .child(SizedBox::gap(0.0, 3.0))
+                        .child(Spacer::gap(0.0, 3.0))
                         .child(Text::new("Checkbox, Badge, Chip — all composable.").color(TEXT_SUB).size(9.5))
-                        .child(SizedBox::gap(0.0, 14.0))
+                        .child(Spacer::gap(0.0, 14.0))
                         .child(Divider::horizontal().color(BORDER))
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         // Subtasks
                         .child(Text::new("Subtasks").color(TEXT_DIM).size(9.0))
-                        .child(SizedBox::gap(0.0, 10.0))
+                        .child(Spacer::gap(0.0, 10.0))
                         .child(subtask("Design layout and color palette", true))
                         .child(subtask("Implement window chrome", true))
                         .child(subtask("Draw sidebar navigation", true))
                         .child(subtask("Render task list with groups", false))
                         .child(subtask("Build detail panel", false))
                         .child(subtask("Export as PNG", false))
-                        .child(SizedBox::gap(0.0, 14.0))
+                        .child(Spacer::gap(0.0, 14.0))
                         .child(Divider::horizontal().color(BORDER))
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         // Progress
                         .child(
                             Row::new()
@@ -281,31 +271,31 @@ fn detail_panel() -> impl Widget {
                                 .child(Text::new("Progress").color(TEXT_DIM).size(9.0))
                                 .child(Text::new("3 / 6 done").color(TEXT_SUB).size(9.0))
                         )
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(ProgressBar::new(0.5).color(GREEN))
-                        .child(SizedBox::gap(0.0, 14.0))
+                        .child(Spacer::gap(0.0, 14.0))
                         .child(Divider::horizontal().color(BORDER))
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         // Controls demo
                         .child(Text::new("Notifications").color(TEXT_DIM).size(9.0))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(
                             Row::new().spacing(10.0)
                                 .child(Text::new("Email alerts").color(TEXT_SUB).size(9.5))
                                 .child(Expanded::empty())
                                 .child(Switch::new(true))
                         )
-                        .child(SizedBox::gap(0.0, 6.0))
+                        .child(Spacer::gap(0.0, 6.0))
                         .child(
                             Row::new().spacing(10.0)
                                 .child(Text::new("Push notifications").color(TEXT_SUB).size(9.5))
                                 .child(Expanded::empty())
                                 .child(Switch::new(false))
                         )
-                        .child(SizedBox::gap(0.0, 14.0))
+                        .child(Spacer::gap(0.0, 14.0))
                         // Priority slider
                         .child(Text::new("Priority level").color(TEXT_DIM).size(9.0))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Slider::new(0.6).width(320.0))
                 )
             )
@@ -319,8 +309,7 @@ fn meta_row(label: &str, value: &str, val_color: Color) -> impl Widget {
 }
 
 fn subtask(label: &str, done: bool) -> impl Widget {
-    Padding::new(EdgeInsets::only(0.0, 0.0, 6.0, 0.0),
-        Row::new().spacing(8.0)
+    Container::new().padding(EdgeInsets::only(0.0, 0.0, 6.0, 0.0)).child(Row::new().spacing(8.0)
             .child(Checkbox::new(done)
                 .color(if done { GREEN } else { BORDER })
                 .size(14.0))

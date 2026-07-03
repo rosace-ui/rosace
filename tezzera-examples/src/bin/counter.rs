@@ -8,11 +8,11 @@ impl Component for Counter {
 
         Scaffold::new(
             Column::new()
-                .child(SizedBox::gap(0.0, 60.0))
+                .child(Spacer::gap(0.0, 60.0))
                 .child(Text::display(count.get().to_string()).align(TextAlign::Center))
-                .child(SizedBox::gap(0.0, 8.0))
+                .child(Spacer::gap(0.0, 8.0))
                 .child(Text::new("click to increment").align(TextAlign::Center))
-                .child(SizedBox::gap(0.0, 32.0))
+                .child(Spacer::gap(0.0, 32.0))
                 .child(
                     Row::new()
                         .main_axis_alignment(MainAxisAlignment::Center)

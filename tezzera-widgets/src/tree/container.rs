@@ -20,6 +20,9 @@ pub struct Container {
     pub height: Option<f32>,
     pub min_width: f32,
     pub min_height: f32,
+    /// When set, the container fills available space and places its child
+    /// at this alignment (absorbs the old `Center` widget — D095).
+    pub align: Option<super::Alignment>,
     pub child: Option<BoxedWidget>,
 }
 
@@ -37,9 +40,14 @@ impl Container {
             height: None,
             min_width: 0.0,
             min_height: 0.0,
+            align: None,
             child: None,
         }
     }
+
+    /// Align the child within this container. Implies filling the available
+    /// space (there is nothing to align within a shrink-wrapped box).
+    pub fn align(mut self, a: super::Alignment) -> Self { self.align = Some(a); self }
 
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
     pub fn border(mut self, c: Color, w: f32) -> Self {
@@ -78,8 +86,21 @@ impl Widget for Container {
             self.padding.grow(c.layout(&ctx.with_constraints(inner_c)))
         }).unwrap_or(Size { width: 0.0, height: 0.0 });
 
-        let w = self.width.unwrap_or(child_size.width.max(self.min_width));
-        let h = self.height.unwrap_or(child_size.height.max(self.min_height));
+        // With an alignment set, fill the available (bounded) space —
+        // Flutter semantics; a shrink-wrapped box has no room to align in.
+        let (fill_w, fill_h) = if self.align.is_some() {
+            (avail_w(constraints), avail_h(constraints))
+        } else {
+            (f32::INFINITY, f32::INFINITY) // sentinel: not used below
+        };
+        let w = self.width.unwrap_or_else(|| {
+            if self.align.is_some() && fill_w.is_finite() { fill_w }
+            else { child_size.width.max(self.min_width) }
+        });
+        let h = self.height.unwrap_or_else(|| {
+            if self.align.is_some() && fill_h.is_finite() { fill_h }
+            else { child_size.height.max(self.min_height) }
+        });
 
         constraints.constrain(Size {
             width:  w.max(self.min_width),
@@ -113,10 +134,25 @@ impl Widget for Container {
             }
         }
 
-        // Child
+        // Child — aligned within the padded rect when an alignment is set,
+        // otherwise given the full inner rect.
         if let Some(child) = &self.child {
             let inner = self.padding.shrink(rect);
-            child.paint(&mut ctx.child(inner));
+            let child_rect = if let Some(align) = self.align {
+                let inner_c = Constraints::loose(inner.size.width, inner.size.height);
+                let child_size = child.layout(&ctx.layout_ctx(inner_c));
+                let off = align.offset(inner.size, child_size);
+                Rect {
+                    origin: tezzera_core::types::Point {
+                        x: inner.origin.x + off.x,
+                        y: inner.origin.y + off.y,
+                    },
+                    size: child_size,
+                }
+            } else {
+                inner
+            };
+            child.paint(&mut ctx.child(child_rect));
         }
     }
 }

@@ -132,7 +132,7 @@ fn home_content(
         ))
         // Horizontal carousel — scroll sideways (trackpad swipe / shift+wheel).
         .child(Text::heading("Feature carousel — scrolls horizontally"))
-        .child(SizedBox::new().height(140.0).child(
+        .child(Container::new().height(140.0).child(
             ScrollView::new(
                 Row::new().spacing(12.0)
                     .child(feature_card("Reactive", "Atom<T> state — zero overhead on idle frames"))
@@ -210,7 +210,7 @@ fn home_content(
 }
 
 fn feature_card(title: &str, body: &str) -> impl Widget {
-    SizedBox::new().width(240.0).child(
+    Container::new().width(240.0).child(
         Card::new(
             Column::new()
                 .spacing(6.0)

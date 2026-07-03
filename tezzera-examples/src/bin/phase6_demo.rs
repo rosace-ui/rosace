@@ -157,7 +157,7 @@ impl Component for Phase6Demo {
 fn load_state_card(state: &str, color: Color) -> impl Widget {
     Card::new(
         Column::new()
-            .child(ColoredBox::new(color).size(60.0, 60.0))
+            .child(Container::new().background(color).size(60.0, 60.0))
             .child(Text::label(state))
     )
 }

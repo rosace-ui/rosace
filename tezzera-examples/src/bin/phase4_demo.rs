@@ -59,7 +59,7 @@ impl Component for Phase4Demo {
                         )
                         .child(Text::label("Tooltip (always visible):"))
                         .child(
-                            Tooltip::new("This is a tooltip", SizedBox::gap(120.0, 40.0))
+                            Tooltip::new("This is a tooltip", Spacer::gap(120.0, 40.0))
                                 .visible(true).font_size(12.0)
                         )
                 )

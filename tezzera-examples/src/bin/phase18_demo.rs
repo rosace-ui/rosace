@@ -92,7 +92,7 @@ impl Component for Phase18Demo {
                                         .child(Button::new("Bot").on_press(move || lb.set(max_scroll)))
                                 )
                                 .child(
-                                    SizedBox::new().height(VIEWPORT_H).child(
+                                    Container::new().height(VIEWPORT_H).child(
                                         ScrollView::live(left_list, left_scroll)
                                     )
                                 )
@@ -117,7 +117,7 @@ impl Component for Phase18Demo {
                                         .child(Button::new("Bot").on_press(move || rb.set(max_scroll)))
                                 )
                                 .child(
-                                    SizedBox::new().height(VIEWPORT_H).child(
+                                    Container::new().height(VIEWPORT_H).child(
                                         ScrollView::live(right_list, right_scroll)
                                     )
                                 )

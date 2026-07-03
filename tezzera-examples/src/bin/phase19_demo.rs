@@ -85,7 +85,7 @@ impl Component for Phase19Demo {
                     }))
             )
             .child(
-                SizedBox::new().height(VIEWPORT_H).child(
+                Container::new().height(VIEWPORT_H).child(
                     TransformLayer::new(list, VIEWPORT_H, scroll_y)
                 )
             )

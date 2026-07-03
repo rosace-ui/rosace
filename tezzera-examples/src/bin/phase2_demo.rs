@@ -73,15 +73,15 @@ impl Component for Phase2Demo {
                     Box::new(
                         Row::new()
                             .spacing(8.0)
-                            .child(ColoredBox::new(Color::rgba(r, g, b, 255)).size(32.0, 24.0))
+                            .child(Container::new().background(Color::rgba(r, g, b, 255)).size(32.0, 24.0))
                             .child(Text::new(label))
                     )
                 };
                 Box::new(
                     Column::new()
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Text::new("Color tokens — toggle theme above").align(TextAlign::Center))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(
                             Row::new()
                                 .spacing(8.0)
@@ -89,7 +89,7 @@ impl Component for Phase2Demo {
                                 .child(Text::new(if dark { "Dark" } else { "Light" }))
                                 .child(Button::new("Toggle theme").on_press(move || is_dark2.set(!is_dark2.get())))
                         )
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         .child(swatch("primary",    (c.primary.r * 255.0) as u8, (c.primary.g * 255.0) as u8, (c.primary.b * 255.0) as u8))
                         .child(swatch("secondary",  (c.secondary.r * 255.0) as u8, (c.secondary.g * 255.0) as u8, (c.secondary.b * 255.0) as u8))
                         .child(swatch("background", (c.background.r * 255.0) as u8, (c.background.g * 255.0) as u8, (c.background.b * 255.0) as u8))
@@ -101,9 +101,9 @@ impl Component for Phase2Demo {
             Screen::WidgetShowcase => {
                 Box::new(
                     Column::new()
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Text::new("Button variants:"))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(
                             Row::new()
                                 .spacing(8.0)
@@ -112,13 +112,13 @@ impl Component for Phase2Demo {
                                 .child(Button::new("Ghost").variant(ButtonVariant::Ghost).on_press(|| {}))
                                 .child(Button::new("Danger").variant(ButtonVariant::Danger).on_press(|| {}))
                         )
-                        .child(SizedBox::gap(0.0, 16.0))
+                        .child(Spacer::gap(0.0, 16.0))
                         .child(Text::new("Divider:"))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Divider::horizontal())
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Text::new("Disabled button:"))
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Button::new("Disabled").disabled().on_press(|| {}))
                 )
             }
@@ -131,16 +131,16 @@ impl Component for Phase2Demo {
                 let tgt3 = anim_target.clone();
                 Box::new(
                     Column::new()
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Text::new("Spring Animation Lab"))
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         .child(
-                            ColoredBox::new(Color::rgba(103, 80, 164, 255))
+                            Container::new().background(Color::rgba(103, 80, 164, 255))
                                 .size(bar_w.max(4.0), 36.0)
                         )
-                        .child(SizedBox::gap(0.0, 8.0))
+                        .child(Spacer::gap(0.0, 8.0))
                         .child(Text::new(format!("position: {:.1} / 320", anim_pos.get())))
-                        .child(SizedBox::gap(0.0, 12.0))
+                        .child(Spacer::gap(0.0, 12.0))
                         .child(
                             Row::new()
                                 .spacing(8.0)
@@ -160,15 +160,15 @@ impl Component for Phase2Demo {
 
             Screen::ScrollingFeed => {
                 let mut col = Column::new()
-                    .child(SizedBox::gap(0.0, 8.0))
+                    .child(Spacer::gap(0.0, 8.0))
                     .child(Text::new("Scrollable feed — 30 items:"))
-                    .child(SizedBox::gap(0.0, 8.0));
+                    .child(Spacer::gap(0.0, 8.0));
                 for i in 1..=30 {
                     col = col
                         .child(Text::new(format!("Item #{i} — Lorem ipsum dolor sit amet")))
-                        .child(SizedBox::gap(0.0, 2.0))
+                        .child(Spacer::gap(0.0, 2.0))
                         .child(Divider::horizontal())
-                        .child(SizedBox::gap(0.0, 6.0));
+                        .child(Spacer::gap(0.0, 6.0));
                 }
                 Box::new(col)
             }
@@ -177,9 +177,9 @@ impl Component for Phase2Demo {
         // ── Assemble ─────────────────────────────────────────────────────────
         Scaffold::new(
             Column::new()
-                .child(SizedBox::gap(0.0, 8.0))
+                .child(Spacer::gap(0.0, 8.0))
                 .child(tabs)
-                .child(SizedBox::gap(0.0, 8.0))
+                .child(Spacer::gap(0.0, 8.0))
                 .child(body)
         )
         .app_bar(AppBar::new("TEZZERA — Phase 2 Demo"))

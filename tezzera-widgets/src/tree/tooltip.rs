@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn tooltip_hidden_has_child_size() {
-        let tip = Tooltip::new("hint", SizedBox::gap(100.0, 50.0));
+        let tip = Tooltip::new("hint", Spacer::gap(100.0, 50.0));
         let (font, theme) = test_ctx(tezzera_layout::Constraints::loose(800.0, 600.0));
         let ctx = LayoutCtx::new(tezzera_layout::Constraints::loose(800.0, 600.0), &font, &theme);
         let size = tip.layout(&ctx);
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn tooltip_visible_adds_label_height() {
-        let tip = Tooltip::new("hint", SizedBox::gap(100.0, 50.0))
+        let tip = Tooltip::new("hint", Spacer::gap(100.0, 50.0))
             .visible(true)
             .font_size(12.0);
         let (font, theme) = test_ctx(tezzera_layout::Constraints::loose(800.0, 600.0));
