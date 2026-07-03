@@ -42,7 +42,7 @@ impl Component for Phase18Demo {
             let c = if i % 2 == 0 { Color::rgb(0x12, 0x12, 0x18) } else { Color::rgb(0x1a, 0x1a, 0x22) };
             left_list = left_list.child(
                 Container::new()
-                    .color(c)
+                    .background(c)
                     .padding(EdgeInsets::all(8.0))
                     .child(Text::caption(&format!("Left item {:02} — y={:.0}", i + 1, left_val)))
             );
@@ -54,7 +54,7 @@ impl Component for Phase18Demo {
             let c = if i % 2 == 0 { Color::rgb(0x18, 0x12, 0x12) } else { Color::rgb(0x22, 0x1a, 0x1a) };
             right_list = right_list.child(
                 Container::new()
-                    .color(c)
+                    .background(c)
                     .padding(EdgeInsets::all(8.0))
                     .child(Text::caption(&format!("Right item {:02} — y={:.0}", i + 1, right_val)))
             );

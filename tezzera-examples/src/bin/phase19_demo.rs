@@ -47,7 +47,7 @@ impl Component for Phase19Demo {
             let c = if i % 2 == 0 { Color::rgb(0x14, 0x14, 0x1e) } else { Color::rgb(0x1c, 0x1c, 0x28) };
             list = list.child(
                 Container::new()
-                    .color(c)
+                    .background(c)
                     .padding(EdgeInsets::symmetric(12.0, 4.0))
                     .child(Text::caption(&format!("Item {:03} — build #{}", i + 1, builds)))
             );

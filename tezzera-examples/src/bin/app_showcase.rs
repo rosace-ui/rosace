@@ -46,7 +46,7 @@ fn sidebar() -> impl Widget {
                     .spacing(10.0)
                     .child(
                         Container::new()
-                            .color(ACCENT)
+                            .background(ACCENT)
                             .size(24.0, 24.0)
                             .radius(4.0)
                             .child(Center::new(Text::new("M").color(TEXT).size(13.0)))
@@ -115,7 +115,7 @@ fn task_row(title: &str, done: bool, tags: &[(&str, Color, Color)], selected: bo
     Column::new()
         .child(
             Container::new()
-                .color(bg)
+                .background(bg)
                 .child(
                     Padding::new(EdgeInsets::symmetric(14.0, 10.0),
                         Row::new().spacing(10.0)
@@ -211,7 +211,7 @@ fn main_panel() -> impl Widget {
 
 fn detail_panel() -> impl Widget {
     Container::new()
-        .color(DETAIL_BG)
+        .background(DETAIL_BG)
         .child(
             ScrollView::new(
                 Padding::new(EdgeInsets::all(20.0),

@@ -41,7 +41,7 @@ impl Container {
         }
     }
 
-    pub fn color(mut self, c: Color) -> Self { self.background = Some(c); self }
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
     pub fn border(mut self, c: Color, w: f32) -> Self {
         self.border_color = Some(c); self.border_width = w; self
     }

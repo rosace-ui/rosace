@@ -49,7 +49,7 @@ impl ListTile {
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
     pub fn no_divider(mut self) -> Self { self.divider = false; self }
     pub fn title_color(mut self, c: Color) -> Self { self.title_color = c; self }
-    pub fn bg(mut self, c: Color) -> Self { self.bg = c; self }
+    pub fn background(mut self, c: Color) -> Self { self.bg = c; self }
 }
 
 impl Widget for ListTile {
