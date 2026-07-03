@@ -12,7 +12,7 @@ use tezzera_state::Atom;
 // - A "build count" atom only increments when the "Add item" button is pressed,
 //   proving that scroll does NOT trigger component rebuilds.
 //
-// ScrollView::live is also shown as an alternative in the right panel.
+// ScrollView::new is also shown as an alternative in the right panel.
 
 const VIEWPORT_H: f32 = 380.0;
 const ITEM_H: f32 = 38.0;

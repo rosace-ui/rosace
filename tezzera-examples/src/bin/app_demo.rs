@@ -39,7 +39,7 @@ impl Component for AppDemo {
 
         // ── Body per screen ──────────────────────────────────────────────
         let body: BoxedWidget = match screen {
-            Screen::Home => Box::new(ScrollView::live(
+            Screen::Home => Box::new(ScrollView::new(
                 home_content(&nav, &carousel_x, &dialog_open, &sheet_open, &toast_open),
                 scroll_y.clone(),
             )),
@@ -133,16 +133,14 @@ fn home_content(
         // Horizontal carousel — scroll sideways (trackpad swipe / shift+wheel).
         .child(Text::heading("Feature carousel — scrolls horizontally"))
         .child(Container::new().height(140.0).child(
-            ScrollView::new(
-                Row::new().spacing(12.0)
-                    .child(feature_card("Reactive", "Atom<T> state — zero overhead on idle frames"))
-                    .child(feature_card("Composable", "Column · Row · Stack · Scaffold · ScrollView"))
-                    .child(feature_card("Themeable", "Dark / light with one set_theme() call"))
-                    .child(feature_card("Navigable", "ScreenNav stack — push, pop, replace"))
-                    .child(feature_card("Layered", "Dialog · Menu · Sheet · Toast overlays")),
-            )
-            .live_x(carousel_x.clone())
-            .axis(ScrollAxis::Horizontal),
+            // D097 sugar: a Row that scrolls sideways is one method call.
+            Row::new().spacing(12.0)
+                .child(feature_card("Reactive", "Atom<T> state — zero overhead on idle frames"))
+                .child(feature_card("Composable", "Column · Row · Stack · Scaffold · ScrollView"))
+                .child(feature_card("Themeable", "Dark / light with one set_theme() call"))
+                .child(feature_card("Navigable", "ScreenNav stack — push, pop, replace"))
+                .child(feature_card("Layered", "Dialog · Menu · Sheet · Toast overlays"))
+                .scrollable(carousel_x.clone()),
         ))
         // Overlay triggers.
         .child(Text::heading("Overlays"))

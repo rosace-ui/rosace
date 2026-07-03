@@ -161,7 +161,7 @@ fn main_panel() -> impl Widget {
         )
         .child(Divider::horizontal().color(BORDER))
         .child(
-            ScrollView::new(
+            ScrollView::fixed(
                 Column::new()
                     .child(
                         Container::new().padding(EdgeInsets::only(8.0, 16.0, 0.0, 14.0)).child(Row::new().spacing(8.0)
@@ -204,7 +204,7 @@ fn detail_panel() -> impl Widget {
     Container::new()
         .background(DETAIL_BG)
         .child(
-            ScrollView::new(
+            ScrollView::fixed(
                 Container::new().padding(EdgeInsets::all(20.0)).child(Column::new().spacing(0.0)
                         // Title
                         .child(Text::new("Write Mosaic showcase demo").color(TEXT).size(14.0))

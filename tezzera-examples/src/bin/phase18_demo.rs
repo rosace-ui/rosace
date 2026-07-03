@@ -7,7 +7,7 @@ use tezzera_state::Atom;
 // A third static panel shows controls. Each panel is a fully independent scroll
 // region; scrolling one never affects the other.
 //
-// ScrollView::live(child, atom) is the D084 reactive constructor. The atom is
+// ScrollView::new(child, atom) is the D084 reactive constructor. The atom is
 // owned by the component; when its value changes the component rebuilds and
 // ScrollView::paint reads the new offset.
 
@@ -67,7 +67,7 @@ impl Component for Phase18Demo {
             )
             .child(Text::caption(
                 "Two independent scroll regions driven by Atom<f32>. \
-                 ScrollView::live(child, atom) reads the atom at paint time. \
+                 ScrollView::new(child, atom) reads the atom at paint time. \
                  Each region scrolls independently with no coupling."
             ))
             // ── panels row ──────────────────────────────────────────────────
@@ -93,7 +93,7 @@ impl Component for Phase18Demo {
                                 )
                                 .child(
                                     Container::new().height(VIEWPORT_H).child(
-                                        ScrollView::live(left_list, left_scroll)
+                                        ScrollView::new(left_list, left_scroll)
                                     )
                                 )
                         )
@@ -118,7 +118,7 @@ impl Component for Phase18Demo {
                                 )
                                 .child(
                                     Container::new().height(VIEWPORT_H).child(
-                                        ScrollView::live(right_list, right_scroll)
+                                        ScrollView::new(right_list, right_scroll)
                                     )
                                 )
                         )

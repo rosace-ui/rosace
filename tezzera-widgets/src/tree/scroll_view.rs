@@ -34,11 +34,18 @@ pub struct ScrollView {
 }
 
 impl ScrollView {
-    pub fn new(child: impl Widget + 'static) -> Self {
+    /// A live vertical scroll view (D097): the wheel/trackpad drives
+    /// `scroll_y`. The atom must come from `ctx.state` so the position
+    /// survives rebuilds.
+    ///
+    /// This is THE constructor — a ScrollView that cannot scroll was the
+    /// trap that shipped a broken demo. For golden tests / snapshots use
+    /// [`ScrollView::fixed`].
+    pub fn new(child: impl Widget + 'static, scroll_y: Atom<f32>) -> Self {
         Self {
             child: Box::new(child),
             offset: 0.0,
-            live_offset: None,
+            live_offset: Some(scroll_y),
             live_offset_x: None,
             axis: ScrollAxis::Vertical,
             show_scrollbar: true,
@@ -46,14 +53,26 @@ impl ScrollView {
         }
     }
 
-    /// Live-scrolling constructor: offset is driven by an `Atom<f32>` (D084).
-    /// The component that owns the atom subscribes automatically; when the atom
-    /// changes the component rebuilds and ScrollView reads the new value in `paint`.
-    pub fn live(child: impl Widget + 'static, scroll_y: Atom<f32>) -> Self {
+    /// A live horizontal scroll view — carousels, chip rows, code blocks.
+    pub fn horizontal(child: impl Widget + 'static, scroll_x: Atom<f32>) -> Self {
         Self {
             child: Box::new(child),
             offset: 0.0,
-            live_offset: Some(scroll_y),
+            live_offset: None,
+            live_offset_x: Some(scroll_x),
+            axis: ScrollAxis::Horizontal,
+            show_scrollbar: true,
+            scrollbar_color: Color::rgb(50, 55, 85),
+        }
+    }
+
+    /// A snapshot viewport — never responds to input. Set the offset with
+    /// `.offset(px)`. For golden tests and static mockups (honest name, D097).
+    pub fn fixed(child: impl Widget + 'static) -> Self {
+        Self {
+            child: Box::new(child),
+            offset: 0.0,
+            live_offset: None,
             live_offset_x: None,
             axis: ScrollAxis::Vertical,
             show_scrollbar: true,
