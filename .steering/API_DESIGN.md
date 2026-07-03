@@ -111,6 +111,17 @@ named constructor or a theme preset, not a widget.**
 - `Column::scrollable(atom)` / `Row::scrollable(atom)` — planned sugar that
   wraps self in a ScrollView; `Expanded` is ignored on an unbounded scroll axis.
 
+**Unbounded-axis doctrine** (kills Flutter's ScrollView/Expanded/Center pain):
+1. Flex on an unbounded axis is DEFINED: ignored, child sizes to content.
+   Never a crash. Debug builds emit a trace naming the widget and the fix.
+2. ScrollView content constraints on the scroll axis are
+   `min = viewport, max = Unbounded` — short content can center or
+   space itself against the full viewport with zero boilerplate
+   (Flutter's LayoutBuilder + ConstrainedBox(minHeight) recipe, as the
+   default), long content scrolls.
+3. `AxisBound::Unbounded`/`Shrink` are named states, not `f32::INFINITY` —
+   framework messages and author code pattern-match them explicitly.
+
 ## 7. Navigation (also D097)
 
 - **`ScreenNav<R>` is the canonical routing API.** Enum of screens +
