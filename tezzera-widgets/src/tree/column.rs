@@ -57,8 +57,23 @@ impl Column {
         let gap_total = if n > 1 { self.spacing * (n - 1) as f32 } else { 0.0 };
 
         let total_flex: f32 = self.children.iter().map(|c| c.flex_factor()).sum();
+        // Unbounded-axis doctrine (API_DESIGN §6): flex needs a finite main
+        // axis to divide. Inside a vertical ScrollView (max_height unbounded)
+        // Expanded children are DEFINED to size to content — never a panic.
+        let flex_enabled = total_flex > 0.0 && max_h.is_finite();
+        #[cfg(debug_assertions)]
+        if total_flex > 0.0 && !flex_enabled {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "[TEZZERA] Column: Expanded child inside an unbounded height \
+                     (e.g. a vertical ScrollView) — flex is ignored, the child \
+                     sizes to its content. Give the Column a bounded height to flex."
+                );
+            });
+        }
         let fixed_h: f32 = self.children.iter()
-            .filter(|c| c.flex_factor() == 0.0)
+            .filter(|c| !flex_enabled || c.flex_factor() == 0.0)
             .map(|c| c.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h))).height)
             .sum::<f32>() + gap_total;
 
@@ -66,7 +81,7 @@ impl Column {
 
         let sizes: Vec<Size> = self.children.iter().map(|c| {
             let ff = c.flex_factor();
-            if ff > 0.0 && total_flex > 0.0 {
+            if ff > 0.0 && flex_enabled {
                 let h = flex_pool * ff / total_flex;
                 c.layout(&ctx.with_constraints(Constraints::tight(max_w, h)))
             } else {
@@ -76,6 +91,18 @@ impl Column {
 
         *self.measure_cache.lock().unwrap() = Some((c, sizes.clone()));
         sizes
+    }
+
+    /// Paint-path sizes: reuse whatever layout() measured this frame.
+    ///
+    /// Paint must NEVER re-measure under different constraints — the rect is
+    /// always bounded, which would re-enable flex that layout disabled on an
+    /// unbounded axis (children would change size between measure and paint).
+    fn layout_sizes(&self, ctx: &LayoutCtx) -> Vec<Size> {
+        if let Some((_, sizes)) = &*self.measure_cache.lock().unwrap() {
+            return sizes.clone();
+        }
+        self.measure(ctx)
     }
 }
 
@@ -87,10 +114,16 @@ impl Widget for Column {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let sizes = self.measure(ctx);
         let c = ctx.constraints;
-        let inner_c = Constraints::loose(
-            (avail_w(c) - self.padding.total_h()).max(0.0),
-            (avail_h(c) - self.padding.total_v()).max(0.0),
-        );
+        // Preserve incoming minimums (unbounded-axis doctrine): a ScrollView
+        // hands its content min = viewport so MainAxisAlignment can center
+        // short content against the full viewport.
+        let (pad_h, pad_v) = (self.padding.total_h(), self.padding.total_v());
+        let inner_c = Constraints {
+            min_width:  (c.min_width - pad_h).max(0.0),
+            max_width:  super::shrink_axis(c.max_width, pad_h),
+            min_height: (c.min_height - pad_v).max(0.0),
+            max_height: super::shrink_axis(c.max_height, pad_v),
+        };
         let result = layout_column(inner_c, &sizes,
             self.main_axis_alignment, self.cross_axis_alignment, self.spacing);
         self.padding.grow(result.size)
@@ -98,9 +131,11 @@ impl Widget for Column {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let inner_rect = self.padding.shrink(ctx.rect);
-        let inner_c = Constraints::loose(inner_rect.size.width, inner_rect.size.height);
+        // Tight to the allotted rect so alignment distributes the same extra
+        // space that layout() reported — measure and paint agree.
+        let inner_c = Constraints::tight(inner_rect.size.width, inner_rect.size.height);
         let lctx = ctx.layout_ctx(inner_c);
-        let sizes = self.measure(&lctx);
+        let sizes = self.layout_sizes(&lctx);
         let result = layout_column(inner_c, &sizes,
             self.main_axis_alignment, self.cross_axis_alignment, self.spacing);
         for (i, child) in self.children.iter().enumerate() {

@@ -57,8 +57,23 @@ impl Row {
         let gap_total = if n > 1 { self.spacing * (n - 1) as f32 } else { 0.0 };
 
         let total_flex: f32 = self.children.iter().map(|c| c.flex_factor()).sum();
+        // Unbounded-axis doctrine (API_DESIGN §6): flex needs a finite main
+        // axis. Inside a horizontal ScrollView, Expanded children size to
+        // content instead of erroring.
+        let flex_enabled = total_flex > 0.0 && max_w.is_finite();
+        #[cfg(debug_assertions)]
+        if total_flex > 0.0 && !flex_enabled {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "[TEZZERA] Row: Expanded child inside an unbounded width \
+                     (e.g. a horizontal ScrollView) — flex is ignored, the child \
+                     sizes to its content. Give the Row a bounded width to flex."
+                );
+            });
+        }
         let fixed_w: f32 = self.children.iter()
-            .filter(|c| c.flex_factor() == 0.0)
+            .filter(|c| !flex_enabled || c.flex_factor() == 0.0)
             .map(|c| c.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h))).width)
             .sum::<f32>() + gap_total;
 
@@ -66,7 +81,7 @@ impl Row {
 
         let sizes: Vec<Size> = self.children.iter().map(|c| {
             let ff = c.flex_factor();
-            if ff > 0.0 && total_flex > 0.0 {
+            if ff > 0.0 && flex_enabled {
                 let w = flex_pool * ff / total_flex;
                 c.layout(&ctx.with_constraints(Constraints::tight(w, max_h)))
             } else {
@@ -76,6 +91,15 @@ impl Row {
 
         *self.measure_cache.lock().unwrap() = Some((c, sizes.clone()));
         sizes
+    }
+
+    /// Paint-path sizes: reuse whatever layout() measured this frame — see
+    /// Column::layout_sizes for why paint must never re-measure.
+    fn layout_sizes(&self, ctx: &LayoutCtx) -> Vec<Size> {
+        if let Some((_, sizes)) = &*self.measure_cache.lock().unwrap() {
+            return sizes.clone();
+        }
+        self.measure(ctx)
     }
 }
 
@@ -87,10 +111,15 @@ impl Widget for Row {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let sizes = self.measure(ctx);
         let c = ctx.constraints;
-        let inner_c = Constraints::loose(
-            (avail_w(c) - self.padding.total_h()).max(0.0),
-            (avail_h(c) - self.padding.total_v()).max(0.0),
-        );
+        // Preserve incoming minimums (unbounded-axis doctrine) so alignment
+        // can distribute against a viewport-sized minimum.
+        let (pad_h, pad_v) = (self.padding.total_h(), self.padding.total_v());
+        let inner_c = Constraints {
+            min_width:  (c.min_width - pad_h).max(0.0),
+            max_width:  super::shrink_axis(c.max_width, pad_h),
+            min_height: (c.min_height - pad_v).max(0.0),
+            max_height: super::shrink_axis(c.max_height, pad_v),
+        };
         let result = layout_row(inner_c, &sizes,
             self.main_axis_alignment, self.cross_axis_alignment, self.spacing);
         self.padding.grow(result.size)
@@ -98,9 +127,10 @@ impl Widget for Row {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let inner_rect = self.padding.shrink(ctx.rect);
-        let inner_c = Constraints::loose(inner_rect.size.width, inner_rect.size.height);
+        // Tight to the allotted rect — measure and paint agree on extra space.
+        let inner_c = Constraints::tight(inner_rect.size.width, inner_rect.size.height);
         let lctx = ctx.layout_ctx(inner_c);
-        let sizes = self.measure(&lctx);
+        let sizes = self.layout_sizes(&lctx);
         let result = layout_row(inner_c, &sizes,
             self.main_axis_alignment, self.cross_axis_alignment, self.spacing);
         for (i, child) in self.children.iter().enumerate() {

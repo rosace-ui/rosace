@@ -88,10 +88,30 @@ impl Widget for ScrollView {
         let scroll_y = self.live_offset.as_ref().map_or(self.offset, |a| a.get());
         let scroll_x = self.live_offset_x.as_ref().map_or(0.0_f32, |a| a.get());
 
+        // Content constraints (unbounded-axis doctrine, API_DESIGN §6):
+        // on the scroll axis min = viewport, max = Unbounded — short content
+        // can center/space itself against the full viewport (no Flutter-style
+        // LayoutBuilder + ConstrainedBox boilerplate); long content scrolls.
+        use tezzera_layout::AxisBound;
         let child_constraints = match self.axis {
-            ScrollAxis::Vertical   => Constraints::loose(vp.size.width,  f32::INFINITY),
-            ScrollAxis::Horizontal => Constraints::loose(f32::INFINITY, vp.size.height),
-            ScrollAxis::Both       => Constraints::loose(f32::INFINITY, f32::INFINITY),
+            ScrollAxis::Vertical => Constraints {
+                min_width: vp.size.width,
+                max_width: AxisBound::Bounded(vp.size.width),
+                min_height: vp.size.height,
+                max_height: AxisBound::Unbounded,
+            },
+            ScrollAxis::Horizontal => Constraints {
+                min_width: vp.size.width,
+                max_width: AxisBound::Unbounded,
+                min_height: vp.size.height,
+                max_height: AxisBound::Bounded(vp.size.height),
+            },
+            ScrollAxis::Both => Constraints {
+                min_width: vp.size.width,
+                max_width: AxisBound::Unbounded,
+                min_height: vp.size.height,
+                max_height: AxisBound::Unbounded,
+            },
         };
         let child_size = self.child.layout(&ctx.layout_ctx(child_constraints));
 

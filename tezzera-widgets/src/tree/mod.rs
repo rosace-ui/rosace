@@ -103,7 +103,17 @@ use std::sync::Arc;
 
 use tezzera_core::types::{Point, Rect, Size};
 use tezzera_core::{Element, NativeElement, WidgetPayload};
-use tezzera_layout::Constraints;
+use tezzera_layout::{AxisBound, Constraints};
+
+/// Shrink a bounded axis by `by` logical pixels (padding); unbounded and
+/// shrink-to-fit axes pass through unchanged — never collapse Unbounded
+/// into `Bounded(f32::INFINITY)`.
+pub(crate) fn shrink_axis(b: AxisBound, by: f32) -> AxisBound {
+    match b {
+        AxisBound::Bounded(v) => AxisBound::Bounded((v - by).max(0.0)),
+        other => other,
+    }
+}
 use tezzera_render::{Color, DrawCommand, FontCache, Picture, PictureRecorder};
 use tezzera_theme::ThemeData;
 
