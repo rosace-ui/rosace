@@ -1145,6 +1145,27 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 
 ---
 
+### D098 — Two-concept model + taxonomy by defaults
+**Status**: LOCKED
+**Decision**: Users learn exactly two concepts: `Component` (reactive — *what* to show) and `Widget` (primitive protocol — *how* to size/draw/behave). `Element` and the render tree are internal. The Leaf/SingleChild/MultiChild taxonomy is NOT three traits (blanket `impl Widget` for multiple taxonomy traits violates Rust coherence); it is one `Widget` trait with a `children() -> Children` accessor (`None`/`One`/`Many`) and smart defaults keyed off it — the taxonomy is which defaults you keep. Full spec: `.steering/WIDGET_PROTOCOL.md`.
+**Affects**: tezzera-widgets, tezzera-core, docs
+
+---
+
+### D099 — Authoring contexts: framework-owned child geometry + declarative semantics
+**Status**: LOCKED
+**Decision**: `LayoutCx` gains `layout_child(i, constraints)` (framework-memoized on the render tree) and `position_child(i, point)` (stored); `PaintCx` gains `paint_child(i)` reading stored positions. Per-widget measure caches are deleted; measure/paint drift becomes unrepresentable; per-child picture caching and damage rects (Phase 20 Steps 1/5) get their tree from this. `semantics(&self, cx)` declares role/label/actions onto the widget's render-tree node (single-owner, D091) — activates the dormant SemanticNode/Role types (D035/D064).
+**Affects**: tezzera-widgets, tezzera, tezzera-a11y
+
+---
+
+### D100 — CustomPaint is a recorded Leaf (amends D034)
+**Status**: LOCKED — supersedes D034's "full SkiaCanvas access" wording
+**Decision**: `CustomPaint::new(|cx, size| ...).repaint_when(atom)` — a Leaf widget whose closure records DrawCommands. No direct pixel/canvas access at paint time (would bypass the retained pipeline — the D091 vanishing-state bug class). Pixel-level needs use `DrawCommand::BlitRgba`. Hit testing via the standard protocol.
+**Affects**: tezzera-render, tezzera-widgets
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

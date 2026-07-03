@@ -1,88 +1,77 @@
-# Phase 21 — API Consistency: One Law, Fewer Widgets
+# Phase 21 — Widget Protocol: Children, Contexts, Semantics
 
 > Status: PLANNED
 > Started: —
 > Completed: —
-> Decisions: D093 (constructor law), D094 (vocabulary), D095 (consolidation),
-> D096 (builder styling), D097 (scroll + nav canonicalization)
-> Constitution: `.steering/API_DESIGN.md`
+> Decisions: D098 (two-concept model, taxonomy by defaults),
+> D099 (framework-owned child geometry, declarative semantics),
+> D100 (CustomPaint as recorded Leaf)
+> Spec: `.steering/WIDGET_PROTOCOL.md`
+> Ordering: BEFORE Phase 22 (API consistency) — built-ins migrate once,
+> onto the final protocol, not twice.
 
 ## Why This Phase
 
-The widget API audit (2026-07-02) found:
-- Background color has three names: `.background()` (AppBar/Card/Scaffold/
-  NavRail/Tab), `.color()` (Container — sets background!), `.bg()` (ListTile)
-- Constructor chaos: `Card::new(child)` vs `Container::new().child()` vs
-  `Padding::new(insets, child)` vs `SizedBox::new()` vs `Tooltip::new(label, child)`
-- Six widgets doing one job: ColoredBox, SizedBox, Padding, Center,
-  Container, Expanded::empty
-- A full parallel element-based widget set still exported from tezzera-layout
-- Two navigation systems, and ScrollView's default constructor silently
-  doesn't scroll
-
-Every one of these produced real friction while writing the demos this week.
-Breaking changes are cheap now (no external users) and get more expensive
-every phase.
+Custom-widget authors today face: two composition systems (Component vs
+Widget) with no stated relationship, hand-written delegation for every
+wrapper, private Mutex measure caches per container, positions recomputed
+in paint (measure/paint drift — the Text overflow bug class), no semantics
+hook at all, and no hit-test story beyond register_hit. The protocol
+(WIDGET_PROTOCOL.md) collapses this to one trait with defaults keyed off
+`children()`, framework-owned child geometry, and declarative semantics.
 
 ## Migration Rule
 
-- Demos and tests stay green after every step; each step is one commit.
-- Removal means REMOVAL — no deprecated aliases left behind (no users yet).
-- Every step updates all call sites (widgets, demos, tests, doc comments,
-  tzr new templates in tezzera-cli).
+Demos/tests green after every step; one commit per step. The Widget trait
+changes are breaking — built-ins migrate in the same step as the change
+that breaks them. No compatibility shims.
 
 ## Steps
 
-### Step 1 — Vocabulary sweep (D094)
-Rename builders to the canonical table: Container `.color()` → `.background()`,
-ListTile `.bg()` → `.background()`, audit every widget against §3.
-No behavior changes. Exit: grep for `fn bg(`, `fn color(` on surface-color
-widgets returns nothing.
+### Step 1 — `Children` accessor + default layout/paint/flex
+Add `Children` enum + `children()` to the Widget trait; implement defaults
+(leaf: constraint-min + nothing; One: delegate; Many: layout must be
+overridden, paint from stored positions). Migrate trivial wrappers
+(RepaintBoundary, RectReader, WithFocus, WithOverlay, Expanded) to
+delete their hand-written delegation.
+Exit: wrappers implement only the methods they change.
 
-### Step 2 — Constructor law sweep (D093)
-- `Padding::new(insets, child)` → interim `Padding::new(child).insets(..)`
-  (dies in Step 3 anyway)
-- `Tooltip::new(label, child)` → `Tooltip::new(child).label(..)`? NO —
-  label is required content: keep `(label, child)`? Illegal under two-required
-  rule → `Tooltip::new(child).text(label)` with debug assert if text unset.
-- Divider gets `new()` (= horizontal), keeps `::horizontal()/::vertical()`.
-- `Box<dyn Widget>` implements `Widget` so builders accept boxed children
-  (kills the `boxed()` adapter in app_demo).
-Exit: API_DESIGN §1 table holds for every exported widget.
+### Step 2 — LayoutCx child geometry
+`layout_child(i, c)` (memoized on the render-tree node) + `position_child`;
+`PaintCx::paint_child(i)`. Migrate Column/Row/Stack/Scaffold: their
+measure logic moves into `layout()` once; `paint()` stops re-measuring;
+delete every `Mutex<Option<(Constraints, Vec<Size>)>>` cache.
+Exit: `grep measure_cache tezzera-widgets` → nothing; layout runs once
+per dirty node per frame (verify via LayoutStart traces).
 
-### Step 3 — Consolidation (D095)
-- Container absorbs: `.align(Alignment)` (from Center), everything else it
-  already has. Then delete ColoredBox, SizedBox, Padding, Center.
-- `Spacer::flex()` replaces `Expanded::empty()`.
-- Audit ListView: if non-virtualizing Column wrapper → delete.
-- Migrate all demos + `tzr new` templates.
-Exit: deleted files gone from tree/mod.rs, prelude, facade; demos green.
+### Step 3 — Default hit protocol
+`hit()` default from declared regions + children back-to-front; `on_press`/
+`on_scroll` as PaintCx declarations (mechanics already on the render tree
+from Phase 20). `hit()` override documented for non-rect targets.
+Exit: Slider knob / circular targets expressible without full-rect hacks.
 
-### Step 4 — tezzera-layout slimming (D095)
-Remove element-based widget structs (Column, Row, Stack, SizedBox, Spacer,
-Flex, Expanded, Grid, Wrap, AspectRatio); keep Constraints, alignments,
-layout_column/row/flex math, LayoutResult. Grid/Wrap/AspectRatio math stays
-as free functions for future tree widgets.
-Exit: tezzera-layout exports no `impl From<_> for Element` widgets.
+### Step 4 — Semantics hook
+`SemanticsCx` writing role/label/value/actions to the render-tree node;
+derived semantics tree collector; defaults for Text/Image; declarations on
+Button, Checkbox, Switch, Slider, TextInput, Dialog (Role::Dialog), Menu.
+Trace: emit node count under TEZZERA_TRACE=perf.
+Exit: app_demo produces a non-empty semantics tree with correct roles.
 
-### Step 5 — Scroll API (D097)
-`ScrollView::fixed(child, offset)` for snapshot mode; `ScrollView::new(child,
-atom)` = live; `Column::scrollable(atom)` / `Row::scrollable(atom)` sugar.
-Exit: no demo uses a ScrollView that cannot scroll unintentionally.
+### Step 5 — CustomPaint (D100)
+`CustomPaint::new(closure).repaint_when(atom)` + hit_test via standard
+protocol. Example bin demonstrating a custom chart.
+Exit: a custom painter works with caching (repaints ONLY when its atom
+changes — verify via trace).
 
-### Step 6 — Nav canonicalization (D097)
-`AppBar::back_button(&nav)`; ScreenNav re-exported as THE nav API;
-Navigator/Route/history/guards + nav-anim Navigator out of prelude
-(internal or feature-gated). app_demo drops its manual back-button block.
-Exit: prelude exposes exactly one navigation type.
-
-### Step 7 — Docs
-Update NAMING.md with a pointer to API_DESIGN.md §3; refresh CRATE_CONTRACTS
-for the slimmed tezzera-layout; refresh README examples.
+### Step 6 — Authoring guide
+`docs/` or steering: "Writing a Widget" walkthrough — the decision table,
+one worked example per taxonomy row, escape-hatch ladder. README section.
+Exit: the three WIDGET_PROTOCOL.md examples compile as doc-tests or an
+example bin.
 
 ## DO NOT
 
-- Do not add a `.style(struct)` API in this phase (D096 defers it).
-- Do not keep compatibility aliases "just in case".
-- Do not introduce new widgets during the sweep — presets are named
-  constructors (API_DESIGN §5 rule of thumb).
+- Do not expose Element/RenderTree in the authoring API.
+- Do not keep per-widget measure caches "temporarily".
+- Do not implement platform a11y bridges here (only the authoring hook +
+  derived tree; bridges are their own phase).
