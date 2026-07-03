@@ -79,9 +79,13 @@ impl Widget for Container {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
         let child_size = self.child.as_ref().map(|c| {
+            // A fixed width/height bounds the CHILD too — a 240px-wide card's
+            // text must wrap at 240px even when the parent offers infinity.
+            let avail_w = self.width.unwrap_or_else(|| avail_w(constraints));
+            let avail_h = self.height.unwrap_or_else(|| avail_h(constraints));
             let inner_c = Constraints::loose(
-                (avail_w(constraints) - self.padding.total_h()).max(0.0),
-                (avail_h(constraints) - self.padding.total_v()).max(0.0),
+                (avail_w - self.padding.total_h()).max(0.0),
+                (avail_h - self.padding.total_v()).max(0.0),
             );
             self.padding.grow(c.layout(&ctx.with_constraints(inner_c)))
         }).unwrap_or(Size { width: 0.0, height: 0.0 });

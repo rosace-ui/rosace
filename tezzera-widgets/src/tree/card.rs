@@ -43,8 +43,10 @@ impl Card {
 impl Widget for Card {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
+        // A fixed width bounds the child too (same rule as Container).
+        let avail_w = self.width.unwrap_or_else(|| constraints.max_width_f32());
         let inner_c = Constraints::loose(
-            (constraints.max_width_f32() - self.padding.total_h()).max(0.0),
+            (avail_w - self.padding.total_h()).max(0.0),
             (constraints.max_height_f32() - self.padding.total_v()).max(0.0),
         );
         let child_size = self.child.layout(&ctx.with_constraints(inner_c));

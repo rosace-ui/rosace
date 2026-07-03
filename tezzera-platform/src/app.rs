@@ -236,14 +236,25 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 // Present the frame — GPU multi-layer compositor (D076, D079),
                 // with softbuffer fallback that CPU-composites overlay on top.
                 if let Some(presenter) = &mut self.presenter {
-                    presenter.present_layers(&[
-                        tezzera_compositor::CompositorLayer::opaque(
-                            self.canvas.pixels(), phys_w, phys_h,
-                        ),
-                        tezzera_compositor::CompositorLayer::opaque(
-                            self.overlay_canvas.pixels(), phys_w, phys_h,
-                        ),
-                    ]);
+                    // Skip the overlay texture upload entirely when nothing
+                    // drew into it this frame — saves a full-framebuffer GPU
+                    // upload on every overlay-free frame.
+                    if self.overlay_canvas.has_drawn() {
+                        presenter.present_layers(&[
+                            tezzera_compositor::CompositorLayer::opaque(
+                                self.canvas.pixels(), phys_w, phys_h,
+                            ),
+                            tezzera_compositor::CompositorLayer::opaque(
+                                self.overlay_canvas.pixels(), phys_w, phys_h,
+                            ),
+                        ]);
+                    } else {
+                        presenter.present_layers(&[
+                            tezzera_compositor::CompositorLayer::opaque(
+                                self.canvas.pixels(), phys_w, phys_h,
+                            ),
+                        ]);
+                    }
                 } else if let Some(surface) = &mut self.surface {
                     let base_pixels = self.canvas.pixels();
                     let mut buffer = surface.buffer_mut().unwrap();

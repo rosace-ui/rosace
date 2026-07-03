@@ -34,6 +34,7 @@ impl Component for AppDemo {
         let menu_open:   Atom<bool> = ctx.state(false);
         let sheet_open:  Atom<bool> = ctx.state(false);
         let toast_open:  Atom<bool> = ctx.state(false);
+        let list_scroll: Atom<f32>  = ctx.state(0.0f32);
 
         let screen = nav.current().unwrap_or(Screen::Home);
 
@@ -43,7 +44,7 @@ impl Component for AppDemo {
                 home_content(&nav, &carousel_x, &dialog_open, &sheet_open, &toast_open),
                 scroll_y.clone(),
             )),
-            Screen::About => Box::new(about_content()),
+            Screen::About => Box::new(about_content(&list_scroll)),
         };
 
         // ── AppBar ───────────────────────────────────────────────────────
@@ -215,7 +216,8 @@ fn feature_card(title: &str, body: &str) -> impl Widget {
 
 // ── About screen ──────────────────────────────────────────────────────────────
 
-fn about_content() -> impl Widget {
+fn about_content(list_scroll: &Atom<f32>) -> impl Widget {
+    let list_scroll = list_scroll.clone();
     Column::new()
         .spacing(16.0)
         .padding(EdgeInsets::all(24.0))
@@ -232,6 +234,20 @@ fn about_content() -> impl Widget {
              much text is put into it — everything past the second line is simply \
              truncated away, which is exactly what happens to this sentence.",
         ).max_lines(2))
+        .child(Text::heading("Virtualized list — 10,000 rows"))
+        .child(Text::caption(
+            "Only the visible rows are built and painted each frame \
+             (RecyclerView model). Scroll it.",
+        ))
+        .child(Container::new().height(240.0).child(
+            ListView::builder(10_000, 40.0, list_scroll, |i| {
+                Box::new(
+                    Container::new()
+                        .padding(EdgeInsets::symmetric(12.0, 10.0))
+                        .child(Text::label(format!("Row {i} — built on demand"))),
+                )
+            }),
+        ))
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────

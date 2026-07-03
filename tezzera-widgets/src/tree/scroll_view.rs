@@ -168,7 +168,11 @@ impl Widget for ScrollView {
             let atom_x = self.live_offset_x.clone();
             let max_scroll_y = (child_size.height - vp.size.height).max(0.0);
             let max_scroll_x = (child_size.width - vp.size.width).max(0.0);
-            ctx.register_scroll_target(vp, Arc::new(move |delta_x, delta_y| {
+            let axes = super::ScrollAxes {
+                x: self.live_offset_x.is_some(),
+                y: self.live_offset.is_some(),
+            };
+            ctx.register_scroll_target(vp, axes, Arc::new(move |delta_x, delta_y| {
                 if let Some(a) = &atom_y {
                     a.set((a.get() - delta_y).clamp(0.0, max_scroll_y));
                 }

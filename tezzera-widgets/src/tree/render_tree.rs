@@ -24,8 +24,25 @@ pub type NodeId = usize;
 
 /// A click callback with its hit rect in window-space logical pixels.
 pub type HitRegion = (Rect, Arc<dyn Fn() + Send + Sync>);
-/// A `(delta_x, delta_y)` scroll callback with its viewport rect.
-pub type ScrollRegion = (Rect, Arc<dyn Fn(f32, f32) + Send + Sync>);
+
+/// Which wheel/trackpad axes a scroll region can consume. Routing prefers
+/// the innermost region that handles the DOMINANT axis of a delta — an
+/// x-only carousel must not swallow a vertical page scroll.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScrollAxes {
+    pub x: bool,
+    pub y: bool,
+}
+
+impl ScrollAxes {
+    pub const BOTH: ScrollAxes = ScrollAxes { x: true, y: true };
+    pub const X: ScrollAxes = ScrollAxes { x: true, y: false };
+    pub const Y: ScrollAxes = ScrollAxes { x: false, y: true };
+}
+
+/// A `(delta_x, delta_y)` scroll callback with its viewport rect and the
+/// axes it handles.
+pub type ScrollRegion = (Rect, ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>);
 
 /// One render-tree node. Declared data is cleared when the node is repainted
 /// (`begin`) and persists untouched otherwise.
@@ -152,25 +169,35 @@ impl RenderTree {
         None
     }
 
-    /// Scroll routing with the same structural z-order as `hit_test` —
-    /// the innermost (deepest) viewport under the cursor wins.
-    pub fn scroll_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>> {
-        self.scroll_test_node(Self::ROOT, x, y)
+    /// Axis-aware scroll routing: among the viewports under the cursor
+    /// (innermost first), pick the first that handles the DOMINANT axis of
+    /// the delta; fall back to the innermost that handles the other axis.
+    /// A horizontal carousel no longer intercepts a vertical page scroll.
+    pub fn scroll_test(&self, x: f32, y: f32, dx: f32, dy: f32)
+        -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>>
+    {
+        let mut candidates: Vec<(ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)> = Vec::new();
+        self.scroll_candidates(Self::ROOT, x, y, &mut candidates);
+        select_scroll_handler(&candidates, dx, dy)
     }
 
-    fn scroll_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>> {
+    fn scroll_candidates(
+        &self,
+        id: NodeId,
+        x: f32,
+        y: f32,
+        out: &mut Vec<(ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
+    ) {
         let n = &self.nodes[id];
+        // Children first (topmost/innermost priority), later siblings first.
         for &child in n.children.iter().rev() {
-            if let Some(cb) = self.scroll_test_node(child, x, y) {
-                return Some(cb);
-            }
+            self.scroll_candidates(child, x, y, out);
         }
-        for (rect, cb) in n.scrolls.iter().rev() {
+        for (rect, axes, cb) in n.scrolls.iter().rev() {
             if contains(rect, x, y) {
-                return Some(cb.clone());
+                out.push((*axes, cb.clone()));
             }
         }
-        None
     }
 
     /// All hit regions in tree (paint) order — used by the overlay pass to
@@ -287,6 +314,22 @@ impl RenderTree {
 
 impl Default for RenderTree {
     fn default() -> Self { Self::new() }
+}
+
+/// Shared axis-preference selection (also used for overlay scroll routes):
+/// first candidate handling the dominant delta axis, else first handling
+/// the other axis.
+pub fn select_scroll_handler(
+    candidates: &[(ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)],
+    dx: f32,
+    dy: f32,
+) -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>> {
+    let dominant_is_x = dx.abs() > dy.abs();
+    let handles_dominant = |a: &ScrollAxes| if dominant_is_x { a.x } else { a.y };
+    let handles_other = |a: &ScrollAxes| if dominant_is_x { a.y } else { a.x };
+    candidates.iter().find(|(a, _)| handles_dominant(a))
+        .or_else(|| candidates.iter().find(|(a, _)| handles_other(a)))
+        .map(|(_, cb)| cb.clone())
 }
 
 #[inline]

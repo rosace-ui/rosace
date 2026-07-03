@@ -284,6 +284,13 @@ impl App {
                                 },
                                 LayerPosition::Fill => Point { x: 0.0, y: 0.0 },
                             };
+                            // Window-aware: clamp the overlay inside the
+                            // window with an 8px margin so anchored menus
+                            // never render off-screen.
+                            let origin = Point {
+                                x: origin.x.min((win_w - widget_size.width - 8.0).max(0.0)).max(0.0),
+                                y: origin.y.min((win_h - widget_size.height - 8.0).max(0.0)).max(0.0),
+                            };
                             let widget_rect = Rect { origin, size: widget_size };
 
                             // Paint into a per-entry throwaway tree; its regions
@@ -419,9 +426,13 @@ impl App {
                         tezzera_platform::InputEvent::Scroll { x, y, delta_x, delta_y } => {
                             let mut handled = false;
                             for route in overlay_routes.iter().rev() {
-                                if let Some((_, cb)) = route.scrolls.iter().rev()
-                                    .find(|(r, _)| rect_contains(r, *x, *y))
-                                {
+                                let candidates: Vec<_> = route.scrolls.iter().rev()
+                                    .filter(|(r, _, _)| rect_contains(r, *x, *y))
+                                    .map(|(_, a, cb)| (*a, cb.clone()))
+                                    .collect();
+                                if let Some(cb) = tezzera_widgets::tree::render_tree::select_scroll_handler(
+                                    &candidates, *delta_x, *delta_y,
+                                ) {
                                     cb(*delta_x, *delta_y);
                                     handled = true;
                                     break;
@@ -434,10 +445,21 @@ impl App {
                                 }
                             }
                             if !handled {
-                                let cb = render_tree.borrow().scroll_test(*x, *y);
+                                let cb = render_tree.borrow().scroll_test(*x, *y, *delta_x, *delta_y);
                                 if let Some(cb) = cb {
                                     cb(*delta_x, *delta_y);
                                 }
+                            }
+                        }
+                        tezzera_platform::InputEvent::KeyDown {
+                            key: tezzera_platform::Key::Escape
+                        } => {
+                            // Dismiss the topmost overlay that has a scrim
+                            // dismisser (dialog, sheet, dropdown).
+                            if let Some(on_tap) = overlay_routes.iter().rev()
+                                .find_map(|r| r.on_tap.clone())
+                            {
+                                on_tap();
                             }
                         }
                         tezzera_platform::InputEvent::KeyDown {
@@ -687,7 +709,7 @@ struct OverlayRoute {
     input: tezzera_widgets::tree::InputBehavior,
     on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
     hits: Vec<(tezzera_core::types::Rect, Arc<dyn Fn() + Send + Sync>)>,
-    scrolls: Vec<(tezzera_core::types::Rect, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
+    scrolls: Vec<(tezzera_core::types::Rect, tezzera_widgets::tree::ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
 }
 
 #[inline]
@@ -725,7 +747,7 @@ pub use tezzera_widgets::{
     Card, Checkbox, Chip,
     Column, Container, CustomPaint, Dialog, Divider,
     EdgeInsets, Expanded, Icon, IconKind,
-    Image, ListTile,
+    Image, ListTile, ListView,
     Menu, NavItem, NavRail,
     ProgressBar,
     RectReader,

@@ -109,9 +109,16 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                         x: anchor.origin.x,
                         y: anchor.origin.y + anchor.size.height,
                     };
+                    // Invisible scrim: a tap anywhere outside the menu closes
+                    // it (and is consumed) — standard menu behavior.
+                    let dismiss = Arc::new(move || open_atom.set(false));
                     OverlayEntry::new(LayerPosition::Absolute(pos), content)
                         .input(InputBehavior::PassThrough)
                         .focus(FocusBehavior::PassThrough)
+                        .scrim(ScrimConfig {
+                            color: Color::TRANSPARENT,
+                            on_tap: Some(dismiss),
+                        })
                 }
 
                 OverlayKind::Sheet => {

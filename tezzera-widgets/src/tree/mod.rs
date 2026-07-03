@@ -25,6 +25,7 @@ pub mod focus_api;
 pub mod icon;
 pub mod image;
 pub mod list_tile;
+pub mod list_view;
 pub mod menu;
 pub mod nav_rail;
 pub mod overlay;
@@ -69,6 +70,7 @@ pub use focus_api::{FocusApi, WithFocus};
 pub use icon::{Icon, IconKind};
 pub use image::Image;
 pub use list_tile::ListTile;
+pub use list_view::ListView;
 pub use nav_rail::{NavItem, NavRail};
 pub use overlay::{
     LayerId, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
@@ -78,7 +80,7 @@ pub use overlay_api::{OverlayApi, OverlayKind, WithOverlay};
 pub use padding::EdgeInsets;
 pub use progress_bar::ProgressBar;
 pub use rect_reader::RectReader;
-pub use render_tree::{NodeId, RenderTree, TreeNode};
+pub use render_tree::{NodeId, RenderTree, ScrollAxes, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
@@ -272,8 +274,13 @@ impl<'a> PaintCtx<'a> {
     /// Register a scroll viewport so the event router can dispatch wheel events
     /// to the correct `ScrollView`. Called from `ScrollView::paint`. The
     /// callback receives `(delta_x, delta_y)` in logical pixels.
-    pub fn register_scroll_target(&self, rect: Rect, callback: Arc<dyn Fn(f32, f32) + Send + Sync>) {
-        self.tree.borrow_mut().node_mut(self.node).scrolls.push((rect, callback));
+    pub fn register_scroll_target(
+        &self,
+        rect: Rect,
+        axes: render_tree::ScrollAxes,
+        callback: Arc<dyn Fn(f32, f32) + Send + Sync>,
+    ) {
+        self.tree.borrow_mut().node_mut(self.node).scrolls.push((rect, axes, callback));
     }
 
     /// Register a focus node for Tab-cycle inclusion (called from `WithFocus<W>::paint`).
@@ -308,7 +315,7 @@ impl<'a> PaintCtx<'a> {
     /// Declare that this widget's rect responds to scroll wheel/trackpad.
     /// The callback receives `(delta_x, delta_y)` in logical pixels.
     pub fn on_scroll(&self, f: impl Fn(f32, f32) + Send + Sync + 'static) {
-        self.register_scroll_target(self.rect, Arc::new(f));
+        self.register_scroll_target(self.rect, render_tree::ScrollAxes::BOTH, Arc::new(f));
     }
 
     /// Declare semantics for this widget (D099): role, label, value.

@@ -30,6 +30,7 @@ pub use tree::Expanded;
 pub use tree::Icon;
 pub use tree::IconKind;
 pub use tree::ListTile;
+pub use tree::ListView;
 pub use tree::Menu;
 pub use tree::NavItem;
 pub use tree::NavRail;

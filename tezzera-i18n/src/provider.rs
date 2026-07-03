@@ -36,6 +36,10 @@ pub fn clear() {
 
 #[cfg(test)]
 mod tests {
+    /// The provider stores the locale in a process-global — parallel
+    /// test threads race on it. Every test takes this lock first.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     use super::*;
     use crate::bundle::MessageBundle;
     use crate::locale::Locale;
@@ -56,12 +60,14 @@ mod tests {
 
     #[test]
     fn t_returns_key_when_no_bundle() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         assert_eq!(t("prov_no_bundle_key"), "prov_no_bundle_key");
     }
 
     #[test]
     fn t_returns_translation_when_bundle_set() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         set_locale(make_bundle_en());
         assert_eq!(t("prov_greeting"), "Hello");
@@ -70,6 +76,7 @@ mod tests {
 
     #[test]
     fn t_falls_back_to_key_when_missing() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         set_locale(make_bundle_en());
         assert_eq!(t("prov_unknown_xyz"), "prov_unknown_xyz");
@@ -78,6 +85,7 @@ mod tests {
 
     #[test]
     fn set_locale_replaces_bundle() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         set_locale(make_bundle_en());
         assert_eq!(t("prov_greeting"), "Hello");
@@ -88,12 +96,14 @@ mod tests {
 
     #[test]
     fn current_locale_none_when_no_bundle() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         assert!(current_locale().is_none());
     }
 
     #[test]
     fn current_locale_returns_locale_when_set() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         set_locale(make_bundle_en());
         let loc = current_locale();
@@ -104,6 +114,7 @@ mod tests {
 
     #[test]
     fn clear_removes_bundle() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_locale(make_bundle_en());
         clear();
         assert!(current_locale().is_none());
@@ -111,6 +122,7 @@ mod tests {
 
     #[test]
     fn t_after_clear_returns_key() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_locale(make_bundle_en());
         clear();
         assert_eq!(t("prov_greeting"), "prov_greeting");
@@ -118,6 +130,7 @@ mod tests {
 
     #[test]
     fn bundle_locale_stored() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         set_locale(make_bundle_fr());
         let loc = current_locale().unwrap();
@@ -127,6 +140,7 @@ mod tests {
 
     #[test]
     fn t_multiple_keys() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         set_locale(make_bundle_en());
         assert_eq!(t("prov_greeting"), "Hello");
