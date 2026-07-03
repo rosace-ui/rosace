@@ -652,6 +652,32 @@ fn walk_element(
     }
 }
 
+// ── Navigation sugar (D097) ──────────────────────────────────────────────────
+
+/// One-call back button: replaces the manual
+/// `if nav.can_pop() { bar.leading(Button::new("← Back").on_press(pop)) }`
+/// block every app was writing. Lives in the facade because it needs both
+/// `AppBar` (widgets) and `ScreenNav` (nav).
+pub trait AppBarNavExt {
+    /// Add a `← Back` leading button that pops `nav` — only when there is
+    /// somewhere to pop to.
+    fn back_button<R: Clone + Send + Sync + 'static>(self, nav: &tezzera_nav::ScreenNav<R>) -> Self;
+}
+
+impl AppBarNavExt for AppBar {
+    fn back_button<R: Clone + Send + Sync + 'static>(self, nav: &tezzera_nav::ScreenNav<R>) -> Self {
+        if !nav.can_pop() {
+            return self;
+        }
+        let nav = nav.clone();
+        self.leading(
+            Button::new("← Back")
+                .variant(ButtonVariant::Ghost)
+                .on_press(move || { nav.pop(); }),
+        )
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Flattened dispatch data for one overlay entry (D092). Built by the overlay
@@ -774,6 +800,7 @@ pub mod prelude {
     pub use tezzera_widgets::RepaintBoundary;
     pub use tezzera_widgets::TransformLayer;
     pub use tezzera_nav::ScreenNav;
+    pub use crate::AppBarNavExt;
     pub use tezzera_render::canvas::Color;
     pub use tezzera_theme::{ThemeData, ColorScheme};
     pub use tezzera_theme::built_in::{dark_theme, light_theme};

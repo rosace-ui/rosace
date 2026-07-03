@@ -1,8 +1,22 @@
 # Phase 22 — API Consistency: One Law, Fewer Widgets
 
-> Status: PLANNED (runs AFTER Phase 21 — the Widget Protocol — so built-ins are migrated once, onto the final protocol)
-> Started: —
+> Status: IN PROGRESS (Steps 1–6 landed 2026-07-03)
+> Started: 2026-07-03
 > Completed: —
+>
+> Progress:
+> - Step 1 ✅ vocabulary sweep (44d565a) — .background() everywhere
+> - Step 2 ✅ constructor law (ed4a8fe) — Divider::new, transparent
+>   Box<dyn Widget>; Tooltip(label, child) ruled legal (different types)
+> - Step 3 ✅ one box (f54accd) — ColoredBox/SizedBox/Padding/Center/
+>   ListView deleted; Alignment + Container.align; Spacer::gap
+> - Step 4 ✅ layout slimmed (7668559) — element widgets deleted, math
+>   kept; Grid/Wrap/AspectRatio retained (not duplicates)
+> - Step 5 ✅ scroll API (01f6452) — new()=live, horizontal(), fixed(),
+>   Column/Row::scrollable
+> - Step 6 ✅ AppBarNavExt::back_button in facade prelude; ScreenNav was
+>   already the only prelude nav type
+> - Step 7 remaining: NAMING.md pointer, CRATE_CONTRACTS refresh, README
 > Decisions: D093 (constructor law), D094 (vocabulary), D095 (consolidation),
 > D096 (builder styling), D097 (scroll + nav canonicalization)
 > Constitution: `.steering/API_DESIGN.md`

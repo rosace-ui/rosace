@@ -409,3 +409,11 @@ RenderObject
 SemanticNode
 Flexure (internal engine name)
 ```
+
+
+## Widget API vocabulary
+
+Builder-method names for widget properties are normative in
+`API_DESIGN.md` §3 (D094): .background() for surfaces, .color() for
+foreground/content only, .border(color, width), .radius(), .elevation(),
+.padding(EdgeInsets), .spacing(), .align(Alignment), .on_press(), .on_change().

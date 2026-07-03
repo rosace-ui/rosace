@@ -51,16 +51,8 @@ impl Component for AppDemo {
             Screen::Home  => "Tezzera Demo",
             Screen::About => "About",
         };
-        let mut bar = AppBar::new(title);
-
-        if nav.can_pop() {
-            let nav_back = nav.clone();
-            bar = bar.leading(
-                Button::new("← Back")
-                    .variant(ButtonVariant::Ghost)
-                    .on_press(move || { nav_back.pop(); }),
-            );
-        }
+        // back_button (D097): appears automatically when nav.can_pop().
+        let mut bar = AppBar::new(title).back_button(&nav);
 
         // Dropdown menu in the AppBar.
         let m_open = menu_open.clone();
