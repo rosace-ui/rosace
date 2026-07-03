@@ -22,14 +22,8 @@ pub use sizing::{Height, Width};
 pub use widgets::flex::{layout_column, layout_row};
 pub use widgets::{
     aspect_ratio::AspectRatio,
-    column::Column,
-    expanded::Expanded,
     flex::{Flex, FlexDirection},
     grid::Grid,
-    row::Row,
-    sized_box::SizedBox,
-    spacer::Spacer,
-    stack::Stack,
     wrap::Wrap,
 };
 
@@ -38,57 +32,37 @@ mod tests {
     use tezzera_core::types::Size;
 
     use crate::{
+        alignment::{CrossAxisAlignment, MainAxisAlignment},
         constraints::Constraints,
         sizing::Width,
-        widgets::{
-            column::Column, grid::Grid, row::Row, sized_box::SizedBox, stack::Stack, wrap::Wrap,
-        },
+        widgets::{flex::{layout_column, layout_row}, grid::Grid, wrap::Wrap},
     };
 
     #[test]
     fn column_stacks_children_vertically() {
-        let col = Column::new().spacing(8.0);
         let child_sizes = vec![
             Size { width: 100.0, height: 30.0 },
             Size { width: 80.0, height: 40.0 },
         ];
-        let constraints = Constraints::loose(400.0, 600.0);
-        let result = col.layout(constraints, &child_sizes);
+        let result = layout_column(
+            Constraints::loose(400.0, 600.0), &child_sizes,
+            MainAxisAlignment::Start, CrossAxisAlignment::Start, 8.0,
+        );
         // Second child should be placed below first + spacing.
         assert_eq!(result.child_positions[1].y, 30.0 + 8.0);
     }
 
     #[test]
     fn row_stacks_children_horizontally() {
-        let row = Row::new().spacing(4.0);
         let child_sizes = vec![
             Size { width: 50.0, height: 20.0 },
             Size { width: 60.0, height: 20.0 },
         ];
-        let result = row.layout(Constraints::loose(400.0, 100.0), &child_sizes);
+        let result = layout_row(
+            Constraints::loose(400.0, 100.0), &child_sizes,
+            MainAxisAlignment::Start, CrossAxisAlignment::Start, 4.0,
+        );
         assert_eq!(result.child_positions[1].x, 50.0 + 4.0);
-    }
-
-    #[test]
-    fn stack_places_all_children_at_origin() {
-        let stack = Stack::new();
-        let child_sizes = vec![
-            Size { width: 200.0, height: 200.0 },
-            Size { width: 100.0, height: 100.0 },
-        ];
-        let result = stack.layout(Constraints::loose(400.0, 400.0), &child_sizes);
-        for pos in &result.child_positions {
-            assert_eq!(pos.x, 0.0);
-            assert_eq!(pos.y, 0.0);
-        }
-    }
-
-    #[test]
-    fn sized_box_respects_fixed_dimensions() {
-        let sb = SizedBox::new().width(200.0).height(100.0);
-        let result = sb.layout(Constraints::loose(400.0, 400.0));
-        assert_eq!(result.size.width, 200.0);
-        assert_eq!(result.size.height, 100.0);
     }
 
     #[test]
