@@ -97,7 +97,7 @@ impl Component for AppDemo {
             set_theme(if new_dark { dark_theme() } else { light_theme() });
         }));
 
-        Scaffold::new(boxed(body)).app_bar(bar).into_element()
+        Scaffold::new(body).app_bar(bar).into_element()
     }
 }
 
@@ -244,18 +244,7 @@ fn about_content() -> impl Widget {
         ).max_lines(2))
 }
 
-// ── Adapters + main ──────────────────────────────────────────────────────────
-
-/// Adapter: Scaffold::new wants `impl Widget`; wrap the boxed screen body.
-fn boxed(w: BoxedWidget) -> impl Widget {
-    struct Boxed(BoxedWidget);
-    impl Widget for Boxed {
-        fn layout(&self, ctx: &tezzera::widgets::tree::LayoutCtx) -> Size { self.0.layout(ctx) }
-        fn paint(&self, ctx: &mut PaintCtx) { self.0.paint(ctx) }
-        fn flex_factor(&self) -> f32 { self.0.flex_factor() }
-    }
-    Boxed(w)
-}
+// ── Main ─────────────────────────────────────────────────────────────────────
 
 fn main() {
     let _ = env_logger::try_init();

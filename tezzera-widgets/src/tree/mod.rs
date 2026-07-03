@@ -512,7 +512,11 @@ pub trait Widget: Send + Sync {
 /// Heap-allocated, type-erased widget.
 pub type BoxedWidget = Box<dyn Widget>;
 
+/// `Box<dyn Widget>` is itself a Widget (D093) — builders accepting
+/// `impl Widget` take boxed children without adapter structs. Fully
+/// transparent delegation: no extra tree node, no behavior change.
 impl Widget for Box<dyn Widget> {
+    fn children(&self) -> Children<'_>        { (**self).children() }
     fn layout(&self, ctx: &LayoutCtx) -> Size { (**self).layout(ctx) }
     fn paint(&self, ctx: &mut PaintCtx)       { (**self).paint(ctx) }
     fn flex_factor(&self) -> f32              { (**self).flex_factor() }

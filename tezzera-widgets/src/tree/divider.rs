@@ -11,6 +11,12 @@ pub struct Divider {
 }
 
 impl Divider {
+    /// A horizontal divider — the common case (D093: `new()` must exist
+    /// wherever named constructors exist).
+    pub fn new() -> Self {
+        Self::horizontal()
+    }
+
     pub fn horizontal() -> Self {
         Self { vertical: false, thickness: 1.0, color: Color::rgba(0, 0, 0, 0), indent: 0.0 }
     }
