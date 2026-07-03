@@ -1109,6 +1109,42 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 
 ---
 
+### D093 — Constructor Law
+**Status**: LOCKED
+**Decision**: `Widget::new()` takes exactly the required content — content leaves take their content (`Text::new(str)`), required-child wrappers take the child (`Card::new(child)`), optional-child and multi-child widgets take nothing (`Container::new()`, `Column::new()`). Everything optional is a builder method. Never two required positional args of the same type. Named constructors are shortcuts, never replacements for `new()`. Full spec: `.steering/API_DESIGN.md` §1.
+**Affects**: tezzera-widgets (all), tezzera-examples
+
+---
+
+### D094 — Property Vocabulary
+**Status**: LOCKED
+**Decision**: One builder name per concept across all widgets: `.background()` = surface fill (never `.color()`/`.bg()`), `.color()` = content/foreground only, `.border(color, width)`, `.radius()`, `.elevation()`, `.padding(EdgeInsets)`, `.width/.height/.size`, `.spacing()`, `.align(Alignment)`, `.on_press()`, `.on_change()`, `.disabled()`. Table in API_DESIGN.md §3 is normative.
+**Affects**: tezzera-widgets (all)
+
+---
+
+### D095 — Widget Consolidation: one box
+**Status**: LOCKED
+**Decision**: `Container` is the single box widget. `ColoredBox`, `SizedBox`, `Padding`, `Center` are removed (migration table in API_DESIGN.md §5). `Card` survives only as a themed Container preset. The element-based widget structs in `tezzera-layout` are removed; that crate keeps only layout math. New-widget bar: must draw or lay out something new — presets are named constructors, not widgets.
+**Reason**: Six widgets did one widget's job; learning curve scales with rules × widgets.
+**Affects**: tezzera-widgets, tezzera-layout, tezzera-examples
+
+---
+
+### D096 — Widget styling = builder chain
+**Status**: LOCKED
+**Decision**: Builder-chain styling (`Text::new("hi").size(20.0).weight(Bold)`) is the primary API. Style-struct arguments are rejected (Rust lacks named/optional args → `..Default::default()` noise at every call site). Reusable styles come later as a single additive `.style(TextStyle)` method bridging to tezzera-style — deferred to style-system integration.
+**Affects**: tezzera-widgets, tezzera-style
+
+---
+
+### D097 — Canonical scroll + navigation APIs
+**Status**: LOCKED
+**Decision**: `ScrollView::new(child, atom)` is live by default; static mode renamed `ScrollView::fixed(child, offset)`; `Column::scrollable(atom)`/`Row::scrollable(atom)` as planned sugar (Expanded is ignored on an unbounded scroll axis). `ScreenNav<R>` is the one routing API; `Navigator`/`Route`/history/guards and nav-anim's Navigator become internal machinery, removed from prelude. `AppBar::back_button(&nav)` replaces the manual can_pop/leading boilerplate.
+**Affects**: tezzera-widgets, tezzera-nav, tezzera-nav-anim
+
+---
+
 ## DEFERRED DECISIONS
 
 ```
