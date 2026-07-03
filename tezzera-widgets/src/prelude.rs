@@ -6,7 +6,7 @@ pub use crate::{
     Widget, PaintCtx, BoxedWidget, WidgetApp,
     TextAlign, FontWeight,
     AppBar, Avatar, Badge, Button, ButtonVariant,
-    Card, Center, Checkbox, Chip, ColoredBox, Column, Container,
+    Card, Center, Checkbox, Chip, ColoredBox, Column, Container, CustomPaint,
     Dialog, Divider, EdgeInsets, Expanded, Icon, IconKind,
     ListTile, ListView, Menu, NavItem, NavRail, Padding, ProgressBar,
     RectReader, RepaintBoundary, TransformLayer,

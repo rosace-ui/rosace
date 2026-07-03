@@ -24,6 +24,7 @@ pub use tree::Chip;
 pub use tree::ColoredBox;
 pub use tree::Column;
 pub use tree::Container;
+pub use tree::CustomPaint;
 pub use tree::Dialog;
 pub use tree::Divider;
 pub use tree::EdgeInsets;

@@ -697,7 +697,7 @@ pub use tezzera_widgets::{
     AppBar, Avatar, Badge,
     Button, ButtonVariant,
     Card, Center, Checkbox, Chip,
-    ColoredBox, Column, Container, Dialog, Divider,
+    ColoredBox, Column, Container, CustomPaint, Dialog, Divider,
     EdgeInsets, Expanded, Icon, IconKind,
     Image, ListTile, ListView,
     Menu, NavItem, NavRail,
