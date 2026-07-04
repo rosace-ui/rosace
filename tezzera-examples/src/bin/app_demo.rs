@@ -291,6 +291,14 @@ fn gallery_screen(check_on: &Atom<bool>, switch_on: &Atom<bool>, slider_v: &Atom
             .child(Chip::new("Chip"))
             .child(Avatar::new("TZ"))
             .child(Badge::new("3")))
+        .child(Text::heading("Hover & long-press"))
+        .child(Row::new().spacing(12.0)
+            .child(Tooltip::new("I appear on hover!", Button::new("Hover me")))
+            .child(
+                Card::new(Text::label("Long-press me (500ms)"))
+                    .radius(10.0).elevation(2.0)
+                    .on_long_press({ let p = press_count.clone(); move || p.set(p.get() + 100) }),
+            ))
 }
 
 // ── Shared bits ───────────────────────────────────────────────────────────────

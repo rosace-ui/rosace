@@ -286,8 +286,9 @@ impl RenderTree {
         None
     }
 
-    /// Set the hovered node, clearing the previous one. Returns true when
-    /// the hover target changed (caller repaints only then).
+    /// Set the hovered node, clearing the previous one. Marks both the old
+    /// and new node dirty so the next walk repaints exactly them (localized
+    /// damage). Returns true when the hover target changed.
     pub fn set_hover(&mut self, target: Option<NodeId>) -> bool {
         let current = self.nodes.iter().position(|n| n.hovered);
         if current == target {
@@ -295,9 +296,11 @@ impl RenderTree {
         }
         if let Some(old) = current {
             self.nodes[old].hovered = false;
+            self.nodes[old].paint_dirty = true;
         }
         if let Some(new) = target {
             self.nodes[new].hovered = true;
+            self.nodes[new].paint_dirty = true;
         }
         true
     }

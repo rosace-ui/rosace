@@ -9,7 +9,7 @@ pub use crate::{
     Card, Checkbox, Chip, Column, Container, CustomPaint,
     Dialog, Divider, EdgeInsets, Expanded, Icon, IconKind,
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
-    PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
+    AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
     Row, Scaffold, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,
     Tab, TabBar, Text, TextInput, Toast, ToastKind, Tooltip,
     Image, ImageCache, ImageFit, ImageSource, ImageWidget,

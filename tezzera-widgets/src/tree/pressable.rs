@@ -40,10 +40,36 @@ impl<W: Widget + Send + Sync + 'static> Widget for Pressable<W> {
     // layout, flex_factor: protocol defaults delegate to the child.
 }
 
-/// `.on_press(cb)` on any widget (D094 vocabulary — never on_click/on_tap).
+/// Wraps any widget with a long-press (≈500 ms) callback on its rect.
+pub struct LongPressable<W: Widget> {
+    child: W,
+    on_long_press: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl<W: Widget + Send + Sync + 'static> LongPressable<W> {
+    pub fn new(child: W, f: impl Fn() + Send + Sync + 'static) -> Self {
+        Self { child, on_long_press: Arc::new(f) }
+    }
+}
+
+impl<W: Widget + Send + Sync + 'static> Widget for LongPressable<W> {
+    fn children(&self) -> Children<'_> { Children::One(&self.child) }
+    fn paint(&self, ctx: &mut PaintCtx) {
+        let f = self.on_long_press.clone();
+        ctx.on_long_press(move || f());
+        let r = ctx.rect;
+        self.child.paint(&mut ctx.child(r));
+    }
+}
+
+/// `.on_press(cb)` / `.on_long_press(cb)` on any widget (D094 vocabulary —
+/// never on_click/on_tap).
 pub trait PressApi: Widget + Sized + Send + Sync + 'static {
     fn on_press(self, f: impl Fn() + Send + Sync + 'static) -> Pressable<Self> {
         Pressable::new(self, f)
+    }
+    fn on_long_press(self, f: impl Fn() + Send + Sync + 'static) -> LongPressable<Self> {
+        LongPressable::new(self, f)
     }
 }
 

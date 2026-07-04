@@ -332,12 +332,10 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     x: self.cursor_x,
                     y: self.cursor_y,
                 });
-                // Request frames only mid-drag: drags must stream, but idle
-                // hover movement stays free (no hover state yet).
-                if self.mouse_down {
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                // Request a frame on every move: hover tracking needs it,
+                // and unchanged-hover frames are skipped cheaply (no raster).
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
             }
 

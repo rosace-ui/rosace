@@ -114,6 +114,12 @@ impl App {
         // MouseDown receives streamed MouseMove positions until MouseUp —
         // slider thumbs, pickers. Plain hits never drag.
         let mut active_drag: Option<Arc<dyn Fn(f32, f32) + Send + Sync>> = None;
+        // Set when a hover change (or other non-atom event) needs a repaint on
+        // the next frame; consumed by `needs_paint`.
+        let mut forced_repaint = false;
+        // Long-press: cancel token for the in-flight press timer + press origin.
+        let mut lp_cancel: Option<Arc<std::sync::atomic::AtomicBool>> = None;
+        let mut press_origin: Option<(f32, f32)> = None;
 
         // ── Phase 13: persistent render cache ─────────────────────────────
         // Cached build output per component ID — skips build() when the
@@ -186,10 +192,16 @@ impl App {
                 let window_resized = events.iter().any(|e| matches!(
                     e, tezzera_platform::InputEvent::WindowResized { .. }
                 ));
+                // A hover change repaints the widget subtree (the picture cache
+                // unit is the top-level native node, so localized damage needs
+                // the widgets to actually re-run paint — force it this frame).
+                let hover_frame = forced_repaint;
+                forced_repaint = false;
                 let needs_paint = global_dirty
                     || !dirty_ids.is_empty()
                     || !canvas.has_drawn()   // fresh canvas after resize/scale change
-                    || window_resized;
+                    || window_resized
+                    || hover_frame;
 
                 if needs_paint {
                 // A full repaint clears the whole canvas; otherwise we clear
@@ -231,7 +243,7 @@ impl App {
                     &mut damage,
                     &dirty_ids,
                     global_dirty,
-                    root_is_dirty,  // subtree_dirty: dirty if root component's atoms changed
+                    root_is_dirty || hover_frame,  // subtree_dirty (+ hover forces repaint)
                     &mut element_cache,
                     &mut new_mounted,
                 );
@@ -457,14 +469,49 @@ impl App {
                                     }
                                 }
                             }
+                            // Arm a long-press timer if a region wants one.
+                            press_origin = Some((*x, *y));
+                            let lp = render_tree.borrow().long_press_test(*x, *y);
+                            if let Some(cb) = lp {
+                                use std::sync::atomic::{AtomicBool, Ordering};
+                                let cancel = Arc::new(AtomicBool::new(false));
+                                lp_cancel = Some(cancel.clone());
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                    if !cancel.load(Ordering::Relaxed) {
+                                        cb();
+                                        tezzera_state::request_frame();
+                                    }
+                                });
+                            }
                         }
                         tezzera_platform::InputEvent::MouseMove { x, y } => {
+                            use std::sync::atomic::Ordering;
                             if let Some(cb) = &active_drag {
                                 cb(*x, *y);
                             }
+                            // Hover tracking — repaints only the changed nodes.
+                            let target = render_tree.borrow().hover_test(*x, *y);
+                            let changed = render_tree.borrow_mut().set_hover(target);
+                            if changed {
+                                forced_repaint = true;
+                                tezzera_state::request_frame();
+                            }
+                            // Movement past the slop cancels a pending long-press.
+                            if let Some((ox, oy)) = press_origin {
+                                if (x - ox).abs() > 8.0 || (y - oy).abs() > 8.0 {
+                                    if let Some(c) = &lp_cancel { c.store(true, Ordering::Relaxed); }
+                                    lp_cancel = None;
+                                    press_origin = None;
+                                }
+                            }
                         }
                         tezzera_platform::InputEvent::MouseUp { .. } => {
+                            use std::sync::atomic::Ordering;
                             active_drag = None;
+                            if let Some(c) = &lp_cancel { c.store(true, Ordering::Relaxed); }
+                            lp_cancel = None;
+                            press_origin = None;
                         }
                         tezzera_platform::InputEvent::Scroll { x, y, delta_x, delta_y } => {
                             let mut handled = false;
@@ -830,7 +877,7 @@ pub use tezzera_render::canvas::Color;
 
 // Accessibility + focus
 pub use tezzera_a11y::FocusNode;
-pub use tezzera_widgets::{FocusApi, OverlayApi, OverlayKind, PressApi, Pressable};
+pub use tezzera_widgets::{AbsorbPointer, FocusApi, IgnorePointer, OverlayApi, OverlayKind, PressApi, Pressable};
 
 // Widgets
 pub use tezzera_widgets::{

@@ -70,6 +70,9 @@ impl Widget for ListTile {
         if let Some(f) = &self.press {
             let f = f.clone();
             ctx.on_press(move || f());
+            if ctx.hovered() {
+                ctx.fill_rect(ctx.rect, tezzera_render::Color::rgba(255, 255, 255, 14));
+            }
         }
         let r = ctx.rect;
         let bg = if self.selected { self.selected_bg } else { self.bg };

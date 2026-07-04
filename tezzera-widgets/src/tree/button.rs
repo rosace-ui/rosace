@@ -86,6 +86,18 @@ impl Widget for Button {
 
         let fg = if self.disabled { ctx.tc(t.outline) } else { fg };
 
+        // Hover feedback: lift the fill toward white (opaque variants) or
+        // add a faint wash (ghost/link). Only when enabled.
+        let bg = if !self.disabled && ctx.hovered() {
+            if bg.a == 0 {
+                Color::rgba(255, 255, 255, 22)
+            } else {
+                lighten(bg, 0.12)
+            }
+        } else {
+            bg
+        };
+
         let r = ctx.rect;
         super::container::draw_rounded_rect_pub(ctx, r, bg, self.radius);
 
@@ -106,4 +118,10 @@ impl Widget for Button {
             }
         }
     }
+}
+
+/// Blend a color toward white by `t` (0..1) — hover/pressed lift.
+pub(super) fn lighten(c: Color, t: f32) -> Color {
+    let mix = |v: u8| (v as f32 + (255.0 - v as f32) * t).round() as u8;
+    Color::rgba(mix(c.r), mix(c.g), mix(c.b), c.a)
 }

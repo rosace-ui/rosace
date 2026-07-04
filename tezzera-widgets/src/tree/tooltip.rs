@@ -1,117 +1,63 @@
-use tezzera_core::types::Size;
+use tezzera_core::types::{Point, Rect, Size};
 use tezzera_render::Color;
 
-use super::{Widget, LayoutCtx, PaintCtx};
+use super::{Widget, Children, LayoutCtx, PaintCtx, BoxedWidget};
+use super::overlay::{OverlayEntry, LayerPosition, InputBehavior, FocusBehavior, push_overlay};
 
-/// A widget that wraps a child and renders a floating label adjacent to it.
+/// Wraps a child and shows a floating label while the pointer hovers it.
 ///
-/// For Phase 4 the label is rendered directly below the child (no hover
-/// detection — hover is Phase 6 gesture work). The tooltip is always visible
-/// when `visible` is `true`.
+/// Built on the hover infrastructure: the child registers a hover region;
+/// when hovered, a label overlay floats just above it (clamped on-screen by
+/// the overlay pass).
 pub struct Tooltip {
-    label:      String,
-    visible:    bool,
-    font_size:  f32,
-    child:      Box<dyn Widget>,
+    label:     String,
+    font_size: f32,
+    child:     BoxedWidget,
 }
 
 impl Tooltip {
     pub fn new(label: impl Into<String>, child: impl Widget + 'static) -> Self {
-        Self {
-            label:     label.into(),
-            visible:   false,
-            font_size: 11.0,
-            child:     Box::new(child),
-        }
+        Self { label: label.into(), font_size: 12.0, child: Box::new(child) }
     }
-
-    pub fn visible(mut self, v: bool) -> Self { self.visible = v; self }
     pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
 }
 
 impl Widget for Tooltip {
-    fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let child_size = self.child.layout(ctx);
-        if self.visible {
-            let label_h = self.font_size * 1.6;
-            Size { width: child_size.width, height: child_size.height + label_h }
-        } else {
-            child_size
-        }
-    }
+    fn children(&self) -> Children<'_> { Children::One(&*self.child) }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        let child_size = self.child.layout(&ctx.layout_ctx(tezzera_layout::Constraints::loose(
-            ctx.rect.size.width,
-            ctx.rect.size.height,
-        )));
-
-        // Paint child in its own rect
-        let child_rect = tezzera_core::types::Rect {
-            origin: ctx.rect.origin,
-            size: child_size,
-        };
-        let mut child_ctx = ctx.child(child_rect);
-        self.child.paint(&mut child_ctx);
-
-        // Paint tooltip label below the child
-        if self.visible {
-            let lx = ctx.rect.origin.x + 4.0;
-            let ly = ctx.rect.origin.y + child_size.height + 2.0;
-            let bg = Color::rgba(40, 40, 60, 220);
-            let label_w = self.label.len() as f32 * self.font_size * 0.6 + 8.0;
-            let label_h = self.font_size * 1.6;
-            ctx.fill_rect(
-                tezzera_core::types::Rect {
-                    origin: tezzera_core::types::Point { x: lx - 4.0, y: ly - 2.0 },
-                    size: tezzera_core::types::Size { width: label_w, height: label_h },
-                },
-                bg,
-            );
-            ctx.draw_text_at(
-                &self.label,
-                tezzera_core::types::Point { x: lx, y: ly + self.font_size * 0.9 },
-                Color::rgb(220, 220, 240),
-                self.font_size,
+        let r = ctx.rect;
+        self.child.paint(&mut ctx.child(r));
+        ctx.hoverable();
+        if ctx.hovered() {
+            let px = self.font_size;
+            let w = ctx.font.measure_text(&self.label, px) + 16.0;
+            let h = px * 1.7;
+            // Anchor just above the hovered child.
+            let pos = Point { x: r.origin.x, y: (r.origin.y - h - 4.0).max(0.0) };
+            let label = self.label.clone();
+            push_overlay(
+                OverlayEntry::new(LayerPosition::Absolute(pos), TooltipLabel { label, w, h, px })
+                    .input(InputBehavior::PassThrough)
+                    .focus(FocusBehavior::Inert),
             );
         }
     }
+    // layout: default delegates to the child.
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tree::{SizedBox, LayoutCtx};
-    use tezzera_render::FontCache;
-    use tezzera_theme::built_in;
+struct TooltipLabel { label: String, w: f32, h: f32, px: f32 }
 
-    fn test_ctx(_c: tezzera_layout::Constraints) -> (FontCache, tezzera_theme::ThemeData) {
-        let font = FontCache::system_ui()
-            .or_else(FontCache::system_mono)
-            .expect("no system font");
-        let theme = built_in::dark_theme();
-        (font, theme)
+impl Widget for TooltipLabel {
+    fn layout(&self, ctx: &LayoutCtx) -> Size {
+        ctx.constraints.constrain(Size { width: self.w, height: self.h })
     }
-
-    #[test]
-    fn tooltip_hidden_has_child_size() {
-        let tip = Tooltip::new("hint", Spacer::gap(100.0, 50.0));
-        let (font, theme) = test_ctx(tezzera_layout::Constraints::loose(800.0, 600.0));
-        let ctx = LayoutCtx::new(tezzera_layout::Constraints::loose(800.0, 600.0), &font, &theme);
-        let size = tip.layout(&ctx);
-        assert_eq!(size.width, 100.0);
-        assert_eq!(size.height, 50.0);
-    }
-
-    #[test]
-    fn tooltip_visible_adds_label_height() {
-        let tip = Tooltip::new("hint", Spacer::gap(100.0, 50.0))
-            .visible(true)
-            .font_size(12.0);
-        let (font, theme) = test_ctx(tezzera_layout::Constraints::loose(800.0, 600.0));
-        let ctx = LayoutCtx::new(tezzera_layout::Constraints::loose(800.0, 600.0), &font, &theme);
-        let size = tip.layout(&ctx);
-        assert_eq!(size.width, 100.0);
-        assert!(size.height > 50.0, "tooltip label should add height");
+    fn paint(&self, ctx: &mut PaintCtx) {
+        let r = ctx.rect;
+        ctx.fill_shadow_rrect(r, 6.0, Color::rgba(0, 0, 0, 90), 8.0);
+        ctx.fill_rrect(r, 6.0, Color::rgba(40, 42, 58, 245));
+        let ty = r.origin.y + (self.h - ctx.font.line_height(self.px)) / 2.0;
+        ctx.draw_text_at(&self.label, Point { x: r.origin.x + 8.0, y: ty },
+            Color::rgb(228, 230, 244), self.px);
     }
 }
