@@ -41,9 +41,14 @@ impl Widget for Wrap {
     fn children(&self) -> Children<'_> { Children::Many(&self.children) }
 
     fn layout(&self, ctx: &LayoutCtx) -> Size {
+        // Occupy the FULL available width (like Grid) — children keep their
+        // natural size and flow onto new lines. Returning the post-wrap
+        // content width would make the parent allocate a narrower box, and
+        // paint would then re-wrap into it (over-wrapping). Only the height
+        // is content-derived.
         let w = avail_w(ctx.constraints);
         let (_, size) = self.arrange(ctx, w);
-        ctx.constraints.constrain(size)
+        ctx.constraints.constrain(Size { width: w, height: size.height })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
