@@ -249,6 +249,12 @@ impl App {
                 );
                 render_tree.borrow_mut().finalize();
 
+                // Self-animating widgets (spinner, shimmer) asked to keep going.
+                if tezzera_widgets::tree::take_animation_request() {
+                    forced_repaint = true;
+                    tezzera_state::request_frame();
+                }
+
                 // ── Damage-scoped clear + replay (Phase 20 Step 5, slice 2) ─
                 // Full repaint (first frame, resize, theme swap) clears the
                 // whole canvas; otherwise clear + replay only the union of
@@ -885,7 +891,7 @@ pub use tezzera_widgets::{
     AppBar, Avatar, Badge,
     Button, ButtonVariant,
     Card, Checkbox, Chip,
-    BoxShape, Column, Container, CustomPaint, Dialog, Divider,
+    AspectRatio, BoxShape, CircularProgress, Column, Container, CustomPaint, Dialog, Divider, Grid, Positioned, Skeleton, Wrap,
     EdgeInsets, Expanded, Icon, IconKind,
     Image, ListTile, ListView,
     Menu, NavItem, NavRail,

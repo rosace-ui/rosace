@@ -9,6 +9,12 @@
 //! [`Expanded`] children by doing a two-pass measure internally.
 
 pub mod app;
+pub mod skeleton;
+pub mod circular_progress;
+pub mod wrap;
+pub mod positioned;
+pub mod grid;
+pub mod aspect_ratio;
 pub mod app_bar;
 pub mod avatar;
 pub mod badge;
@@ -62,6 +68,12 @@ pub use checkbox::Checkbox;
 pub use chip::Chip;
 pub use column::Column;
 pub use container::{BoxShape, Container};
+pub use aspect_ratio::AspectRatio;
+pub use grid::Grid;
+pub use circular_progress::CircularProgress;
+pub use skeleton::Skeleton;
+pub use positioned::Positioned;
+pub use wrap::Wrap;
 pub use custom_paint::CustomPaint;
 pub use dialog::Dialog;
 pub use menu::Menu;
@@ -118,6 +130,28 @@ pub(crate) fn shrink_axis(b: AxisBound, by: f32) -> AxisBound {
 }
 use tezzera_render::{Color, DrawCommand, FontCache, Picture, PictureRecorder};
 use tezzera_theme::ThemeData;
+
+// ── Continuous animation request (spinners, shimmer) ─────────────────────────
+
+use std::cell::Cell;
+thread_local! {
+    static ANIM_REQUEST: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Ask the frame loop to schedule another frame — self-animating widgets
+/// (CircularProgress spinner, Skeleton shimmer) call this each paint.
+pub fn request_animation() { ANIM_REQUEST.with(|a| a.set(true)); }
+
+/// Frame loop: did any widget request continuous animation this frame?
+pub fn take_animation_request() -> bool { ANIM_REQUEST.with(|a| a.replace(false)) }
+
+/// Seconds since process start — a shared clock for time-driven widgets.
+pub fn anim_clock() -> f32 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f32()
+}
 
 // ── Alignment ────────────────────────────────────────────────────────────────
 
@@ -543,6 +577,10 @@ impl<'a> PaintCtx<'a> {
     pub fn fill_arc(&mut self, center: Point, radius: f32, thickness: f32, start_deg: f32, sweep_deg: f32, color: Color) {
         self.recorder.push(DrawCommand::FillArc { center, radius, thickness, start_deg, sweep_deg, color });
     }
+
+    /// Request another frame — self-animating widgets (spinner, shimmer) call
+    /// this each paint so the frame loop keeps repainting them.
+    pub fn request_animation(&self) { crate::tree::request_animation(); }
 
     /// Push a raw [`DrawCommand`] for advanced use.
     pub fn record(&mut self, cmd: DrawCommand) {
