@@ -1,27 +1,43 @@
-use tezzera_core::types::{Rect, Size};
+use tezzera_core::types::{Point, Rect, Size};
 use tezzera_layout::Constraints;
-use tezzera_render::Color;
+use tezzera_render::{Color, DrawCommand};
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h};
 use super::padding::EdgeInsets;
 
-/// The most fundamental building block — a box with optional background,
-/// border, rounded corners, shadow, fixed dimensions, padding, and child.
+/// Box shape (D095 — a circle is a Container, not a CircleWidget).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum BoxShape {
+    /// Rounded rect using `radius` (0 = sharp corners).
+    #[default]
+    Rect,
+    /// Fully circular (radius = min(w, h) / 2).
+    Circle,
+    /// Pill: radius = height / 2.
+    Stadium,
+}
+
+/// The most fundamental building block — a maximally-configurable box:
+/// shape, background (solid or gradient), border, shadow, corner radius,
+/// padding, margin, fixed/min size, alignment, child clipping, and a child.
 ///
-/// Analogous to a CSS `div` or Flutter's `Container`.
+/// Everything box-shaped is a `Container` — there is no ColoredBox / CircleBox
+/// / GradientBox (D095). Analogous to a CSS `div` or Flutter's `Container`.
 pub struct Container {
     pub background: Option<Color>,
+    pub gradient: Option<(Color, Color, bool)>, // (from, to, vertical)
     pub border_color: Option<Color>,
     pub border_width: f32,
     pub border_radius: f32,
+    pub shape: BoxShape,
     pub shadow_blur: f32,
     pub shadow_color: Color,
     pub padding: EdgeInsets,
+    pub margin: EdgeInsets,
     pub width: Option<f32>,
     pub height: Option<f32>,
     pub min_width: f32,
     pub min_height: f32,
-    /// When set, the container fills available space and places its child
-    /// at this alignment (absorbs the old `Center` widget — D095).
+    pub clip: bool,
     pub align: Option<super::Alignment>,
     pub child: Option<BoxedWidget>,
 }
@@ -30,45 +46,56 @@ impl Container {
     pub fn new() -> Self {
         Self {
             background: None,
+            gradient: None,
             border_color: None,
             border_width: 1.0,
             border_radius: 0.0,
+            shape: BoxShape::Rect,
             shadow_blur: 0.0,
             shadow_color: Color::rgba(0, 0, 0, 0),
             padding: EdgeInsets::default(),
+            margin: EdgeInsets::default(),
             width: None,
             height: None,
             min_width: 0.0,
             min_height: 0.0,
+            clip: false,
             align: None,
             child: None,
         }
     }
 
-    /// Align the child within this container. Implies filling the available
-    /// space (there is nothing to align within a shrink-wrapped box).
-    pub fn align(mut self, a: super::Alignment) -> Self { self.align = Some(a); self }
+    /// Effective corner radius given the shape and box size.
+    fn radius_for(&self, size: Size) -> f32 {
+        match self.shape {
+            BoxShape::Rect    => self.border_radius,
+            BoxShape::Circle  => size.width.min(size.height) / 2.0,
+            BoxShape::Stadium => size.height / 2.0,
+        }
+    }
 
+    pub fn align(mut self, a: super::Alignment) -> Self { self.align = Some(a); self }
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
-    pub fn border(mut self, c: Color, w: f32) -> Self {
-        self.border_color = Some(c); self.border_width = w; self
-    }
+    /// Two-stop linear gradient background (overrides solid `background`).
+    pub fn gradient(mut self, from: Color, to: Color) -> Self { self.gradient = Some((from, to, true)); self }
+    pub fn gradient_h(mut self, from: Color, to: Color) -> Self { self.gradient = Some((from, to, false)); self }
+    pub fn border(mut self, c: Color, w: f32) -> Self { self.border_color = Some(c); self.border_width = w; self }
     pub fn radius(mut self, r: f32) -> Self { self.border_radius = r; self }
-    pub fn shadow(mut self, color: Color, blur: f32) -> Self {
-        self.shadow_color = color; self.shadow_blur = blur; self
-    }
+    pub fn shape(mut self, s: BoxShape) -> Self { self.shape = s; self }
+    pub fn circle(mut self) -> Self { self.shape = BoxShape::Circle; self }
+    pub fn stadium(mut self) -> Self { self.shape = BoxShape::Stadium; self }
+    pub fn shadow(mut self, color: Color, blur: f32) -> Self { self.shadow_color = color; self.shadow_blur = blur; self }
+    /// Material-style elevation shortcut (black shadow scaled by elevation).
+    pub fn elevation(mut self, e: f32) -> Self { self.shadow_color = Color::rgba(0, 0, 0, 90); self.shadow_blur = e; self }
     pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = p; self }
+    pub fn margin(mut self, m: EdgeInsets) -> Self { self.margin = m; self }
+    /// Clip the child to the box shape (rounded/circle content masking).
+    pub fn clip(mut self) -> Self { self.clip = true; self }
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
     pub fn height(mut self, h: f32) -> Self { self.height = Some(h); self }
-    pub fn size(mut self, w: f32, h: f32) -> Self {
-        self.width = Some(w); self.height = Some(h); self
-    }
-    pub fn min_size(mut self, w: f32, h: f32) -> Self {
-        self.min_width = w; self.min_height = h; self
-    }
-    pub fn child(mut self, w: impl Widget + 'static) -> Self {
-        self.child = Some(Box::new(w)); self
-    }
+    pub fn size(mut self, w: f32, h: f32) -> Self { self.width = Some(w); self.height = Some(h); self }
+    pub fn min_size(mut self, w: f32, h: f32) -> Self { self.min_width = w; self.min_height = h; self }
+    pub fn child(mut self, w: impl Widget + 'static) -> Self { self.child = Some(Box::new(w)); self }
 }
 
 impl Default for Container {
@@ -106,40 +133,39 @@ impl Widget for Container {
             else { child_size.height.max(self.min_height) }
         });
 
+        // Margin is added around the box — it occupies more layout space but
+        // the visual box (bg/border/child) is inset by the margin at paint.
         constraints.constrain(Size {
-            width:  w.max(self.min_width),
-            height: h.max(self.min_height),
+            width:  w.max(self.min_width) + self.margin.total_h(),
+            height: h.max(self.min_height) + self.margin.total_v(),
         })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        let rect = ctx.rect;
+        // Inset by margin: the box draws inside its allocated rect.
+        let rect = self.margin.shrink(ctx.rect);
+        let radius = self.radius_for(rect.size);
 
-        // Drop shadow — source shape matches the (possibly rounded) background.
+        // Drop shadow — source shape matches the (possibly rounded) box.
         if self.shadow_blur > 0.5 {
-            ctx.fill_shadow_rrect(rect, self.border_radius, self.shadow_color, self.shadow_blur);
+            ctx.fill_shadow_rrect(rect, radius, self.shadow_color, self.shadow_blur);
         }
 
-        // Background
-        if let Some(bg) = self.background {
-            if self.border_radius > 0.5 {
-                ctx.fill_rrect(rect, self.border_radius, bg);
-            } else {
-                ctx.fill_rect(rect, bg);
-            }
+        // Background — gradient wins over solid.
+        if let Some((from, to, vertical)) = self.gradient {
+            ctx.fill_gradient(rect, radius, from, to, vertical);
+        } else if let Some(bg) = self.background {
+            if radius > 0.5 { ctx.fill_rrect(rect, radius, bg); }
+            else { ctx.fill_rect(rect, bg); }
         }
 
-        // Border — follows the same corner geometry as the background.
+        // Border — same corner geometry as the background.
         if let Some(bc) = self.border_color {
-            if self.border_radius > 0.5 {
-                ctx.stroke_rrect(rect, self.border_radius, bc, self.border_width);
-            } else {
-                ctx.stroke_rect(rect, bc, self.border_width);
-            }
+            if radius > 0.5 { ctx.stroke_rrect(rect, radius, bc, self.border_width); }
+            else { ctx.stroke_rect(rect, bc, self.border_width); }
         }
 
-        // Child — aligned within the padded rect when an alignment is set,
-        // otherwise given the full inner rect.
+        // Child — optionally clipped to the box, aligned or filling padded rect.
         if let Some(child) = &self.child {
             let inner = self.padding.shrink(rect);
             let child_rect = if let Some(align) = self.align {
@@ -147,16 +173,19 @@ impl Widget for Container {
                 let child_size = child.layout(&ctx.layout_ctx(inner_c));
                 let off = align.offset(inner.size, child_size);
                 Rect {
-                    origin: tezzera_core::types::Point {
-                        x: inner.origin.x + off.x,
-                        y: inner.origin.y + off.y,
-                    },
+                    origin: Point { x: inner.origin.x + off.x, y: inner.origin.y + off.y },
                     size: child_size,
                 }
             } else {
                 inner
             };
-            child.paint(&mut ctx.child(child_rect));
+            if self.clip {
+                ctx.record(DrawCommand::PushClip { rect });
+                child.paint(&mut ctx.child(child_rect));
+                ctx.record(DrawCommand::PopClip);
+            } else {
+                child.paint(&mut ctx.child(child_rect));
+            }
         }
     }
 }

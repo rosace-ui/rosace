@@ -7,7 +7,7 @@ pub use crate::{
     TextAlign, FontWeight,
     AppBar, Avatar, Badge, Button, ButtonVariant,
     Card, Checkbox, Chip, Column, Container, CustomPaint,
-    Dialog, Divider, EdgeInsets, Expanded, Icon, IconKind,
+    BoxShape, Dialog, Divider, EdgeInsets, Expanded, Icon, IconKind,
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
     AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
     Row, Scaffold, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,

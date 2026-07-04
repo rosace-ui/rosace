@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tiny_skia::{FillRule, Mask, Paint, PathBuilder, Pixmap, Transform};
+use tiny_skia::{FillRule, GradientStop, LinearGradient, Mask, Paint, PathBuilder, Pixmap, Shader, SpreadMode, Stroke, Transform};
 use tezzera_core::types::{Point, Rect, Size};
 
 /// Cubic Bézier circle-approximation constant (4/3 · tan(π/8)).
@@ -654,7 +654,66 @@ impl SkiaCanvas {
         self.has_drawn = true;
     }
 
-    /// Replay a [`Picture`] (display list) onto this canvas.
+    /// Fill a (rounded) rect with a two-stop linear gradient.
+    pub fn fill_gradient(&mut self, rect: Rect, radius: f32, from: Color, to: Color, vertical: bool) {
+        if let Some(clip) = self.clip {
+            if !overlaps_clip(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, clip) { return; }
+            ensure_clip_mask(&mut self.clip_masks, clip, self.pixmap.width(), self.pixmap.height());
+        }
+        let (x, y, w, h) = (rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
+        let (p0, p1) = if vertical {
+            (tiny_skia::Point::from_xy(x, y), tiny_skia::Point::from_xy(x, y + h))
+        } else {
+            (tiny_skia::Point::from_xy(x, y), tiny_skia::Point::from_xy(x + w, y))
+        };
+        let stops = vec![
+            GradientStop::new(0.0, tiny_skia::Color::from_rgba8(from.r, from.g, from.b, from.a)),
+            GradientStop::new(1.0, tiny_skia::Color::from_rgba8(to.r, to.g, to.b, to.a)),
+        ];
+        let Some(shader) = LinearGradient::new(p0, p1, stops, SpreadMode::Pad, Transform::identity()) else { return; };
+        let mut paint = Paint::default();
+        paint.shader = shader;
+        paint.anti_alias = true;
+        let mask = self.clip.and_then(|c| self.clip_masks.get(&c));
+        let r = radius.min(w / 2.0).min(h / 2.0);
+        if r < 0.5 {
+            if let Some(rr) = tiny_skia::Rect::from_xywh(x, y, w, h) {
+                self.pixmap.fill_rect(rr, &paint, Transform::identity(), mask);
+            }
+        } else if let Some(path) = rounded_rect_path(x, y, w, h, r) {
+            self.pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), mask);
+        }
+        self.has_drawn = true;
+    }
+
+    /// Draw a ring segment (progress arc / spinner) by stroking a polyline
+    /// approximation of the arc centerline with round caps.
+    pub fn fill_arc(&mut self, center: Point, radius: f32, thickness: f32, start_deg: f32, sweep_deg: f32, color: Color) {
+        if color.a == 0 || radius < 0.5 || thickness < 0.3 { return; }
+        if let Some(clip) = self.clip {
+            let r = radius + thickness;
+            if !overlaps_clip(center.x - r, center.y - r, r * 2.0, r * 2.0, clip) { return; }
+            ensure_clip_mask(&mut self.clip_masks, clip, self.pixmap.width(), self.pixmap.height());
+        }
+        let segs = ((sweep_deg.abs() / 6.0).ceil() as usize).max(2);
+        let mut pb = PathBuilder::new();
+        for i in 0..=segs {
+            let t = i as f32 / segs as f32;
+            let a = (start_deg + sweep_deg * t).to_radians();
+            let (px, py) = (center.x + radius * a.cos(), center.y + radius * a.sin());
+            if i == 0 { pb.move_to(px, py); } else { pb.line_to(px, py); }
+        }
+        let Some(path) = pb.finish() else { return; };
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+        paint.anti_alias = true;
+        let stroke = Stroke { width: thickness, line_cap: tiny_skia::LineCap::Round, ..Default::default() };
+        let mask = self.clip.and_then(|c| self.clip_masks.get(&c));
+        self.pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), mask);
+        self.has_drawn = true;
+    }
+
+        /// Replay a [`Picture`] (display list) onto this canvas.
     ///
     /// All draw-command coordinates are in **logical pixels**. They are
     /// multiplied by `self.scale` before writing to the physical pixmap, so
@@ -711,6 +770,8 @@ impl SkiaCanvas {
                     self.stroke_rrect(sr(*rect), *radius * s, *color, *width * s);
                 }
                 DrawCommand::FillCircle { center, radius, color } => self.fill_circle(sp(*center), *radius * s, *color),
+                DrawCommand::FillGradient { rect, radius, from, to, vertical } => self.fill_gradient(sr(*rect), *radius * s, *from, *to, *vertical),
+                DrawCommand::FillArc { center, radius, thickness, start_deg, sweep_deg, color } => self.fill_arc(sp(*center), *radius * s, *thickness * s, *start_deg, *sweep_deg, *color),
                 DrawCommand::DrawText { text, origin, color, px, weight } => {
                     self.draw_text_weighted(text, sp(*origin), *color, font, *px * s, *weight);
                 }

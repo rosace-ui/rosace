@@ -61,7 +61,7 @@ pub use card::Card;
 pub use checkbox::Checkbox;
 pub use chip::Chip;
 pub use column::Column;
-pub use container::Container;
+pub use container::{BoxShape, Container};
 pub use custom_paint::CustomPaint;
 pub use dialog::Dialog;
 pub use menu::Menu;
@@ -532,6 +532,16 @@ impl<'a> PaintCtx<'a> {
     /// Stroke a rounded-rect outline matching [`PaintCtx::fill_rrect`] geometry.
     pub fn stroke_rrect(&mut self, rect: Rect, radius: f32, color: Color, width: f32) {
         self.recorder.push(DrawCommand::StrokeRRect { rect, radius, color, width });
+    }
+
+    /// Fill a (rounded) rect with a two-stop linear gradient.
+    pub fn fill_gradient(&mut self, rect: Rect, radius: f32, from: Color, to: Color, vertical: bool) {
+        self.recorder.push(DrawCommand::FillGradient { rect, radius, from, to, vertical });
+    }
+
+    /// Draw a ring segment (progress arc / spinner).
+    pub fn fill_arc(&mut self, center: Point, radius: f32, thickness: f32, start_deg: f32, sweep_deg: f32, color: Color) {
+        self.recorder.push(DrawCommand::FillArc { center, radius, thickness, start_deg, sweep_deg, color });
     }
 
     /// Push a raw [`DrawCommand`] for advanced use.

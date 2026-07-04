@@ -23,7 +23,7 @@ pub use tree::Card;
 pub use tree::Checkbox;
 pub use tree::Chip;
 pub use tree::Column;
-pub use tree::Container;
+pub use tree::{BoxShape, Container};
 pub use tree::CustomPaint;
 pub use tree::Dialog;
 pub use tree::Divider;

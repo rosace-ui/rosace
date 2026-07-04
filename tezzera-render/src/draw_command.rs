@@ -20,6 +20,13 @@ pub enum DrawCommand {
     /// hug rounded fills instead of framing them with square corners.
     StrokeRRect { rect: Rect, radius: f32, color: Color, width: f32 },
     FillCircle { center: Point, radius: f32, color: Color },
+    /// Two-stop linear gradient fill of a (rounded) rect. `vertical` picks
+    /// the axis; `radius` rounds corners (0 = square).
+    FillGradient { rect: Rect, radius: f32, from: Color, to: Color, vertical: bool },
+    /// A ring segment: stroke of thickness `thickness` along the circle of
+    /// `radius` centered at `center`, from `start_deg` sweeping `sweep_deg`
+    /// clockwise (0° = 3 o'clock). Powers progress rings and spinners.
+    FillArc { center: Point, radius: f32, thickness: f32, start_deg: f32, sweep_deg: f32, color: Color },
     DrawText   { text: String, origin: Point, color: Color, px: f32, weight: FontWeight },
     /// Gaussian-approximate drop shadow. `radius` rounds the shadow's source
     /// shape to match rounded widgets — a square shadow behind a rounded fill
@@ -49,6 +56,8 @@ impl DrawCommand {
             Self::FillRRect  { rect, radius, color }   => Self::FillRRect  { rect: shift(rect, dx, dy), radius, color },
             Self::StrokeRRect { rect, radius, color, width } => Self::StrokeRRect { rect: shift(rect, dx, dy), radius, color, width },
             Self::FillCircle { center, radius, color } => Self::FillCircle { center: Point { x: center.x + dx, y: center.y + dy }, radius, color },
+            Self::FillGradient { rect, radius, from, to, vertical } => Self::FillGradient { rect: shift(rect, dx, dy), radius, from, to, vertical },
+            Self::FillArc { center, radius, thickness, start_deg, sweep_deg, color } => Self::FillArc { center: Point { x: center.x + dx, y: center.y + dy }, radius, thickness, start_deg, sweep_deg, color },
             Self::DrawText   { text, origin, color, px, weight } => Self::DrawText { text, origin: Point { x: origin.x + dx, y: origin.y + dy }, color, px, weight },
             Self::DrawShadow { rect, radius, color, blur } => Self::DrawShadow { rect: shift(rect, dx, dy), radius, color, blur },
             Self::BlitRgba   { pixels, src_width, src_height, dest_rect } =>
