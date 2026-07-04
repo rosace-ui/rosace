@@ -1,6 +1,7 @@
 # Phase 22 — API Consistency: One Law, Fewer Widgets
 
-> Status: IN PROGRESS (Steps 1–6 landed 2026-07-03)
+> Status: COMPLETE (Steps 1–6 landed 2026-07-03; Step 7 doc leftovers —
+> CRATE_CONTRACTS refresh + README — folded into Phase 21 Step 6)
 > Started: 2026-07-03
 > Completed: —
 >
@@ -16,7 +17,7 @@
 >   Column/Row::scrollable
 > - Step 6 ✅ AppBarNavExt::back_button in facade prelude; ScreenNav was
 >   already the only prelude nav type
-> - Step 7 remaining: NAMING.md pointer, CRATE_CONTRACTS refresh, README
+> - Step 7 ✅ NAMING.md pointer; CRATE_CONTRACTS/README → Phase 21 Step 6
 > Decisions: D093 (constructor law), D094 (vocabulary), D095 (consolidation),
 > D096 (builder styling), D097 (scroll + nav canonicalization)
 > Constitution: `.steering/API_DESIGN.md`

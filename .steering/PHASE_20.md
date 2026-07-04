@@ -12,7 +12,22 @@
 > positional per parent (safe: paint recursion is all-or-nothing per
 > subtree; only the walker skips, and it consumes slots without reset).
 > Step 1 remains partial — the keyed reconciler is still unused and the
-> flat RenderNode list still owns picture caching. Steps 5–6 not started.
+> flat RenderNode list still owns picture caching. Step 5 slice 1
+> (clean-frame skip) landed 1c6c3be; slice 2 (damage on DIRTY frames)
+> and Step 6 remain.
+>
+> DESIGN NOTE for the remaining block (found while scoping): per-node
+> picture caching cannot key on constraints alone — widgets are rebuilt
+> structs with closures, so there is no content equality to detect
+> "same constraints, different text". Safe invalidation units are
+> COMPONENT boundaries (element_cache already diffs per component) and
+> explicit RepaintBoundary/.repaint_when opt-ins. Therefore the block
+> is: (a) unify RenderNode's caches onto the RenderTree arena,
+> (b) cache pictures per component-boundary subtree (walker already
+> knows dirtiness per component), (c) damage = union of dirty
+> component rects, (d) D089 texture cache on top. Multi-component apps
+> get fine granularity; single-component apps behave as today until
+> split — document this in the authoring guide.
 
 ## Why This Phase
 
