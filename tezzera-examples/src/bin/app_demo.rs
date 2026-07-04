@@ -6,7 +6,7 @@
 // Run: cargo run --release -p tezzera-examples --bin app_demo
 
 use tezzera::prelude::*;
-use tezzera::theme::set_theme;
+use tezzera::theme::{set_theme, set_animations};
 use tezzera_state::Atom;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -55,6 +55,7 @@ impl Component for AppDemo {
         let drop_open:   Atom<bool> = ctx.state(false);
         let drop_sel:    Atom<usize> = ctx.state(0);
         let exp_open:    Atom<bool> = ctx.state(true);
+        let anim_on:     Atom<bool> = ctx.state(true);
 
         let screen = nav.current().unwrap_or(Screen::Home);
 
@@ -69,7 +70,7 @@ impl Component for AppDemo {
             )),
             Screen::VirtualList => Box::new(virtual_list_screen()),
             Screen::Gallery     => Box::new(gallery_screen(&check_on, &switch_on, &slider_v, &press_count)),
-            Screen::Showcase    => Box::new(showcase_screen(&radio_sel, &seg_sel, &drop_open, &drop_sel, &exp_open)),
+            Screen::Showcase    => Box::new(showcase_screen(&radio_sel, &seg_sel, &drop_open, &drop_sel, &exp_open, &anim_on)),
         };
 
         // ── AppBar: back appears off-Home; ⬆ Top only where it acts ──────
@@ -311,11 +312,16 @@ fn gallery_screen(check_on: &Atom<bool>, switch_on: &Atom<bool>, slider_v: &Atom
 }
 
 
-fn showcase_screen(radio_sel: &Atom<usize>, seg_sel: &Atom<usize>, drop_open: &Atom<bool>, drop_sel: &Atom<usize>, exp_open: &Atom<bool>) -> impl Widget {
+fn showcase_screen(radio_sel: &Atom<usize>, seg_sel: &Atom<usize>, drop_open: &Atom<bool>, drop_sel: &Atom<usize>, exp_open: &Atom<bool>, anim_on: &Atom<bool>) -> impl Widget {
+    let an = anim_on.clone();
     let rs = radio_sel.clone(); let rs2 = radio_sel.clone(); let rs3 = radio_sel.clone();
     let ss = seg_sel.clone();
     let ds = drop_sel.clone();
     Column::new().spacing(18.0).padding(EdgeInsets::all(24.0))
+        .child(Row::new().spacing(10.0).cross_axis_alignment(CrossAxisAlignment::Center)
+            .child(Text::label("Animations (theme global)"))
+            .child(Switch::new(an.get()).on_change(move |v| { an.set(v); set_animations(v); })))
+        .child(Text::caption("Toggle above, then flip a switch/checkbox/radio below — they ease when on, snap when off."))
         .child(Text::heading("Container shapes"))
         .child(Row::new().spacing(12.0)
             .child(Container::new().size(56.0, 56.0).background(Color::rgb(120, 90, 220)).circle())

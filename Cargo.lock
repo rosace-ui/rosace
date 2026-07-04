@@ -2365,6 +2365,7 @@ name = "tezzera-widgets"
 version = "0.1.0"
 dependencies = [
  "tezzera-a11y",
+ "tezzera-animate",
  "tezzera-core",
  "tezzera-layout",
  "tezzera-render",

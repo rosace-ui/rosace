@@ -163,6 +163,12 @@ pub fn anim_clock() -> f32 {
     START.get_or_init(Instant::now).elapsed().as_secs_f32()
 }
 
+/// Linear blend between two colors (t in 0..1) — animation interpolation.
+pub(crate) fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color::rgba(l(a.r, b.r), l(a.g, b.g), l(a.b, b.b), l(a.a, b.a))
+}
+
 // ── Alignment ────────────────────────────────────────────────────────────────
 
 /// Where a single child sits inside its parent's rect (D095).
@@ -591,6 +597,40 @@ impl<'a> PaintCtx<'a> {
     /// Request another frame — self-animating widgets (spinner, shimmer) call
     /// this each paint so the frame loop keeps repainting them.
     pub fn request_animation(&self) { crate::tree::request_animation(); }
+
+    /// Ease this node's persistent scalar toward `target` and return the
+    /// current value. Honors the theme's global [`AnimationConfig`]: when
+    /// disabled it snaps; otherwise it exponentially eases over the theme's
+    /// duration (or `duration_ms` if > 0) and keeps requesting frames until
+    /// settled. This is how Switch/Checkbox/Radio animate WITHOUT any per-
+    /// widget state — the animation policy is global (theme), the value is
+    /// per-node. First observation snaps (no appear-animation).
+    pub fn animate_to(&self, target: f32, duration_ms: f32) -> f32 {
+        let cfg = self.theme.animation;
+        if !cfg.enabled {
+            self.tree.borrow_mut().node_mut(self.node).anim = Some(target);
+            return target;
+        }
+        let dur = (if duration_ms > 0.0 { duration_ms } else { cfg.duration_ms }).max(1.0);
+        let (val, settled) = {
+            let mut tree = self.tree.borrow_mut();
+            let node = tree.node_mut(self.node);
+            match node.anim {
+                None => { node.anim = Some(target); (target, true) }
+                Some(cur) => {
+                    let dt = tezzera_animate::frame_dt();
+                    let alpha = 1.0 - (-dt * (1000.0 / dur)).exp();
+                    let next = cur + (target - cur) * alpha;
+                    let settled = (next - target).abs() < 0.001;
+                    let v = if settled { target } else { next };
+                    node.anim = Some(v);
+                    (v, settled)
+                }
+            }
+        };
+        if !settled { crate::tree::request_animation(); }
+        val
+    }
 
     /// Push a raw [`DrawCommand`] for advanced use.
     pub fn record(&mut self, cmd: DrawCommand) {

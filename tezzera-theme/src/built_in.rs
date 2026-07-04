@@ -11,6 +11,7 @@ use crate::typography::Typography;
 /// Primary: `#6750A4` (MD3 purple).
 pub fn light_theme() -> ThemeData {
     ThemeData {
+        animation: crate::AnimationConfig::default(),
         colors: ColorScheme {
             primary:               Color::from_hex(0x6750A4),
             on_primary:            Color::from_hex(0xFFFFFF),
@@ -40,6 +41,7 @@ pub fn light_theme() -> ThemeData {
 /// Primary: `#D0BCFF` (MD3 purple, dark variant).
 pub fn dark_theme() -> ThemeData {
     ThemeData {
+        animation: crate::AnimationConfig::default(),
         colors: ColorScheme {
             primary:               Color::from_hex(0xD0BCFF),
             on_primary:            Color::from_hex(0x381E72),

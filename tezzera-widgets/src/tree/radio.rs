@@ -32,11 +32,11 @@ impl Widget for Radio {
         let r = ctx.rect;
         let c = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.primary));
         let center = Point { x: r.origin.x + self.size / 2.0, y: r.origin.y + self.size / 2.0 };
-        let ring = if self.selected { c } else { ctx.tc(ctx.theme.colors.outline) };
-        // Ring
+        let t = ctx.animate_to(if self.selected { 1.0 } else { 0.0 }, 0.0);
+        let ring = super::lerp_color(ctx.tc(ctx.theme.colors.outline), c, t);
         ctx.fill_arc(center, self.size / 2.0 - 1.5, 2.0, 0.0, 360.0, ring);
-        if self.selected {
-            ctx.fill_circle(center, self.size / 4.0, c);
+        if t > 0.01 {
+            ctx.fill_circle(center, self.size / 4.0 * t, c);
         }
         if let Some(cb) = &self.on_select {
             ctx.register_hit(Arc::clone(cb));

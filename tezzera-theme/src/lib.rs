@@ -28,11 +28,11 @@ pub mod typography;
 
 // Flat re-exports for convenience.
 pub use color::{Color, ColorScheme};
-pub use provider::{set_theme, use_theme};
+pub use provider::{set_theme, use_theme, set_animations};
 pub use radius::BorderRadius;
 pub use shadow::{ShadowLayer, Shadows};
 pub use spacing::Spacing;
-pub use theme::{ThemeData, TezzeraTheme};
+pub use theme::{AnimationConfig, ThemeData, TezzeraTheme};
 pub use typography::{FontFamily, FontWeight, TextStyle, Typography};
 
 // ---------------------------------------------------------------------------

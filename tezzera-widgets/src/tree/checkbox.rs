@@ -61,15 +61,21 @@ impl Widget for Checkbox {
             size: Size { width: self.box_size, height: self.box_size },
         };
 
+        let t = ctx.animate_to(if self.checked || self.indeterminate { 1.0 } else { 0.0 }, 0.0);
+        // Empty state underneath (fades out as t rises).
+        ctx.fill_rect(box_rect, super::lerp_color(Color::rgb(15, 16, 28), self.color, t));
+        if t < 0.99 {
+            ctx.stroke_rect(box_rect, super::lerp_color(self.border_color, self.color, t), 1.5);
+        }
         if self.checked || self.indeterminate {
-            ctx.fill_rect(box_rect, self.color);
             if self.indeterminate {
                 let dash = Rect {
                     origin: Point { x: box_rect.origin.x + self.box_size * 0.2, y: box_rect.origin.y + self.box_size * 0.45 },
                     size: Size { width: self.box_size * 0.6, height: self.box_size * 0.1 },
                 };
-                ctx.fill_rect(dash, Color::rgb(230, 232, 245));
+                ctx.fill_rect(dash, Color::rgba(230, 232, 245, (255.0 * t) as u8));
             } else {
+                let ink = Color::rgba(230, 232, 245, (255.0 * t) as u8);
                 let tick1 = Rect {
                     origin: Point { x: box_rect.origin.x + self.box_size * 0.2, y: box_rect.origin.y + self.box_size * 0.5 },
                     size: Size { width: self.box_size * 0.25, height: self.box_size * 0.1 },
@@ -78,12 +84,9 @@ impl Widget for Checkbox {
                     origin: Point { x: box_rect.origin.x + self.box_size * 0.4, y: box_rect.origin.y + self.box_size * 0.3 },
                     size: Size { width: self.box_size * 0.1, height: self.box_size * 0.35 },
                 };
-                ctx.fill_rect(tick1, Color::rgb(230, 232, 245));
-                ctx.fill_rect(tick2, Color::rgb(230, 232, 245));
+                ctx.fill_rect(tick1, ink);
+                ctx.fill_rect(tick2, ink);
             }
-        } else {
-            ctx.fill_rect(box_rect, Color::rgb(15, 16, 28));
-            ctx.stroke_rect(box_rect, self.border_color, 1.5);
         }
 
         // Label

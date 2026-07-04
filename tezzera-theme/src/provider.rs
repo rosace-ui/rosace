@@ -29,6 +29,14 @@ pub fn use_theme() -> ThemeData {
 /// Replaces the active theme with `theme` and notifies all subscribers.
 ///
 /// Typically called at app startup or in response to a user preference change.
+/// Globally enable/disable animation on the LIVE theme — one call makes
+/// every Switch/Checkbox/Radio (and future animated widget) ease or snap.
+pub fn set_animations(enabled: bool) {
+    let mut t = use_theme();
+    t.animation.enabled = enabled;
+    set_theme(t);
+}
+
 pub fn set_theme(theme: ThemeData) {
     CURRENT_THEME.set(theme);
 }

@@ -46,10 +46,13 @@ impl Widget for Switch {
         ctx.semantics(super::Semantics::new(tezzera_core::Role::Switch)
             .value(if self.on { "on" } else { "off" }));
         let r = ctx.rect;
-        let track_color = if self.on { self.on_color } else { self.off_color };
+        let t = ctx.animate_to(if self.on { 1.0 } else { 0.0 }, 0.0);
+        let track_color = super::lerp_color(self.off_color, self.on_color, t);
         draw_rounded_rect_pub(ctx, r, track_color, 10.0);
 
-        let thumb_x = if self.on { r.origin.x + r.size.width - 18.0 } else { r.origin.x + 2.0 };
+        let off_x = r.origin.x + 2.0;
+        let on_x = r.origin.x + r.size.width - 18.0;
+        let thumb_x = off_x + (on_x - off_x) * t;
         ctx.fill_circle(
             Point { x: thumb_x + 8.0, y: r.origin.y + 10.0 },
             8.0,

@@ -73,6 +73,9 @@ pub struct TreeNode {
     /// first scrollable painted at this position, survives rebuilds like
     /// Flutter's ScrollPosition.
     pub scroll_ctrl: Option<tezzera_scroll::ScrollController>,
+    /// A persistent eased scalar (0..1) for toggle transitions — advanced by
+    /// PaintCtx::animate_to. `None` until first observed (then snaps).
+    pub anim: Option<f32>,
 
     // ── Picture cache (Phase 20 unification — was the flat RenderNode) ───
     /// Widget type name at this position; a mismatch resets the caches.
