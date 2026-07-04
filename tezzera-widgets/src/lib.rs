@@ -10,6 +10,7 @@ pub mod prelude;
 pub use tree::{Alignment, Children, Semantics, Widget};
 pub use tree::PaintCtx;
 pub use tree::{HitTarget, ScrollTarget};
+pub use tree::{PressApi, Pressable};
 pub use tree::BoxedWidget;
 pub use tree::WidgetApp;
 pub use tree::AppBar;

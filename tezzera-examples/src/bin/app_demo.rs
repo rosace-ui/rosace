@@ -45,6 +45,7 @@ impl Component for AppDemo {
         let sheet_open:  Atom<bool> = ctx.state(false);
         let toast_open:  Atom<bool> = ctx.state(false);
         let check_on:    Atom<bool> = ctx.state(true);
+        let press_count: Atom<i32>  = ctx.state(0);
         let switch_on:   Atom<bool> = ctx.state(false);
         let slider_v:    Atom<f32>  = ctx.state(0.6f32);
 
@@ -60,7 +61,7 @@ impl Component for AppDemo {
                 &dialog_open, &menu_open, &sheet_open, &toast_open,
             )),
             Screen::VirtualList => Box::new(virtual_list_screen()),
-            Screen::Gallery     => Box::new(gallery_screen(&check_on, &switch_on, &slider_v)),
+            Screen::Gallery     => Box::new(gallery_screen(&check_on, &switch_on, &slider_v, &press_count)),
         };
 
         // ── AppBar: back appears off-Home; ⬆ Top only where it acts ──────
@@ -251,7 +252,7 @@ fn virtual_list_screen() -> impl Widget {
         ))
 }
 
-fn gallery_screen(check_on: &Atom<bool>, switch_on: &Atom<bool>, slider_v: &Atom<f32>) -> impl Widget {
+fn gallery_screen(check_on: &Atom<bool>, switch_on: &Atom<bool>, slider_v: &Atom<f32>, press_count: &Atom<i32>) -> impl Widget {
     let c = check_on.clone();
     let c2 = check_on.clone();
     let sw = switch_on.clone();
@@ -274,9 +275,17 @@ fn gallery_screen(check_on: &Atom<bool>, switch_on: &Atom<bool>, slider_v: &Atom
             .child(Text::label(if c2.get() { "checked" } else { "unchecked" }))
             .child(Switch::new(switch_on.get()).on_change(move |v| sw.set(v)))
             .child(Text::label(if sw2.get() { "on" } else { "off" })))
-        .child(Text::caption("Click the slider track to set (drag lands with gesture events)"))
+        .child(Text::caption("Click OR drag the slider"))
         .child(Slider::new(slider_v.get()).on_change(move |v| sl.set(v)))
         .child(ProgressBar::new(slider_v.get()))
+        .child(Text::heading("Pressable anything"))
+        .child(Row::new().spacing(12.0)
+            .child(
+                Card::new(Text::label("This whole card is .on_press()"))
+                    .radius(10.0).elevation(3.0)
+                    .on_press({ let p = press_count.clone(); move || p.set(p.get() + 1) }),
+            )
+            .child(Text::label(format!("pressed {} times", press_count.get()))))
         .child(Text::heading("Bits"))
         .child(Row::new().spacing(8.0)
             .child(Chip::new("Chip"))

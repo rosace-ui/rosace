@@ -106,6 +106,7 @@ impl PlatformWindow {
             frame_counter: 0,
             cursor_x: 0.0,
             cursor_y: 0.0,
+            mouse_down: false,
             last_frame_time: None,
         };
         event_loop.run_app(&mut app).unwrap();
@@ -133,6 +134,9 @@ struct AppState<F> {
     frame_counter: u64,
     cursor_x: f32,
     cursor_y: f32,
+    // True while a mouse button is held — CursorMoved requests frames only
+    // then, so drags stream without paying for idle mouse movement.
+    mouse_down: bool,
     last_frame_time: Option<Instant>,
 }
 
@@ -328,9 +332,13 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     x: self.cursor_x,
                     y: self.cursor_y,
                 });
-                // Do NOT request_redraw here: no hover state is implemented yet,
-                // so repainting on every mouse move burns CPU for no visual change.
-                // Re-enable once Button/widget hover highlighting is wired up.
+                // Request frames only mid-drag: drags must stream, but idle
+                // hover movement stays free (no hover state yet).
+                if self.mouse_down {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
@@ -341,6 +349,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     _ => return,
                 };
                 let (x, y) = (self.cursor_x, self.cursor_y);
+                self.mouse_down = matches!(state, ElementState::Pressed);
                 let ev = match state {
                     ElementState::Pressed  => InputEvent::MouseDown { x, y, button: btn },
                     ElementState::Released => InputEvent::MouseUp   { x, y, button: btn },

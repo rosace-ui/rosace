@@ -161,11 +161,14 @@ impl RenderTree {
 
     /// Hit-test walk: children before own regions, later siblings first —
     /// paint order is z-order, so the topmost match wins structurally (D092).
-    pub fn hit_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>> {
+    /// Returns the topmost hit callback and whether it is POSITIONAL —
+    /// positional hits become the active drag grab (streamed MouseMove
+    /// positions until release); plain hits fire once.
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<(Arc<dyn Fn(f32, f32) + Send + Sync>, bool)> {
         self.hit_test_node(Self::ROOT, x, y)
     }
 
-    fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>> {
+    fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<(Arc<dyn Fn(f32, f32) + Send + Sync>, bool)> {
         let n = &self.nodes[id];
         for &child in n.children.iter().rev() {
             if let Some(cb) = self.hit_test_node(child, x, y) {
@@ -175,13 +178,13 @@ impl RenderTree {
         // Positional regions first within a node (more specific intent).
         for (rect, cb) in n.hits_at.iter().rev() {
             if contains(rect, x, y) {
-                return Some(cb.clone());
+                return Some((cb.clone(), true));
             }
         }
         for (rect, cb) in n.hits.iter().rev() {
             if contains(rect, x, y) {
                 let cb = cb.clone();
-                return Some(Arc::new(move |_, _| cb()));
+                return Some((Arc::new(move |_, _| cb()), false));
             }
         }
         None

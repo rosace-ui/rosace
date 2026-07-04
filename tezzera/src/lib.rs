@@ -113,6 +113,10 @@ impl App {
         // ── Phase 14: focus manager ────────────────────────────────────────
         let mut focus_manager = tezzera_a11y::FocusManager::new();
         let mut shift_held = false;
+        // Active drag grab: a POSITIONAL hit (on_press_at) captured on
+        // MouseDown receives streamed MouseMove positions until MouseUp —
+        // slider thumbs, pickers. Plain hits never drag.
+        let mut active_drag: Option<Arc<dyn Fn(f32, f32) + Send + Sync>> = None;
 
         // ── Phase 13: persistent render cache ─────────────────────────────
         // Cached build output per component ID — skips build() when the
@@ -434,11 +438,22 @@ impl App {
                                 }
                             }
                             if !handled {
-                                let cb = render_tree.borrow().hit_test(*x, *y);
-                                if let Some(cb) = cb {
+                                let hit = render_tree.borrow().hit_test(*x, *y);
+                                if let Some((cb, positional)) = hit {
                                     cb(*x, *y);
+                                    if positional {
+                                        active_drag = Some(cb);
+                                    }
                                 }
                             }
+                        }
+                        tezzera_platform::InputEvent::MouseMove { x, y } => {
+                            if let Some(cb) = &active_drag {
+                                cb(*x, *y);
+                            }
+                        }
+                        tezzera_platform::InputEvent::MouseUp { .. } => {
+                            active_drag = None;
                         }
                         tezzera_platform::InputEvent::Scroll { x, y, delta_x, delta_y } => {
                             let mut handled = false;
@@ -759,7 +774,7 @@ pub use tezzera_render::canvas::Color;
 
 // Accessibility + focus
 pub use tezzera_a11y::FocusNode;
-pub use tezzera_widgets::{FocusApi, OverlayApi, OverlayKind};
+pub use tezzera_widgets::{FocusApi, OverlayApi, OverlayKind, PressApi, Pressable};
 
 // Widgets
 pub use tezzera_widgets::{

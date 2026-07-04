@@ -31,6 +31,7 @@ pub mod nav_rail;
 pub mod overlay;
 pub mod overlay_api;
 pub mod padding;
+pub mod pressable;
 pub mod progress_bar;
 pub mod rect_reader;
 pub mod render_tree;
@@ -78,6 +79,7 @@ pub use overlay::{
 };
 pub use overlay_api::{OverlayApi, OverlayKind, WithOverlay};
 pub use padding::EdgeInsets;
+pub use pressable::{PressApi, Pressable};
 pub use progress_bar::ProgressBar;
 pub use rect_reader::RectReader;
 pub use render_tree::{NodeId, RenderTree, ScrollAxes, TreeNode};
