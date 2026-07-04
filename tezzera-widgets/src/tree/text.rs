@@ -10,15 +10,7 @@ pub enum TextAlign {
     Right,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub enum FontWeight {
-    Light,
-    #[default]
-    Regular,
-    Medium,
-    SemiBold,
-    Bold,
-}
+pub use tezzera_render::FontWeight;
 
 /// A plain text leaf widget.
 ///
@@ -62,7 +54,7 @@ impl Text {
     fn wrap_lines(&self, font: &tezzera_render::FontCache, max_w: f32) -> Vec<String> {
         let single_paragraph = !self.text.contains('\n');
         if single_paragraph
-            && (!max_w.is_finite() || font.measure_text(&self.text, self.size) <= max_w)
+            && (!max_w.is_finite() || font.measure_text_weighted(&self.text, self.size, self.weight) <= max_w)
         {
             return vec![self.text.clone()];
         }
@@ -73,7 +65,7 @@ impl Text {
                 lines.push(String::new());
             } else {
                 lines.extend(tezzera_text::word_wrap(paragraph, max_w, |s| {
-                    font.measure_text(s, self.size)
+                    font.measure_text_weighted(s, self.size, self.weight)
                 }));
             }
         }
@@ -90,7 +82,7 @@ impl Widget for Text {
         let lines = self.wrap_lines(ctx.font, ctx.constraints.max_width_f32());
         let text_w = lines
             .iter()
-            .map(|l| ctx.font.measure_text(l, self.size))
+            .map(|l| ctx.font.measure_text_weighted(l, self.size, self.weight))
             .fold(0.0_f32, f32::max);
         let text_h = line_h * lines.len().max(1) as f32;
         ctx.constraints.constrain(Size { width: text_w, height: text_h })
@@ -117,13 +109,13 @@ impl Widget for Text {
 
         for (i, line) in lines.iter().enumerate() {
             if line.is_empty() { continue; }
-            let line_w = ctx.font.measure_text(line, self.size);
+            let line_w = ctx.font.measure_text_weighted(line, self.size, self.weight);
             let x_off = match self.align {
                 TextAlign::Left   => 0.0,
                 TextAlign::Center => ((ctx.rect.size.width - line_w) / 2.0).max(0.0),
                 TextAlign::Right  => (ctx.rect.size.width - line_w).max(0.0),
             };
-            ctx.text(line, x_off, y_base + i as f32 * line_h, color, self.size);
+            ctx.text_styled(line, x_off, y_base + i as f32 * line_h, color, self.size, self.weight);
         }
     }
 }

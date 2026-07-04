@@ -6,6 +6,23 @@ use tezzera_core::types::{Point, Rect, Size};
 /// Cubic Bézier circle-approximation constant (4/3 · tan(π/8)).
 const KAPPA: f32 = 0.552_285;
 
+/// Perceptual coverage curve for text anti-aliasing. Linear alpha makes
+/// dark-on-light stems look anemic (mid coverages read too light); a mild
+/// gamma boost on the coverage ramp keeps edges smooth while restoring
+/// stem weight. One-time 256-entry table.
+fn text_gamma(cov: u32) -> u32 {
+    use std::sync::OnceLock;
+    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
+    let lut = LUT.get_or_init(|| {
+        let mut t = [0u8; 256];
+        for (i, v) in t.iter_mut().enumerate() {
+            *v = ((i as f32 / 255.0).powf(1.0 / 1.22) * 255.0).round() as u8;
+        }
+        t
+    });
+    lut[cov as usize] as u32
+}
+
 /// Exact-rounding division by 255 without an integer divide.
 #[inline(always)]
 fn d255(x: u32) -> u32 {
@@ -427,6 +444,13 @@ impl SkiaCanvas {
     /// [`FontCache::measure_text`]. Blending uses an exact divide-free
     /// source-over with a straight-store fast path for opaque pixels.
     pub fn draw_text(&mut self, text: &str, origin: Point, color: Color, font: &crate::font::FontCache, px: f32) {
+        self.draw_text_weighted(text, origin, color, font, px, crate::font::FontWeight::Regular);
+    }
+
+    /// Weighted variant: routes each character through the bold face and the
+    /// Unicode fallback chain, applies kerning within a face, and blends
+    /// with the perceptual coverage curve.
+    pub fn draw_text_weighted(&mut self, text: &str, origin: Point, color: Color, font: &crate::font::FontCache, px: f32, weight: crate::font::FontWeight) {
         if color.a == 0 || text.is_empty() { return; }
 
         let canvas_w = self.pixmap.width() as i32;
@@ -453,11 +477,11 @@ impl SkiaCanvas {
 
         for ch in text.chars() {
             if let Some(p) = prev {
-                cursor_x += font.kern(p, ch, px);
+                cursor_x += font.kern_weighted(p, ch, px, weight);
             }
             prev = Some(ch);
 
-            let glyph = font.glyph(ch, px);
+            let glyph = font.glyph_weighted(ch, px, weight);
             let (metrics, bitmap) = (&glyph.0, &glyph.1);
 
             if metrics.width == 0 || metrics.height == 0 {
@@ -475,7 +499,7 @@ impl SkiaCanvas {
                 let src_row = row * metrics.width;
 
                 for col in 0..metrics.width {
-                    let coverage = bitmap[src_row + col] as u32;
+                    let coverage = text_gamma(bitmap[src_row + col] as u32);
                     if coverage == 0 { continue; }
 
                     let px_xi = gx + col as i32;
@@ -687,8 +711,8 @@ impl SkiaCanvas {
                     self.stroke_rrect(sr(*rect), *radius * s, *color, *width * s);
                 }
                 DrawCommand::FillCircle { center, radius, color } => self.fill_circle(sp(*center), *radius * s, *color),
-                DrawCommand::DrawText { text, origin, color, px } => {
-                    self.draw_text(text, sp(*origin), *color, font, *px * s);
+                DrawCommand::DrawText { text, origin, color, px, weight } => {
+                    self.draw_text_weighted(text, sp(*origin), *color, font, *px * s, *weight);
                 }
                 DrawCommand::DrawShadow { rect, radius, color, blur } => {
                     self.draw_shadow(sr(*rect), *radius * s, *color, *blur * s);

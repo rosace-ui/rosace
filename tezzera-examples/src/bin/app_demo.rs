@@ -71,7 +71,7 @@ impl Component for AppDemo {
                 .variant(ButtonVariant::Ghost)
                 .on_press(move || top.scroll_to_top()));
         }
-        let label = if is_dark.get() { "☀ Light" } else { "🌙 Dark" };
+        let label = if is_dark.get() { "☀ Light" } else { "☾ Dark" };
         let is_dark_btn = is_dark.clone();
         bar = bar.action(Button::new(label).on_press(move || {
             let dark = !is_dark_btn.get();

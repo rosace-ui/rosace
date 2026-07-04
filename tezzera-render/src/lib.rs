@@ -12,7 +12,7 @@ pub mod picture;
 
 pub use canvas::{Color, SkiaCanvas};
 pub use draw_command::DrawCommand;
-pub use font::FontCache;
+pub use font::{FontCache, FontWeight};
 pub use image::{CachePolicy, ImageFit, ImageHandle};
 pub use picture::{Picture, PictureRecorder};
 

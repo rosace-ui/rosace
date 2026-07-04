@@ -428,13 +428,24 @@ impl<'a> PaintCtx<'a> {
             origin,
             color,
             px,
+            weight: tezzera_render::FontWeight::Regular,
         });
     }
 
     /// Draw text at `(self.rect.origin + (dx, dy))`.
     pub fn text(&mut self, s: &str, dx: f32, dy: f32, color: Color, px: f32) {
         let origin = Point { x: self.rect.origin.x + dx, y: self.rect.origin.y + dy };
-        self.recorder.push(DrawCommand::DrawText { text: s.to_string(), origin, color, px });
+        self.recorder.push(DrawCommand::DrawText {
+            text: s.to_string(), origin, color, px,
+            weight: tezzera_render::FontWeight::Regular,
+        });
+    }
+
+    /// Draw text at `(self.rect.origin + (dx, dy))` with an explicit weight —
+    /// SemiBold/Bold route to the real bold face.
+    pub fn text_styled(&mut self, s: &str, dx: f32, dy: f32, color: Color, px: f32, weight: tezzera_render::FontWeight) {
+        let origin = Point { x: self.rect.origin.x + dx, y: self.rect.origin.y + dy };
+        self.recorder.push(DrawCommand::DrawText { text: s.to_string(), origin, color, px, weight });
     }
 
     /// Emit a blurred drop shadow behind a square-cornered `rect`.

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tezzera_core::types::{Point, Rect};
 
 use crate::canvas::Color;
+use crate::font::FontWeight;
 
 /// A single drawing instruction recorded during the paint pass.
 ///
@@ -19,7 +20,7 @@ pub enum DrawCommand {
     /// hug rounded fills instead of framing them with square corners.
     StrokeRRect { rect: Rect, radius: f32, color: Color, width: f32 },
     FillCircle { center: Point, radius: f32, color: Color },
-    DrawText   { text: String, origin: Point, color: Color, px: f32 },
+    DrawText   { text: String, origin: Point, color: Color, px: f32, weight: FontWeight },
     /// Gaussian-approximate drop shadow. `radius` rounds the shadow's source
     /// shape to match rounded widgets — a square shadow behind a rounded fill
     /// leaks dark corner triangles.
@@ -48,7 +49,7 @@ impl DrawCommand {
             Self::FillRRect  { rect, radius, color }   => Self::FillRRect  { rect: shift(rect, dx, dy), radius, color },
             Self::StrokeRRect { rect, radius, color, width } => Self::StrokeRRect { rect: shift(rect, dx, dy), radius, color, width },
             Self::FillCircle { center, radius, color } => Self::FillCircle { center: Point { x: center.x + dx, y: center.y + dy }, radius, color },
-            Self::DrawText   { text, origin, color, px } => Self::DrawText { text, origin: Point { x: origin.x + dx, y: origin.y + dy }, color, px },
+            Self::DrawText   { text, origin, color, px, weight } => Self::DrawText { text, origin: Point { x: origin.x + dx, y: origin.y + dy }, color, px, weight },
             Self::DrawShadow { rect, radius, color, blur } => Self::DrawShadow { rect: shift(rect, dx, dy), radius, color, blur },
             Self::BlitRgba   { pixels, src_width, src_height, dest_rect } =>
                 Self::BlitRgba { pixels, src_width, src_height, dest_rect: shift(dest_rect, dx, dy) },
