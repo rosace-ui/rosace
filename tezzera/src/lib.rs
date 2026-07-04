@@ -175,17 +175,32 @@ impl App {
                 // picked up here on the very next frame.
                 let current_theme = tezzera_theme::use_theme();
 
+                // Layout in logical pixels so widget sizes and font sizes are
+                // display-independent. play_picture scales to physical pixels.
+                let win_w = canvas.logical_width() as f32;
+                let win_h = canvas.logical_height() as f32;
+
+                // ── Frame-skip (Phase 20 Step 5, first slice) ──────────────
+                // On a clean frame — nothing dirty, canvas not recreated by a
+                // resize — the base canvas already holds the correct pixels
+                // and the render tree holds all dispatch state: skip build,
+                // walk, and rasterization entirely. Overlay pass, focus sync,
+                // and event dispatch still run below.
+                let window_resized = events.iter().any(|e| matches!(
+                    e, tezzera_platform::InputEvent::WindowResized { .. }
+                ));
+                let needs_paint = global_dirty
+                    || !dirty_ids.is_empty()
+                    || !canvas.has_drawn()   // fresh canvas after resize/scale change
+                    || window_resized;
+
+                if needs_paint {
                 // ── Clear background (direct canvas write — not recorded) ──
                 let bg = theme_color(&current_theme.colors.background);
                 canvas.clear(bg);
 
                 // ── Set up main display-list recording ─────────────────────
                 let mut recorder = tezzera_render::PictureRecorder::new();
-
-                // Layout in logical pixels so widget sizes and font sizes are
-                // display-independent. play_picture scales to physical pixels.
-                let win_w = canvas.logical_width() as f32;
-                let win_h = canvas.logical_height() as f32;
 
                 // Begin the persistent render tree frame (D091). Repainted
                 // nodes re-declare their regions; skipped subtrees keep theirs.
@@ -228,6 +243,38 @@ impl App {
                 // ── Replay the main display list onto the canvas ───────────
                 let picture = recorder.finish();
                 canvas.play_picture(&picture, &font);
+
+                // ── Reconcile: fire lifecycle for mounted/unmounted components
+                for &id in new_mounted.difference(&prev_mounted) {
+                    let cid = tezzera_core::types::ComponentId(id);
+                    root.on_mount();
+                    #[cfg(debug_assertions)]
+                    {
+                        use tezzera_trace::{event::TezzeraTrace, location, trace};
+                        trace!(TezzeraTrace::ComponentMount {
+                            id: cid,
+                            name: root.type_name(),
+                            location: location!(),
+                        });
+                    }
+                    let _ = cid;
+                }
+                for &id in prev_mounted.difference(&new_mounted) {
+                    let cid = tezzera_core::types::ComponentId(id);
+                    tezzera_state::cleanup_store::fire_and_clear(cid);
+                    tezzera_state::clear_component(cid);
+                    root.on_unmount();
+                    #[cfg(debug_assertions)]
+                    {
+                        use tezzera_trace::{event::TezzeraTrace, trace};
+                        trace!(TezzeraTrace::ComponentUnmount {
+                            id: cid,
+                            name: root.type_name(),
+                        });
+                    }
+                }
+                prev_mounted = new_mounted;
+                } // needs_paint
 
                 // ── Overlay pass — second recorder into overlay_canvas (D076) ─
                 // Entries come from the render tree (D091 — they persist on
@@ -326,11 +373,10 @@ impl App {
                 }
 
                 // ── TransformLayer pass (D088) ─────────────────────────────
-                // Entries live on the render tree (D091): re-declared when the
-                // owning TransformLayer repaints, persisting otherwise — so the
-                // scrolled content stays visible on cache-hit frames without a
-                // separate entry cache.
-                {
+                // Entries live on the render tree (D091). Skipped on clean
+                // frames: the base canvas already holds last frame's replay,
+                // and re-blending translucent content would double-darken.
+                if needs_paint {
                     let tree_ref = render_tree.borrow();
                     for (n, i) in tree_ref.transform_ids() {
                         let entry = &tree_ref.node(n).transforms[i];
@@ -347,36 +393,6 @@ impl App {
                     }
                 }
 
-                // ── Reconcile: fire lifecycle for mounted/unmounted components
-                for &id in new_mounted.difference(&prev_mounted) {
-                    let cid = tezzera_core::types::ComponentId(id);
-                    root.on_mount();
-                    #[cfg(debug_assertions)]
-                    {
-                        use tezzera_trace::{event::TezzeraTrace, location, trace};
-                        trace!(TezzeraTrace::ComponentMount {
-                            id: cid,
-                            name: root.type_name(),
-                            location: location!(),
-                        });
-                    }
-                    let _ = cid;
-                }
-                for &id in prev_mounted.difference(&new_mounted) {
-                    let cid = tezzera_core::types::ComponentId(id);
-                    tezzera_state::cleanup_store::fire_and_clear(cid);
-                    tezzera_state::clear_component(cid);
-                    root.on_unmount();
-                    #[cfg(debug_assertions)]
-                    {
-                        use tezzera_trace::{event::TezzeraTrace, trace};
-                        trace!(TezzeraTrace::ComponentUnmount {
-                            id: cid,
-                            name: root.type_name(),
-                        });
-                    }
-                }
-                prev_mounted = new_mounted;
 
                 // ── Sync focus manager from the render tree ────────────────
                 // Collected from persistent nodes, so the Tab cycle survives
