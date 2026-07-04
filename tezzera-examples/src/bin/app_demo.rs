@@ -1,13 +1,7 @@
-// ── App Demo — the canonical TEZZERA showcase ─────────────────────────────────
+// ── App Demo — the canonical TEZZERA feature gallery ─────────────────────────
 //
-// One app exercising every core system:
-// - Scaffold + AppBar (leading back button, dropdown menu, theme toggle)
-// - Routing: ScreenNav<Screen> push/pop
-// - ScrollView: vertical page scroll + a horizontal card carousel
-// - Text: word wrap, max_lines, kerned sizes
-// - Canvas quality: rounded cards, real shadows, circles, image blits
-// - Overlays: Dialog, Menu, Sheet, Toast (scrim tap-to-dismiss)
-// - Theme: dark/light toggle via set_theme()
+// Home is an index; every feature lives on its own route (steering demo
+// policy). Add a Screen variant + a tile + a screen fn for each new feature.
 //
 // Run: cargo run --release -p tezzera-examples --bin app_demo
 
@@ -15,10 +9,27 @@ use tezzera::prelude::*;
 use tezzera::theme::set_theme;
 use tezzera_state::Atom;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Screen {
     Home,
-    About,
+    Typography,
+    Scrolling,
+    Overlays,
+    VirtualList,
+    Gallery,
+}
+
+impl Screen {
+    fn title(&self) -> &'static str {
+        match self {
+            Screen::Home        => "Tezzera Gallery",
+            Screen::Typography  => "Typography & Wrapping",
+            Screen::Scrolling   => "Scrolling",
+            Screen::Overlays    => "Overlays",
+            Screen::VirtualList => "Virtualized List",
+            Screen::Gallery     => "Widget Gallery",
+        }
+    }
 }
 
 struct AppDemo;
@@ -35,104 +46,95 @@ impl Component for AppDemo {
         let sheet_open:  Atom<bool> = ctx.state(false);
         let toast_open:  Atom<bool> = ctx.state(false);
         let list_scroll: Atom<f32>  = ctx.state(0.0f32);
+        let check_on:    Atom<bool> = ctx.state(true);
+        let switch_on:   Atom<bool> = ctx.state(false);
+        let slider_v:    Atom<f32>  = ctx.state(0.6f32);
 
         let screen = nav.current().unwrap_or(Screen::Home);
 
-        // ── Body per screen ──────────────────────────────────────────────
         let body: BoxedWidget = match screen {
-            Screen::Home => Box::new(ScrollView::controlled(
-                home_content(&nav, &carousel_x, &dialog_open, &sheet_open, &toast_open),
-                page_ctrl.clone(),
+            Screen::Home        => Box::new(home_screen(&nav)),
+            Screen::Typography  => Box::new(typography_screen()),
+            Screen::Scrolling   => Box::new(ScrollView::controlled(
+                scrolling_screen(&carousel_x), page_ctrl.clone(),
             )),
-            Screen::About => Box::new(about_content(&list_scroll)),
+            Screen::Overlays    => Box::new(overlays_screen(
+                &dialog_open, &menu_open, &sheet_open, &toast_open,
+            )),
+            Screen::VirtualList => Box::new(virtual_list_screen(&list_scroll)),
+            Screen::Gallery     => Box::new(gallery_screen(&check_on, &switch_on, &slider_v)),
         };
 
-        // ── AppBar ───────────────────────────────────────────────────────
-        let title = match screen {
-            Screen::Home  => "Tezzera Demo",
-            Screen::About => "About",
-        };
-        // back_button (D097): appears automatically when nav.can_pop().
-        let mut bar = AppBar::new(title).back_button(&nav);
-
-        // Dropdown menu in the AppBar.
-        let m_open = menu_open.clone();
-        let m_close = menu_open.clone();
-        let m_nav = nav.clone();
-        let m_close2 = menu_open.clone();
-        bar = bar.action(
-            Button::new("Menu ▾")
-                .variant(ButtonVariant::Secondary)
-                .on_press(move || m_open.set(true))
-                .dropdown(menu_open.clone(), move || {
-                    let close = m_close.clone();
-                    let close2 = m_close2.clone();
-                    let nav = m_nav.clone();
-                    Box::new(
-                        Menu::new()
-                            .item("About this demo", move || {
-                                close.set(false);
-                                if nav.current() != Some(Screen::About) {
-                                    nav.push(Screen::About);
-                                }
-                            })
-                            .item("Close", move || close2.set(false)),
-                    )
-                }),
-        );
-
-        // Programmatic scroll: jump the page back to the top.
-        let top_ctrl = page_ctrl.clone();
-        bar = bar.action(Button::new("⬆ Top")
-            .variant(ButtonVariant::Ghost)
-            .on_press(move || top_ctrl.scroll_to_top()));
-
-        // Theme toggle.
+        // ── AppBar: back appears off-Home; ⬆ Top only where it acts ──────
+        let mut bar = AppBar::new(screen.title()).back_button(&nav);
+        if screen == Screen::Scrolling {
+            let top = page_ctrl.clone();
+            bar = bar.action(Button::new("⬆ Top")
+                .variant(ButtonVariant::Ghost)
+                .on_press(move || top.scroll_to_top()));
+        }
         let label = if is_dark.get() { "☀ Light" } else { "🌙 Dark" };
         let is_dark_btn = is_dark.clone();
         bar = bar.action(Button::new(label).on_press(move || {
-            let new_dark = !is_dark_btn.get();
-            is_dark_btn.set(new_dark);
-            set_theme(if new_dark { dark_theme() } else { light_theme() });
+            let dark = !is_dark_btn.get();
+            is_dark_btn.set(dark);
+            set_theme(if dark { dark_theme() } else { light_theme() });
         }));
 
         Scaffold::new(body).app_bar(bar).into_element()
     }
 }
 
-// ── Home screen ───────────────────────────────────────────────────────────────
+// ── Home: the feature index ───────────────────────────────────────────────────
 
-fn home_content(
-    nav: &ScreenNav<Screen>,
-    carousel_x: &Atom<f32>,
-    dialog_open: &Atom<bool>,
-    sheet_open: &Atom<bool>,
-    toast_open: &Atom<bool>,
-) -> impl Widget {
-    // Overlay atom clones for the closures below.
-    let d_open = dialog_open.clone();
-    let d_cancel = dialog_open.clone();
-    let d_confirm = dialog_open.clone();
-    let d_toast = toast_open.clone();
-    let s_open = sheet_open.clone();
-    let t_open = toast_open.clone();
-    let nav_about = nav.clone();
+fn home_screen(nav: &ScreenNav<Screen>) -> impl Widget {
+    let tile = |title: &'static str, subtitle: &'static str, to: Screen, nav: &ScreenNav<Screen>| {
+        let nav = nav.clone();
+        ListTile::new(title)
+            .subtitle(subtitle)
+            .on_press(move || { nav.push(to); })
+    };
 
+    Column::new()
+        .padding(EdgeInsets::all(16.0))
+        .child(tile("Typography & Wrapping", "Sizes, kerning, word-wrap, max_lines", Screen::Typography, nav))
+        .child(tile("Scrolling", "Controlled page scroll, carousel, doctrine", Screen::Scrolling, nav))
+        .child(tile("Overlays", "Dialog, dropdown menu, sheet, toast", Screen::Overlays, nav))
+        .child(tile("Virtualized List", "10,000 rows, built on demand", Screen::VirtualList, nav))
+        .child(tile("Widget Gallery", "Buttons, inputs, chips, progress", Screen::Gallery, nav))
+}
+
+// ── Feature screens ───────────────────────────────────────────────────────────
+
+fn typography_screen() -> impl Widget {
+    Column::new()
+        .spacing(14.0)
+        .padding(EdgeInsets::all(24.0))
+        .child(Text::display("Display 40"))
+        .child(Text::heading("Heading 22 — SemiBold"))
+        .child(Text::title("Title 20 — Medium"))
+        .child(Text::label("Label 16"))
+        .child(Text::caption("Caption 14 — and a long paragraph to show wrapping: \
+            the text engine measures with real kerned advances, wraps greedily, \
+            and honors explicit line breaks.\nLike this one."))
+        .child(Text::caption(
+            "This caption is capped at two lines with max_lines(2); everything \
+             past the second line is truncated away, which is exactly what \
+             happens to this very sentence you are reading right now.",
+        ).max_lines(2))
+}
+
+fn scrolling_screen(carousel_x: &Atom<f32>) -> impl Widget {
     Column::new()
         .spacing(20.0)
         .padding(EdgeInsets::all(24.0))
-        // Wrapped text — resize the window and the caption reflows.
-        .child(Text::display("Tezzera UI"))
         .child(Text::caption(
-            "A declarative Rust UI framework with a CPU compositor, reactive \
-             atom-based state, and a full widget library. This caption word-wraps \
-             with real kerned font metrics — resize the window to watch it reflow \
-             onto the next line.",
+            "This page scrolls via a ScrollController (⬆ Top in the AppBar \
+             jumps home programmatically). The carousel below scrolls \
+             horizontally — vertical wheel over it still scrolls the page \
+             (axis-aware routing).",
         ))
-        // Horizontal carousel — scroll sideways (trackpad swipe / shift+wheel).
-        .child(Text::heading("Feature carousel — scrolls horizontally"))
         .child(Container::new().height(140.0).child(
-            // D097 sugar: a Row that scrolls sideways is one method call.
             Row::new().spacing(12.0)
                 .child(feature_card("Reactive", "Atom<T> state — zero overhead on idle frames"))
                 .child(feature_card("Composable", "Column · Row · Stack · Scaffold · ScrollView"))
@@ -141,8 +143,39 @@ fn home_content(
                 .child(feature_card("Layered", "Dialog · Menu · Sheet · Toast overlays"))
                 .scrollable(carousel_x.clone()),
         ))
-        // Overlay triggers.
-        .child(Text::heading("Overlays"))
+        .child(Text::heading("Tall content to scroll"))
+        .children((1..=12).map(|i| {
+            Box::new(
+                Card::new(Text::label(format!("Section {i} — keep scrolling")))
+                    .radius(10.0).elevation(3.0),
+            ) as BoxedWidget
+        }).collect())
+        .child(Text::caption("The end — press ⬆ Top."))
+}
+
+fn overlays_screen(
+    dialog_open: &Atom<bool>,
+    menu_open: &Atom<bool>,
+    sheet_open: &Atom<bool>,
+    toast_open: &Atom<bool>,
+) -> impl Widget {
+    let d_open = dialog_open.clone();
+    let d_cancel = dialog_open.clone();
+    let d_confirm = dialog_open.clone();
+    let d_toast = toast_open.clone();
+    let m_open = menu_open.clone();
+    let m_a = menu_open.clone();
+    let m_b = menu_open.clone();
+    let s_open = sheet_open.clone();
+    let t_open = toast_open.clone();
+
+    Column::new()
+        .spacing(16.0)
+        .padding(EdgeInsets::all(24.0))
+        .child(Text::caption(
+            "Scrim tap and Escape dismiss. The menu clamps inside the window \
+             and closes on any outside tap.",
+        ))
         .child(
             Row::new().spacing(8.0)
                 .child(
@@ -155,7 +188,7 @@ fn home_content(
                             let toast = d_toast.clone();
                             Box::new(
                                 Dialog::new("Delete item?")
-                                    .message("This action cannot be undone. Tap the scrim to dismiss.")
+                                    .message("This action cannot be undone.")
                                     .action("Cancel", move || cancel.set(false))
                                     .destructive_action("Delete", move || {
                                         confirm.set(false);
@@ -165,23 +198,33 @@ fn home_content(
                         }),
                 )
                 .child(
-                    Button::new("Bottom Sheet")
+                    Button::new("Menu ▾")
                         .variant(ButtonVariant::Secondary)
+                        .on_press(move || m_open.set(true))
+                        .dropdown(menu_open.clone(), move || {
+                            let a = m_a.clone();
+                            let b = m_b.clone();
+                            Box::new(
+                                Menu::new()
+                                    .item("First action", move || a.set(false))
+                                    .item("Second action", move || b.set(false)),
+                            )
+                        }),
+                )
+                .child(
+                    Button::new("Bottom Sheet")
+                        .variant(ButtonVariant::Ghost)
                         .on_press(move || s_open.set(true))
                         .sheet(sheet_open.clone(), || {
                             Box::new(Sheet::new(
-                                Column::new()
-                                    .spacing(8.0)
+                                Column::new().spacing(8.0)
                                     .child(Text::title("Sheet title"))
-                                    .child(Text::caption(
-                                        "Full-width bottom sheet with rounded top corners \
-                                         and a grab handle. Tap the scrim to dismiss.",
-                                    )),
+                                    .child(Text::caption("Tap the scrim or press Escape to dismiss.")),
                             ))
                         }),
                 )
                 .child(
-                    Button::new("Show Toast")
+                    Button::new("Toast")
                         .variant(ButtonVariant::Success)
                         .on_press(move || Toast::show(&t_open, 2.5))
                         .toast(toast_open.clone(), || {
@@ -189,63 +232,18 @@ fn home_content(
                         }),
                 ),
         )
-        // Routing.
-        .child(Text::heading("Navigation"))
-        .child(
-            Row::new().spacing(8.0)
-                .child(Button::new("About this demo →")
-                    .on_press(move || { nav_about.push(Screen::About); })),
-        )
-        // Image blits — placeholder grid (bilinear-scaled).
-        .child(Text::heading("Images"))
-        .child(
-            Row::new().spacing(8.0)
-                .child(Image::placeholder(Color::rgb(70, 100, 170)).width(180.0).height(120.0))
-                .child(Image::placeholder(Color::rgb(170, 70, 100)).width(180.0).height(120.0))
-                .child(Image::placeholder(Color::rgb(70, 170, 100)).width(180.0).height(120.0)),
-        )
 }
 
-fn feature_card(title: &str, body: &str) -> impl Widget {
-    Container::new().width(240.0).child(
-        Card::new(
-            Column::new()
-                .spacing(6.0)
-                .child(Text::label(title).weight(FontWeight::Bold))
-                .child(Text::caption(body)),
-        )
-        .radius(12.0)
-        .elevation(6.0)
-        .padding(EdgeInsets::all(16.0)),
-    )
-}
-
-// ── About screen ──────────────────────────────────────────────────────────────
-
-fn about_content(list_scroll: &Atom<f32>) -> impl Widget {
+fn virtual_list_screen(list_scroll: &Atom<f32>) -> impl Widget {
     let list_scroll = list_scroll.clone();
     Column::new()
-        .spacing(16.0)
+        .spacing(12.0)
         .padding(EdgeInsets::all(24.0))
-        .child(Text::display("About"))
-        .child(Text::new(
-            "This screen was pushed onto the ScreenNav stack — the ← Back button \
-             in the AppBar pops it. Screen state lives in an Atom<Vec<Screen>> so \
-             the owning component rebuilds automatically on push and pop.\n\n\
-             Explicit newlines are honored by the Text widget, and long paragraphs \
-             wrap using greedy word-wrap with real kerned font metrics.",
-        ).size(16.0))
         .child(Text::caption(
-            "This caption is capped at two lines with max_lines(2), no matter how \
-             much text is put into it — everything past the second line is simply \
-             truncated away, which is exactly what happens to this sentence.",
-        ).max_lines(2))
-        .child(Text::heading("Virtualized list — 10,000 rows"))
-        .child(Text::caption(
-            "Only the visible rows are built and painted each frame \
-             (RecyclerView model). Scroll it.",
+            "10,000 rows; only the visible window is built, laid out, and \
+             painted each frame (RecyclerView model).",
         ))
-        .child(Container::new().height(240.0).child(
+        .child(Container::new().height(430.0).child(
             ListView::builder(10_000, 40.0, list_scroll, |i| {
                 Box::new(
                     Container::new()
@@ -256,12 +254,63 @@ fn about_content(list_scroll: &Atom<f32>) -> impl Widget {
         ))
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+fn gallery_screen(check_on: &Atom<bool>, switch_on: &Atom<bool>, slider_v: &Atom<f32>) -> impl Widget {
+    let c = check_on.clone();
+    let c2 = check_on.clone();
+    let sw = switch_on.clone();
+    let sw2 = switch_on.clone();
+    let sl = slider_v.clone();
+
+    Column::new()
+        .spacing(16.0)
+        .padding(EdgeInsets::all(24.0))
+        .child(Text::heading("Buttons"))
+        .child(Row::new().spacing(8.0)
+            .child(Button::new("Primary"))
+            .child(Button::new("Secondary").variant(ButtonVariant::Secondary))
+            .child(Button::new("Ghost").variant(ButtonVariant::Ghost))
+            .child(Button::new("Danger").variant(ButtonVariant::Danger))
+            .child(Button::new("Disabled").disabled()))
+        .child(Text::heading("Inputs"))
+        .child(Row::new().spacing(16.0)
+            .child(Checkbox::new(check_on.get()).on_change(move |v| c.set(v)))
+            .child(Text::label(if c2.get() { "checked" } else { "unchecked" }))
+            .child(Switch::new(switch_on.get()).on_change(move |v| sw.set(v)))
+            .child(Text::label(if sw2.get() { "on" } else { "off" })))
+        .child(Row::new().spacing(8.0)
+            .child(Button::new("−").variant(ButtonVariant::Secondary)
+                .on_press({ let sl = sl.clone(); move || sl.set((sl.get() - 0.1).max(0.0)) }))
+            .child(Button::new("+").variant(ButtonVariant::Secondary)
+                .on_press({ let sl = sl.clone(); move || sl.set((sl.get() + 0.1).min(1.0)) }))
+            .child(Text::caption("Slider drag lands with gesture events")))
+        .child(Slider::new(slider_v.get()))
+        .child(ProgressBar::new(slider_v.get()))
+        .child(Text::heading("Bits"))
+        .child(Row::new().spacing(8.0)
+            .child(Chip::new("Chip"))
+            .child(Avatar::new("TZ"))
+            .child(Badge::new("3")))
+}
+
+// ── Shared bits ───────────────────────────────────────────────────────────────
+
+fn feature_card(title: &str, body: &str) -> impl Widget {
+    Container::new().width(240.0).child(
+        Card::new(
+            Column::new().spacing(6.0)
+                .child(Text::label(title).weight(FontWeight::Bold))
+                .child(Text::caption(body)),
+        )
+        .radius(12.0)
+        .elevation(6.0)
+        .padding(EdgeInsets::all(16.0)),
+    )
+}
 
 fn main() {
     let _ = env_logger::try_init();
     App::new()
-        .title("Tezzera — App Demo")
+        .title("Tezzera — Gallery")
         .size(900, 640)
         .theme(dark_theme())
         .launch(AppDemo);

@@ -13,6 +13,11 @@ pub struct Badge {
 }
 
 impl Badge {
+    /// D093: new() must exist wherever named constructors exist.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self::label(text)
+    }
+
     pub fn count(n: u32) -> Self {
         Self::label(n.to_string())
     }

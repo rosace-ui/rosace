@@ -136,3 +136,10 @@ named constructor or a theme preset, not a widget.**
 
 Learning curve = number of rules, not number of widgets. Target: a user who
 has used TWO widgets can guess the API of every other widget correctly.
+
+## 9. Demo policy
+
+ONE canonical demo: `app_demo`. Home is an index of feature tiles; every
+feature lives on its own route (Screen variant + tile + screen fn).
+New features add a route — never a new demo bin, never more Home clutter.
+Phase demo bins (phase2..19) are historical; do not extend them.

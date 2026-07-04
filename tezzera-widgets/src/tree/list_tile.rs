@@ -15,6 +15,7 @@ pub struct ListTile {
     pub title_size: f32,
     pub subtitle_size: f32,
     pub title_color: Color,
+    press: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     pub subtitle_color: Color,
     pub bg: Color,
     pub selected_bg: Color,
@@ -40,6 +41,7 @@ impl ListTile {
             selected_bg: Color::rgb(26, 29, 50),
             selected_accent: Color::rgb(110, 75, 210),
             divider: true,
+            press: None,
         }
     }
     pub fn subtitle(mut self, s: impl Into<String>) -> Self { self.subtitle = Some(s.into()); self }
@@ -50,6 +52,12 @@ impl ListTile {
     pub fn no_divider(mut self) -> Self { self.divider = false; self }
     pub fn title_color(mut self, c: Color) -> Self { self.title_color = c; self }
     pub fn background(mut self, c: Color) -> Self { self.bg = c; self }
+
+    /// Make the whole tile pressable.
+    pub fn on_press(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.press = Some(std::sync::Arc::new(f));
+        self
+    }
 }
 
 impl Widget for ListTile {
@@ -59,6 +67,10 @@ impl Widget for ListTile {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        if let Some(f) = &self.press {
+            let f = f.clone();
+            ctx.on_press(move || f());
+        }
         let r = ctx.rect;
         let bg = if self.selected { self.selected_bg } else { self.bg };
         if bg.a > 0 { ctx.fill_rect(r, bg); }

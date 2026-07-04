@@ -5,6 +5,7 @@ use super::{Widget, LayoutCtx, PaintCtx};
 /// A checkbox with optional label.
 pub struct Checkbox {
     pub checked: bool,
+    on_change: Option<std::sync::Arc<dyn Fn(bool) + Send + Sync>>,
     pub indeterminate: bool,
     pub label: Option<String>,
     pub box_size: f32,
@@ -23,9 +24,16 @@ impl Checkbox {
             color: Color::rgb(110, 75, 210),
             border_color: Color::rgb(60, 65, 95),
             font_size: 11.0,
+            on_change: None,
         }
     }
     pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
+
+    /// Called with the NEW value when the control is tapped (D094).
+    pub fn on_change(mut self, f: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        self.on_change = Some(std::sync::Arc::new(f));
+        self
+    }
     pub fn indeterminate(mut self) -> Self { self.indeterminate = true; self }
     pub fn color(mut self, c: Color) -> Self { self.color = c; self }
     pub fn size(mut self, s: f32) -> Self { self.box_size = s; self.font_size = s * 0.7; self }
@@ -40,6 +48,11 @@ impl Widget for Checkbox {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        if let Some(f) = &self.on_change {
+            let f = f.clone();
+            let next = !self.checked;
+            ctx.on_press(move || f(next));
+        }
         ctx.semantics(super::Semantics::new(tezzera_core::Role::Checkbox)
             .value(if self.checked { "checked" } else { "unchecked" }));
         let r = ctx.rect;
