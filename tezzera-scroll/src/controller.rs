@@ -13,6 +13,13 @@ pub struct ScrollController {
 }
 
 impl ScrollController {
+    /// Create (or retrieve) a controller persisted in component state — the
+    /// scroll position survives rebuilds. Follows the hook rules: call
+    /// unconditionally in `build()`, stable order.
+    pub fn for_ctx(ctx: &mut tezzera_core::Context) -> Self {
+        ctx.state(Self::new()).get()
+    }
+
     pub fn new() -> Self {
         Self {
             offset: tezzera_state::use_atom([0.0f32; 2]),

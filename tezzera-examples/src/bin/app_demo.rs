@@ -27,8 +27,8 @@ impl Component for AppDemo {
     fn build(&self, ctx: &mut Context) -> Element {
         // Hooks — unconditional, stable order.
         let nav = ScreenNav::new(ctx, Screen::Home);
+        let page_ctrl = ScrollController::for_ctx(ctx);
         let is_dark:     Atom<bool> = ctx.state(true);
-        let scroll_y:    Atom<f32>  = ctx.state(0.0f32);
         let carousel_x:  Atom<f32>  = ctx.state(0.0f32);
         let dialog_open: Atom<bool> = ctx.state(false);
         let menu_open:   Atom<bool> = ctx.state(false);
@@ -40,9 +40,9 @@ impl Component for AppDemo {
 
         // ── Body per screen ──────────────────────────────────────────────
         let body: BoxedWidget = match screen {
-            Screen::Home => Box::new(ScrollView::new(
+            Screen::Home => Box::new(ScrollView::controlled(
                 home_content(&nav, &carousel_x, &dialog_open, &sheet_open, &toast_open),
-                scroll_y.clone(),
+                page_ctrl.clone(),
             )),
             Screen::About => Box::new(about_content(&list_scroll)),
         };
@@ -80,6 +80,12 @@ impl Component for AppDemo {
                     )
                 }),
         );
+
+        // Programmatic scroll: jump the page back to the top.
+        let top_ctrl = page_ctrl.clone();
+        bar = bar.action(Button::new("⬆ Top")
+            .variant(ButtonVariant::Ghost)
+            .on_press(move || top_ctrl.scroll_to_top()));
 
         // Theme toggle.
         let label = if is_dark.get() { "☀ Light" } else { "🌙 Dark" };

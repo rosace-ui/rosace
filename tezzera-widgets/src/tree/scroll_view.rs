@@ -3,6 +3,7 @@ use tezzera_core::types::{Point, Rect, Size};
 use tezzera_layout::Constraints;
 use tezzera_render::{Color, DrawCommand};
 use tezzera_state::Atom;
+use tezzera_scroll::ScrollController;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h, intersect_rect};
 
 /// Scroll direction.
@@ -28,6 +29,9 @@ pub struct ScrollView {
     live_offset: Option<Atom<f32>>,
     /// Second axis live offset (horizontal in `Both` mode).
     live_offset_x: Option<Atom<f32>>,
+    /// Programmatic controller (overrides the atoms when set). Publishes
+    /// viewport/content sizes back so scroll_to/scroll_by can clamp.
+    controller: Option<ScrollController>,
     pub axis: ScrollAxis,
     pub show_scrollbar: bool,
     pub scrollbar_color: Color,
@@ -47,6 +51,7 @@ impl ScrollView {
             offset: 0.0,
             live_offset: Some(scroll_y),
             live_offset_x: None,
+            controller: None,
             axis: ScrollAxis::Vertical,
             show_scrollbar: true,
             scrollbar_color: Color::rgb(50, 55, 85),
@@ -60,6 +65,7 @@ impl ScrollView {
             offset: 0.0,
             live_offset: None,
             live_offset_x: Some(scroll_x),
+            controller: None,
             axis: ScrollAxis::Horizontal,
             show_scrollbar: true,
             scrollbar_color: Color::rgb(50, 55, 85),
@@ -74,6 +80,25 @@ impl ScrollView {
             offset: 0.0,
             live_offset: None,
             live_offset_x: None,
+            controller: None,
+            axis: ScrollAxis::Vertical,
+            show_scrollbar: true,
+            scrollbar_color: Color::rgb(50, 55, 85),
+        }
+    }
+
+    /// A scroll view driven by a [`ScrollController`] — programmatic
+    /// scroll_to / scroll_by / scroll_to_top / scroll_to_bottom, with the
+    /// viewport and content extents published back to the controller.
+    /// Create the controller with `ScrollController::for_ctx(ctx)` so the
+    /// position survives rebuilds.
+    pub fn controlled(child: impl Widget + 'static, controller: ScrollController) -> Self {
+        Self {
+            child: Box::new(child),
+            offset: 0.0,
+            live_offset: None,
+            live_offset_x: None,
+            controller: Some(controller),
             axis: ScrollAxis::Vertical,
             show_scrollbar: true,
             scrollbar_color: Color::rgb(50, 55, 85),
@@ -103,9 +128,16 @@ impl Widget for ScrollView {
     fn paint(&self, ctx: &mut PaintCtx) {
         let vp = ctx.rect;
 
-        // Resolve scroll offset — atom value takes precedence over static field.
-        let scroll_y = self.live_offset.as_ref().map_or(self.offset, |a| a.get());
-        let scroll_x = self.live_offset_x.as_ref().map_or(0.0_f32, |a| a.get());
+        // Resolve scroll offset — controller wins, then atoms, then static.
+        let (scroll_x, scroll_y) = if let Some(ctrl) = &self.controller {
+            let [x, y] = ctrl.offset.get();
+            (x, y)
+        } else {
+            (
+                self.live_offset_x.as_ref().map_or(0.0_f32, |a| a.get()),
+                self.live_offset.as_ref().map_or(self.offset, |a| a.get()),
+            )
+        };
 
         // Content constraints (unbounded-axis doctrine, API_DESIGN §6):
         // on the scroll axis min = viewport, max = Unbounded — short content
@@ -160,6 +192,30 @@ impl Widget for ScrollView {
         self.child.paint(&mut child_ctx);
 
         ctx.record(DrawCommand::PopClip);
+
+        // Publish extents so the controller can clamp programmatic scrolls.
+        // Guarded sets: writing an unchanged atom would dirty the component
+        // every frame and spin the render loop.
+        if let Some(ctrl) = &self.controller {
+            let vp_s = [vp.size.width, vp.size.height];
+            if ctrl.viewport_size.get() != vp_s { ctrl.viewport_size.set(vp_s); }
+            let cs = [child_size.width, child_size.height];
+            if ctrl.content_size.get() != cs { ctrl.content_size.set(cs); }
+
+            let axes = match self.axis {
+                ScrollAxis::Vertical   => super::ScrollAxes::Y,
+                ScrollAxis::Horizontal => super::ScrollAxes::X,
+                ScrollAxis::Both       => super::ScrollAxes::BOTH,
+            };
+            let ctrl = ctrl.clone();
+            let (ax, ay) = (axes.x, axes.y);
+            ctx.register_scroll_target(vp, axes, Arc::new(move |dx, dy| {
+                ctrl.scroll_by(
+                    if ax { -dx } else { 0.0 },
+                    if ay { -dy } else { 0.0 },
+                );
+            }));
+        }
 
         // Register a scroll target so the event router can dispatch wheel events
         // to this viewport. Only live-scrolling ScrollViews respond to wheel input.

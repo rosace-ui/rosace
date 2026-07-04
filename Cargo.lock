@@ -2368,6 +2368,7 @@ dependencies = [
  "tezzera-core",
  "tezzera-layout",
  "tezzera-render",
+ "tezzera-scroll",
  "tezzera-state",
  "tezzera-text",
  "tezzera-theme",

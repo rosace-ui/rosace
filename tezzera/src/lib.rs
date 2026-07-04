@@ -829,4 +829,5 @@ pub mod prelude {
     pub use tezzera_core::types::{Point, Rect, Size};
     pub use tezzera_layout::{Constraints, CrossAxisAlignment, MainAxisAlignment};
     pub use tezzera_state::Atom;
+    pub use tezzera_scroll::ScrollController;
 }

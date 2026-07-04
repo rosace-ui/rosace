@@ -13,6 +13,7 @@ tezzera-core   = { path = "../tezzera-core" }
 tezzera-state  = { path = "../tezzera-state" }
 tezzera-layout = { path = "../tezzera-layout" }
 tezzera-render = { path = "../tezzera-render" }
+tezzera-scroll = { path = "../tezzera-scroll" }
 tezzera-text   = { path = "../tezzera-text" }
 tezzera-theme  = { path = "../tezzera-theme" }
 tiny-skia      = "0.11"
