@@ -15,7 +15,9 @@
 
 use std::sync::Arc;
 
-use tezzera_core::types::Rect;
+use tezzera_core::types::{Rect, Size};
+use tezzera_layout::Constraints;
+use tezzera_render::Picture;
 
 use super::overlay::OverlayEntry;
 use super::TransformLayerEntry;
@@ -71,6 +73,32 @@ pub struct TreeNode {
     /// first scrollable painted at this position, survives rebuilds like
     /// Flutter's ScrollPosition.
     pub scroll_ctrl: Option<tezzera_scroll::ScrollController>,
+
+    // ── Picture cache (Phase 20 unification — was the flat RenderNode) ───
+    /// Widget type name at this position; a mismatch resets the caches.
+    pub tag: &'static str,
+    /// Constraints used for the last successful layout pass.
+    pub last_constraints: Option<Constraints>,
+    /// Size returned by the last layout pass.
+    pub cached_size: Option<Size>,
+    /// Display list from the last paint pass.
+    pub cached_picture: Option<Arc<Picture>>,
+    /// World-space rect of the last paint (also the damage extent).
+    pub cached_rect: Option<Rect>,
+    /// When true, the subtree must re-layout/re-paint this frame.
+    pub paint_dirty: bool,
+
+    // ── Interaction state (dispatcher-owned) ─────────────────────────────
+    /// True while the cursor is over this node's hit/hover region.
+    pub hovered: bool,
+    /// Pointer interception: 1 = ignore (subtree transparent to hits),
+    /// 2 = absorb (consume everything in rect). Declared per paint.
+    pub pointer_mode: u8,
+    /// Hover-only regions (tooltips) — participate in hover_test but not
+    /// in click dispatch.
+    pub hover_regions: Vec<Rect>,
+    /// Long-press callbacks with their rects.
+    pub long_hits: Vec<HitRegion>,
 }
 
 /// Arena-allocated persistent render tree. Node 0 is always the root.
@@ -99,6 +127,12 @@ impl RenderTree {
         self.begin(Self::ROOT);
     }
 
+    /// Reset a node for a fresh paint: clears its declarations (the picture
+    /// cache fields persist — the walker manages those explicitly).
+    pub fn reset(&mut self, node: NodeId) {
+        self.begin(node);
+    }
+
     /// Begin (re)painting `node`: clear declared data, reset the child cursor.
     fn begin(&mut self, node: NodeId) {
         let n = &mut self.nodes[node];
@@ -111,6 +145,9 @@ impl RenderTree {
         n.overlays.clear();
         n.transforms.clear();
         n.semantics.clear();
+        n.pointer_mode = 0;
+        n.hover_regions.clear();
+        n.long_hits.clear();
         self.begun_this_frame.push(node);
     }
 
@@ -170,6 +207,18 @@ impl RenderTree {
 
     fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<(Arc<dyn Fn(f32, f32) + Send + Sync>, bool)> {
         let n = &self.nodes[id];
+        // Pointer interceptors (IgnorePointer / AbsorbPointer widgets):
+        // 1 = subtree transparent to hits; 2 = consume everything in rect.
+        if n.pointer_mode == 1 {
+            return None;
+        }
+        if n.pointer_mode == 2 {
+            if let Some(r) = &n.cached_rect {
+                if contains(r, x, y) {
+                    return Some((Arc::new(|_, _| {}), false));
+                }
+            }
+        }
         for &child in n.children.iter().rev() {
             if let Some(cb) = self.hit_test_node(child, x, y) {
                 return Some(cb);
@@ -188,6 +237,69 @@ impl RenderTree {
             }
         }
         None
+    }
+
+    /// Topmost node under the cursor that owns any interactive or hover
+    /// region — drives hover state (buttons, tiles, tooltips).
+    pub fn hover_test(&self, x: f32, y: f32) -> Option<NodeId> {
+        self.hover_test_node(Self::ROOT, x, y)
+    }
+
+    fn hover_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<NodeId> {
+        let n = &self.nodes[id];
+        if n.pointer_mode == 1 {
+            return None;
+        }
+        for &child in n.children.iter().rev() {
+            if let Some(hit) = self.hover_test_node(child, x, y) {
+                return Some(hit);
+            }
+        }
+        let owns = n.hits.iter().map(|(r, _)| r)
+            .chain(n.hits_at.iter().map(|(r, _)| r))
+            .chain(n.long_hits.iter().map(|(r, _)| r))
+            .chain(n.hover_regions.iter())
+            .any(|r| contains(r, x, y));
+        if owns { Some(id) } else { None }
+    }
+
+    /// Topmost long-press callback under the cursor.
+    pub fn long_press_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.long_press_node(Self::ROOT, x, y)
+    }
+
+    fn long_press_node(&self, id: NodeId, x: f32, y: f32) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        let n = &self.nodes[id];
+        if n.pointer_mode == 1 {
+            return None;
+        }
+        for &child in n.children.iter().rev() {
+            if let Some(cb) = self.long_press_node(child, x, y) {
+                return Some(cb);
+            }
+        }
+        for (rect, cb) in n.long_hits.iter().rev() {
+            if contains(rect, x, y) {
+                return Some(cb.clone());
+            }
+        }
+        None
+    }
+
+    /// Set the hovered node, clearing the previous one. Returns true when
+    /// the hover target changed (caller repaints only then).
+    pub fn set_hover(&mut self, target: Option<NodeId>) -> bool {
+        let current = self.nodes.iter().position(|n| n.hovered);
+        if current == target {
+            return false;
+        }
+        if let Some(old) = current {
+            self.nodes[old].hovered = false;
+        }
+        if let Some(new) = target {
+            self.nodes[new].hovered = true;
+        }
+        true
     }
 
     /// Axis-aware scroll routing: among the viewports under the cursor

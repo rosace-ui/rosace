@@ -806,6 +806,28 @@ impl SkiaCanvas {
         self.has_drawn = true;
     }
 
+    /// Set (or clear) a master clip in LOGICAL pixels — used for
+    /// damage-rect repaints: fills and replays outside it are culled.
+    /// `play_picture` treats it as the outer clip and restores it.
+    pub fn set_logical_clip(&mut self, r: Option<Rect>) {
+        let s = self.scale;
+        self.clip = r.map(|r| (
+            (r.origin.x * s).floor() as i32,
+            (r.origin.y * s).floor() as i32,
+            ((r.origin.x + r.size.width) * s).ceil() as i32,
+            ((r.origin.y + r.size.height) * s).ceil() as i32,
+        ));
+    }
+
+    /// Fill a LOGICAL-pixel rect (scaled to physical) — damage background.
+    pub fn fill_logical_rect(&mut self, r: Rect, color: Color) {
+        let s = self.scale;
+        self.fill_rect(Rect {
+            origin: Point { x: r.origin.x * s, y: r.origin.y * s },
+            size: Size { width: r.size.width * s, height: r.size.height * s },
+        }, color);
+    }
+
     /// Returns the raw RGBA pixel data as a byte slice.
     pub fn pixels(&self) -> &[u8] {
         self.pixmap.data()

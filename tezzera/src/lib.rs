@@ -23,9 +23,6 @@
 //! }
 //! ```
 
-mod render_node;
-mod reconcile;
-
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -123,10 +120,6 @@ impl App {
         // component's atoms haven't changed.
         let mut element_cache: std::collections::HashMap<u64, tezzera_core::Element> =
             std::collections::HashMap::new();
-        // Persistent RenderNode list (DFS order of native elements). Caches
-        // last layout size and painted Picture so unchanged widgets skip
-        // re-layout and re-paint.
-        let mut render_nodes: Vec<render_node::RenderNode> = Vec::new();
         // ── Phase 20: persistent render tree (D091) ────────────────────────
         // Single owner of per-node retained state: hit/scroll regions, focus
         // nodes, overlay attachments, transform layers. State declared during
@@ -199,9 +192,10 @@ impl App {
                     || window_resized;
 
                 if needs_paint {
-                // ── Clear background (direct canvas write — not recorded) ──
+                // A full repaint clears the whole canvas; otherwise we clear
+                // and replay only the damaged region (computed by the walk).
+                let full_repaint = global_dirty || window_resized || !canvas.has_drawn();
                 let bg = theme_color(&current_theme.colors.background);
-                canvas.clear(bg);
 
                 // ── Set up main display-list recording ─────────────────────
                 let mut recorder = tezzera_render::PictureRecorder::new();
@@ -227,15 +221,14 @@ impl App {
 
                 // ── Walk element tree — widgets record DrawCommands ────────
                 let mut position: u64 = 0;
-                let mut native_idx: usize = 0;
+                let mut damage: Option<Rect> = None;
                 let mut new_mounted: HashSet<u64> = HashSet::new();
                 walk_element(
                     &element,
                     constraints,
                     &mut paint_ctx,
                     &mut position,
-                    &mut native_idx,
-                    &mut render_nodes,
+                    &mut damage,
                     &dirty_ids,
                     global_dirty,
                     root_is_dirty,  // subtree_dirty: dirty if root component's atoms changed
@@ -244,9 +237,27 @@ impl App {
                 );
                 render_tree.borrow_mut().finalize();
 
-                // ── Replay the main display list onto the canvas ───────────
+                // ── Damage-scoped clear + replay (Phase 20 Step 5, slice 2) ─
+                // Full repaint (first frame, resize, theme swap) clears the
+                // whole canvas; otherwise clear + replay only the union of
+                // changed rects, culling every fill/blit/text outside it.
                 let picture = recorder.finish();
+                // Inflate damage to cover pixels a widget paints OUTSIDE its
+                // rect: shadow blur (≤16px), focus rings, rounded-corner AA.
+                let damage_clip = if full_repaint {
+                    None
+                } else {
+                    damage.map(|d| inflate_rect(d, 24.0))
+                };
+                match damage_clip {
+                    None => canvas.clear(bg),
+                    Some(d) => {
+                        canvas.set_logical_clip(Some(d));
+                        canvas.fill_logical_rect(d, bg);
+                    }
+                }
                 canvas.play_picture(&picture, &font);
+                canvas.set_logical_clip(None);
 
                 // ── Reconcile: fire lifecycle for mounted/unmounted components
                 for &id in new_mounted.difference(&prev_mounted) {
@@ -526,8 +537,7 @@ impl Default for App {
 /// collecting mounted component IDs for the reconciler, and painting widgets.
 ///
 /// `position` — DFS counter for Component nodes (determines ComponentId).
-/// `native_idx` — DFS counter for Native nodes (indexes into `render_nodes`).
-/// `render_nodes` — persistent RenderNode list; caches layout size + Picture.
+/// `damage` — union of world rects whose pixels change this frame.
 /// `dirty_ids` — component IDs whose atoms changed this frame.
 /// `global_dirty` — when true, skip cache and rebuild everything.
 /// `subtree_dirty` — an ancestor component rebuilt this frame; force re-paint.
@@ -538,8 +548,7 @@ fn walk_element(
     constraints: tezzera_layout::Constraints,
     ctx: &mut tezzera_widgets::tree::PaintCtx,
     position: &mut u64,
-    native_idx: &mut usize,
-    render_nodes: &mut Vec<render_node::RenderNode>,
+    damage: &mut Option<Rect>,
     dirty_ids: &std::collections::HashSet<tezzera_core::types::ComponentId>,
     global_dirty: bool,
     subtree_dirty: bool,
@@ -600,8 +609,7 @@ fn walk_element(
                 constraints,
                 ctx,
                 position,
-                native_idx,
-                render_nodes,
+                damage,
                 dirty_ids,
                 global_dirty,
                 child_subtree_dirty,
@@ -616,57 +624,83 @@ fn walk_element(
             if let Some(wb) = n.payload.as_ref()
                 .and_then(|p| p.as_any().downcast_ref::<WidgetBox>())
             {
-                // ── Ensure RenderNode exists at this DFS position ──────────
-                let idx = *native_idx;
-                *native_idx += 1;
-                if render_nodes.len() <= idx {
-                    render_nodes.push(render_node::RenderNode::new(n.tag, n.key.clone()));
-                } else if render_nodes[idx].tag != n.tag {
-                    // Type mismatch — replace with a fresh dirty node.
-                    render_nodes[idx] = render_node::RenderNode::new(n.tag, n.key.clone());
-                }
-                let node = &mut render_nodes[idx];
+                // Consume this position's slot WITHOUT reset — the cache
+                // state on the node decides whether we repaint (Phase 20:
+                // the arena IS the render tree; the flat list is gone).
+                let node_id = ctx.tree.borrow_mut().slot(ctx.node, false);
 
-                // When the containing component rebuilt, force re-layout + re-paint.
-                if subtree_dirty {
-                    node.paint_dirty = true;
-                }
-
-                // ── Layout (skip if constraints unchanged and not dirty) ────
-                let size = if node.last_constraints == Some(constraints) && !node.paint_dirty
-                    && node.cached_size.is_some()
                 {
-                    node.cached_size.unwrap()
-                } else {
-                    let lctx = ctx.layout_ctx(constraints);
-                    let s = wb.0.layout(&lctx);
-                    node.last_constraints = Some(constraints);
-                    node.cached_size = Some(s);
-                    node.paint_dirty = true;
-                    s
+                    let mut tree = ctx.tree.borrow_mut();
+                    let node = tree.node_mut(node_id);
+                    if node.tag != n.tag {
+                        // Type mismatch — hard cache reset.
+                        node.tag = n.tag;
+                        node.last_constraints = None;
+                        node.cached_size = None;
+                        node.cached_picture = None;
+                        node.cached_rect = None;
+                        node.paint_dirty = true;
+                    }
+                    if subtree_dirty {
+                        node.paint_dirty = true;
+                    }
+                }
+
+                // ── Layout (skip if constraints unchanged and not dirty) ──
+                let cached = {
+                    let tree = ctx.tree.borrow();
+                    let node = tree.node(node_id);
+                    if node.last_constraints == Some(constraints)
+                        && !node.paint_dirty
+                        && node.cached_size.is_some()
+                    {
+                        node.cached_size
+                    } else {
+                        None
+                    }
+                };
+                let size = match cached {
+                    Some(s) => s,
+                    None => {
+                        let lctx = ctx.layout_ctx(constraints);
+                        let s = wb.0.layout(&lctx);
+                        let mut tree = ctx.tree.borrow_mut();
+                        let node = tree.node_mut(node_id);
+                        node.last_constraints = Some(constraints);
+                        node.cached_size = Some(s);
+                        node.paint_dirty = true;
+                        s
+                    }
                 };
 
                 let child_rect = Rect { origin: ctx.rect.origin, size };
 
-                // ── Paint (skip if rect unchanged and not dirty) ───────────
-                if !node.paint_dirty
-                    && node.cached_picture.is_some()
-                    && node.cached_rect == Some(child_rect)
-                {
-                    // Replay cached display list — zero widget work. Consume
-                    // the tree slot WITHOUT resetting it (D091): the subtree's
-                    // declared hit/scroll/overlay/focus state persists, and
-                    // sibling slots stay positionally aligned.
-                    ctx.tree.borrow_mut().slot(ctx.node, false);
-                    let pic = node.cached_picture.as_ref().unwrap();
+                // ── Paint (replay cache or fresh, tracking damage) ─────────
+                let (replay, old_rect) = {
+                    let tree = ctx.tree.borrow();
+                    let node = tree.node(node_id);
+                    (
+                        !node.paint_dirty
+                            && node.cached_picture.is_some()
+                            && node.cached_rect == Some(child_rect),
+                        node.cached_rect,
+                    )
+                };
+
+                if replay {
+                    // Zero widget work; slot untouched so the subtree's
+                    // declared regions persist (D091).
+                    let pic = ctx.tree.borrow().node(node_id).cached_picture.clone().unwrap();
                     for cmd in &pic.commands {
                         ctx.recorder.push(cmd.clone());
                     }
                 } else {
-                    // Fresh paint — record into a sub-recorder, then merge.
-                    // The reset slot clears the subtree's previously declared
-                    // regions; the widget re-declares them during paint.
-                    let tree_node = ctx.tree.borrow_mut().slot(ctx.node, true);
+                    // Damage = where it was ∪ where it is.
+                    *damage = union_rect(*damage, old_rect);
+                    *damage = union_rect(*damage, Some(child_rect));
+
+                    // Reset declarations; the widget re-declares during paint.
+                    ctx.tree.borrow_mut().reset(node_id);
                     let mut sub_recorder = tezzera_render::PictureRecorder::new();
                     {
                         let mut child_ctx = tezzera_widgets::tree::PaintCtx {
@@ -675,20 +709,18 @@ fn walk_element(
                             font: ctx.font,
                             theme: ctx.theme.clone(),
                             tree: Rc::clone(&ctx.tree),
-                            node: tree_node,
+                            node: node_id,
                             owner: ctx.owner,
                             clip_rect: ctx.clip_rect,
                         };
                         wb.0.paint(&mut child_ctx);
                     }
                     let picture = sub_recorder.finish();
-
-                    // Merge sub-picture commands into main recorder.
                     for cmd in &picture.commands {
                         ctx.recorder.push(cmd.clone());
                     }
-
-                    // Cache the picture and clear dirty flag.
+                    let mut tree = ctx.tree.borrow_mut();
+                    let node = tree.node_mut(node_id);
                     node.cached_picture = Some(Arc::new(picture));
                     node.cached_rect    = Some(child_rect);
                     node.paint_dirty    = false;
@@ -747,6 +779,30 @@ struct OverlayRoute {
     on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
     hits: Vec<(tezzera_core::types::Rect, Arc<dyn Fn() + Send + Sync>)>,
     scrolls: Vec<(tezzera_core::types::Rect, tezzera_widgets::tree::ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
+}
+
+/// Grow a rect by `m` logical pixels on every side.
+fn inflate_rect(r: tezzera_core::types::Rect, m: f32) -> tezzera_core::types::Rect {
+    use tezzera_core::types::{Point, Rect, Size};
+    Rect {
+        origin: Point { x: r.origin.x - m, y: r.origin.y - m },
+        size: Size { width: r.size.width + 2.0 * m, height: r.size.height + 2.0 * m },
+    }
+}
+
+/// Union of two optional rects (damage accumulation).
+fn union_rect(a: Option<tezzera_core::types::Rect>, b: Option<tezzera_core::types::Rect>) -> Option<tezzera_core::types::Rect> {
+    use tezzera_core::types::{Point, Rect, Size};
+    match (a, b) {
+        (None, x) | (x, None) => x,
+        (Some(a), Some(b)) => {
+            let x0 = a.origin.x.min(b.origin.x);
+            let y0 = a.origin.y.min(b.origin.y);
+            let x1 = (a.origin.x + a.size.width).max(b.origin.x + b.size.width);
+            let y1 = (a.origin.y + a.size.height).max(b.origin.y + b.size.height);
+            Some(Rect { origin: Point { x: x0, y: y0 }, size: Size { width: x1 - x0, height: y1 - y0 } })
+        }
+    }
 }
 
 #[inline]

@@ -337,6 +337,32 @@ impl<'a> PaintCtx<'a> {
         c
     }
 
+    /// True while the cursor is over this widget's interactive region —
+    /// paint hover feedback with it. Hover changes repaint automatically.
+    pub fn hovered(&self) -> bool {
+        self.tree.borrow().node(self.node).hovered
+    }
+
+    /// Declare a hover-only region (tooltips): participates in hover
+    /// tracking without swallowing clicks.
+    pub fn hoverable(&self) {
+        let r = self.rect;
+        self.tree.borrow_mut().node_mut(self.node).hover_regions.push(r);
+    }
+
+    /// Declare a long-press callback for this widget's rect (fires after
+    /// ~500 ms of press without movement).
+    pub fn on_long_press(&self, f: impl Fn() + Send + Sync + 'static) {
+        let r = self.rect;
+        self.tree.borrow_mut().node_mut(self.node).long_hits.push((r, Arc::new(f)));
+    }
+
+    /// Pointer interception for this subtree: `IgnorePointer` /
+    /// `AbsorbPointer` widgets call this — 1 = transparent, 2 = absorb.
+    pub fn set_pointer_mode(&self, mode: u8) {
+        self.tree.borrow_mut().node_mut(self.node).pointer_mode = mode;
+    }
+
     /// Declare a POSITIONAL press region for this widget's rect — the
     /// callback receives the click point in window-space logical pixels
     /// (sliders, pickers, canvases). Clip-aware like register_hit.
