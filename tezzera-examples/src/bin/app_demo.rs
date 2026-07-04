@@ -61,16 +61,16 @@ impl Component for AppDemo {
 
         let body: BoxedWidget = match screen {
             Screen::Home        => Box::new(home_screen(&nav)),
-            Screen::Typography  => Box::new(typography_screen()),
+            Screen::Typography  => Box::new(ScrollView::new(typography_screen())),
             Screen::Scrolling   => Box::new(ScrollView::controlled(
                 scrolling_screen(), page_ctrl.clone(),
             )),
-            Screen::Overlays    => Box::new(overlays_screen(
+            Screen::Overlays    => Box::new(ScrollView::new(overlays_screen(
                 &dialog_open, &menu_open, &sheet_open, &toast_open,
-            )),
+            ))),
             Screen::VirtualList => Box::new(virtual_list_screen()),
-            Screen::Gallery     => Box::new(gallery_screen(&check_on, &switch_on, &slider_v, &press_count)),
-            Screen::Showcase    => Box::new(showcase_screen(&radio_sel, &seg_sel, &drop_open, &drop_sel, &exp_open, &anim_on)),
+            Screen::Gallery     => Box::new(ScrollView::new(gallery_screen(&check_on, &switch_on, &slider_v, &press_count))),
+            Screen::Showcase    => Box::new(ScrollView::new(showcase_screen(&radio_sel, &seg_sel, &drop_open, &drop_sel, &exp_open, &anim_on))),
         };
 
         // ── AppBar: back appears off-Home; ⬆ Top only where it acts ──────
@@ -323,7 +323,7 @@ fn showcase_screen(radio_sel: &Atom<usize>, seg_sel: &Atom<usize>, drop_open: &A
             .child(Switch::new(an.get()).on_change(move |v| { an.set(v); set_animations(v); })))
         .child(Text::caption("Toggle above, then flip a switch/checkbox/radio below — they ease when on, snap when off."))
         .child(Text::heading("Container shapes"))
-        .child(Row::new().spacing(12.0)
+        .child(Wrap::new().spacing(12.0).run_spacing(12.0)
             .child(Container::new().size(56.0, 56.0).background(Color::rgb(120, 90, 220)).circle())
             .child(Container::new().size(120.0, 40.0).background(Color::rgb(60, 170, 120)).stadium()
                 .align(Alignment::Center).child(Text::label("Stadium")))
@@ -340,7 +340,7 @@ fn showcase_screen(radio_sel: &Atom<usize>, seg_sel: &Atom<usize>, drop_open: &A
             .children(["design","rust","ui","fast","native","reactive","themeable"].iter()
                 .map(|t| Box::new(Chip::new(*t)) as BoxedWidget).collect()))
         .child(Text::heading("Progress & Skeleton"))
-        .child(Row::new().spacing(20.0).cross_axis_alignment(CrossAxisAlignment::Center)
+        .child(Wrap::new().spacing(20.0).run_spacing(12.0)
             .child(CircularProgress::new(0.65))
             .child(CircularProgress::spinner())
             .child(Container::new().width(160.0).child(Column::new().spacing(8.0)

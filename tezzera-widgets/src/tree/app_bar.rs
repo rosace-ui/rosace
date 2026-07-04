@@ -27,7 +27,7 @@ impl AppBar {
             height: 44.0,
             leading: None,
             actions: Vec::new(),
-            show_traffic_lights: true,
+            show_traffic_lights: false,
         }
     }
 
@@ -37,6 +37,9 @@ impl AppBar {
     pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Box::new(w)); self }
     pub fn action(mut self, w: impl Widget + 'static) -> Self { self.actions.push(Box::new(w)); self }
     pub fn no_traffic_lights(mut self) -> Self { self.show_traffic_lights = false; self }
+    /// Draw faux macOS traffic-light dots (only for standalone mockup
+    /// screenshots — a real app window already has real OS traffic lights).
+    pub fn traffic_lights(mut self) -> Self { self.show_traffic_lights = true; self }
     pub fn title_size(mut self, s: f32) -> Self { self.title_size = s; self }
 }
 

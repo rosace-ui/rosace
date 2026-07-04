@@ -331,7 +331,7 @@ fn main() {
             .child(Container::new().width(380.0).child(detail_panel()))
     )
     .app_bar(
-        AppBar::new("Mosaic")
+        AppBar::new("Mosaic").traffic_lights()
             .background(Color::rgb(9, 10, 18))
             .height(44.0)
     )
