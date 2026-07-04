@@ -312,6 +312,21 @@ impl<'a> PaintCtx<'a> {
         self.register_hit(Arc::new(f));
     }
 
+    /// Declare a POSITIONAL press region for this widget's rect — the
+    /// callback receives the click point in window-space logical pixels
+    /// (sliders, pickers, canvases). Clip-aware like register_hit.
+    pub fn on_press_at(&self, f: impl Fn(f32, f32) + Send + Sync + 'static) {
+        let hit_rect = if let Some(clip) = self.clip_rect {
+            match intersect_rect(self.rect, clip) {
+                Some(r) => r,
+                None    => return,
+            }
+        } else {
+            self.rect
+        };
+        self.tree.borrow_mut().node_mut(self.node).hits_at.push((hit_rect, Arc::new(f)));
+    }
+
     /// Declare that this widget's rect responds to scroll wheel/trackpad.
     /// The callback receives `(delta_x, delta_y)` in logical pixels.
     pub fn on_scroll(&self, f: impl Fn(f32, f32) + Send + Sync + 'static) {

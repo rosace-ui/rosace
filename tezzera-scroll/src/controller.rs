@@ -17,7 +17,17 @@ impl ScrollController {
     /// scroll position survives rebuilds. Follows the hook rules: call
     /// unconditionally in `build()`, stable order.
     pub fn for_ctx(ctx: &mut tezzera_core::Context) -> Self {
-        ctx.state(Self::new()).get()
+        let ctrl = ctx.state(Self::new()).get();
+        // The inner atoms are framework-created (use_atom) — nothing
+        // subscribes to them by default, so a scroll_to/wheel write would
+        // request a frame that repaints NOTHING (cache-hit). Subscribing the
+        // owning component makes controller writes dirty it like ctx.state
+        // atoms do. (Duplicate subscribes are ignored.)
+        let id = ctx.component_id();
+        ctrl.offset.subscribe(id);
+        ctrl.content_size.subscribe(id);
+        ctrl.viewport_size.subscribe(id);
+        ctrl
     }
 
     pub fn new() -> Self {

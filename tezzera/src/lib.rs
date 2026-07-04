@@ -419,7 +419,7 @@ impl App {
                             if !handled {
                                 let cb = render_tree.borrow().hit_test(*x, *y);
                                 if let Some(cb) = cb {
-                                    cb();
+                                    cb(*x, *y);
                                 }
                             }
                         }

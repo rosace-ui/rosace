@@ -12,6 +12,7 @@ pub struct Slider {
     pub thumb_color: Color,
     pub height: f32,
     pub width: Option<f32>,
+    on_change: Option<std::sync::Arc<dyn Fn(f32) + Send + Sync>>,
 }
 
 impl Slider {
@@ -25,6 +26,7 @@ impl Slider {
             thumb_color: Color::rgb(200, 202, 225),
             height: 20.0,
             width: None,
+            on_change: None,
         }
     }
     pub fn range(mut self, min: f32, max: f32, value: f32) -> Self {
@@ -33,6 +35,13 @@ impl Slider {
         self
     }
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
+
+    /// Called with the new value (in `min..max`) when the track is clicked.
+    /// (Continuous dragging lands with gesture/move events.)
+    pub fn on_change(mut self, f: impl Fn(f32) + Send + Sync + 'static) -> Self {
+        self.on_change = Some(std::sync::Arc::new(f));
+        self
+    }
 }
 
 impl Widget for Slider {
@@ -42,6 +51,15 @@ impl Widget for Slider {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        if let Some(f) = &self.on_change {
+            let f = f.clone();
+            let (min, max) = (self.min, self.max);
+            let r = ctx.rect;
+            ctx.on_press_at(move |px, _py| {
+                let t = ((px - r.origin.x) / r.size.width.max(1.0)).clamp(0.0, 1.0);
+                f(min + t * (max - min));
+            });
+        }
         ctx.semantics(super::Semantics::new(tezzera_core::Role::Slider)
             .value(format!("{:.2}", self.value)));
         let r = ctx.rect;

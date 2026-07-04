@@ -24,6 +24,9 @@ pub type NodeId = usize;
 
 /// A click callback with its hit rect in window-space logical pixels.
 pub type HitRegion = (Rect, Arc<dyn Fn() + Send + Sync>);
+/// A positional click callback — receives the click point in window-space
+/// logical pixels (sliders, color pickers, canvases).
+pub type HitRegionAt = (Rect, Arc<dyn Fn(f32, f32) + Send + Sync>);
 
 /// Which wheel/trackpad axes a scroll region can consume. Routing prefers
 /// the innermost region that handles the DOMINANT axis of a delta — an
@@ -56,6 +59,7 @@ pub struct TreeNode {
 
     // ── Declared per-paint data (D091) ────────────────────────────────────
     pub hits:       Vec<HitRegion>,
+    pub hits_at:    Vec<HitRegionAt>,
     pub scrolls:    Vec<ScrollRegion>,
     pub focus:      Vec<tezzera_a11y::FocusNode>,
     pub overlays:   Vec<OverlayEntry>,
@@ -95,6 +99,7 @@ impl RenderTree {
         n.cursor = 0;
         n.begun = true;
         n.hits.clear();
+        n.hits_at.clear();
         n.scrolls.clear();
         n.focus.clear();
         n.overlays.clear();
@@ -150,20 +155,27 @@ impl RenderTree {
 
     /// Hit-test walk: children before own regions, later siblings first —
     /// paint order is z-order, so the topmost match wins structurally (D092).
-    pub fn hit_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn() + Send + Sync>> {
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>> {
         self.hit_test_node(Self::ROOT, x, y)
     }
 
-    fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<Arc<dyn Fn() + Send + Sync>> {
+    fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>> {
         let n = &self.nodes[id];
         for &child in n.children.iter().rev() {
             if let Some(cb) = self.hit_test_node(child, x, y) {
                 return Some(cb);
             }
         }
-        for (rect, cb) in n.hits.iter().rev() {
+        // Positional regions first within a node (more specific intent).
+        for (rect, cb) in n.hits_at.iter().rev() {
             if contains(rect, x, y) {
                 return Some(cb.clone());
+            }
+        }
+        for (rect, cb) in n.hits.iter().rev() {
+            if contains(rect, x, y) {
+                let cb = cb.clone();
+                return Some(Arc::new(move |_, _| cb()));
             }
         }
         None
