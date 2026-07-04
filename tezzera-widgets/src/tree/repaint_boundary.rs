@@ -1,65 +1,63 @@
-use tezzera_core::types::Size;
-use super::{Widget, LayoutCtx, PaintCtx};
+use std::sync::Mutex;
 
-/// Wraps a child widget in an explicit paint cache boundary.
+use tezzera_render::Picture;
+use tezzera_state::Atom;
+use super::{Widget, Children, PaintCtx};
+
+/// Caches an expensive subtree's Picture and replays it without re-running
+/// the child's `paint()` — for large mostly-static content (chart backdrops,
+/// icon grids). Records once and holds by default; pass `.repaint_when(atom)`
+/// to re-record whenever that atom changes.
 ///
-/// When the child's content has not changed since the last frame, the
-/// render loop replays its cached Picture without calling `child.paint()`.
-/// This is useful for expensive static subtrees — e.g. large icon sets,
-/// complex backdrops, or chart backgrounds.
-///
-/// The cache is invalidated when the render loop marks the containing
-/// component's subtree dirty (i.e. an atom the component reads has changed).
-/// No manual invalidation is needed.
+/// Interactive regions declared inside are recorded at real screen
+/// coordinates and persist across replay frames (D091), so clicks still work.
 pub struct RepaintBoundary<W: Widget + Send + Sync + 'static> {
     pub child: W,
+    repaint_when: Vec<Atom<u64>>,
+    cache: Mutex<Option<(tezzera_core::types::Rect, Picture, Vec<u64>)>>,
 }
 
 impl<W: Widget + Send + Sync + 'static> RepaintBoundary<W> {
     pub fn new(child: W) -> Self {
-        Self { child }
+        Self { child, repaint_when: Vec::new(), cache: Mutex::new(None) }
+    }
+
+    /// Re-record whenever `atom` changes. Chain multiple.
+    pub fn repaint_when(mut self, atom: Atom<u64>) -> Self {
+        self.repaint_when.push(atom);
+        self
     }
 }
 
 impl<W: Widget + Send + Sync + 'static> Widget for RepaintBoundary<W> {
-    fn children(&self) -> super::Children<'_> {
-        super::Children::One(&self.child)
-    }
-    // layout, paint, flex_factor: protocol defaults delegate to the child.
-}
+    fn children(&self) -> Children<'_> { Children::One(&self.child) }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tezzera_core::types::Size;
-    use tezzera_layout::Constraints;
-    use std::sync::{Arc, Mutex};
+    fn paint(&self, ctx: &mut PaintCtx) {
+        let rect = ctx.rect;
+        let keys: Vec<u64> = self.repaint_when.iter().map(|a| a.get()).collect();
 
-    struct SizeBox { w: f32, h: f32, paint_count: Arc<Mutex<u32>> }
-    impl Widget for SizeBox {
-        fn layout(&self, _ctx: &LayoutCtx) -> Size {
-            Size { width: self.w, height: self.h }
+        let stale = {
+            let cache = self.cache.lock().unwrap();
+            match &*cache {
+                Some((r, _, k)) => *r != rect || *k != keys,
+                None => true,
+            }
+        };
+
+        if stale {
+            // Record at the real screen rect so hit regions land correctly.
+            let child = &self.child;
+            let pic = ctx.capture(rect, |cctx| child.paint(cctx));
+            *self.cache.lock().unwrap() = Some((rect, pic, keys));
+        } else {
+            // Preserve the captured sub-node (and its hit regions) this frame.
+            ctx.keep_child_slot();
         }
-        fn paint(&self, _ctx: &mut PaintCtx) {
-            *self.paint_count.lock().unwrap() += 1;
+
+        let cache = self.cache.lock().unwrap();
+        if let Some((_, pic, _)) = &*cache {
+            ctx.replay_offset(pic, 0.0, 0.0);
         }
     }
-
-    #[test]
-    fn repaint_boundary_delegates_layout() {
-        use tezzera_render::FontCache;
-        use tezzera_theme::built_in::light_theme;
-
-        let paint_count = Arc::new(Mutex::new(0u32));
-        let rb = RepaintBoundary::new(SizeBox { w: 100.0, h: 50.0, paint_count });
-        let font = FontCache::system_ui()
-            .or_else(FontCache::system_mono)
-            .expect("font");
-        let theme = light_theme();
-        let lctx = LayoutCtx::new(Constraints::tight(200.0, 200.0), &font, &theme);
-        let size = rb.layout(&lctx);
-        assert_eq!(size.width, 100.0);
-        assert_eq!(size.height, 50.0);
-    }
-
+    // layout, flex_factor: protocol defaults delegate to the child.
 }

@@ -394,7 +394,47 @@ impl<'a> PaintCtx<'a> {
         self.tree.borrow_mut().node_mut(self.node).semantics.push(s);
     }
 
-    /// Attach an overlay entry to this node (called from `WithOverlay::paint`).
+    /// Record `paint` into a standalone [`Picture`] at `rect`, returning it —
+    /// used by RepaintBoundary to cache an expensive subtree. Runs on a fresh
+    /// child slot so interactive regions declared inside still register.
+    pub fn capture(&mut self, rect: Rect, paint: impl FnOnce(&mut PaintCtx)) -> tezzera_render::Picture {
+        let node = self.tree.borrow_mut().slot(self.node, true);
+        self.capture_into(node, rect, paint)
+    }
+
+    /// Consume the next child slot WITHOUT resetting it — preserves the
+    /// subtree's declared interactive regions across a cache-replay frame.
+    pub fn keep_child_slot(&mut self) {
+        self.tree.borrow_mut().slot(self.node, false);
+    }
+
+    fn capture_into(&mut self, node: NodeId, rect: Rect, paint: impl FnOnce(&mut PaintCtx)) -> tezzera_render::Picture {
+        let mut rec = tezzera_render::PictureRecorder::new();
+        {
+            let mut cctx = PaintCtx {
+                recorder: &mut rec,
+                rect,
+                font: self.font,
+                theme: self.theme.clone(),
+                tree: Rc::clone(&self.tree),
+                node,
+                owner: self.owner,
+                clip_rect: self.clip_rect,
+            };
+            paint(&mut cctx);
+        }
+        rec.finish()
+    }
+
+    /// Replay an already-recorded [`Picture`] into this context, translating
+    /// every command by `(dx, dy)`.
+    pub fn replay_offset(&mut self, picture: &tezzera_render::Picture, dx: f32, dy: f32) {
+        for cmd in &picture.commands {
+            self.recorder.push(cmd.offset(dx, dy));
+        }
+    }
+
+        /// Attach an overlay entry to this node (called from `WithOverlay::paint`).
     /// The entry persists on the node across cache-hit frames and is cleared
     /// when the node repaints — open overlays cannot vanish on clean frames.
     pub fn attach_overlay(&self, entry: OverlayEntry) {
