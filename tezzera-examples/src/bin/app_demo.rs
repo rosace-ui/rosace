@@ -17,6 +17,7 @@ enum Screen {
     Overlays,
     VirtualList,
     Gallery,
+    Showcase,
 }
 
 impl Screen {
@@ -28,6 +29,7 @@ impl Screen {
             Screen::Overlays    => "Overlays",
             Screen::VirtualList => "Virtualized List",
             Screen::Gallery     => "Widget Gallery",
+            Screen::Showcase    => "New Widgets",
         }
     }
 }
@@ -48,6 +50,11 @@ impl Component for AppDemo {
         let press_count: Atom<i32>  = ctx.state(0);
         let switch_on:   Atom<bool> = ctx.state(false);
         let slider_v:    Atom<f32>  = ctx.state(0.6f32);
+        let radio_sel:   Atom<usize> = ctx.state(0);
+        let seg_sel:     Atom<usize> = ctx.state(1);
+        let drop_open:   Atom<bool> = ctx.state(false);
+        let drop_sel:    Atom<usize> = ctx.state(0);
+        let exp_open:    Atom<bool> = ctx.state(true);
 
         let screen = nav.current().unwrap_or(Screen::Home);
 
@@ -62,6 +69,7 @@ impl Component for AppDemo {
             )),
             Screen::VirtualList => Box::new(virtual_list_screen()),
             Screen::Gallery     => Box::new(gallery_screen(&check_on, &switch_on, &slider_v, &press_count)),
+            Screen::Showcase    => Box::new(showcase_screen(&radio_sel, &seg_sel, &drop_open, &drop_sel, &exp_open)),
         };
 
         // ── AppBar: back appears off-Home; ⬆ Top only where it acts ──────
@@ -101,6 +109,7 @@ fn home_screen(nav: &ScreenNav<Screen>) -> impl Widget {
         .child(tile("Overlays", "Dialog, dropdown menu, sheet, toast", Screen::Overlays, nav))
         .child(tile("Virtualized List", "10,000 rows, built on demand", Screen::VirtualList, nav))
         .child(tile("Widget Gallery", "Buttons, inputs, chips, progress", Screen::Gallery, nav))
+        .child(tile("New Widgets", "Shapes, grid, spinner, radio, dropdown…", Screen::Showcase, nav))
 }
 
 // ── Feature screens ───────────────────────────────────────────────────────────
@@ -299,6 +308,57 @@ fn gallery_screen(check_on: &Atom<bool>, switch_on: &Atom<bool>, slider_v: &Atom
                     .radius(10.0).elevation(2.0)
                     .on_long_press({ let p = press_count.clone(); move || p.set(p.get() + 100) }),
             ))
+}
+
+
+fn showcase_screen(radio_sel: &Atom<usize>, seg_sel: &Atom<usize>, drop_open: &Atom<bool>, drop_sel: &Atom<usize>, exp_open: &Atom<bool>) -> impl Widget {
+    let rs = radio_sel.clone(); let rs2 = radio_sel.clone(); let rs3 = radio_sel.clone();
+    let ss = seg_sel.clone();
+    let ds = drop_sel.clone();
+    Column::new().spacing(18.0).padding(EdgeInsets::all(24.0))
+        .child(Text::heading("Container shapes"))
+        .child(Row::new().spacing(12.0)
+            .child(Container::new().size(56.0, 56.0).background(Color::rgb(120, 90, 220)).circle())
+            .child(Container::new().size(120.0, 40.0).background(Color::rgb(60, 170, 120)).stadium()
+                .align(Alignment::Center).child(Text::label("Stadium")))
+            .child(Container::new().size(120.0, 56.0).gradient(Color::rgb(255, 110, 90), Color::rgb(150, 60, 220)).radius(12.0))
+            .child(Container::new().size(56.0, 56.0).background(Color::rgb(90, 130, 210)).radius(10.0)
+                .border(Color::WHITE, 2.0).clip()))
+        .child(Text::heading("Grid & Wrap"))
+        .child(Grid::new(4).spacing(8.0).run_spacing(8.0)
+            .children((0..8).map(|i| Box::new(
+                Container::new().height(40.0).radius(8.0)
+                    .background(Color::rgb(50 + i*20, 60, 110)).align(Alignment::Center)
+                    .child(Text::caption(format!("{}", i+1)))) as BoxedWidget).collect()))
+        .child(Wrap::new().spacing(8.0).run_spacing(8.0)
+            .children(["design","rust","ui","fast","native","reactive","themeable"].iter()
+                .map(|t| Box::new(Chip::new(*t)) as BoxedWidget).collect()))
+        .child(Text::heading("Progress & Skeleton"))
+        .child(Row::new().spacing(20.0).cross_axis_alignment(CrossAxisAlignment::Center)
+            .child(CircularProgress::new(0.65))
+            .child(CircularProgress::spinner())
+            .child(Container::new().width(160.0).child(Column::new().spacing(8.0)
+                .child(Skeleton::new().height(14.0))
+                .child(Skeleton::new().width(110.0).height(14.0)))))
+        .child(Text::heading("AspectRatio 16:9"))
+        .child(Container::new().width(240.0).child(
+            AspectRatio::new(16.0/9.0, Container::new().gradient(Color::rgb(40,50,90), Color::rgb(20,24,44)).radius(10.0)
+                .align(Alignment::Center).child(Text::caption("16:9")))))
+        .child(Text::heading("Radio · Segmented · Dropdown"))
+        .child(Row::new().spacing(8.0).cross_axis_alignment(CrossAxisAlignment::Center)
+            .child(Radio::new(rs.get()==0).on_select({let r=rs.clone(); move|| r.set(0)}))
+            .child(Text::label("One"))
+            .child(Radio::new(rs2.get()==1).on_select({let r=rs2.clone(); move|| r.set(1)}))
+            .child(Text::label("Two"))
+            .child(Radio::new(rs3.get()==2).on_select({let r=rs3.clone(); move|| r.set(2)}))
+            .child(Text::label("Three")))
+        .child(SegmentedControl::new(vec!["Day","Week","Month"], ss.get())
+            .on_change({let s=ss.clone(); move|i| s.set(i)}))
+        .child(Dropdown::new(vec!["Rust","Swift","Kotlin","Dart"], ds.get(), drop_open.clone())
+            .on_change({let d=ds.clone(); move|i| d.set(i)}))
+        .child(Text::heading("Expander"))
+        .child(Expander::new("Show details", exp_open.clone(),
+            Text::caption("Collapsible body content revealed while expanded. Tap the header row to toggle.")))
 }
 
 // ── Shared bits ───────────────────────────────────────────────────────────────

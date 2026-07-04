@@ -9,6 +9,11 @@
 //! [`Expanded`] children by doing a two-pass measure internally.
 
 pub mod app;
+pub mod drawer;
+pub mod dropdown;
+pub mod expander;
+pub mod segmented;
+pub mod radio;
 pub mod skeleton;
 pub mod circular_progress;
 pub mod wrap;
@@ -72,6 +77,11 @@ pub use aspect_ratio::AspectRatio;
 pub use grid::Grid;
 pub use circular_progress::CircularProgress;
 pub use skeleton::Skeleton;
+pub use radio::Radio;
+pub use segmented::SegmentedControl;
+pub use expander::Expander;
+pub use dropdown::Dropdown;
+pub use drawer::Drawer;
 pub use positioned::Positioned;
 pub use wrap::Wrap;
 pub use custom_paint::CustomPaint;

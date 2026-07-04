@@ -25,6 +25,7 @@ pub use tree::Chip;
 pub use tree::Column;
 pub use tree::{BoxShape, Container};
 pub use tree::{AspectRatio, CircularProgress, Grid, Positioned, Skeleton, Wrap};
+pub use tree::{Dropdown, Drawer, Expander, Radio, SegmentedControl};
 pub use tree::CustomPaint;
 pub use tree::Dialog;
 pub use tree::Divider;
