@@ -40,12 +40,10 @@ impl Component for AppDemo {
         let nav = ScreenNav::new(ctx, Screen::Home);
         let page_ctrl = ScrollController::for_ctx(ctx);
         let is_dark:     Atom<bool> = ctx.state(true);
-        let carousel_x:  Atom<f32>  = ctx.state(0.0f32);
         let dialog_open: Atom<bool> = ctx.state(false);
         let menu_open:   Atom<bool> = ctx.state(false);
         let sheet_open:  Atom<bool> = ctx.state(false);
         let toast_open:  Atom<bool> = ctx.state(false);
-        let list_scroll: Atom<f32>  = ctx.state(0.0f32);
         let check_on:    Atom<bool> = ctx.state(true);
         let switch_on:   Atom<bool> = ctx.state(false);
         let slider_v:    Atom<f32>  = ctx.state(0.6f32);
@@ -56,12 +54,12 @@ impl Component for AppDemo {
             Screen::Home        => Box::new(home_screen(&nav)),
             Screen::Typography  => Box::new(typography_screen()),
             Screen::Scrolling   => Box::new(ScrollView::controlled(
-                scrolling_screen(&carousel_x), page_ctrl.clone(),
+                scrolling_screen(), page_ctrl.clone(),
             )),
             Screen::Overlays    => Box::new(overlays_screen(
                 &dialog_open, &menu_open, &sheet_open, &toast_open,
             )),
-            Screen::VirtualList => Box::new(virtual_list_screen(&list_scroll)),
+            Screen::VirtualList => Box::new(virtual_list_screen()),
             Screen::Gallery     => Box::new(gallery_screen(&check_on, &switch_on, &slider_v)),
         };
 
@@ -124,7 +122,7 @@ fn typography_screen() -> impl Widget {
         ).max_lines(2))
 }
 
-fn scrolling_screen(carousel_x: &Atom<f32>) -> impl Widget {
+fn scrolling_screen() -> impl Widget {
     Column::new()
         .spacing(20.0)
         .padding(EdgeInsets::all(24.0))
@@ -141,7 +139,7 @@ fn scrolling_screen(carousel_x: &Atom<f32>) -> impl Widget {
                 .child(feature_card("Themeable", "Dark / light with one set_theme() call"))
                 .child(feature_card("Navigable", "ScreenNav stack — push, pop, replace"))
                 .child(feature_card("Layered", "Dialog · Menu · Sheet · Toast overlays"))
-                .scrollable(carousel_x.clone()),
+                .scrollable(),
         ))
         .child(Text::heading("Tall content to scroll"))
         .children((1..=12).map(|i| {
@@ -234,8 +232,7 @@ fn overlays_screen(
         )
 }
 
-fn virtual_list_screen(list_scroll: &Atom<f32>) -> impl Widget {
-    let list_scroll = list_scroll.clone();
+fn virtual_list_screen() -> impl Widget {
     Column::new()
         .spacing(12.0)
         .padding(EdgeInsets::all(24.0))
@@ -244,7 +241,7 @@ fn virtual_list_screen(list_scroll: &Atom<f32>) -> impl Widget {
              painted each frame (RecyclerView model).",
         ))
         .child(Container::new().height(430.0).child(
-            ListView::builder(10_000, 40.0, list_scroll, |i| {
+            ListView::builder(10_000, 40.0, |i| {
                 Box::new(
                     Container::new()
                         .padding(EdgeInsets::symmetric(12.0, 10.0))

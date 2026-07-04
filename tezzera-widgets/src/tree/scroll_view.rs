@@ -2,7 +2,6 @@ use std::sync::Arc;
 use tezzera_core::types::{Point, Rect, Size};
 use tezzera_layout::Constraints;
 use tezzera_render::{Color, DrawCommand};
-use tezzera_state::Atom;
 use tezzera_scroll::ScrollController;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h, intersect_rect};
 
@@ -16,21 +15,17 @@ pub enum ScrollAxis {
 }
 
 /// A scrollable viewport. The child can exceed the available size; content
-/// is painted at `offset` and clipped to the viewport bounds.
+/// is painted at the scroll offset and clipped to the viewport bounds.
 ///
-/// Two modes:
-/// - Static: `ScrollView::new(child).offset(n)` — fixed offset, for snapshot demos.
-/// - Live: `ScrollView::live(child, scroll_atom)` — reactive, driven by an `Atom<f32>` (D084).
+/// Scrolls by default (D101): the position lives on the widget's render-tree
+/// node and survives rebuilds — no wiring needed. Pass a
+/// [`ScrollController`] (`::controlled` / `.controller()`) only when the app
+/// needs programmatic control.
 pub struct ScrollView {
     child: BoxedWidget,
-    /// Static offset (used when `live_offset` is None).
-    pub offset: f32,
-    /// Reactive scroll position atom (D084). If set, overrides `offset` at paint time.
-    live_offset: Option<Atom<f32>>,
-    /// Second axis live offset (horizontal in `Both` mode).
-    live_offset_x: Option<Atom<f32>>,
-    /// Programmatic controller (overrides the atoms when set). Publishes
-    /// viewport/content sizes back so scroll_to/scroll_by can clamp.
+    /// Fixed offset for [`ScrollView::fixed`] snapshot mode.
+    fixed_offset: Option<f32>,
+    /// Explicit controller override (D101). `None` = implicit node controller.
     controller: Option<ScrollController>,
     pub axis: ScrollAxis,
     pub show_scrollbar: bool,
@@ -38,19 +33,12 @@ pub struct ScrollView {
 }
 
 impl ScrollView {
-    /// A live vertical scroll view (D097): the wheel/trackpad drives
-    /// `scroll_y`. The atom must come from `ctx.state` so the position
-    /// survives rebuilds.
-    ///
-    /// This is THE constructor — a ScrollView that cannot scroll was the
-    /// trap that shipped a broken demo. For golden tests / snapshots use
-    /// [`ScrollView::fixed`].
-    pub fn new(child: impl Widget + 'static, scroll_y: Atom<f32>) -> Self {
+    /// A vertical scroll view. Just scrolls — position is implicit per-node
+    /// state (D101).
+    pub fn new(child: impl Widget + 'static) -> Self {
         Self {
             child: Box::new(child),
-            offset: 0.0,
-            live_offset: Some(scroll_y),
-            live_offset_x: None,
+            fixed_offset: None,
             controller: None,
             axis: ScrollAxis::Vertical,
             show_scrollbar: true,
@@ -58,61 +46,32 @@ impl ScrollView {
         }
     }
 
-    /// A live horizontal scroll view — carousels, chip rows, code blocks.
-    pub fn horizontal(child: impl Widget + 'static, scroll_x: Atom<f32>) -> Self {
-        Self {
-            child: Box::new(child),
-            offset: 0.0,
-            live_offset: None,
-            live_offset_x: Some(scroll_x),
-            controller: None,
-            axis: ScrollAxis::Horizontal,
-            show_scrollbar: true,
-            scrollbar_color: Color::rgb(50, 55, 85),
-        }
+    /// A horizontal scroll view — carousels, chip rows, code blocks.
+    pub fn horizontal(child: impl Widget + 'static) -> Self {
+        Self { axis: ScrollAxis::Horizontal, ..Self::new(child) }
     }
 
     /// A snapshot viewport — never responds to input. Set the offset with
-    /// `.offset(px)`. For golden tests and static mockups (honest name, D097).
+    /// `.offset(px)`. For golden tests and static mockups.
     pub fn fixed(child: impl Widget + 'static) -> Self {
-        Self {
-            child: Box::new(child),
-            offset: 0.0,
-            live_offset: None,
-            live_offset_x: None,
-            controller: None,
-            axis: ScrollAxis::Vertical,
-            show_scrollbar: true,
-            scrollbar_color: Color::rgb(50, 55, 85),
-        }
+        Self { fixed_offset: Some(0.0), ..Self::new(child) }
     }
 
-    /// A scroll view driven by a [`ScrollController`] — programmatic
-    /// scroll_to / scroll_by / scroll_to_top / scroll_to_bottom, with the
-    /// viewport and content extents published back to the controller.
-    /// Create the controller with `ScrollController::for_ctx(ctx)` so the
-    /// position survives rebuilds.
+    /// A scroll view driven by an explicit [`ScrollController`] —
+    /// programmatic scroll_to / scroll_by / scroll_to_top / scroll_to_bottom.
+    /// Create the controller with `ScrollController::for_ctx(ctx)`.
     pub fn controlled(child: impl Widget + 'static, controller: ScrollController) -> Self {
-        Self {
-            child: Box::new(child),
-            offset: 0.0,
-            live_offset: None,
-            live_offset_x: None,
-            controller: Some(controller),
-            axis: ScrollAxis::Vertical,
-            show_scrollbar: true,
-            scrollbar_color: Color::rgb(50, 55, 85),
-        }
+        Self { controller: Some(controller), ..Self::new(child) }
     }
 
-    pub fn offset(mut self, o: f32) -> Self { self.offset = o; self }
-
-    /// Drive horizontal scrolling from an `Atom<f32>`. Use together with
-    /// [`ScrollAxis::Horizontal`] or [`ScrollAxis::Both`].
-    pub fn live_x(mut self, scroll_x: Atom<f32>) -> Self {
-        self.live_offset_x = Some(scroll_x);
+    /// Attach an explicit controller (same as [`ScrollView::controlled`]).
+    pub fn controller(mut self, c: ScrollController) -> Self {
+        self.controller = Some(c);
         self
     }
+
+    /// Fixed-mode offset in logical pixels (only meaningful with `fixed`).
+    pub fn offset(mut self, o: f32) -> Self { self.fixed_offset = Some(o); self }
 
     pub fn axis(mut self, a: ScrollAxis) -> Self { self.axis = a; self }
     pub fn no_scrollbar(mut self) -> Self { self.show_scrollbar = false; self }
@@ -128,21 +87,28 @@ impl Widget for ScrollView {
     fn paint(&self, ctx: &mut PaintCtx) {
         let vp = ctx.rect;
 
-        // Resolve scroll offset — controller wins, then atoms, then static.
-        let (scroll_x, scroll_y) = if let Some(ctrl) = &self.controller {
-            let [x, y] = ctrl.offset.get();
-            (x, y)
+        // Resolve the controller: explicit override, or the node's implicit
+        // one (D101). Fixed mode has no controller and never handles input.
+        let ctrl = if self.fixed_offset.is_some() {
+            None
         } else {
-            (
-                self.live_offset_x.as_ref().map_or(0.0_f32, |a| a.get()),
-                self.live_offset.as_ref().map_or(self.offset, |a| a.get()),
-            )
+            Some(self.controller.clone().unwrap_or_else(|| ctx.scroll_controller()))
+        };
+
+        let (scroll_x, scroll_y) = match (&ctrl, self.fixed_offset) {
+            (Some(c), _) => {
+                let [x, y] = c.offset.get();
+                (x, y)
+            }
+            (None, Some(o)) => match self.axis {
+                ScrollAxis::Horizontal => (o, 0.0),
+                _ => (0.0, o),
+            },
+            (None, None) => (0.0, 0.0),
         };
 
         // Content constraints (unbounded-axis doctrine, API_DESIGN §6):
-        // on the scroll axis min = viewport, max = Unbounded — short content
-        // can center/space itself against the full viewport (no Flutter-style
-        // LayoutBuilder + ConstrainedBox boilerplate); long content scrolls.
+        // on the scroll axis min = viewport, max = Unbounded.
         use tezzera_layout::AxisBound;
         let child_constraints = match self.axis {
             ScrollAxis::Vertical => Constraints {
@@ -177,26 +143,19 @@ impl Widget for ScrollView {
             size: child_size,
         };
 
-        // Clip child paint output to the viewport so scrolled-off content
-        // is not visible and does not receive hit events in other panels.
+        // Clip child paint output to the viewport.
         ctx.record(DrawCommand::PushClip { rect: vp });
-
-        // Compute effective clip for hit-testing: intersect parent clip (if any)
-        // with our viewport so nested ScrollViews clip correctly.
         let effective_clip = ctx.clip_rect
             .and_then(|parent| intersect_rect(parent, vp))
             .unwrap_or(vp);
-
         let mut child_ctx = ctx.child(child_rect);
         child_ctx.clip_rect = Some(effective_clip);
         self.child.paint(&mut child_ctx);
-
         ctx.record(DrawCommand::PopClip);
 
-        // Publish extents so the controller can clamp programmatic scrolls.
-        // Guarded sets: writing an unchanged atom would dirty the component
-        // every frame and spin the render loop.
-        if let Some(ctrl) = &self.controller {
+        // Publish extents (guarded — unconditional atom writes during paint
+        // would dirty the component every frame) and route wheel input.
+        if let Some(ctrl) = &ctrl {
             let vp_s = [vp.size.width, vp.size.height];
             if ctrl.viewport_size.get() != vp_s { ctrl.viewport_size.set(vp_s); }
             let cs = [child_size.width, child_size.height];
@@ -217,28 +176,7 @@ impl Widget for ScrollView {
             }));
         }
 
-        // Register a scroll target so the event router can dispatch wheel events
-        // to this viewport. Only live-scrolling ScrollViews respond to wheel input.
-        if self.live_offset.is_some() || self.live_offset_x.is_some() {
-            let atom_y = self.live_offset.clone();
-            let atom_x = self.live_offset_x.clone();
-            let max_scroll_y = (child_size.height - vp.size.height).max(0.0);
-            let max_scroll_x = (child_size.width - vp.size.width).max(0.0);
-            let axes = super::ScrollAxes {
-                x: self.live_offset_x.is_some(),
-                y: self.live_offset.is_some(),
-            };
-            ctx.register_scroll_target(vp, axes, Arc::new(move |delta_x, delta_y| {
-                if let Some(a) = &atom_y {
-                    a.set((a.get() - delta_y).clamp(0.0, max_scroll_y));
-                }
-                if let Some(a) = &atom_x {
-                    a.set((a.get() - delta_x).clamp(0.0, max_scroll_x));
-                }
-            }));
-        }
-
-        // Scrollbars drawn AFTER PopClip so they are not clipped by the viewport.
+        // Scrollbars drawn AFTER PopClip so they are not clipped.
         if self.show_scrollbar && matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both) {
             let ratio = (vp.size.height / child_size.height.max(1.0)).min(1.0);
             if ratio < 1.0 {

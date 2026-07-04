@@ -226,6 +226,9 @@ pub struct PaintCtx<'a> {
     pub tree: Rc<RefCell<RenderTree>>,
     /// The tree node this widget declares onto.
     pub node: NodeId,
+    /// The component that owns this paint subtree — node-created state
+    /// (default scroll controllers, D101) subscribes it so writes repaint.
+    pub owner: tezzera_core::types::ComponentId,
     /// Current clip viewport in world-space logical pixels. `None` means no clip.
     /// Set by `ScrollView` so that `register_hit` ignores targets outside the
     /// visible area, preventing phantom clicks in other panels below the fold.
@@ -251,6 +254,7 @@ impl<'a> PaintCtx<'a> {
             theme,
             tree,
             node: RenderTree::ROOT,
+            owner: tezzera_core::types::ComponentId(0),
             clip_rect: None,
         }
     }
@@ -267,6 +271,7 @@ impl<'a> PaintCtx<'a> {
             theme: self.theme.clone(),
             tree: Rc::clone(&self.tree),
             node,
+            owner: self.owner,
             clip_rect: self.clip_rect,
         }
     }
@@ -310,6 +315,24 @@ impl<'a> PaintCtx<'a> {
     /// persistence handled by the render tree.
     pub fn on_press(&self, f: impl Fn() + Send + Sync + 'static) {
         self.register_hit(Arc::new(f));
+    }
+
+    /// The implicit scroll controller for this widget's tree node (D101):
+    /// created on first use, persists across rebuilds, subscribed to the
+    /// owning component so scroll writes repaint. This is why
+    /// `ScrollView::new(child)` scrolls with zero wiring.
+    pub fn scroll_controller(&self) -> tezzera_scroll::ScrollController {
+        let mut tree = self.tree.borrow_mut();
+        let node = tree.node_mut(self.node);
+        if let Some(c) = &node.scroll_ctrl {
+            return c.clone();
+        }
+        let c = tezzera_scroll::ScrollController::new();
+        c.offset.subscribe(self.owner);
+        c.content_size.subscribe(self.owner);
+        c.viewport_size.subscribe(self.owner);
+        node.scroll_ctrl = Some(c.clone());
+        c
     }
 
     /// Declare a POSITIONAL press region for this widget's rect — the

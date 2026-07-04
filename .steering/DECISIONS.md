@@ -1166,6 +1166,14 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 
 ---
 
+### D101 — Default scroll controllers on the render tree
+**Status**: LOCKED
+**Decision**: Every scrollable widget scrolls by default with zero wiring: its render-tree node lazily owns a `ScrollController` (persistent per-node state, NOT cleared on repaint — like Flutter's implicit ScrollPosition). `PaintCtx` carries the owning `ComponentId`; node-created controllers subscribe it so writes dirty the component (the no-subscriber trap proven by the b37d9e0 bug). APIs: `ScrollView::new(child)` / `::horizontal(child)` / `Column::scrollable()` / `Row::scrollable()` / `ListView::builder(count, extent, f)` take no scroll state; `.controller(ctrl)` / `ScrollView::controlled(child, ctrl)` opt into programmatic control; raw scroll atoms are removed from the public API. `ScrollView::fixed(child)` remains the inert snapshot mode.
+**Reason**: "Create an atom in build() and thread it down" was boilerplate on every scrollable and a footgun (forgotten atom = broken scroll). The OOP 'scrollables always have a controller' model, translated to Rust as per-node retained state (D091's home) + composition.
+**Affects**: tezzera-widgets, tezzera-scroll, tezzera, tezzera-examples
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

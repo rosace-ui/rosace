@@ -42,11 +42,11 @@ impl Row {
         self.children.extend(ws); self
     }
 
-    /// Wrap this flex container in a live ScrollView scrolling horizontally
-    /// (D097 sugar). Expanded children are ignored on the unbounded
-    /// scroll axis (unbounded-axis doctrine).
-    pub fn scrollable(self, scroll: tezzera_state::Atom<f32>) -> super::ScrollView {
-        super::ScrollView::horizontal(self, scroll)
+    /// Wrap this flex container in a ScrollView scrolling horizontally
+    /// (D101: position is implicit per-node state — zero wiring).
+    /// Expanded children are ignored on the unbounded scroll axis.
+    pub fn scrollable(self) -> super::ScrollView {
+        super::ScrollView::horizontal(self)
     }
 
     fn measure(&self, ctx: &LayoutCtx) -> Vec<Size> {

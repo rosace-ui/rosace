@@ -200,6 +200,7 @@ impl App {
                     theme: current_theme.clone(),
                     tree: Rc::clone(&render_tree),
                     node: tezzera_widgets::tree::RenderTree::ROOT,
+                    owner: root_component_id,
                     clip_rect: None,
                 };
 
@@ -525,6 +526,8 @@ fn walk_element(
             new_mounted.insert(id.0);
 
             let is_dirty = global_dirty || subtree_dirty || dirty_ids.contains(&id);
+            let prev_owner = ctx.owner;
+            ctx.owner = id;
 
             let (child_element, child_subtree_dirty) = if is_dirty {
                 // Build fresh and update cache.
@@ -561,7 +564,7 @@ fn walk_element(
                 (elem, true)
             };
 
-            walk_element(
+            let size = walk_element(
                 &child_element,
                 constraints,
                 ctx,
@@ -573,7 +576,9 @@ fn walk_element(
                 child_subtree_dirty,
                 element_cache,
                 new_mounted,
-            )
+            );
+            ctx.owner = prev_owner;
+            size
         }
 
         Element::Native(n) => {
@@ -640,6 +645,7 @@ fn walk_element(
                             theme: ctx.theme.clone(),
                             tree: Rc::clone(&ctx.tree),
                             node: tree_node,
+                            owner: ctx.owner,
                             clip_rect: ctx.clip_rect,
                         };
                         wb.0.paint(&mut child_ctx);

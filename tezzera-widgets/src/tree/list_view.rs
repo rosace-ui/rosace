@@ -3,7 +3,6 @@ use std::sync::Arc;
 use tezzera_core::types::{Point, Rect, Size};
 use tezzera_layout::Constraints;
 use tezzera_render::{Color, DrawCommand};
-use tezzera_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h, intersect_rect, ScrollAxes};
 
 /// A virtualized vertical list (RecyclerView / FlatList model).
@@ -27,7 +26,6 @@ use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h, intersec
 pub struct ListView {
     count: usize,
     item_extent: f32,
-    scroll_y: Atom<f32>,
     builder: Arc<dyn Fn(usize) -> BoxedWidget + Send + Sync>,
     pub show_scrollbar: bool,
     pub scrollbar_color: Color,
@@ -35,17 +33,15 @@ pub struct ListView {
 
 impl ListView {
     /// A virtualized list of `count` rows, each `item_extent` logical pixels
-    /// tall, scrolled by `scroll_y` (from `ctx.state` so position persists).
+    /// tall. Scroll position is implicit per-node state (D101).
     pub fn builder(
         count: usize,
         item_extent: f32,
-        scroll_y: Atom<f32>,
         builder: impl Fn(usize) -> BoxedWidget + Send + Sync + 'static,
     ) -> Self {
         Self {
             count,
             item_extent: item_extent.max(1.0),
-            scroll_y,
             builder: Arc::new(builder),
             show_scrollbar: true,
             scrollbar_color: Color::rgb(50, 55, 85),
@@ -69,9 +65,15 @@ impl Widget for ListView {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let vp = ctx.rect;
+        let ctrl = ctx.scroll_controller();
         let content_h = self.count as f32 * self.item_extent;
         let max_scroll = (content_h - vp.size.height).max(0.0);
-        let scroll = self.scroll_y.get().clamp(0.0, max_scroll);
+        let scroll = ctrl.offset.get()[1].clamp(0.0, max_scroll);
+        // Publish extents (guarded) so programmatic scroll_to can clamp.
+        let vp_s = [vp.size.width, vp.size.height];
+        if ctrl.viewport_size.get() != vp_s { ctrl.viewport_size.set(vp_s); }
+        let cs = [vp.size.width, content_h];
+        if ctrl.content_size.get() != cs { ctrl.content_size.set(cs); }
 
         ctx.record(DrawCommand::PushClip { rect: vp });
         let effective_clip = ctx.clip_rect
@@ -101,10 +103,10 @@ impl Widget for ListView {
 
         ctx.record(DrawCommand::PopClip);
 
-        // Wheel/trackpad drives the scroll atom (vertical only).
-        let atom = self.scroll_y.clone();
+        // Wheel/trackpad drives the node controller (vertical only).
+        let wheel = ctrl.clone();
         ctx.register_scroll_target(vp, ScrollAxes::Y, Arc::new(move |_dx, dy| {
-            atom.set((atom.get() - dy).clamp(0.0, max_scroll));
+            wheel.scroll_by(0.0, -dy);
         }));
 
         if self.show_scrollbar && content_h > vp.size.height {

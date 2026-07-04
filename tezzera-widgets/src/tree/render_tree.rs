@@ -65,6 +65,12 @@ pub struct TreeNode {
     pub overlays:   Vec<OverlayEntry>,
     pub transforms: Vec<TransformLayerEntry>,
     pub semantics:  Vec<super::Semantics>,
+
+    // ── Persistent per-node state (NOT cleared on repaint) ───────────────
+    /// The node's implicit scroll position (D101) — created lazily by the
+    /// first scrollable painted at this position, survives rebuilds like
+    /// Flutter's ScrollPosition.
+    pub scroll_ctrl: Option<tezzera_scroll::ScrollController>,
 }
 
 /// Arena-allocated persistent render tree. Node 0 is always the root.
