@@ -1,6 +1,6 @@
 # Phase 20 — RenderTree Unification: Retained State, Structural Hit Testing, Damage Repaint
 
-> Status: IN PROGRESS
+> Status: NEARLY COMPLETE (Steps 1–5 done; Step 6 D089/D090 GPU cache remains)
 > Started: 2026-07-02
 > Completed: —
 >
@@ -14,7 +14,11 @@
 > Step 1 remains partial — the keyed reconciler is still unused and the
 > flat RenderNode list still owns picture caching. Step 5 slice 1
 > (clean-frame skip) landed 1c6c3be; slice 2 (damage on DIRTY frames)
-> and Step 6 remain.
+> LANDED: arena unification (flat RenderNode + dead reconciler deleted),
+> damage-rect repaint (dirty region only), real RepaintBoundary picture
+> cache, hover/tooltip/long-press/pointer-interceptors on the arena.
+> REMAINS: Step 6 D089/D090 (skip GPU upload for unchanged frames /
+> persistent scroll-layer textures) — the last perf tier.
 >
 > DESIGN NOTE for the remaining block (found while scoping): per-node
 > picture caching cannot key on constraints alone — widgets are rebuilt
