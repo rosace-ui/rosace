@@ -1,6 +1,6 @@
 use tezzera_core::types::{Point, Rect, Size};
 use tezzera_layout::Constraints;
-use tezzera_render::Color;
+use tezzera_render::{Color, DrawCommand};
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w};
 
 /// A top app bar with title, leading, and trailing action slots.
@@ -67,41 +67,58 @@ impl Widget for AppBar {
         let cy = r.origin.y + r.size.height / 2.0;
         let mut lx = r.origin.x + 16.0;
 
-        // Traffic lights (macOS window controls)
+        // Traffic lights (opt-in mockup chrome).
         if self.show_traffic_lights {
-            let tl_y = cy;
             for (i, color) in [
                 Color::rgb(235, 85, 75),
                 Color::rgb(245, 185, 55),
                 Color::rgb(75, 200, 85),
             ].iter().enumerate() {
-                ctx.fill_circle(Point { x: lx + i as f32 * 20.0, y: tl_y }, 7.0, *color);
+                ctx.fill_circle(Point { x: lx + i as f32 * 20.0, y: cy }, 7.0, *color);
             }
             lx += 72.0;
         }
 
-        // Leading widget
+        // Leading widget — sized to its content (up to a sane cap), advancing
+        // the left boundary so the title never overlaps it.
         if let Some(lead) = &self.leading {
-            let ls = lead.layout(&ctx.layout_ctx(Constraints::loose(40.0, self.height)));
+            let ls = lead.layout(&ctx.layout_ctx(Constraints::loose(160.0, self.height)));
             let ly = r.origin.y + (r.size.height - ls.height) / 2.0;
             lead.paint(&mut ctx.child(Rect { origin: Point { x: lx, y: ly }, size: ls }));
-            let _ = lx + ls.width + 8.0;
+            lx += ls.width + 12.0;
         }
 
-        // Title (centered)
-        let title_w = ctx.font.measure_text(&self.title, self.title_size);
-        let title_x = r.origin.x + (r.size.width - title_w) / 2.0;
-        let line_h = ctx.font.line_height(self.title_size);
-        let title_y = r.origin.y + (r.size.height - line_h) / 2.0;
-        ctx.draw_text_at(&self.title, Point { x: title_x, y: title_y }, fg, self.title_size);
-
-        // Actions (right side)
+        // Actions (right side) — paint right-to-left, tracking the left edge
+        // so the title stops before them.
         let mut ax = r.origin.x + r.size.width - 12.0;
         for action in self.actions.iter().rev() {
-            let as_ = action.layout(&ctx.layout_ctx(Constraints::loose(36.0, self.height)));
-            ax -= as_.width + 4.0;
+            let as_ = action.layout(&ctx.layout_ctx(Constraints::loose(160.0, self.height)));
+            ax -= as_.width + 6.0;
             let ay = r.origin.y + (r.size.height - as_.height) / 2.0;
             action.paint(&mut ctx.child(Rect { origin: Point { x: ax, y: ay }, size: as_ }));
+        }
+
+        // Title — centered within the space BETWEEN leading and actions,
+        // left-aligned + clipped (truncates) when it doesn't fit.
+        let region_l = lx;
+        let region_r = (ax - 8.0).max(region_l);
+        let region_w = (region_r - region_l).max(0.0);
+        if region_w > 4.0 {
+            let title_w = ctx.font.measure_text(&self.title, self.title_size);
+            let line_h = ctx.font.line_height(self.title_size);
+            let title_y = r.origin.y + (r.size.height - line_h) / 2.0;
+            let title_x = if title_w <= region_w {
+                region_l + (region_w - title_w) / 2.0
+            } else {
+                region_l
+            };
+            let clip = Rect {
+                origin: Point { x: region_l, y: r.origin.y },
+                size: Size { width: region_w, height: r.size.height },
+            };
+            ctx.record(DrawCommand::PushClip { rect: clip });
+            ctx.draw_text_at(&self.title, Point { x: title_x, y: title_y }, fg, self.title_size);
+            ctx.record(DrawCommand::PopClip);
         }
     }
 }
