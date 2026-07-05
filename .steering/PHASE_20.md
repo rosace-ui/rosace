@@ -33,12 +33,19 @@
 > the platform composites base + scroll layers + overlay, retaining the
 > scroll set across clean frames. Verified via app_demo "GPU Scroll Layer"
 > route (viewport clip + scroll offset correct on GPU).
-> REMAINS in Step 6: (a) route ScrollView::live through this instead of
-> painting into the base canvas; (b) make a scroll tick update ONLY the
-> layer src_offset without dirtying the component (no CPU repaint) — the
-> real "scroll produces no CPU paint" payoff; (c) hit-testing through the
-> scroll offset; (d) content taller than MAX_TL_DIM (4096) needs a
-> re-render window / virtualization strategy.
+> Step 6 D090 ZERO-REPAINT SCROLL LANDED (commit c0baffc): a placed
+> layer's offset lives in a non-reactive channel (tezzera_state::
+> scroll_offset, keyed by node id); updating it requests a present-only
+> frame that dirties NO component. TransformLayer registers a wheel scroll
+> target feeding the channel; the platform reads it at present as the
+> layer's UV src_offset. Verified: 92 consecutive scroll frames were
+> needs_paint=false + "present 2 layers (0 dirty)" — zero repaint, zero
+> re-upload. This MEETS Step 6's exit criterion (scroll = no CPU paint).
+> REMAINS in Step 6: (a) route ScrollView::live through this (it paints
+> into the base canvas today; needs hit-testing through the offset first,
+> since ScrollView content is interactive — blast radius across the demo);
+> (b) content taller than MAX_TL_DIM (4096) needs a re-render window /
+> virtualization strategy.
 >
 > DESIGN NOTE for the remaining block (found while scoping): per-node
 > picture caching cannot key on constraints alone — widgets are rebuilt
