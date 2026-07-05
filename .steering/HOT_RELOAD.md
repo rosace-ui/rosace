@@ -157,6 +157,44 @@ UX, different mechanism, in tiers:
 - Shared with native: one state store in the wasm "host" instance; the reload
   boundary is JS-mediated; persistence maps to D008 levels.
 
+## Mobile (iOS / Android)
+
+Mobile splits by whether the OS permits runtime `dlopen` of a freshly-built lib.
+
+- **Android — full module hot-swap works in dev.** bionic supports `dlopen`;
+  Rust cross-compiles to `.so` per ABI. Dev host builds the changed module
+  `.so` → `adb push` into the app's **private code-cache dir** → `dlopen` +
+  the same ordered swap protocol; control channel over `adb forward` (socket).
+  Caveat: W^X / SELinux blocks executing code from arbitrary writable paths —
+  load only from `codeCacheDir`; some OEM images are stricter.
+- **iOS Simulator — works like desktop.** Simulator `dyld` does not enforce
+  device code-signing, so `dlopen` of a fresh `.dylib` succeeds. Primary iOS
+  fast-swap target; artifact shared via the Mac filesystem.
+- **iOS real device — dylib swap is IMPOSSIBLE.** Code-signing + sandbox
+  forbid `dlopen` of any dylib not signed into the bundle; `dyld` refuses it
+  (no AOT equivalent of Flutter's debug-JIT). Two-tier fallback:
+  1. **Markup/style → data-driven RSX hot-reload** (Tier 3 below): ship a new
+     UI *description* the installed binary interprets — no new code, no
+     re-sign, instant. iOS-device dev is this tier's key consumer.
+  2. **Logic → full rebuild + re-sign + re-deploy + relaunch + rehydrate**
+     (Tier 1 hot restart). Slow but the only legal path; `#[persist]` restores
+     state.
+
+All mobile targets need a **dev transport + control channel** (adb for
+Android; `devicectl`/`ios-deploy` + socket for iOS) that desktop gets for free.
+State preservation is unchanged: shared-dylib singleton where swap works;
+serialize→rehydrate on the iOS-device restart path.
+
+**Capability matrix:**
+
+| Target          | Module hot-swap | Fallback for logic changes |
+|-----------------|-----------------|----------------------------|
+| Desktop         | ✅ dylib         | hot restart                |
+| Android (dev)   | ✅ dylib (adb)   | hot restart                |
+| iOS Simulator   | ✅ dylib         | hot restart                |
+| iOS device      | ❌ (signing)     | RSX reload / full redeploy |
+| Web (wasm)      | ❌ (no dyn-link) | RSX reload / rebuild+rehydrate |
+
 ## `tzr` CLI changes
 
 - **`tzr dev`** becomes the orchestrator/supervisor: build the host once (or
