@@ -1,6 +1,6 @@
 # Phase 20 — RenderTree Unification: Retained State, Structural Hit Testing, Damage Repaint
 
-> Status: NEARLY COMPLETE (Steps 1–5 done; Step 6 D089 done; D090 remains)
+> Status: NEARLY COMPLETE (Steps 1–5 done; Step 6 D089 done; D090 foundation done — ScrollView routing + no-repaint scroll remain)
 > Started: 2026-07-02
 > Completed: —
 >
@@ -25,9 +25,20 @@
 > by the platform via `take_frame_dirty` → `CompositorLayer::tracked(..)`.
 > Verified on Metal/M1 Pro: idle+hover frames log "skip present", content
 > changes log "present (1 dirty)".
-> REMAINS: Step 6 D090 (ScrollView::live pushes its content as its own
-> compositor layer so scroll is a uniform offset update, not a CPU
-> repaint) — the last perf tier. Exit: scroll produces no CPU paint.
+> Step 6 D090 FOUNDATION LANDED (commits d6e60f6, 5e23899): the compositor
+> gained placed layers (CompositorLayer::placed — dest rect + texture
+> src_offset; shader positions the quad in NDC + maps a UV window). The
+> frame loop renders each TransformLayer entry ONCE into its own content
+> canvas and publishes it (tezzera-platform::scroll_layer thread-local);
+> the platform composites base + scroll layers + overlay, retaining the
+> scroll set across clean frames. Verified via app_demo "GPU Scroll Layer"
+> route (viewport clip + scroll offset correct on GPU).
+> REMAINS in Step 6: (a) route ScrollView::live through this instead of
+> painting into the base canvas; (b) make a scroll tick update ONLY the
+> layer src_offset without dirtying the component (no CPU repaint) — the
+> real "scroll produces no CPU paint" payoff; (c) hit-testing through the
+> scroll offset; (d) content taller than MAX_TL_DIM (4096) needs a
+> re-render window / virtualization strategy.
 >
 > DESIGN NOTE for the remaining block (found while scoping): per-node
 > picture caching cannot key on constraints alone — widgets are rebuilt

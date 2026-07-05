@@ -1089,9 +1089,11 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 ---
 
 ### D090 — ScrollView integration with TransformLayer
-**Status**: DEFERRED → Phase 20
+**Status**: FOUNDATION LANDED (Phase 20 Step 6) — ScrollView routing + no-repaint scroll remain
 **Decision**: Phase 19 provides `TransformLayer<W>` as a direct-use widget. Phase 20 integrates it into `ScrollView::live` transparently.
-**Affects**: `tezzera-widgets`
+**Implementation (foundation)**: The compositor now supports *placed* layers — `CompositorLayer::placed(pixels, w, h, dest, src_offset, dirty)` positions a quad at a screen-space `dest` rect (physical px) and samples a content-sized texture at `src_offset` (the shader maps `uv_min + corner*uv_span`, out-of-range UV → transparent for viewport/content clipping). The frame loop renders each `TransformLayerEntry` once into its own `SkiaCanvas` and publishes it via the `tezzera-platform::scroll_layer` thread-local registry; the platform composites `base + scroll layers + overlay`, retaining the scroll set across clean frames. Composes with D089 (a clean scroll layer skips re-upload; an offset-only change is a uniform write). Verified via app_demo "GPU Scroll Layer".
+**Remaining**: route `ScrollView::live` through this (today it paints into the base canvas); make a scroll tick update only `src_offset` without a component repaint (the zero-CPU-paint payoff); hit-testing through the offset; content > `MAX_TL_DIM` (4096px) re-render windowing.
+**Affects**: `tezzera-compositor`, `tezzera-platform`, `tezzera`, `tezzera-widgets`
 
 ---
 
