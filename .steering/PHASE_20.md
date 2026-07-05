@@ -44,13 +44,17 @@
 > Step 6 D090 HIT-TEST-THROUGH-OFFSET LANDED (commit 4b7e159): the
 > dispatch walk maps screen→content coords when descending into a
 > transform node's children (child_coords) and clips to the viewport, so
-> GPU-composited scroll content is interactive. Unit-tested. (Also fixed a
-> pre-existing broken render_tree test so the widgets suite compiles.)
-> REMAINS in Step 6: (a) route ScrollView::live through this — the LAST
-> piece (it paints into the base canvas today; hit-test prereq now done,
-> but still a demo-wide blast radius since every route wraps ScrollView);
-> (b) content taller than MAX_TL_DIM (4096) needs a re-render window /
-> virtualization strategy.
+> GPU-composited scroll content is interactive. Unit-tested.
+> Step 6 D090 ScrollView::gpu LANDED (commit cc1a243): ScrollView gained
+> an opt-in GPU-layer path (::gpu / .gpu_layer()) — records content into
+> its own picture, attaches a transform entry, wheel→channel, scrollbar
+> from the channel offset. Fixed/controlled/::new keep the base path
+> (zero regression). Verified in the GPU Scroll Layer demo route.
+> REMAINS in Step 6 (D090 polish, not blocking Phase-20 mechanics):
+> (a) make the GPU path the TRANSPARENT default for ScrollView::live —
+> needs per-route interactive validation + a size heuristic + fixing
+> positional-drag (hits_at) coord mapping through a transform (sliders in
+> scroll); (b) content > MAX_TL_DIM (4096) re-render windowing.
 >
 > DESIGN NOTE for the remaining block (found while scoping): per-node
 > picture caching cannot key on constraints alone — widgets are rebuilt
