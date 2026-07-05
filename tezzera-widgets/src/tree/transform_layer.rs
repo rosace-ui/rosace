@@ -86,6 +86,22 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
             scroll_y,
         });
 
+        // Register wheel scrolling straight into the non-reactive offset
+        // channel, keyed by this node id (D090). A scroll tick updates the
+        // channel + requests a present-only frame — it dirties NO component,
+        // so the content texture is reused and only the compositor UV offset
+        // changes. Zero CPU paint on scroll.
+        let node_id = ctx.node as u64;
+        let max_x = (child_size.width  - vp_rect.size.width).max(0.0);
+        let max_y = (child_size.height - self.viewport_h).max(0.0);
+        ctx.register_scroll_target(
+            vp_rect,
+            super::render_tree::ScrollAxes::BOTH,
+            std::sync::Arc::new(move |dx, dy| {
+                tezzera_state::scroll_offset_by(node_id, -dx, -dy, max_x, max_y);
+            }),
+        );
+
         // Update ctx.rect to the viewport size for sibling layout correctness.
         ctx.rect = Rect {
             origin: vp_rect.origin,

@@ -17,14 +17,16 @@ use std::cell::RefCell;
 /// One scrolling region handed from the frame loop to the compositor.
 #[derive(Clone)]
 pub struct ScrollLayer {
+    /// Render-tree node id — keys the non-reactive scroll-offset channel
+    /// (`tezzera_state::scroll_offset`) so a wheel tick shifts this layer's UV
+    /// without a repaint.
+    pub id:     u64,
     /// Content texture, RGBA8, `width * height * 4` bytes (physical pixels).
     pub pixels: Vec<u8>,
     pub width:  u32,
     pub height: u32,
     /// Viewport placement on screen in physical pixels: `(x, y, w, h)`.
     pub dest:   (f32, f32, f32, f32),
-    /// Scroll offset into the content texture in physical pixels.
-    pub src_offset: (f32, f32),
 }
 
 thread_local! {

@@ -436,6 +436,7 @@ impl App {
                         content.play_picture(&entry.picture, &font);
 
                         scroll_layers.push(tezzera_platform::ScrollLayer {
+                            id: n as u64,
                             pixels: content.pixels().to_vec(),
                             width:  cw,
                             height: ch,
@@ -443,7 +444,6 @@ impl App {
                                 vp.origin.x * scale, vp.origin.y * scale,
                                 vp.size.width * scale, vp.size.height * scale,
                             ),
-                            src_offset: (entry.scroll_x * scale, entry.scroll_y * scale),
                         });
                     }
                     drop(tree_ref);

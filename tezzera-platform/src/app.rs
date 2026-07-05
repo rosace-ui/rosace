@@ -286,12 +286,17 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                         ),
                     ];
                     for sl in &self.scroll_layers {
+                        // Live scroll offset from the non-reactive channel
+                        // (physical px). A wheel tick updates this without a
+                        // repaint, so a scroll-only frame is a uniform write
+                        // over the reused content texture (D090).
+                        let off = tezzera_state::scroll_offset(sl.id);
                         layers.push(tezzera_compositor::CompositorLayer::placed(
                             &sl.pixels, sl.width, sl.height,
                             tezzera_compositor::LayerRect {
                                 x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
                             },
-                            sl.src_offset,
+                            (off[0] * scale, off[1] * scale),
                             scroll_dirty,
                         ));
                     }

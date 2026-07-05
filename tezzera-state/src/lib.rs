@@ -18,6 +18,7 @@ pub mod dirty_set;
 pub mod frame_scheduler;
 pub mod global_atom;
 pub mod refresh_engine;
+pub mod scroll_offset;
 pub mod state_store;
 
 pub use async_state::{AsyncError, AsyncState};
@@ -28,6 +29,7 @@ pub use dirty_set::{mark_dirty, is_global_dirty, take_dirty_components, reset_to
 pub use frame_scheduler::{register_wakeup, request_frame, take_frame_requested};
 pub use global_atom::GlobalAtom;
 pub use refresh_engine::RefreshEngine;
+pub use scroll_offset::{scroll_offset, set_scroll_offset, scroll_offset_by, clear_scroll_offset};
 pub use state_store::{hook_state, clear_component};
 
 /// Creates a new local atom initialised with `default`.

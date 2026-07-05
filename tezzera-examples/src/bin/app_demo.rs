@@ -155,18 +155,16 @@ fn gpu_layer_screen(scroll: &Atom<f32>) -> impl Widget {
         );
     }
 
-    let sc = scroll.clone();
     Column::new()
         .spacing(16.0)
         .padding(EdgeInsets::all(24.0))
         .child(Text::caption(
-            "These rows live in a TransformLayer whose content is rasterized once \
-             into its own texture and composited as a placed GPU layer. Drag the \
-             slider: the viewport samples the texture at the scroll offset (a UV \
-             shift), clipped to 240px — no base-canvas re-raster of the content.",
+            "These rows live in a TransformLayer: their content is rasterized once \
+             into its own GPU texture. SCROLL THE BOX WITH THE MOUSE WHEEL — a \
+             scroll tick only shifts the compositor's UV sample offset and requests \
+             a present; it dirties no component, so there is zero CPU re-raster of \
+             the content (D090). Clipped to 240px.",
         ))
-        .child(Slider::new(scroll.get()).range(0.0, 500.0, scroll.get())
-            .on_change(move |v| sc.set(v)))
         .child(Card::new(TransformLayer::new(rows, 240.0, scroll.clone())))
 }
 
