@@ -540,6 +540,18 @@ Atoms only written from UI thread. Workers communicate via channels.
 
 ---
 
+### D104 — Two project/packaging styles: managed + bare
+**Status**: PLANNED (build AFTER each platform runs an MVP — user priority: platforms working first)
+**Decision**: `tzr` offers two project styles, like the Expo↔React-Native / Flutter split:
+- **Managed (Expo-like, default)** — platform harnesses are hidden/generated on demand; the developer stays in Rust and runs one command (`tzr run ios|android|web|desktop`, `tzr dev --target …`). `tzr` owns the generated iOS/Android/web scaffolding in a cache/gen dir; the app repo stays clean.
+- **Bare / eject (Flutter-like)** — `tzr eject` (or `tzr add-platform ios`) materializes real, editable native project folders (`ios/`, `android/`, `web/`) in the repo so developers can drop to Xcode / Android Studio / native config for platform-specific work. Once ejected, `tzr` drives those folders instead of regenerating.
+**Foundation**: the per-platform build+run+harness machinery (targets, NDK/cargo-ndk, Xcode project, Gradle project, wasm-bindgen glue) is the same underneath both styles — managed hides it in gen/, bare exposes it in-repo. Decide the harness generator (cargo-mobile2 vs hand-rolled) as part of platform bring-up.
+**Reason**: Beginners want zero-config one-command runs (managed); serious apps eventually need native escape hatches (bare). Supporting both, with a clean eject, is the proven model.
+**Affects**: `tezzera-cli`, project templates
+**Relates to**: D102/D103 (hot-reload transports per platform), D051/D052 (CLI)
+
+---
+
 ## TESTING
 
 ### D053 — Golden Files
