@@ -62,7 +62,7 @@ impl PlatformWindow {
     /// always transparent. Internally uses `run_layered` with an adapter.
     pub fn run<F>(self, mut paint_fn: F)
     where
-        F: FnMut(&mut SkiaCanvas, &[InputEvent]),
+        F: FnMut(&mut SkiaCanvas, &[InputEvent]) + 'static,
     {
         self.run_layered(move |base, _overlay, events| paint_fn(base, events));
     }
@@ -74,7 +74,9 @@ impl PlatformWindow {
     /// on the GPU (base first, overlay on top with `ALPHA_BLENDING`).
     pub fn run_layered<F>(self, paint_fn: F)
     where
-        F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent]),
+        // `'static` so the app can be handed to the browser's rAF loop on web
+        // (`spawn_app`); native `move` closures already satisfy it.
+        F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent]) + 'static,
     {
         let event_loop = EventLoop::<FrameRequest>::with_user_event()
             .build()
@@ -110,7 +112,15 @@ impl PlatformWindow {
             last_frame_time: None,
             scroll_layers: Vec::new(),
         };
+        // Native blocks on the OS event loop; web cannot block, so it hands the
+        // app to the browser's requestAnimationFrame loop and returns.
+        #[cfg(not(target_arch = "wasm32"))]
         event_loop.run_app(&mut app).unwrap();
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::EventLoopExtWebSys;
+            event_loop.spawn_app(app);
+        }
     }
 }
 
@@ -153,6 +163,19 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 self.config.height,
             ));
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
+
+        // On web, winit creates a <canvas> but does not attach it to the page —
+        // append it to the document body so the app is visible.
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowExtWebSys;
+            if let Some(canvas) = window.canvas() {
+                web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.body())
+                    .and_then(|b| b.append_child(&canvas).ok());
+            }
+        }
 
         // Try GPU compositor (D072). Fall back to softbuffer if unavailable.
         let presenter = tezzera_compositor::GpuPresenter::new(

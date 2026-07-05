@@ -17,8 +17,15 @@ path = "src/bin/app_showcase.rs"
 name = "animated_counter"
 path = "src/bin/animated_counter.rs"
 
+# Web (wasm) MVP entry — cdylib so wasm-bindgen can generate JS glue.
+[[example]]
+name = "web"
+path = "examples/web.rs"
+crate-type = ["cdylib"]
+
 [dependencies]
 tezzera         = { path = "../tezzera" }
 tezzera-animate = { path = "../tezzera-animate" }
 tezzera-state   = { path = "../tezzera-state" }
 env_logger      = "0.11"
+wasm-bindgen    = "0.2"

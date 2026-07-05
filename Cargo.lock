@@ -2174,6 +2174,7 @@ dependencies = [
  "tezzera",
  "tezzera-animate",
  "tezzera-state",
+ "wasm-bindgen",
 ]
 
 [[package]]

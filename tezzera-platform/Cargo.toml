@@ -25,7 +25,8 @@ console_error_panic_hook = "0.1"
 [target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
 version = "0.3"
 features = [
-    "Window", "Document", "HtmlCanvasElement", "CanvasRenderingContext2d",
+    "Window", "Document", "Element", "HtmlElement", "Node",
+    "HtmlCanvasElement", "CanvasRenderingContext2d",
     "ImageData", "Performance",
     "MouseEvent", "KeyboardEvent", "Event", "EventTarget",
 ]

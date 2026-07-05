@@ -96,9 +96,12 @@ impl App {
             TRACING_BUS.add_subscriber(Arc::new(ConsoleSubscriber::with_filter(filter)));
         }
 
+        // Prefer a system UI/mono font; fall back to the embedded DejaVu Sans
+        // when none is found (always the case on web/wasm) so text always
+        // renders on every platform.
         let font = tezzera_render::FontCache::system_ui()
             .or_else(tezzera_render::FontCache::system_mono)
-            .expect("no system font found");
+            .unwrap_or_else(tezzera_render::FontCache::embedded);
         let theme = self.theme;
         let width = self.width;
         let height = self.height;

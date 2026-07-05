@@ -104,6 +104,16 @@ impl FontCache {
         Self::build(font, None)
     }
 
+    /// A fallback font compiled into the binary — DejaVu Sans (permissive
+    /// Bitstream Vera license). Used when no system font is available, most
+    /// importantly on the web/wasm target where `system_ui()` finds nothing.
+    /// Guarantees text always renders on every platform.
+    pub fn embedded() -> Self {
+        const DEJAVU_SANS: &[u8] =
+            include_bytes!("../../assets/fonts/DejaVuSans.ttf");
+        Self::from_bytes(DEJAVU_SANS)
+    }
+
     fn load_first(paths: &[&str]) -> Option<Font> {
         for path in paths {
             if let Ok(bytes) = std::fs::read(path) {
