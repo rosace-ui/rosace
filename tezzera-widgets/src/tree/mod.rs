@@ -158,7 +158,7 @@ pub fn take_animation_request() -> bool { ANIM_REQUEST.with(|a| a.replace(false)
 /// Seconds since process start — a shared clock for time-driven widgets.
 pub fn anim_clock() -> f32 {
     use std::sync::OnceLock;
-    use std::time::Instant;
+    use web_time::Instant;
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f32()
 }

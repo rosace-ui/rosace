@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+web-time           = "1"
 tezzera-animate    = { path = "../tezzera-animate" }
 tezzera-compositor = { path = "../tezzera-compositor" }
 tezzera-core       = { path = "../tezzera-core" }

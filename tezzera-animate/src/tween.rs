@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 use crate::{Easing, Lerp};
 
 /// Time-based interpolation from one value to another using a chosen easing function.

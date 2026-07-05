@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+web-time = "1"
 tezzera-core  = { path = "../tezzera-core" }
 tezzera-state = { path = "../tezzera-state" }
 tezzera-trace = { path = "../tezzera-trace" }

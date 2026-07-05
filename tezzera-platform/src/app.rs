@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 #[cfg(debug_assertions)]
 use tezzera_trace::{event::TezzeraTrace, trace};

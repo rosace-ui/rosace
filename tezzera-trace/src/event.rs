@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Unique identifier for a component instance in the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

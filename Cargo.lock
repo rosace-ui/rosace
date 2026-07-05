@@ -2114,6 +2114,7 @@ dependencies = [
  "tezzera-core",
  "tezzera-state",
  "tezzera-trace",
+ "web-time",
 ]
 
 [[package]]
@@ -2279,6 +2280,7 @@ dependencies = [
  "tezzera-trace",
  "wasm-bindgen",
  "web-sys",
+ "web-time",
  "winit",
 ]
 
@@ -2359,6 +2361,9 @@ dependencies = [
 [[package]]
 name = "tezzera-trace"
 version = "0.1.0"
+dependencies = [
+ "web-time",
+]
 
 [[package]]
 name = "tezzera-widgets"
@@ -2375,6 +2380,7 @@ dependencies = [
  "tezzera-theme",
  "tezzera-trace",
  "tiny-skia",
+ "web-time",
 ]
 
 [[package]]
