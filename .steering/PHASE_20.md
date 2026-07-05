@@ -41,9 +41,14 @@
 > layer's UV src_offset. Verified: 92 consecutive scroll frames were
 > needs_paint=false + "present 2 layers (0 dirty)" — zero repaint, zero
 > re-upload. This MEETS Step 6's exit criterion (scroll = no CPU paint).
-> REMAINS in Step 6: (a) route ScrollView::live through this (it paints
-> into the base canvas today; needs hit-testing through the offset first,
-> since ScrollView content is interactive — blast radius across the demo);
+> Step 6 D090 HIT-TEST-THROUGH-OFFSET LANDED (commit 4b7e159): the
+> dispatch walk maps screen→content coords when descending into a
+> transform node's children (child_coords) and clips to the viewport, so
+> GPU-composited scroll content is interactive. Unit-tested. (Also fixed a
+> pre-existing broken render_tree test so the widgets suite compiles.)
+> REMAINS in Step 6: (a) route ScrollView::live through this — the LAST
+> piece (it paints into the base canvas today; hit-test prereq now done,
+> but still a demo-wide blast radius since every route wraps ScrollView);
 > (b) content taller than MAX_TL_DIM (4096) needs a re-render window /
 > virtualization strategy.
 >
