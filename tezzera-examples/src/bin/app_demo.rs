@@ -18,6 +18,7 @@ enum Screen {
     VirtualList,
     Gallery,
     Showcase,
+    GpuLayer,
 }
 
 impl Screen {
@@ -30,6 +31,7 @@ impl Screen {
             Screen::VirtualList => "Virtualized List",
             Screen::Gallery     => "Widget Gallery",
             Screen::Showcase    => "New Widgets",
+            Screen::GpuLayer    => "GPU Scroll Layer",
         }
     }
 }
@@ -56,6 +58,7 @@ impl Component for AppDemo {
         let drop_sel:    Atom<usize> = ctx.state(0);
         let exp_open:    Atom<bool> = ctx.state(true);
         let anim_on:     Atom<bool> = ctx.state(true);
+        let tl_scroll:   Atom<f32>  = ctx.state(120.0f32);
 
         let screen = nav.current().unwrap_or(Screen::Home);
 
@@ -71,6 +74,7 @@ impl Component for AppDemo {
             Screen::VirtualList => Box::new(virtual_list_screen()),
             Screen::Gallery     => Box::new(ScrollView::new(gallery_screen(&check_on, &switch_on, &slider_v, &press_count))),
             Screen::Showcase    => Box::new(ScrollView::new(showcase_screen(&radio_sel, &seg_sel, &drop_open, &drop_sel, &exp_open, &anim_on))),
+            Screen::GpuLayer    => Box::new(gpu_layer_screen(&tl_scroll)),
         };
 
         // ── AppBar: back appears off-Home; ⬆ Top only where it acts ──────
@@ -111,6 +115,7 @@ fn home_screen(nav: &ScreenNav<Screen>) -> impl Widget {
         .child(tile("Virtualized List", "10,000 rows, built on demand", Screen::VirtualList, nav))
         .child(tile("Widget Gallery", "Buttons, inputs, chips, progress", Screen::Gallery, nav))
         .child(tile("New Widgets", "Shapes, grid, spinner, radio, dropdown…", Screen::Showcase, nav))
+        .child(tile("GPU Scroll Layer", "TransformLayer composited as a placed GPU layer", Screen::GpuLayer, nav))
 }
 
 // ── Feature screens ───────────────────────────────────────────────────────────
@@ -131,6 +136,38 @@ fn typography_screen() -> impl Widget {
              past the second line is truncated away, which is exactly what \
              happens to this very sentence you are reading right now.",
         ).max_lines(2))
+}
+
+fn gpu_layer_screen(scroll: &Atom<f32>) -> impl Widget {
+    // Tall content: 16 numbered rows (~48px each ≈ 760px) inside a 240px
+    // viewport, so most of it is off-screen. The content is rendered once into
+    // its own texture; the compositor samples that texture at the scroll offset
+    // and clips to the viewport — a placed GPU layer (D090), not a base replay.
+    let mut rows = Column::new().spacing(0.0);
+    for i in 0..16 {
+        let s = if i % 2 == 0 { 44u8 } else { 60u8 };
+        rows = rows.child(
+            Container::new()
+                .width(360.0)
+                .background(Color::rgb(s, s + 6, s + 26))
+                .padding(EdgeInsets::all(14.0))
+                .child(Text::title(format!("Row {i:02}"))),
+        );
+    }
+
+    let sc = scroll.clone();
+    Column::new()
+        .spacing(16.0)
+        .padding(EdgeInsets::all(24.0))
+        .child(Text::caption(
+            "These rows live in a TransformLayer whose content is rasterized once \
+             into its own texture and composited as a placed GPU layer. Drag the \
+             slider: the viewport samples the texture at the scroll offset (a UV \
+             shift), clipped to 240px — no base-canvas re-raster of the content.",
+        ))
+        .child(Slider::new(scroll.get()).range(0.0, 500.0, scroll.get())
+            .on_change(move |v| sc.set(v)))
+        .child(Card::new(TransformLayer::new(rows, 240.0, scroll.clone())))
 }
 
 fn scrolling_screen() -> impl Widget {

@@ -108,6 +108,7 @@ impl PlatformWindow {
             cursor_y: 0.0,
             mouse_down: false,
             last_frame_time: None,
+            scroll_layers: Vec::new(),
         };
         event_loop.run_app(&mut app).unwrap();
     }
@@ -138,6 +139,9 @@ struct AppState<F> {
     // then, so drags stream without paying for idle mouse movement.
     mouse_down: bool,
     last_frame_time: Option<Instant>,
+    // Retained scroll layers (D090) — refreshed when the frame loop publishes,
+    // reused across clean frames so they persist without a re-upload.
+    scroll_layers: Vec<crate::scroll_layer::ScrollLayer>,
 }
 
 impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandler<FrameRequest> for AppState<F> {
@@ -263,26 +267,44 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     // when the frame loop actually redraws it.
                     let base_dirty = self.canvas.take_frame_dirty();
 
+                    // Refresh the retained scroll layers only when the frame
+                    // loop published (it repainted). `None` = clean frame →
+                    // keep the retained set so the layers persist unchanged.
+                    let refreshed = crate::scroll_layer::take_scroll_layers();
+                    let scroll_dirty = refreshed.is_some();
+                    if let Some(layers) = refreshed {
+                        self.scroll_layers = layers;
+                    }
+
+                    // Composite bottom-to-top: base, scroll layers (each placed
+                    // at its viewport), then the overlay on top (D090). Scroll
+                    // layers re-upload only on a publish frame (scroll_dirty);
+                    // otherwise D089 reuses their persistent textures.
+                    let mut layers = vec![
+                        tezzera_compositor::CompositorLayer::tracked(
+                            self.canvas.pixels(), phys_w, phys_h, base_dirty,
+                        ),
+                    ];
+                    for sl in &self.scroll_layers {
+                        layers.push(tezzera_compositor::CompositorLayer::placed(
+                            &sl.pixels, sl.width, sl.height,
+                            tezzera_compositor::LayerRect {
+                                x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
+                            },
+                            sl.src_offset,
+                            scroll_dirty,
+                        ));
+                    }
                     // Skip the overlay layer entirely when nothing drew into it
                     // this frame. When it did draw, treat it as dirty — the
                     // overlay is cleared and replayed every frame, so its pixels
                     // may differ even when the base is clean.
                     if self.overlay_canvas.has_drawn() {
-                        presenter.present_layers(&[
-                            tezzera_compositor::CompositorLayer::tracked(
-                                self.canvas.pixels(), phys_w, phys_h, base_dirty,
-                            ),
-                            tezzera_compositor::CompositorLayer::tracked(
-                                self.overlay_canvas.pixels(), phys_w, phys_h, true,
-                            ),
-                        ]);
-                    } else {
-                        presenter.present_layers(&[
-                            tezzera_compositor::CompositorLayer::tracked(
-                                self.canvas.pixels(), phys_w, phys_h, base_dirty,
-                            ),
-                        ]);
+                        layers.push(tezzera_compositor::CompositorLayer::tracked(
+                            self.overlay_canvas.pixels(), phys_w, phys_h, true,
+                        ));
                     }
+                    presenter.present_layers(&layers);
                 } else if let Some(surface) = &mut self.surface {
                     let base_pixels = self.canvas.pixels();
                     let mut buffer = surface.buffer_mut().unwrap();

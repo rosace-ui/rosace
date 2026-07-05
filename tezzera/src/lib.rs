@@ -410,25 +410,44 @@ impl App {
                     }
                 }
 
-                // ── TransformLayer pass (D088) ─────────────────────────────
-                // Entries live on the render tree (D091). Skipped on clean
-                // frames: the base canvas already holds last frame's replay,
-                // and re-blending translucent content would double-darken.
+                // ── TransformLayer pass (D088/D090) ────────────────────────
+                // Each entry's content is rendered ONCE into its own content-
+                // sized canvas and published as a placed GPU compositor layer
+                // (D090) — the compositor samples it at the scroll offset, so
+                // scrolling is a UV shift rather than a base-canvas re-raster.
+                // Published only on repaint frames; the platform retains the
+                // set across clean frames (persists through frame-skip).
                 if needs_paint {
+                    // Physical-pixel cap for a content texture (D082).
+                    const MAX_TL_DIM: u32 = 4096;
+                    let scale = canvas.scale();
+                    let mut scroll_layers: Vec<tezzera_platform::ScrollLayer> = Vec::new();
                     let tree_ref = render_tree.borrow();
                     for (n, i) in tree_ref.transform_ids() {
                         let entry = &tree_ref.node(n).transforms[i];
                         let vp = entry.viewport_rect;
-                        let dx = vp.origin.x - entry.scroll_x;
-                        let dy = vp.origin.y - entry.scroll_y;
 
-                        let mut tl_recorder = tezzera_render::PictureRecorder::new();
-                        for cmd in &entry.picture.commands {
-                            tl_recorder.push(cmd.offset(dx, dy));
-                        }
-                        let tl_picture = tl_recorder.finish();
-                        canvas.play_picture(&tl_picture, &font);
+                        // Content texture = child natural size at physical
+                        // resolution, capped. Pixmap starts transparent, so
+                        // areas the content does not cover reveal the base.
+                        let cw = (((entry.child_size.width  * scale).ceil() as u32)).clamp(1, MAX_TL_DIM);
+                        let ch = (((entry.child_size.height * scale).ceil() as u32)).clamp(1, MAX_TL_DIM);
+                        let mut content = tezzera_render::SkiaCanvas::new_hidpi(cw, ch, scale);
+                        content.play_picture(&entry.picture, &font);
+
+                        scroll_layers.push(tezzera_platform::ScrollLayer {
+                            pixels: content.pixels().to_vec(),
+                            width:  cw,
+                            height: ch,
+                            dest: (
+                                vp.origin.x * scale, vp.origin.y * scale,
+                                vp.size.width * scale, vp.size.height * scale,
+                            ),
+                            src_offset: (entry.scroll_x * scale, entry.scroll_y * scale),
+                        });
                     }
+                    drop(tree_ref);
+                    tezzera_platform::publish_scroll_layers(scroll_layers);
                 }
 
 
