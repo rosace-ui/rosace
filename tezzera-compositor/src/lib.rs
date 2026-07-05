@@ -18,13 +18,13 @@
 
 use wgpu::util::DeviceExt;
 
-/// Reinterpret a `[f32; 4]` as its raw 16 bytes for GPU upload.
-/// SAFETY: `[f32; 4]` is 16 contiguous bytes; every bit pattern is a valid u8.
-fn bytemuck_f32x4(data: &[f32; 4]) -> &[u8] {
+/// Reinterpret a `[f32; 8]` as its raw 32 bytes for GPU upload.
+/// SAFETY: `[f32; 8]` is 32 contiguous bytes; every bit pattern is a valid u8.
+fn bytemuck_f32x8(data: &[f32; 8]) -> &[u8] {
     unsafe {
         std::slice::from_raw_parts(
             data.as_ptr() as *const u8,
-            std::mem::size_of::<[f32; 4]>(),
+            std::mem::size_of::<[f32; 8]>(),
         )
     }
 }
@@ -37,28 +37,78 @@ fn bytemuck_f32x4(data: &[f32; 4]) -> &[u8] {
 /// With offset `(0.0, 0.0)` the layer is rendered without scrolling (Phase 15/16 behaviour).
 /// Out-of-range UV due to the offset returns transparent (D081).
 pub struct CompositorLayer<'a> {
-    pub pixels:  &'a [u8],
-    pub width:   u32,
-    pub height:  u32,
-    pub opacity: f32,
-    /// UV-space scroll offset. Use `(0.0, 0.0)` for no scroll (D080).
-    pub offset:  (f32, f32),
+    pub pixels: &'a [u8],
+    /// Content-texture dimensions in physical pixels.
+    pub width:  u32,
+    pub height: u32,
+    /// Screen placement in physical pixels. `None` fills the whole surface
+    /// (base/overlay); `Some` places the layer at a viewport sub-rect (D090).
+    pub dest:   Option<LayerRect>,
+    /// Texture sample origin in physical pixels — the scroll offset. `(0,0)`
+    /// samples from the top-left (D080).
+    pub src_offset: (f32, f32),
     /// True when `pixels` differ from the last frame's for this layer slot.
     /// When false, the compositor reuses the persistent GPU texture and skips
     /// re-upload (D089); when every layer is clean and unmoved, it skips the
     /// present entirely.
-    pub dirty:   bool,
+    pub dirty:  bool,
+}
+
+/// A rectangle in physical pixels (compositor-local, avoids a geometry dep).
+#[derive(Clone, Copy, PartialEq)]
+pub struct LayerRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
 }
 
 impl<'a> CompositorLayer<'a> {
-    /// Convenience: opaque layer, no scroll offset, always re-uploaded.
+    /// Convenience: full-surface opaque layer, always re-uploaded.
     pub fn opaque(pixels: &'a [u8], width: u32, height: u32) -> Self {
-        Self { pixels, width, height, opacity: 1.0, offset: (0.0, 0.0), dirty: true }
+        Self { pixels, width, height, dest: None, src_offset: (0.0, 0.0), dirty: true }
     }
 
-    /// Opaque layer that only re-uploads its texture when `dirty` (D089).
+    /// Full-surface layer that only re-uploads its texture when `dirty` (D089).
     pub fn tracked(pixels: &'a [u8], width: u32, height: u32, dirty: bool) -> Self {
-        Self { pixels, width, height, opacity: 1.0, offset: (0.0, 0.0), dirty }
+        Self { pixels, width, height, dest: None, src_offset: (0.0, 0.0), dirty }
+    }
+
+    /// A layer placed at a viewport sub-rect (`dest`, physical px) that samples
+    /// its content texture from `src_offset` — a scrolling content layer (D090).
+    pub fn placed(
+        pixels: &'a [u8], width: u32, height: u32,
+        dest: LayerRect, src_offset: (f32, f32), dirty: bool,
+    ) -> Self {
+        Self { pixels, width, height, dest: Some(dest), src_offset, dirty }
+    }
+
+    /// Compute the 8-float uniform (dest NDC + UV window) for this layer given
+    /// the current surface size in physical pixels.
+    fn uniform(&self, surface_w: u32, surface_h: u32) -> [f32; 8] {
+        let (sw, sh) = (surface_w.max(1) as f32, surface_h.max(1) as f32);
+        let (tw, th) = (self.width.max(1) as f32, self.height.max(1) as f32);
+
+        // Screen placement → NDC. Full surface when dest is None.
+        let d = self.dest.unwrap_or(LayerRect { x: 0.0, y: 0.0, w: sw, h: sh });
+        let ndc_left   = 2.0 * d.x / sw - 1.0;
+        let ndc_right  = 2.0 * (d.x + d.w) / sw - 1.0;
+        let ndc_top    = 1.0 - 2.0 * d.y / sh;
+        let ndc_bottom = 1.0 - 2.0 * (d.y + d.h) / sh;
+
+        // UV window: sample a d.w × d.h region of the texture starting at the
+        // scroll offset (1:1 physical px → texel, no scaling).
+        let uv_min_x  = self.src_offset.0 / tw;
+        let uv_min_y  = self.src_offset.1 / th;
+        let uv_span_x = d.w / tw;
+        let uv_span_y = d.h / th;
+
+        [
+            ndc_left, ndc_bottom,   // dest_min
+            ndc_right, ndc_top,     // dest_max
+            uv_min_x, uv_min_y,     // uv_min
+            uv_span_x, uv_span_y,   // uv_span
+        ]
     }
 }
 
@@ -70,7 +120,9 @@ struct CachedLayer {
     uniform_buf: wgpu::Buffer,
     width:       u32,
     height:      u32,
-    offset:      (f32, f32),
+    /// Last uniform written (dest NDC + UV window) — compared to skip both the
+    /// present and the uniform write when nothing moved.
+    uniform:     [f32; 8],
 }
 
 /// GPU compositor state. One instance per window.
@@ -192,10 +244,11 @@ impl GpuPresenter {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // Binding 2: LayerUniforms (offset + pad, 16 bytes) (D081)
+                // Binding 2: LayerUniforms (dest NDC + UV window, 32 bytes) (D090).
+                // Read in the VERTEX stage (quad placement) — must be visible there.
                 wgpu::BindGroupLayoutEntry {
                     binding:    2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty:                 wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -322,13 +375,14 @@ impl GpuPresenter {
         // Do nothing: no upload, no encoder, no surface acquire. This is the
         // common case for hover/idle frames the frame-skip already made
         // raster-free upstream.
+        let (sw, sh) = (self.width, self.height);
         let unchanged = self.cached_layers.len() == layers.len()
             && layers.iter().enumerate().all(|(i, l)| {
                 let c = &self.cached_layers[i];
                 !l.dirty
                     && c.width == l.width
                     && c.height == l.height
-                    && c.offset == l.offset
+                    && c.uniform == l.uniform(sw, sh)
             });
         if unchanged {
             log::debug!("compositor: skip present ({} layers unchanged)", layers.len());
@@ -376,13 +430,13 @@ impl GpuPresenter {
                         },
                     );
                 }
-                if cached.offset != layer.offset {
-                    let uniform_data: [f32; 4] = [layer.offset.0, layer.offset.1, 0.0, 0.0];
-                    self.queue.write_buffer(&cached.uniform_buf, 0, bytemuck_f32x4(&uniform_data));
-                    cached.offset = layer.offset;
+                let uniform = layer.uniform(sw, sh);
+                if cached.uniform != uniform {
+                    self.queue.write_buffer(&cached.uniform_buf, 0, bytemuck_f32x8(&uniform));
+                    cached.uniform = uniform;
                 }
             } else {
-                let cached = self.build_cached_layer(layer);
+                let cached = self.build_cached_layer(layer, sw, sh);
                 if idx < self.cached_layers.len() {
                     self.cached_layers[idx] = cached;
                 } else {
@@ -439,7 +493,7 @@ impl GpuPresenter {
 
     /// Create a persistent texture + bind group for a fresh layer slot and
     /// upload its initial pixels (D089).
-    fn build_cached_layer(&self, layer: &CompositorLayer<'_>) -> CachedLayer {
+    fn build_cached_layer(&self, layer: &CompositorLayer<'_>, surface_w: u32, surface_h: u32) -> CachedLayer {
         let texture = self.device.create_texture_with_data(
             &self.queue,
             &wgpu::TextureDescriptor {
@@ -462,12 +516,11 @@ impl GpuPresenter {
         );
         let tex_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Write layer uniforms: offset (UV-space) + 8 bytes padding (D081).
-        // Layout: [offset_x f32][offset_y f32][pad f32][pad f32] = 16 bytes
-        let uniform_data: [f32; 4] = [layer.offset.0, layer.offset.1, 0.0, 0.0];
+        // Write layer uniforms: dest NDC + UV window (D090). 8 floats = 32 bytes.
+        let uniform = layer.uniform(surface_w, surface_h);
         let uniform_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label:    Some("layer-uniforms"),
-            contents: bytemuck_f32x4(&uniform_data),
+            contents: bytemuck_f32x8(&uniform),
             usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -496,7 +549,7 @@ impl GpuPresenter {
             uniform_buf,
             width:  layer.width,
             height: layer.height,
-            offset: layer.offset,
+            uniform,
         }
     }
 
