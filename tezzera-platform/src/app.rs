@@ -204,6 +204,21 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                         .unwrap();
                 }
 
+                // Keep the GPU surface at the PHYSICAL canvas resolution every
+                // frame. The presenter is initialised at the window's logical
+                // size, so without this the first frame(s) render a physical
+                // (Retina) canvas into a half-resolution surface and the OS
+                // upscales the result → blurry text until a Resized event
+                // happens to correct it. Syncing here guarantees a 1:1 map.
+                // A surface reconfigure discards its contents, so force a
+                // repaint+present this frame (never skip it via D089).
+                if let Some(presenter) = self.presenter.as_mut() {
+                    if presenter.surface_size() != (phys_w, phys_h) {
+                        presenter.resize(phys_w, phys_h);
+                        self.canvas.mark_frame_dirty();
+                    }
+                }
+
                 let now = Instant::now();
                 let dt = self.last_frame_time
                     .map(|t| t.elapsed().as_secs_f32())
