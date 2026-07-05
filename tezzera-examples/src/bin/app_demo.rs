@@ -58,7 +58,6 @@ impl Component for AppDemo {
         let drop_sel:    Atom<usize> = ctx.state(0);
         let exp_open:    Atom<bool> = ctx.state(true);
         let anim_on:     Atom<bool> = ctx.state(true);
-        let tl_scroll:   Atom<f32>  = ctx.state(120.0f32);
 
         let screen = nav.current().unwrap_or(Screen::Home);
 
@@ -74,7 +73,7 @@ impl Component for AppDemo {
             Screen::VirtualList => Box::new(virtual_list_screen()),
             Screen::Gallery     => Box::new(ScrollView::new(gallery_screen(&check_on, &switch_on, &slider_v, &press_count))),
             Screen::Showcase    => Box::new(ScrollView::new(showcase_screen(&radio_sel, &seg_sel, &drop_open, &drop_sel, &exp_open, &anim_on))),
-            Screen::GpuLayer    => Box::new(gpu_layer_screen(&tl_scroll)),
+            Screen::GpuLayer    => Box::new(gpu_layer_screen()),
         };
 
         // ── AppBar: back appears off-Home; ⬆ Top only where it acts ──────
@@ -115,7 +114,7 @@ fn home_screen(nav: &ScreenNav<Screen>) -> impl Widget {
         .child(tile("Virtualized List", "10,000 rows, built on demand", Screen::VirtualList, nav))
         .child(tile("Widget Gallery", "Buttons, inputs, chips, progress", Screen::Gallery, nav))
         .child(tile("New Widgets", "Shapes, grid, spinner, radio, dropdown…", Screen::Showcase, nav))
-        .child(tile("GPU Scroll Layer", "TransformLayer composited as a placed GPU layer", Screen::GpuLayer, nav))
+        .child(tile("GPU Scroll Layer", "ScrollView::gpu — content composited as a placed GPU layer", Screen::GpuLayer, nav))
 }
 
 // ── Feature screens ───────────────────────────────────────────────────────────
@@ -138,11 +137,11 @@ fn typography_screen() -> impl Widget {
         ).max_lines(2))
 }
 
-fn gpu_layer_screen(scroll: &Atom<f32>) -> impl Widget {
-    // Tall content: 16 numbered rows (~48px each ≈ 760px) inside a 240px
-    // viewport, so most of it is off-screen. The content is rendered once into
-    // its own texture; the compositor samples that texture at the scroll offset
-    // and clips to the viewport — a placed GPU layer (D090), not a base replay.
+fn gpu_layer_screen() -> impl Widget {
+    // 16 numbered rows (~700px) inside a ~300px ScrollView::gpu — most is
+    // off-screen. The content rasterizes once into its own GPU texture; a
+    // mouse-wheel scroll only shifts the compositor UV offset (zero component
+    // repaint, D090), and clicks map through the offset into the right row.
     let mut rows = Column::new().spacing(0.0);
     for i in 0..16 {
         let s = if i % 2 == 0 { 44u8 } else { 60u8 };
@@ -159,13 +158,15 @@ fn gpu_layer_screen(scroll: &Atom<f32>) -> impl Widget {
         .spacing(16.0)
         .padding(EdgeInsets::all(24.0))
         .child(Text::caption(
-            "These rows live in a TransformLayer: their content is rasterized once \
-             into its own GPU texture. SCROLL THE BOX WITH THE MOUSE WHEEL — a \
-             scroll tick only shifts the compositor's UV sample offset and requests \
-             a present; it dirties no component, so there is zero CPU re-raster of \
-             the content (D090). Clipped to 240px.",
+            "This is a ScrollView::gpu — its content is composited as a placed GPU \
+             layer. SCROLL WITH THE MOUSE WHEEL: a scroll tick only shifts the \
+             compositor's UV offset and requests a present; it dirties no \
+             component, so there is zero CPU re-raster of the content (D090).",
         ))
-        .child(Card::new(TransformLayer::new(rows, 240.0, scroll.clone())))
+        .child(Container::new()
+            .height(300.0)
+            .background(Color::rgb(28, 30, 42))
+            .child(ScrollView::gpu(rows)))
 }
 
 fn scrolling_screen() -> impl Widget {

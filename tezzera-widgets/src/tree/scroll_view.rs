@@ -30,6 +30,10 @@ pub struct ScrollView {
     pub axis: ScrollAxis,
     pub show_scrollbar: bool,
     pub scrollbar_color: Color,
+    /// Composite the content as a placed GPU layer (D090) instead of painting
+    /// it into the base canvas. Scrolling then shifts the compositor UV offset
+    /// with zero component repaint. Content is capped at `MAX_TL_DIM` (4096px).
+    gpu_layer: bool,
 }
 
 impl ScrollView {
@@ -43,8 +47,20 @@ impl ScrollView {
             axis: ScrollAxis::Vertical,
             show_scrollbar: true,
             scrollbar_color: Color::rgb(50, 55, 85),
+            gpu_layer: false,
         }
     }
+
+    /// A scroll view whose content is composited as a placed GPU layer (D090):
+    /// the content rasterizes once into its own texture and a scroll is a
+    /// compositor UV shift with zero CPU repaint. Best for content that fits
+    /// the 4096px texture cap; taller content should use [`ScrollView::new`].
+    pub fn gpu(child: impl Widget + 'static) -> Self {
+        Self { gpu_layer: true, ..Self::new(child) }
+    }
+
+    /// Opt this scroll view into GPU-layer compositing (see [`ScrollView::gpu`]).
+    pub fn gpu_layer(mut self) -> Self { self.gpu_layer = true; self }
 
     /// A horizontal scroll view — carousels, chip rows, code blocks.
     pub fn horizontal(child: impl Widget + 'static) -> Self {
@@ -76,6 +92,109 @@ impl ScrollView {
     pub fn axis(mut self, a: ScrollAxis) -> Self { self.axis = a; self }
     pub fn no_scrollbar(mut self) -> Self { self.show_scrollbar = false; self }
     pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar_color = c; self }
+
+    /// GPU-layer paint path (D090). Records the content once into its own
+    /// sub-tree/picture at content-local `(0,0)`, attaches it as a
+    /// TransformLayer entry (the platform composites it as a placed layer), and
+    /// registers wheel scrolling straight into the non-reactive offset channel
+    /// so a scroll tick is a compositor UV shift with no component repaint.
+    fn paint_gpu(&self, ctx: &mut PaintCtx) {
+        use super::TransformLayerEntry;
+        let vp = ctx.rect;
+        let node_id = ctx.node as u64;
+        let off = tezzera_state::scroll_offset(node_id);
+
+        // Lay out the content with the unbounded scroll axis (API_DESIGN §6).
+        use tezzera_layout::AxisBound;
+        let child_constraints = match self.axis {
+            ScrollAxis::Vertical => Constraints {
+                min_width: vp.size.width,
+                max_width: AxisBound::Bounded(vp.size.width),
+                min_height: vp.size.height,
+                max_height: AxisBound::Unbounded,
+            },
+            ScrollAxis::Horizontal => Constraints {
+                min_width: vp.size.width,
+                max_width: AxisBound::Unbounded,
+                min_height: vp.size.height,
+                max_height: AxisBound::Bounded(vp.size.height),
+            },
+            ScrollAxis::Both => Constraints {
+                min_width: vp.size.width,
+                max_width: AxisBound::Unbounded,
+                min_height: vp.size.height,
+                max_height: AxisBound::Unbounded,
+            },
+        };
+        let child_size = self.child.layout(&ctx.layout_ctx(child_constraints));
+
+        // Record the content at (0,0) into its own node/picture (D090).
+        let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
+        let mut sub_rec = tezzera_render::PictureRecorder::new();
+        let child_rect = Rect { origin: Point { x: 0.0, y: 0.0 }, size: child_size };
+        let mut sub_ctx = PaintCtx {
+            recorder: &mut sub_rec,
+            rect: child_rect,
+            font: ctx.font,
+            theme: ctx.theme.clone(),
+            tree: ctx.tree.clone(),
+            node: sub_node,
+            owner: ctx.owner,
+            clip_rect: None,
+        };
+        self.child.paint(&mut sub_ctx);
+        let picture = sub_rec.finish();
+
+        ctx.attach_transform(TransformLayerEntry {
+            picture,
+            child_size,
+            viewport_rect: vp,
+            scroll_x: off[0],
+            scroll_y: off[1],
+        });
+
+        // Wheel scrolling → offset channel (no repaint). Axis-clamped.
+        let max_x = match self.axis {
+            ScrollAxis::Horizontal | ScrollAxis::Both => (child_size.width - vp.size.width).max(0.0),
+            ScrollAxis::Vertical => 0.0,
+        };
+        let max_y = match self.axis {
+            ScrollAxis::Vertical | ScrollAxis::Both => (child_size.height - vp.size.height).max(0.0),
+            ScrollAxis::Horizontal => 0.0,
+        };
+        let axes = match self.axis {
+            ScrollAxis::Vertical   => super::ScrollAxes::Y,
+            ScrollAxis::Horizontal => super::ScrollAxes::X,
+            ScrollAxis::Both       => super::ScrollAxes::BOTH,
+        };
+        ctx.register_scroll_target(vp, axes, Arc::new(move |dx, dy| {
+            tezzera_state::scroll_offset_by(node_id, -dx, -dy, max_x, max_y);
+        }));
+
+        // Scrollbar drawn into the base canvas from the live channel offset.
+        if self.show_scrollbar && matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both)
+            && child_size.height > vp.size.height
+        {
+            let ratio = (vp.size.height / child_size.height).min(1.0);
+            let bar_h = vp.size.height * ratio;
+            let bar_y = vp.origin.y + (off[1] / child_size.height) * vp.size.height;
+            ctx.fill_rect(Rect {
+                origin: Point { x: vp.origin.x + vp.size.width - 4.0, y: bar_y },
+                size: Size { width: 3.0, height: bar_h },
+            }, self.scrollbar_color);
+        }
+        if self.show_scrollbar && matches!(self.axis, ScrollAxis::Horizontal | ScrollAxis::Both)
+            && child_size.width > vp.size.width
+        {
+            let ratio = (vp.size.width / child_size.width).min(1.0);
+            let bar_w = vp.size.width * ratio;
+            let bar_x = vp.origin.x + (off[0] / child_size.width) * vp.size.width;
+            ctx.fill_rect(Rect {
+                origin: Point { x: bar_x, y: vp.origin.y + vp.size.height - 4.0 },
+                size: Size { width: bar_w, height: 3.0 },
+            }, self.scrollbar_color);
+        }
+    }
 }
 
 impl Widget for ScrollView {
@@ -85,6 +204,13 @@ impl Widget for ScrollView {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // GPU-layer path (D090) — live mode only (fixed/controlled keep the
+        // base-canvas path so programmatic control and snapshots are exact).
+        if self.gpu_layer && self.fixed_offset.is_none() && self.controller.is_none() {
+            self.paint_gpu(ctx);
+            return;
+        }
+
         let vp = ctx.rect;
 
         // Resolve the controller: explicit override, or the node's implicit
