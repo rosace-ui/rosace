@@ -208,6 +208,23 @@ impl RenderTree {
         self.hit_test_node(Self::ROOT, x, y)
     }
 
+    /// Map screen coords into the content space of a node hosting a placed
+    /// scroll layer (D090). A transform node's children declare their hit
+    /// regions at content-local coords `(0,0)`-based, but the content is drawn
+    /// at the viewport scrolled by the live channel offset. Returns the coords
+    /// to descend into children with, and `true` when the point falls OUTSIDE
+    /// the viewport (children receive nothing — content is clipped to it).
+    /// Non-transform nodes pass coords through unchanged.
+    fn child_coords(&self, n: &TreeNode, id: NodeId, x: f32, y: f32) -> (f32, f32, bool) {
+        let Some(entry) = n.transforms.first() else { return (x, y, false); };
+        let vp = entry.viewport_rect;
+        if !contains(&vp, x, y) {
+            return (x, y, true);
+        }
+        let off = tezzera_state::scroll_offset(id as u64);
+        (x - vp.origin.x + off[0], y - vp.origin.y + off[1], false)
+    }
+
     fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<(Arc<dyn Fn(f32, f32) + Send + Sync>, bool)> {
         let n = &self.nodes[id];
         // Pointer interceptors (IgnorePointer / AbsorbPointer widgets):
@@ -222,9 +239,14 @@ impl RenderTree {
                 }
             }
         }
-        for &child in n.children.iter().rev() {
-            if let Some(cb) = self.hit_test_node(child, x, y) {
-                return Some(cb);
+        // Descend into children in the content space of a placed scroll layer
+        // (screen coords elsewhere). Outside the viewport, content is clipped.
+        let (cx, cy, clipped) = self.child_coords(n, id, x, y);
+        if !clipped {
+            for &child in n.children.iter().rev() {
+                if let Some(cb) = self.hit_test_node(child, cx, cy) {
+                    return Some(cb);
+                }
             }
         }
         // Positional regions first within a node (more specific intent).
@@ -253,9 +275,12 @@ impl RenderTree {
         if n.pointer_mode == 1 {
             return None;
         }
-        for &child in n.children.iter().rev() {
-            if let Some(hit) = self.hover_test_node(child, x, y) {
-                return Some(hit);
+        let (cx, cy, clipped) = self.child_coords(n, id, x, y);
+        if !clipped {
+            for &child in n.children.iter().rev() {
+                if let Some(hit) = self.hover_test_node(child, cx, cy) {
+                    return Some(hit);
+                }
             }
         }
         let owns = n.hits.iter().map(|(r, _)| r)
@@ -276,9 +301,12 @@ impl RenderTree {
         if n.pointer_mode == 1 {
             return None;
         }
-        for &child in n.children.iter().rev() {
-            if let Some(cb) = self.long_press_node(child, x, y) {
-                return Some(cb);
+        let (cx, cy, clipped) = self.child_coords(n, id, x, y);
+        if !clipped {
+            for &child in n.children.iter().rev() {
+                if let Some(cb) = self.long_press_node(child, cx, cy) {
+                    return Some(cb);
+                }
             }
         }
         for (rect, cb) in n.long_hits.iter().rev() {
@@ -535,9 +563,48 @@ mod tests {
         t.finalize();
 
         // Overlapping rects: the later sibling (painted on top) must win.
-        let cb = t.hit_test(5.0, 5.0).unwrap();
-        cb();
+        let (cb, _) = t.hit_test(5.0, 5.0).unwrap();
+        cb(0.0, 0.0);
         assert!(!hit_first.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn hit_test_maps_through_scroll_layer_offset() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // A transform node with a 100×100 viewport at (50,50), scrolled 200px
+        // down. Its child declares a hit at content-local (0,300)-(100,340).
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let tl = t.slot(RenderTree::ROOT, true);
+        t.node_mut(tl).transforms.push(TransformLayerEntry {
+            picture: tezzera_render::PictureRecorder::new().finish(),
+            child_size: Size { width: 100.0, height: 1000.0 },
+            viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let child = t.slot(tl, true);
+        let hit = Arc::new(AtomicBool::new(false));
+        let h = hit.clone();
+        // Content-local region visible at scroll 200 (content y 200..300).
+        t.node_mut(child).hits.push((rect(0.0, 220.0, 100.0, 40.0), Arc::new(move || {
+            h.store(true, Ordering::SeqCst);
+        })));
+        t.finalize();
+
+        // Live offset lives in the channel keyed by the transform node id.
+        tezzera_state::set_scroll_offset(tl as u64, [0.0, 200.0]);
+
+        // Screen (75,90): inside the viewport (50..150); content y = 90-50+200
+        // = 240, which lands in the child's [220,260) region → hits.
+        let (cb, _) = t.hit_test(75.0, 90.0).expect("content region must be hit through the offset");
+        cb(0.0, 0.0);
+        assert!(hit.load(Ordering::SeqCst), "click mapped into scrolled content");
+
+        // Screen (75, 40): ABOVE the viewport → clipped, no hit.
+        assert!(t.hit_test(75.0, 40.0).is_none(), "clicks outside the viewport are clipped");
+
+        tezzera_state::clear_scroll_offset(tl as u64);
     }
 
     #[test]
