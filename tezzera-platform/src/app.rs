@@ -240,22 +240,31 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 // Present the frame — GPU multi-layer compositor (D076, D079),
                 // with softbuffer fallback that CPU-composites overlay on top.
                 if let Some(presenter) = &mut self.presenter {
-                    // Skip the overlay texture upload entirely when nothing
-                    // drew into it this frame — saves a full-framebuffer GPU
-                    // upload on every overlay-free frame.
+                    // Per-frame dirtiness drives the compositor's texture cache
+                    // (D089): a clean base layer reuses its persistent GPU
+                    // texture, and a frame where nothing changed skips the
+                    // present entirely. `take_frame_dirty` must run every frame
+                    // so the flag resets; the base only repaints (and re-marks)
+                    // when the frame loop actually redraws it.
+                    let base_dirty = self.canvas.take_frame_dirty();
+
+                    // Skip the overlay layer entirely when nothing drew into it
+                    // this frame. When it did draw, treat it as dirty — the
+                    // overlay is cleared and replayed every frame, so its pixels
+                    // may differ even when the base is clean.
                     if self.overlay_canvas.has_drawn() {
                         presenter.present_layers(&[
-                            tezzera_compositor::CompositorLayer::opaque(
-                                self.canvas.pixels(), phys_w, phys_h,
+                            tezzera_compositor::CompositorLayer::tracked(
+                                self.canvas.pixels(), phys_w, phys_h, base_dirty,
                             ),
-                            tezzera_compositor::CompositorLayer::opaque(
-                                self.overlay_canvas.pixels(), phys_w, phys_h,
+                            tezzera_compositor::CompositorLayer::tracked(
+                                self.overlay_canvas.pixels(), phys_w, phys_h, true,
                             ),
                         ]);
                     } else {
                         presenter.present_layers(&[
-                            tezzera_compositor::CompositorLayer::opaque(
-                                self.canvas.pixels(), phys_w, phys_h,
+                            tezzera_compositor::CompositorLayer::tracked(
+                                self.canvas.pixels(), phys_w, phys_h, base_dirty,
                             ),
                         ]);
                     }

@@ -1,6 +1,6 @@
 # Phase 20 — RenderTree Unification: Retained State, Structural Hit Testing, Damage Repaint
 
-> Status: NEARLY COMPLETE (Steps 1–5 done; Step 6 D089/D090 GPU cache remains)
+> Status: NEARLY COMPLETE (Steps 1–5 done; Step 6 D089 done; D090 remains)
 > Started: 2026-07-02
 > Completed: —
 >
@@ -17,8 +17,17 @@
 > LANDED: arena unification (flat RenderNode + dead reconciler deleted),
 > damage-rect repaint (dirty region only), real RepaintBoundary picture
 > cache, hover/tooltip/long-press/pointer-interceptors on the arena.
-> REMAINS: Step 6 D089/D090 (skip GPU upload for unchanged frames /
-> persistent scroll-layer textures) — the last perf tier.
+> Step 6 D089 LANDED: GpuPresenter holds persistent per-layer textures
+> (`CachedLayer`) reused across frames; clean layers skip `write_texture`,
+> offset-only changes are a uniform write, and a frame where no layer
+> changed skips the present entirely (no surface acquire/submit). Signal:
+> `SkiaCanvas::frame_dirty` set by the run loop when it repaints, consumed
+> by the platform via `take_frame_dirty` → `CompositorLayer::tracked(..)`.
+> Verified on Metal/M1 Pro: idle+hover frames log "skip present", content
+> changes log "present (1 dirty)".
+> REMAINS: Step 6 D090 (ScrollView::live pushes its content as its own
+> compositor layer so scroll is a uniform offset update, not a CPU
+> repaint) — the last perf tier. Exit: scroll produces no CPU paint.
 >
 > DESIGN NOTE for the remaining block (found while scoping): per-node
 > picture caching cannot key on constraints alone — widgets are rebuilt

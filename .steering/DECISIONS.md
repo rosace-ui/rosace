@@ -1081,9 +1081,10 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 ---
 
 ### D089 — GPU texture caching
-**Status**: DEFERRED → Phase 20
+**Status**: LANDED (Phase 20 Step 6)
 **Decision**: Full "zero re-upload on scroll" (persistent wgpu Texture keyed by layer, reused across frames) is Phase 20. Phase 19 re-plays the Picture each frame into a new pixel buffer. The architecture is correct; the caching layer is an optimization.
-**Affects**: `tezzera-compositor`
+**Implementation**: `GpuPresenter` holds `cached_layers: Vec<CachedLayer>` (persistent texture + bind group + uniform buffer per slot). `CompositorLayer::dirty` drives it: clean layers reuse their texture (no `write_texture`), offset changes are a `write_buffer`, and a frame where every layer is clean and unmoved skips the present entirely. Dirtiness flows `SkiaCanvas::frame_dirty` (set by the frame loop on repaint) → `take_frame_dirty` in the platform → `CompositorLayer::tracked`. Verified: idle/hover frames upload nothing.
+**Affects**: `tezzera-compositor`, `tezzera-render`, `tezzera-platform`, `tezzera`
 
 ---
 

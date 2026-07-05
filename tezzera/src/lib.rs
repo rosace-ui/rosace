@@ -277,6 +277,11 @@ impl App {
                 canvas.play_picture(&picture, &font);
                 canvas.set_logical_clip(None);
 
+                // The base canvas changed this frame — tell the platform to
+                // re-upload its GPU texture (D089). Clean/hover frames skip
+                // this block, leaving frame_dirty false so no upload happens.
+                canvas.mark_frame_dirty();
+
                 // ── Reconcile: fire lifecycle for mounted/unmounted components
                 for &id in new_mounted.difference(&prev_mounted) {
                     let cid = tezzera_core::types::ComponentId(id);

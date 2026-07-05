@@ -44,6 +44,11 @@ pub struct SkiaCanvas {
     /// True after any draw call (other than `clear_transparent`). Used by the
     /// platform to skip the overlay Porter-Duff blend when nothing was drawn.
     has_drawn: bool,
+    /// True when this canvas's pixels changed since the last present. The frame
+    /// loop sets it whenever it repaints; the platform consumes it via
+    /// [`take_frame_dirty`] to skip the GPU texture upload on clean frames
+    /// (D089). Starts `true` so the first frame always uploads.
+    frame_dirty: bool,
     /// Active clip rect in PHYSICAL pixel coordinates, stored as (x, y, right, bottom)
     /// right-exclusive. `None` means no clipping. Managed by `play_picture`.
     clip: Option<(i32, i32, i32, i32)>,
@@ -278,6 +283,7 @@ impl SkiaCanvas {
             pixmap: Pixmap::new(phys_width, phys_height).expect("failed to create pixmap"),
             scale: scale.max(1.0),
             has_drawn: false,
+            frame_dirty: true,
             clip: None,
             clip_masks: HashMap::new(),
             shadow_cache: HashMap::new(),
@@ -315,6 +321,19 @@ impl SkiaCanvas {
     /// overlay canvas has no content, avoiding O(pixels) work every frame.
     pub fn has_drawn(&self) -> bool {
         self.has_drawn
+    }
+
+    /// Mark this canvas's pixels as changed this frame (D089). The frame loop
+    /// calls this whenever it repaints the canvas, so the platform re-uploads
+    /// its GPU texture; clean frames leave the flag false and skip the upload.
+    pub fn mark_frame_dirty(&mut self) {
+        self.frame_dirty = true;
+    }
+
+    /// Return whether the canvas changed since the last present and reset the
+    /// flag to false (D089). Called once per frame by the platform present.
+    pub fn take_frame_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.frame_dirty, false)
     }
 
     /// Fill the entire canvas with a solid color.

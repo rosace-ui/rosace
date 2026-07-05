@@ -11,12 +11,23 @@
 //! let presenter = GpuPresenter::new(&window, width, height);
 //! // in frame loop:
 //! presenter.present_layers(&[
-//!     CompositorLayer { pixels: base.pixels(), width, height, opacity: 1.0 },
-//!     CompositorLayer { pixels: overlay.pixels(), width, height, opacity: 1.0 },
+//!     CompositorLayer::tracked(base.pixels(), width, height, base_dirty),
+//!     CompositorLayer::tracked(overlay.pixels(), width, height, true),
 //! ]);
 //! ```
 
 use wgpu::util::DeviceExt;
+
+/// Reinterpret a `[f32; 4]` as its raw 16 bytes for GPU upload.
+/// SAFETY: `[f32; 4]` is 16 contiguous bytes; every bit pattern is a valid u8.
+fn bytemuck_f32x4(data: &[f32; 4]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            data.as_ptr() as *const u8,
+            std::mem::size_of::<[f32; 4]>(),
+        )
+    }
+}
 
 /// One render layer passed to `GpuPresenter::present_layers`.
 ///
@@ -32,13 +43,34 @@ pub struct CompositorLayer<'a> {
     pub opacity: f32,
     /// UV-space scroll offset. Use `(0.0, 0.0)` for no scroll (D080).
     pub offset:  (f32, f32),
+    /// True when `pixels` differ from the last frame's for this layer slot.
+    /// When false, the compositor reuses the persistent GPU texture and skips
+    /// re-upload (D089); when every layer is clean and unmoved, it skips the
+    /// present entirely.
+    pub dirty:   bool,
 }
 
 impl<'a> CompositorLayer<'a> {
-    /// Convenience: layer with no scroll offset.
+    /// Convenience: opaque layer, no scroll offset, always re-uploaded.
     pub fn opaque(pixels: &'a [u8], width: u32, height: u32) -> Self {
-        Self { pixels, width, height, opacity: 1.0, offset: (0.0, 0.0) }
+        Self { pixels, width, height, opacity: 1.0, offset: (0.0, 0.0), dirty: true }
     }
+
+    /// Opaque layer that only re-uploads its texture when `dirty` (D089).
+    pub fn tracked(pixels: &'a [u8], width: u32, height: u32, dirty: bool) -> Self {
+        Self { pixels, width, height, opacity: 1.0, offset: (0.0, 0.0), dirty }
+    }
+}
+
+/// One persistent GPU texture + bind group for a layer slot, reused across
+/// frames so clean frames pay no upload cost (D089).
+struct CachedLayer {
+    texture:     wgpu::Texture,
+    bind_group:  wgpu::BindGroup,
+    uniform_buf: wgpu::Buffer,
+    width:       u32,
+    height:      u32,
+    offset:      (f32, f32),
 }
 
 /// GPU compositor state. One instance per window.
@@ -58,6 +90,8 @@ pub struct GpuPresenter {
     sampler:               wgpu::Sampler,
     width:                 u32,
     height:                u32,
+    /// Persistent per-slot textures reused across frames (D089).
+    cached_layers:         Vec<CachedLayer>,
 }
 
 impl GpuPresenter {
@@ -251,6 +285,7 @@ impl GpuPresenter {
             sampler,
             width,
             height,
+            cached_layers: Vec::new(),
         })
     }
 
@@ -280,6 +315,83 @@ impl GpuPresenter {
     pub fn present_layers(&mut self, layers: &[CompositorLayer<'_>]) {
         if layers.is_empty() { return; }
 
+        // ── Skip-present fast path (D089) ──────────────────────────────────
+        // If the layer set is structurally identical to last frame — same
+        // count, same dimensions, no dirty pixels, no moved offsets — then the
+        // composited image is byte-for-byte what the swapchain already shows.
+        // Do nothing: no upload, no encoder, no surface acquire. This is the
+        // common case for hover/idle frames the frame-skip already made
+        // raster-free upstream.
+        let unchanged = self.cached_layers.len() == layers.len()
+            && layers.iter().enumerate().all(|(i, l)| {
+                let c = &self.cached_layers[i];
+                !l.dirty
+                    && c.width == l.width
+                    && c.height == l.height
+                    && c.offset == l.offset
+            });
+        if unchanged {
+            log::debug!("compositor: skip present ({} layers unchanged)", layers.len());
+            return;
+        }
+        log::debug!(
+            "compositor: present {} layers ({} dirty)",
+            layers.len(),
+            layers.iter().filter(|l| l.dirty).count(),
+        );
+
+        // ── Sync the persistent texture cache to this frame's layers ───────
+        // Reuse a slot's texture when dimensions match: dirty slots get a
+        // `write_texture` (no realloc); clean slots are left untouched. Offset
+        // changes are a cheap uniform-buffer write — clean pixels, moved layer
+        // (e.g. scroll) uploads nothing.
+        self.cached_layers.truncate(layers.len());
+        for (idx, layer) in layers.iter().enumerate() {
+            if layer.width == 0 || layer.height == 0 { continue; }
+
+            let dims_match = self.cached_layers.get(idx)
+                .map(|c| c.width == layer.width && c.height == layer.height)
+                .unwrap_or(false);
+
+            if dims_match {
+                let cached = &mut self.cached_layers[idx];
+                if layer.dirty {
+                    self.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture:   &cached.texture,
+                            mip_level: 0,
+                            origin:    wgpu::Origin3d::ZERO,
+                            aspect:    wgpu::TextureAspect::All,
+                        },
+                        layer.pixels,
+                        wgpu::TexelCopyBufferLayout {
+                            offset:         0,
+                            bytes_per_row:  Some(layer.width * 4),
+                            rows_per_image: Some(layer.height),
+                        },
+                        wgpu::Extent3d {
+                            width:                 layer.width,
+                            height:                layer.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                if cached.offset != layer.offset {
+                    let uniform_data: [f32; 4] = [layer.offset.0, layer.offset.1, 0.0, 0.0];
+                    self.queue.write_buffer(&cached.uniform_buf, 0, bytemuck_f32x4(&uniform_data));
+                    cached.offset = layer.offset;
+                }
+            } else {
+                let cached = self.build_cached_layer(layer);
+                if idx < self.cached_layers.len() {
+                    self.cached_layers[idx] = cached;
+                } else {
+                    self.cached_layers.push(cached);
+                }
+            }
+        }
+
+        // ── Composite the cached layers onto the surface ───────────────────
         let Ok(output) = self.surface.get_current_texture() else { return; };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -289,63 +401,7 @@ impl GpuPresenter {
 
         for (idx, layer) in layers.iter().enumerate() {
             if layer.width == 0 || layer.height == 0 { continue; }
-
-            let texture = self.device.create_texture_with_data(
-                &self.queue,
-                &wgpu::TextureDescriptor {
-                    label:           Some("frame-layer"),
-                    size:            wgpu::Extent3d {
-                        width:               layer.width,
-                        height:              layer.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count:    1,
-                    dimension:       wgpu::TextureDimension::D2,
-                    format:          wgpu::TextureFormat::Rgba8Unorm,
-                    usage:           wgpu::TextureUsages::TEXTURE_BINDING
-                                   | wgpu::TextureUsages::COPY_DST,
-                    view_formats:    &[],
-                },
-                wgpu::util::TextureDataOrder::LayerMajor,
-                layer.pixels,
-            );
-            let tex_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            // Write layer uniforms: offset (UV-space) + 8 bytes padding (D081).
-            // Layout: [offset_x f32][offset_y f32][pad f32][pad f32] = 16 bytes
-            let uniform_data: [f32; 4] = [layer.offset.0, layer.offset.1, 0.0, 0.0];
-            // SAFETY: [f32; 4] is 16 bytes, all bit patterns valid for u8.
-            let uniform_bytes: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    uniform_data.as_ptr() as *const u8,
-                    std::mem::size_of::<[f32; 4]>(),
-                )
-            };
-            let uniform_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label:    Some("layer-uniforms"),
-                contents: uniform_bytes,
-                usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label:   Some("layer-bg"),
-                layout:  &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding:  0,
-                        resource: wgpu::BindingResource::TextureView(&tex_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding:  1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding:  2,
-                        resource: uniform_buf.as_entire_binding(),
-                    },
-                ],
-            });
+            let Some(cached) = self.cached_layers.get(idx) else { continue; };
 
             let pipeline = if idx == 0 {
                 &self.pipeline_base
@@ -373,12 +429,75 @@ impl GpuPresenter {
                 occlusion_query_set:      None,
             });
             rpass.set_pipeline(pipeline);
-            rpass.set_bind_group(0, &bind_group, &[]);
+            rpass.set_bind_group(0, &cached.bind_group, &[]);
             rpass.draw(0..6, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+    }
+
+    /// Create a persistent texture + bind group for a fresh layer slot and
+    /// upload its initial pixels (D089).
+    fn build_cached_layer(&self, layer: &CompositorLayer<'_>) -> CachedLayer {
+        let texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label:           Some("frame-layer"),
+                size:            wgpu::Extent3d {
+                    width:                 layer.width,
+                    height:                layer.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count:    1,
+                dimension:       wgpu::TextureDimension::D2,
+                format:          wgpu::TextureFormat::Rgba8Unorm,
+                usage:           wgpu::TextureUsages::TEXTURE_BINDING
+                               | wgpu::TextureUsages::COPY_DST,
+                view_formats:    &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            layer.pixels,
+        );
+        let tex_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Write layer uniforms: offset (UV-space) + 8 bytes padding (D081).
+        // Layout: [offset_x f32][offset_y f32][pad f32][pad f32] = 16 bytes
+        let uniform_data: [f32; 4] = [layer.offset.0, layer.offset.1, 0.0, 0.0];
+        let uniform_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("layer-uniforms"),
+            contents: bytemuck_f32x4(&uniform_data),
+            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("layer-bg"),
+            layout:  &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding:  0,
+                    resource: wgpu::BindingResource::TextureView(&tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding:  1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding:  2,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        CachedLayer {
+            texture,
+            bind_group,
+            uniform_buf,
+            width:  layer.width,
+            height: layer.height,
+            offset: layer.offset,
+        }
     }
 
     /// Physical size of the configured surface.
