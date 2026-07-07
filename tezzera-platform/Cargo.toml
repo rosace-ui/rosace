@@ -26,7 +26,7 @@ console_error_panic_hook = "0.1"
 version = "0.3"
 features = [
     "Window", "Document", "Element", "HtmlElement", "Node",
-    "HtmlCanvasElement", "CanvasRenderingContext2d",
+    "HtmlCanvasElement", "CanvasRenderingContext2d", "CssStyleDeclaration",
     "ImageData", "Performance",
     "MouseEvent", "KeyboardEvent", "Event", "EventTarget",
 ]

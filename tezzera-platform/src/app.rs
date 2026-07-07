@@ -169,16 +169,32 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             ));
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
 
-        // On web, winit creates a <canvas> but does not attach it to the page —
-        // append it to the document body so the app is visible.
+        // On web, winit creates a <canvas> but (a) does not attach it to the
+        // page and (b) ignores `with_inner_size` for it — the canvas keeps the
+        // HTML default of 300x150, which crams the whole UI into a tiny box
+        // (widgets overflow off-screen, click coords mismatch). Append it and
+        // size it to fill the viewport: backing buffer in physical px, CSS box
+        // in logical px. winit reads the canvas size back for `inner_size()`.
         #[cfg(target_arch = "wasm32")]
         {
             use winit::platform::web::WindowExtWebSys;
             if let Some(canvas) = window.canvas() {
-                web_sys::window()
-                    .and_then(|w| w.document())
-                    .and_then(|d| d.body())
-                    .and_then(|b| b.append_child(&canvas).ok());
+                if let Some(web_win) = web_sys::window() {
+                    let dpr = web_win.device_pixel_ratio();
+                    let vw = web_win.inner_width().ok()
+                        .and_then(|v| v.as_f64()).unwrap_or(800.0);
+                    let vh = web_win.inner_height().ok()
+                        .and_then(|v| v.as_f64()).unwrap_or(600.0);
+                    canvas.set_width((vw * dpr) as u32);
+                    canvas.set_height((vh * dpr) as u32);
+                    let style = canvas.style();
+                    let _ = style.set_property("width", &format!("{}px", vw));
+                    let _ = style.set_property("height", &format!("{}px", vh));
+                    let _ = style.set_property("display", "block");
+                    web_win.document()
+                        .and_then(|d| d.body())
+                        .and_then(|b| b.append_child(&canvas).ok());
+                }
             }
         }
 
