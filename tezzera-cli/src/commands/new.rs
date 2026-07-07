@@ -312,9 +312,10 @@ use tezzera::prelude::*;
 /// Start the app. Runs the winit event loop on native; hands off to the
 /// browser's requestAnimationFrame loop on web.
 pub fn launch() {{
+    // Window size applies on desktop; mobile is always fullscreen.
     App::new()
         .title("{name}")
-        .size(420, 760)
+        .size(960, 640)
         .launch(app::AppRoot);
 }}
 

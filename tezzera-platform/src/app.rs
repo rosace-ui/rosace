@@ -78,6 +78,11 @@ impl PlatformWindow {
         // (`spawn_app`); native `move` closures already satisfy it.
         F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent]) + 'static,
     {
+        // Surface real panic messages in the browser console instead of a bare
+        // "RuntimeError: unreachable".
+        #[cfg(target_arch = "wasm32")]
+        console_error_panic_hook::set_once();
+
         let event_loop = EventLoop::<FrameRequest>::with_user_event()
             .build()
             .expect("failed to create event loop");
@@ -178,6 +183,12 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         }
 
         // Try GPU compositor (D072). Fall back to softbuffer if unavailable.
+        // On web, wgpu init is async and `GpuPresenter::new` blocks on it
+        // (`pollster::block_on`) — blocking is illegal on wasm and traps
+        // ("RuntimeError: unreachable"), so use the CPU softbuffer path there.
+        #[cfg(target_arch = "wasm32")]
+        let presenter: Option<tezzera_compositor::GpuPresenter> = None;
+        #[cfg(not(target_arch = "wasm32"))]
         let presenter = tezzera_compositor::GpuPresenter::new(
             window.clone(),
             self.config.width,
@@ -427,6 +438,42 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     ElementState::Released => InputEvent::MouseUp   { x, y, button: btn },
                 };
                 self.pending_events.push(ev);
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+
+            WindowEvent::Touch(touch) => {
+                // iOS and Android deliver touches, not mouse events. Map the
+                // touch to the same pipeline as the mouse so taps, drags, and
+                // scroll gestures work with the identical widget code. (Multi-
+                // touch: every finger drives the single pointer — fine for now.)
+                let scale = self.window.as_ref()
+                    .map(|w| w.scale_factor())
+                    .unwrap_or(1.0);
+                self.cursor_x = (touch.location.x / scale) as f32;
+                self.cursor_y = (touch.location.y / scale) as f32;
+                let (x, y) = (self.cursor_x, self.cursor_y);
+                match touch.phase {
+                    winit::event::TouchPhase::Started => {
+                        self.mouse_down = true;
+                        // Position the pointer, then press — a fresh touch has
+                        // no prior CursorMoved to set the hit location.
+                        self.pending_events.push(InputEvent::MouseMove { x, y });
+                        self.pending_events.push(InputEvent::MouseDown {
+                            x, y, button: MouseButton::Left,
+                        });
+                    }
+                    winit::event::TouchPhase::Moved => {
+                        self.pending_events.push(InputEvent::MouseMove { x, y });
+                    }
+                    winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => {
+                        self.mouse_down = false;
+                        self.pending_events.push(InputEvent::MouseUp {
+                            x, y, button: MouseButton::Left,
+                        });
+                    }
+                }
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
