@@ -1219,6 +1219,21 @@ Implementation: `RepaintBoundary` is a `NativeElement` with tag `"RepaintBoundar
 
 ---
 
+### D105 — Platform-adaptive theming: ONE widget set, theme is the only platform authority
+**Status**: PLANNED (full plan in `.steering/PHASE_23.md`)
+**Problem**: Desktop/iOS/Android chrome genuinely differs (macOS traffic-light inset, iOS centered title + edge-back, Android left title + elevation, Cupertino vs Material switch shapes, scroll physics, touch density). Today TEZZERA has one widget set with ad-hoc props (`AppBar.show_traffic_lights`) and **no platform awareness at all** — `ThemeData` carries only global tokens (colors/typography/spacing/radius/animation). We do NOT want two widget libraries (Material + Cupertino) — that doubles maintenance and fights the one-concept ethos.
+**Decision**: Keep **ONE widget set**; make the **theme the sole source of platform look** (SwiftUI/Flutter-`ThemeExtension` model, minus the dual-widget-set cost). Four parts:
+1. **Platform-keyed theme bundle + fallback.** `Themes::new(fallback).platform(Platform::Ios, ios).platform(Platform::Android, android)` handed to `App::themes(..)`. The **framework resolves the active theme ONCE at startup** from the detected running platform (`themes.get(platform).unwrap_or(fallback)`); widgets read only `ctx.theme` and **never branch on platform** (nothing per-platform to maintain in widget code). The active platform can be forced to preview another platform's look.
+2. **Per-widget Style structs in `ThemeData`** (`AppBarStyle { title_align, show_traffic_lights, height, elevation, .. }`, `ButtonStyle`, `SwitchStyle`, …). This is what lets a theme change *structure*, not just color — so "Material theme" and "Cupertino theme" are two different `ThemeData` values with identical widget code. Per-instance widget props still override the theme style.
+3. **`ThemeExtension` type-map** (`ThemeData` gains a `HashMap<TypeId, Box<dyn Any>>`; `theme.with_ext(MyStyle{..})` / `ctx.theme.ext::<MyStyle>()`). New/custom/third-party widgets add their own theming WITHOUT editing core `ThemeData` — the "new-widget customization is addable" requirement.
+4. **Built-in `material()` / `cupertino()` themes** so `tzr new` can wire an iOS+Android app out of the box (D104).
+**Reason**: Platform look varies structurally, but branching in widgets (or shipping a second widget set) is unmaintainable. Pushing all platform variance into data (theme) keeps widgets platform-agnostic, gives maximum per-platform per-widget customization, and stays extensible. Resolving the theme once (framework, not per-widget) keeps widgets dumb readers.
+**Rejected**: dual widget set (Flutter Material+Cupertino) — 2× library to build/maintain, rejected explicitly by the user.
+**Affects**: `tezzera-theme`, `tezzera-widgets`, `tezzera`, `tezzera-platform`, `tezzera-cli`
+**Relates to**: D104 (packaging — themes ship per platform), the theme-global animation model (D-anim), Widget protocol D098–D100
+
+---
+
 ## DEFERRED DECISIONS
 
 ```
