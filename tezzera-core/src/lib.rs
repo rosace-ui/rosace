@@ -7,6 +7,7 @@ pub mod error;
 pub mod error_boundary;
 pub mod lifecycle;
 pub mod render_object;
+pub mod safe_area;
 pub mod semantic_node;
 pub mod types;
 
@@ -18,6 +19,7 @@ pub use element::{Element, NativeElement, ComponentElement, TextElement, WidgetP
 pub use error::{TezzeraError, TezzeraResult};
 pub use error_boundary::ErrorBoundary;
 pub use render_object::{AxisBound, Canvas, Constraints, RenderObject};
+pub use safe_area::{use_safe_area, set_safe_area, SafeArea};
 pub use semantic_node::{Role, SemanticNode};
 pub use types::{AtomId, ComponentId, Key, Location, Point, Rect, Size};
 

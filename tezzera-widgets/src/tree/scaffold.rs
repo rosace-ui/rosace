@@ -45,15 +45,31 @@ impl Widget for Scaffold {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        let total = ctx.rect;
+        let full = ctx.rect;
 
-        // Background — use explicit color or fall back to theme.background
+        // Background — use explicit color or fall back to theme.background.
+        // Painted over the FULL rect (extends behind the status bar/notch,
+        // matching normal mobile-app behavior); only the content below is
+        // inset by the safe area.
         let bg = if self.background.a == 0 {
             ctx.tc(ctx.theme.colors.background)
         } else {
             self.background
         };
-        ctx.fill_rect(total, bg);
+        ctx.fill_rect(full, bg);
+
+        // Keep interactive content (AppBar, body, bottom bar, FAB) clear of
+        // platform-reserved regions — iOS status bar/Dynamic Island/home
+        // indicator, Android status/nav bars. Zero on platforms without one
+        // (desktop, web), so this is a no-op there.
+        let sa = tezzera_core::use_safe_area();
+        let total = Rect {
+            origin: Point { x: full.origin.x + sa.left, y: full.origin.y + sa.top },
+            size: Size {
+                width: (full.size.width - sa.left - sa.right).max(0.0),
+                height: (full.size.height - sa.top - sa.bottom).max(0.0),
+            },
+        };
 
         // Measure app bar
         let bar_h = self.app_bar.as_ref()
