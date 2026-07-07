@@ -229,13 +229,18 @@ fn run_web(port: u16) -> Result<(), String> {
             .map_err(|e| format!("cannot write index.html: {}", e))?;
     }
 
-    // Step 3: start HTTP server
+    serve_dist(port)
+}
+
+/// Serve the `dist/` directory over HTTP on `127.0.0.1:port` (blocks). Shared
+/// by `tzr dev` and `tzr run --target web`.
+pub fn serve_dist(port: u16) -> Result<(), String> {
     let addr = format!("127.0.0.1:{}", port);
     let listener =
         TcpListener::bind(&addr).map_err(|e| format!("cannot bind to {}: {}", addr, e))?;
 
     println!();
-    println!("  TEZZERA dev server running at http://localhost:{}", port);
+    println!("  TEZZERA app running at http://localhost:{}", port);
     println!("  Serving: dist/");
     println!("  Press Ctrl+C to stop.");
     println!();

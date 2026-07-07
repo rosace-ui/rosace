@@ -8,6 +8,8 @@ pub mod dev;
 pub mod new;
 /// `tzr package` — bundle for distribution (.app / .deb / .exe).
 pub mod package;
+/// `tzr run` — build + run the current app on desktop / web / iOS.
+pub mod run;
 /// `tzr snapshot` — run an example and save its PNG output.
 pub mod snapshot;
 /// `tzr check`, `tzr test`, `tzr lint`, `tzr fmt` — workspace quality commands.

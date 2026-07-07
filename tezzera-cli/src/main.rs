@@ -2,6 +2,7 @@ mod commands;
 
 use commands::{analyze, build, dev, new, snapshot};
 use commands::package;
+use commands::run;
 use commands::workspace;
 
 fn main() {
@@ -16,6 +17,20 @@ fn main() {
             match dev::DevOptions::from_args(rest) {
                 Ok(opts) => {
                     if let Err(e) = dev::run(opts) {
+                        eprintln!("error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("run") => {
+            match run::RunOptions::from_args(rest) {
+                Ok(opts) => {
+                    if let Err(e) = run::run(opts) {
                         eprintln!("error: {}", e);
                         std::process::exit(1);
                     }
@@ -158,6 +173,8 @@ fn print_usage() {
     println!("COMMANDS:");
     println!("  new <name>          Scaffold a new TEZZERA app (interactive platform picker)
     --platforms <list> desktop,web,ios,android (skips the prompt); --all for every platform");
+    println!("  run                 Build + run the app on a platform
+    --target <t>       desktop (default), web, ios; --port <n> (web), --device <name> (ios)");
     println!("  dev               Start desktop app in dev mode (cargo run)");
     println!("  build             Build the app for a target platform");
     println!("  package           Bundle for distribution (.app / .deb / .exe)");
