@@ -1,5 +1,9 @@
 //! Core theme types: `ThemeData` and the `TezzeraTheme` trait.
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use crate::color::ColorScheme;
 use crate::radius::BorderRadius;
 use crate::spacing::Spacing;
@@ -63,7 +67,7 @@ impl Default for AppBarStyle {
 /// All design tokens bundled together as a single snapshot.
 ///
 /// `ThemeData` is `Clone` so it can be cheaply shared via the global atom.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ThemeData {
     pub colors: ColorScheme,
     /// Global animation policy — see [`AnimationConfig`].
@@ -76,6 +80,25 @@ pub struct ThemeData {
     /// Platform-adaptive AppBar defaults (D105). The first of what will
     /// become several per-widget Style fields — see Phase 23.
     pub app_bar: AppBarStyle,
+    /// Type-keyed extension map (D105 Phase 23 Step 4): lets a custom widget
+    /// stash and read its own theme-style struct without editing this type.
+    /// Populate via [`ThemeData::with_ext`], read via [`ThemeData::ext`].
+    pub ext: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+}
+
+impl std::fmt::Debug for ThemeData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThemeData")
+            .field("colors", &self.colors)
+            .field("animation", &self.animation)
+            .field("typography", &self.typography)
+            .field("spacing", &self.spacing)
+            .field("radius", &self.radius)
+            .field("is_dark", &self.is_dark)
+            .field("app_bar", &self.app_bar)
+            .field("ext", &format_args!("{} extension(s)", self.ext.len()))
+            .finish()
+    }
 }
 
 /// Implement this trait to supply a custom theme to the framework.
@@ -94,5 +117,57 @@ impl ThemeData {
     /// Set the global animation duration in milliseconds.
     pub fn animation_ms(mut self, ms: f32) -> Self {
         self.animation.duration_ms = ms; self
+    }
+
+    /// Stash a custom per-widget style struct in the theme, keyed by its own
+    /// type (D105 Phase 23 Step 4). Lets a new/custom widget theme itself
+    /// without any change to `ThemeData`'s fields.
+    pub fn with_ext<T: Any + Send + Sync + 'static>(mut self, ext: T) -> Self {
+        self.ext.insert(TypeId::of::<T>(), Arc::new(ext));
+        self
+    }
+
+    /// Read a previously-stashed extension struct by type, if the theme set
+    /// one. Falls back to `None` so callers typically pair this with
+    /// `.unwrap_or_default()` or a widget-local default.
+    pub fn ext<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
+        self.ext.get(&TypeId::of::<T>()).and_then(|a| a.downcast_ref::<T>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::built_in::light_theme;
+
+    /// A style struct for a hypothetical custom widget (not part of core
+    /// `tezzera-theme`), proving Step 4's exit criteria: it themes itself
+    /// purely via `with_ext`/`ext`, no edit to `ThemeData`'s fields needed.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct BadgeStyle {
+        corner_radius: f32,
+    }
+
+    #[test]
+    fn ext_round_trips_a_custom_style() {
+        let theme = light_theme().with_ext(BadgeStyle { corner_radius: 6.0 });
+        let badge = theme.ext::<BadgeStyle>().expect("BadgeStyle should be present");
+        assert_eq!(badge.corner_radius, 6.0);
+    }
+
+    #[test]
+    fn ext_is_none_when_never_set() {
+        let theme = light_theme();
+        assert!(theme.ext::<BadgeStyle>().is_none());
+    }
+
+    #[test]
+    fn ext_distinguishes_by_type() {
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        struct OtherStyle {
+            weight: f32,
+        }
+        let theme = light_theme().with_ext(BadgeStyle { corner_radius: 6.0 });
+        assert!(theme.ext::<OtherStyle>().is_none());
+        assert!(theme.ext::<BadgeStyle>().is_some());
     }
 }

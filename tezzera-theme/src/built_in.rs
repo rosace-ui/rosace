@@ -34,6 +34,7 @@ pub fn light_theme() -> ThemeData {
         radius: BorderRadius::default(),
         is_dark: false,
         app_bar: crate::theme::AppBarStyle::default(),
+        ext: std::collections::HashMap::new(),
     }
 }
 
@@ -65,6 +66,7 @@ pub fn dark_theme() -> ThemeData {
         radius: BorderRadius::default(),
         is_dark: true,
         app_bar: crate::theme::AppBarStyle::default(),
+        ext: std::collections::HashMap::new(),
     }
 }
 

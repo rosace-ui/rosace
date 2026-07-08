@@ -1,6 +1,6 @@
 # Phase 23 — Platform-Adaptive Theming (D105)
 
-> Status: IN PROGRESS (Steps 1-3 landed 2026-07-08)
+> Status: IN PROGRESS (Steps 1-4 landed 2026-07-08)
 > Started: 2026-07-08
 > Completed: —
 > Decision: **D105** — ONE widget set; the theme is the only platform authority.
@@ -28,8 +28,17 @@
 >   border sits exactly 24 physical px (12pt logical * 2x retina) below the
 >   default's — matching the 56pt vs 44pt height difference precisely. See
 >   tezzera-examples/src/bin/theming_demo.rs.
-> Remaining: Step 4 (ThemeExtension type-map), Step 5 (finish material()/
-> cupertino(), wire into tzr new).
+> - Step 4 ✅ ThemeExtension type-map — tezzera-theme/src/theme.rs.
+>   `ThemeData.ext: HashMap<TypeId, Arc<dyn Any + Send + Sync>>` +
+>   `with_ext<T>(T) -> Self` / `ext<T>() -> Option<&T>`. `ThemeData` no
+>   longer derives `Debug` (dyn Any isn't Debug) — manual impl prints an
+>   "N extension(s)" count instead of contents. `Clone` still derives fine
+>   (Arc is Clone regardless of the trait object's contents). Verified with
+>   unit tests: round-trip get/set, absent-when-unset, and type-distinguishing
+>   (two different ext structs don't collide) — a hypothetical `BadgeStyle`
+>   proves a widget outside `tezzera-theme` can theme itself with zero edits
+>   to `ThemeData`'s fields.
+> Remaining: Step 5 (finish material()/cupertino(), wire into tzr new).
 
 ## Why This Phase
 
