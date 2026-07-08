@@ -617,11 +617,25 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
 /// wrong in ABSOLUTE terms here (a winit bug in `screen_frame()`'s coordinate
 /// conversion, not our math), which showed up as a widget on the right edge
 /// (18pt inset from a canvas 27pt too wide) getting clipped by the real
-/// screen. `current_monitor().size()` is independently correct, so use it as
-/// the canvas size; keep `outer_size() - inner_size()` for the safe-area
-/// INSET (the systematic error cancels in that subtraction — the result,
-/// 59pt top / 34pt bottom, matches Apple's published iPhone 15 Pro status-bar
-/// + home-indicator constants exactly).
+/// screen. `current_monitor().size()` is independently correct IN PORTRAIT,
+/// so use it as the canvas size; keep `outer_size() - inner_size()` for the
+/// safe-area INSET (the systematic error cancels in that subtraction — the
+/// result, 59pt top / 34pt bottom, matches Apple's published iPhone 15 Pro
+/// status-bar + home-indicator constants exactly).
+///
+/// KNOWN GAP — landscape/rotation: `current_monitor().size()` reads
+/// `UIScreen.nativeBounds`, which per Apple's docs is fixed to the device's
+/// NATIVE (portrait) orientation and does NOT rotate with the interface — in
+/// landscape this feeds a swapped width/height into the canvas/GPU surface
+/// and corrupts the frame (confirmed: rotated/garbled UI on-device). A
+/// prior version of this function tried to detect orientation from
+/// `outer_size()`'s aspect ratio and swap accordingly — REVERTED: that
+/// signal turned out stale/unreliable (it broke the already-verified
+/// portrait case, rendering the whole UI sideways, without reliably fixing
+/// landscape either). Do not re-attempt an aspect-ratio heuristic without a
+/// real orientation source (e.g. a direct `UIDevice.orientation`/
+/// `windowScene.interfaceOrientation` query via objc2 FFI) verified on an
+/// actual rotated device — portrait is solid; landscape is unsupported.
 #[cfg(target_os = "ios")]
 fn physical_canvas_size(window: &winit::window::Window) -> winit::dpi::PhysicalSize<u32> {
     window.current_monitor().map(|m| m.size()).unwrap_or_else(|| window.outer_size())
