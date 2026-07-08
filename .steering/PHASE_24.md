@@ -1,7 +1,7 @@
 # Phase 24 — Real Native Host Projects for Mobile (D106)
 
-> Status: IN PROGRESS (Steps 1-3 landed 2026-07-08; Step 4 partial — Android
-> side only)
+> Status: IN PROGRESS (Steps 1-3 + 5 landed 2026-07-08; Step 4 partial —
+> Android side only)
 > Started: 2026-07-08
 > Completed: —
 > Decision: **D106** — winit cannot own the iOS app; mobile needs a real,
@@ -184,8 +184,57 @@
 >   iOS harness still works and wasn't broken, so this was scoped as
 >   lower-priority than getting Android's Step 3 fully verified within
 >   this session; remains open.
+> - Step 5 ✅ Capability-plumbing proof — camera permission, chosen because
+>   it's the exact example the phase doc's own Step 5 text names. New
+>   `tezzera-ffi/src/capability.rs`: a request queue (`request_camera`,
+>   called by app code; `take_camera_request`, polled by the native host
+>   once per frame tick alongside `tzr_engine_frame` — same polling shape
+>   `Engine::frame` already uses for input events) + a result atom
+>   (`CAMERA_PERMISSION: GlobalAtom<Option<bool>>`, `report_camera_result`
+>   sets it — reusing the existing `GlobalAtom` primitive `tezzera-theme`'s
+>   `use_theme()` already established, atom id `0xFFFC` following the same
+>   reserved-high-id convention as the theme/platform/safe-area atoms).
+>   Deliberately ONE capability, not a general `Permission`/`Haptics`/
+>   `use_sensor()` surface — matches the phase doc's own scope note ("one
+>   proof is enough... a fuller capabilities surface is later work").
+>   Engine-independent by design (not `TzrEngine*`-scoped) — there's only
+>   one engine per app process, matching how `tezzera_platform`'s own
+>   scroll-layer registry is also a bare global.
+>   **Deliberately NOT baked into `tzr new`'s default template** — unlike
+>   `tzr_engine_init/resize/input/frame/shutdown` (every app needs these),
+>   camera access isn't universal, and an unused `NSCameraUsageDescription`
+>   in every generated app's Info.plist is a real App Store review
+>   liability for apps that never touch the camera. The reusable plumbing
+>   lives in `tezzera-ffi` (real, tested, in `include/tzr_engine.h`); the
+>   activation pieces (Info.plist key, Swift `AVCaptureDevice` call) are a
+>   documented pattern proven via a throwaway scratch app, same precedent
+>   as Step 1's `ios_stub.rs` (not committed, per that same precedent).
+>   **Verified for real, twice over**: (1) extended `ios_stub.rs` with the
+>   two new `#[no_mangle]` functions, cross-compiled to
+>   `aarch64-apple-ios-sim`, `nm -gU` confirmed both symbols exported. (2)
+>   Scaffolded a real app (`tzr new --platforms ios`), hand-wired the full
+>   round trip (Info.plist `NSCameraUsageDescription` + `AVFoundation`
+>   framework link in the pbxproj, `AppRoot::build()` calling
+>   `request_camera()` once on mount via a `ctx.state`-guarded run-once —
+>   no button needed, since GUI-tap automation is blocked in this sandbox
+>   the same way Step 2 already noted — Swift polling + `AVCaptureDevice.
+>   requestAccess` + reporting back), built via real `xcodebuild -project
+>   ... -destination 'id=<booted-simulator>'` (needed an explicit
+>   `-destination`, not just `-sdk iphonesimulator` — without one, Xcode
+>   tried linking for x86_64 too and failed since Cargo only built
+>   `aarch64-apple-ios-sim`), pre-granted the permission via `xcrun simctl
+>   privacy grant camera` (TCC db confirmed `auth_value=2`) to avoid
+>   needing to tap a system dialog, installed + launched on a real booted
+>   iOS 17.4 Simulator. `NSLog` tracing confirmed the full round trip
+>   (Rust request seen → `AVCaptureDevice.requestAccess` called → resolved
+>   `granted=true` → reported back to Rust) completing in under 1ms once
+>   the permission was already OS-authorized. **User-confirmed via a real
+>   screenshot**: the app's UI showed "Camera: GRANTED (D106 Step 5
+>   proof)" — a live reactive re-render driven entirely by the native
+>   host's answer flowing back through the bridge, proving the model
+>   delivers exactly what a winit-owned app structurally couldn't.
 > Remaining: Step 4 (iOS side — replace the hand-rolled `codesign`/`simctl`
-> pipeline with real `xcodebuild`), Step 5 (capability-plumbing proof).
+> pipeline with real `xcodebuild`).
 
 ## Why This Phase
 

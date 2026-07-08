@@ -95,6 +95,30 @@ void tzr_engine_frame(TzrEngine *engine);
 /* Releases the engine. `engine` must not be used again after this call. */
 void tzr_engine_shutdown(TzrEngine *engine);
 
+/* -- Platform capabilities (D106 Phase 24 Step 5) --------------------------
+ * Proves the native-host model reaches things a winit-owned app structurally
+ * couldn't: a real permission prompt, with the result flowing back into Rust
+ * app code. Deliberately ONE capability (camera) — see
+ * tezzera-ffi/src/capability.rs's module doc and .steering/PHASE_24.md's
+ * Step 5 scope note. Engine-independent (not `TzrEngine*`-scoped) — there's
+ * only one engine per app process, matching how `tezzera_platform`'s own
+ * scroll-layer registry is also a bare global, not window-scoped.
+ *
+ * Host usage (see ios_stub.rs / a real app's EngineViewController.swift):
+ *   - Poll `tzr_camera_permission_take_request()` once per frame tick
+ *     (alongside `tzr_engine_frame`). If it returns true, trigger the real
+ *     platform permission API (e.g. `AVCaptureDevice.requestAccess`).
+ *   - When that resolves, call `tzr_camera_permission_report_result`.
+ */
+
+/* True at most once per Rust-side `tezzera_ffi::request_camera()` call —
+ * act on it immediately, don't cache a `true` result. */
+uint8_t tzr_camera_permission_take_request(void);
+
+/* Reports the native permission API's result back into Rust — updates the
+ * `tezzera_ffi::CAMERA_PERMISSION` atom, which notifies subscribed widgets. */
+void tzr_camera_permission_report_result(uint8_t granted);
+
 #ifdef __cplusplus
 }
 #endif

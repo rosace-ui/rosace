@@ -18,12 +18,14 @@
 
 #[cfg(target_os = "android")]
 mod android;
+mod capability;
 mod engine;
 mod event;
 mod surface;
 
 #[cfg(target_os = "android")]
 pub use android::AndroidSurfaceHandle;
+pub use capability::{report_camera_result, request_camera, take_camera_request, CAMERA_PERMISSION};
 pub use engine::Engine;
 pub use event::TzrInputEventFfi;
 pub use surface::RawSurface;

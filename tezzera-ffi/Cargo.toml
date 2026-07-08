@@ -15,6 +15,7 @@ tezzera-render  = { path = "../tezzera-render" }
 tezzera-theme   = { path = "../tezzera-theme" }
 tezzera-state   = { path = "../tezzera-state" }
 tezzera-compositor = { path = "../tezzera-compositor" }
+tezzera-trace   = { path = "../tezzera-trace" }
 # Only for the `wgpu::rwh` re-export of `raw-window-handle` — pinned to the
 # same version as `tezzera-compositor` so `RawSurface` satisfies
 # `GpuPresenter::new`'s bound without a second raw-window-handle in the tree.

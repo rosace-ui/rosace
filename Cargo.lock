@@ -2346,6 +2346,7 @@ dependencies = [
  "tezzera-render",
  "tezzera-state",
  "tezzera-theme",
+ "tezzera-trace",
  "wgpu",
 ]
 

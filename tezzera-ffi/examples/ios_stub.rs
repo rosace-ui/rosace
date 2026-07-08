@@ -121,3 +121,16 @@ pub unsafe extern "C" fn tzr_engine_shutdown(engine: *mut Engine) {
     if engine.is_null() { return; }
     drop(unsafe { Box::from_raw(engine) });
 }
+
+// -- Platform capabilities (D106 Phase 24 Step 5) ----------------------------
+// Engine-independent by design — see tzr_engine.h's doc comment on these two.
+
+#[no_mangle]
+pub extern "C" fn tzr_camera_permission_take_request() -> u8 {
+    tezzera_ffi::take_camera_request() as u8
+}
+
+#[no_mangle]
+pub extern "C" fn tzr_camera_permission_report_result(granted: u8) {
+    tezzera_ffi::report_camera_result(granted != 0);
+}
