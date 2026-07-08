@@ -50,7 +50,7 @@ is the big Phase 19 addition to the compositor.
   is skipped. Only the uniform buffer is re-written with the new offset. This is
   the true "zero re-upload on scroll" path.
 
-- **D090** — ScrollView integration: `ScrollView::live` pushes a
+- **D090** — ScrollView integration: `ScrollView::new` pushes a
   TransformLayerEntry instead of painting child directly. The scroll offset atom
   drives the UV offset in the entry — no CPU paint on scroll.
 
@@ -134,7 +134,7 @@ at 0 during pure scroll steps (only the TransformLayer's dirty flag is false).
 □ Platform: separate SkiaCanvas per transform layer, replayed when dirty
 □ Compositor: additional GPU layers from transform_entries after overlay
 □ GpuPresenter: texture cache — no re-upload when dirty == false
-□ ScrollView::live uses TransformLayer path (D090)
+□ ScrollView::new uses TransformLayer path (D090)
 □ phase19_demo shows frame counter unchanged on pure scroll
 □ Workspace tests pass
 □ D087–D090 in DECISIONS.md

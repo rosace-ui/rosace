@@ -133,7 +133,7 @@ the deferred D089/D090 (GPU texture cache + transparent ScrollView layers).
 - **D091** — RenderTree owns all per-node retained state (locked)
 - **D092** — Tree-walk hit testing with structural z-order (locked)
 - **D089** — GPU texture caching (deferred here from Phase 19)
-- **D090** — ScrollView::live rides TransformLayer transparently (deferred here)
+- **D090** — ScrollView::new rides TransformLayer transparently (deferred here)
 
 ## Migration Rule
 
@@ -186,7 +186,7 @@ boundary (verify via PaintRegion traces).
 
 ### Step 6 — D089/D090 land on top
 TransformLayer canvases become persistent GPU textures (skip write_texture
-when clean); ScrollView::live pushes a layer instead of repainting content.
+when clean); ScrollView::new pushes a layer instead of repainting content.
 
 Exit: scroll produces no CPU paint, only uniform updates.
 
