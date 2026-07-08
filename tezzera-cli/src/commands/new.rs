@@ -1333,8 +1333,27 @@ func tzr_engine_shutdown(_ engine: TzrEngine?)
 // MARK: - View
 
 /// A `CAMetalLayer`-backed view — the surface the Rust engine renders into.
+///
+/// `contentsScale` is set explicitly in `init` — UIKit only auto-syncs a
+/// view's OWN default `CALayer` to the screen's pixel density; overriding
+/// `layerClass` with a custom layer (as this does) opts out of that
+/// automatic behavior, and a `CAMetalLayer` left at its default
+/// `contentsScale = 1.0` renders a blurry, effectively-downscaled image
+/// even though the Rust side correctly renders at full physical-pixel
+/// resolution — one of the most common CAMetalLayer gotchas. Root-caused
+/// and fixed 2026-07-08 after a direct visual report of blurry text.
 final class MetalView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        (layer as! CAMetalLayer).contentsScale = UIScreen.main.scale
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        (layer as! CAMetalLayer).contentsScale = UIScreen.main.scale
+    }
 }
 
 final class EngineViewController: UIViewController {
