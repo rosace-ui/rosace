@@ -1,8 +1,8 @@
 # Phase 21 — Widget Protocol: Children, Contexts, Semantics
 
-> Status: IN PROGRESS (Steps 1–5 landed 2026-07-03)
+> Status: COMPLETE
 > Started: 2026-07-03
-> Completed: —
+> Completed: 2026-07-08
 >
 > Progress notes:
 > - Step 1 ✅ Children accessor + defaults (d070844)
@@ -16,13 +16,21 @@
 >   Custom-shape hit() override deferred to the two-pass walker.
 > - Step 4 ✅ semantics hook + derived a11y tree + 9 widget declarations
 > - Step 5 ✅ CustomPaint (71b4914)
-> - Step 6 DEFERRED until after Phase 22 — writing the authoring guide
->   before the consistency sweep would document builder names that are
->   about to change.
+> - Step 6 ✅ LANDED 2026-07-08: `.steering/WIDGET_AUTHORING_GUIDE.md` — the
+>   practical companion to WIDGET_PROTOCOL.md, written against the REAL
+>   shipped API (not the aspirational planning spec — no framework-owned
+>   layout_child/position_child, no hit()/semantics() trait methods; both
+>   descoped per Steps 2/3 above). Three worked examples, one per taxonomy
+>   row (Dot=leaf, Highlight=single-child wrapper, EvenColumn=multi-child
+>   container), proven via a real compiling+running bin
+>   (tezzera-examples/src/bin/widget_authoring_demo.rs) rather than
+>   untested prose — visually verified all three render correctly. README
+>   gained a "Writing Custom Widgets" section linking the guide.
 > Decisions: D098 (two-concept model, taxonomy by defaults),
 > D099 (framework-owned child geometry, declarative semantics),
 > D100 (CustomPaint as recorded Leaf)
-> Spec: `.steering/WIDGET_PROTOCOL.md`
+> Spec: `.steering/WIDGET_PROTOCOL.md` (planning) +
+> `.steering/WIDGET_AUTHORING_GUIDE.md` (as-shipped, Step 6)
 > Ordering: BEFORE Phase 22 (API consistency) — built-ins migrate once,
 > onto the final protocol, not twice.
 

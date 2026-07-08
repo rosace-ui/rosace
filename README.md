@@ -106,6 +106,16 @@ tzr analyze                 # static analysis of your component tree
 tzr snapshot                # snapshot test your UI
 ```
 
+### Writing Custom Widgets
+
+Most app code only ever composes built-in widgets (`Column`, `Button`,
+`ScrollView`, ...) inside a `Component` — no need to read further. If you're
+building a genuinely new visual primitive, see
+[`.steering/WIDGET_AUTHORING_GUIDE.md`](.steering/WIDGET_AUTHORING_GUIDE.md)
+for the `Widget` trait, the leaf/single-child/multi-child decision table, and
+three worked, compiling examples
+(`tezzera-examples/src/bin/widget_authoring_demo.rs`).
+
 ---
 
 ## Crate Overview
