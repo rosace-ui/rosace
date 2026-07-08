@@ -1266,6 +1266,16 @@ Also export a per-route `llms.txt`/plain-text summary from the same semantic tre
 
 ---
 
+### D108 — Pervasive default animation + an animation-authoring framework (VISION, raised 2026-07-08, not yet scoped)
+**Status**: NOTE ONLY — no phase, no steps. Recorded so the idea isn't lost, not a commitment to build yet.
+**Existing foundation (shipped, never formally written down until now — a documentation gap in the same spirit as `CRATE_CONTRACTS.md`'s)**: TEZZERA already has a **theme-global, not per-widget** animation model. `ThemeData.animation: AnimationConfig { enabled, duration_ms }` (default on, 160ms) is a single switch (`set_animations(bool)`) that governs every animated widget at once. `PaintCtx::animate_to(target, ms) -> f32` eases a per-render-tree-node persistent scalar — snaps instantly if the theme disables animation, otherwise exponentially eases and keeps requesting frames until settled. `Switch`/`Checkbox`/`Radio`/`SegmentedControl` already animate through this mechanism, automatically respecting the global toggle. `tezzera-animate` (see `CRATE_CONTRACTS.md`) is the crate backing it — `use_animation`/`use_spring` let any widget drive a per-frame value through `Context`.
+**The vision (not yet designed)**: extend "theme-pinned, automatic" animation far beyond the four widgets that have it today — smooth scroll (momentum/deceleration, not just instant offset jumps), navigation/screen-transition animation (`tezzera-nav-anim` exists but isn't wired to be "just on" by default), press/tap feedback (ripple/fade), image load-in fades, list-item enter/exit — all "under the hood," no per-app wiring, governed by the same theme-global switch so an app can still turn it all off at once. On top of that: TEZZERA should offer an **abundant, ready-to-use library of custom animations** and a **real framework for authoring new ones** (beyond today's low-level `Tween`/`Spring`/`Keyframe` primitives) as an explicit platform strength/differentiator, not an afterthought.
+**Why not scoped yet**: this spans many widgets and touches `tezzera-nav-anim`, `tezzera-scroll`, `tezzera-animate`, and probably `tezzera-widgets` broadly — a real phase-sized effort, not a single decision. Recorded now, at the user's explicit request, specifically so it survives to when it's actually picked up rather than being re-discovered from scratch.
+**Affects (when scoped)**: `tezzera-animate`, `tezzera-nav-anim`, `tezzera-scroll`, `tezzera-widgets`, `tezzera-theme` (the `AnimationConfig` surface likely grows — e.g. per-category durations/curves, not just one global duration).
+**Relates to**: the existing (until-now-undocumented) theme-global animation model this extends; D105 (same "theme is the single dial" philosophy, applied to motion instead of color/platform look).
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

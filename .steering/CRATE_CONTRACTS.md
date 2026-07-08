@@ -75,11 +75,20 @@ silently baked into the contracts below, per the project's violation policy
    pulled into the umbrella `tezzera` crate as a normal `[dependencies]`
    entry — contradicting its own doc comment ("use it only in
    `[dev-dependencies]`"). Test/snapshot infrastructure currently ships
-   inside the production SDK crate.
+   inside the production SDK crate. **Explicitly DEFERRED (user, 2026-07-08)**
+   — known, not urgent, not being fixed right now.
 4. **`tezzera-style` is unintegrated.** A CSS-like stylesheet system exists
    (selectors, rules, computed/inline styles) but `tezzera-widgets` does not
-   depend on it — nothing in the actual widget rendering path uses it. Either
-   it's mid-migration or abandoned; worth a decision either way.
+   depend on it — nothing in the actual widget rendering path uses it.
+   **Open question raised 2026-07-08**: do we need this at all, given
+   `tezzera-theme` already provides a design-token/theme system? Not
+   resolved — could be (a) genuinely redundant with theme and worth
+   deleting, (b) intended for a different job theme doesn't cover (e.g.
+   arbitrary per-instance style overrides via a selector/cascade model,
+   closer to inline CSS than design tokens), or (c) a mid-migration
+   leftover nobody finished wiring up. **Explicitly DEFERRED (user,
+   2026-07-08)** — no action now; revisit the question above before
+   deciding anything.
 
 None of these are fixed by this doc rewrite — this is the audit that found
 them. Fixing them (removing `tezzera-anim`, reordering `gesture`, moving
