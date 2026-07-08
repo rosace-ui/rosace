@@ -78,8 +78,13 @@ typedef struct {
  * (e.g. no suitable GPU adapter) — mirrors `GpuPresenter::new`. */
 TzrEngine *tzr_engine_init(void *surface_handle, uint32_t width, uint32_t height, float scale);
 
-/* Resizes the surface + canvases (e.g. on rotation / layout change). */
-void tzr_engine_resize(TzrEngine *engine, uint32_t width, uint32_t height, float scale);
+/* Resizes the surface + canvases (e.g. on rotation / layout change), and
+ * updates the safe-area insets (logical points) — e.g. from a real
+ * `UIView.safeAreaInsets` on iOS. Resize and safe-area change together in
+ * practice (rotation, layout), so they share one call rather than needing a
+ * separate function. Pass zeros if the host has no safe-area concept. */
+void tzr_engine_resize(TzrEngine *engine, uint32_t width, uint32_t height, float scale,
+                        float safe_top, float safe_right, float safe_bottom, float safe_left);
 
 /* Queues `count` events, applied on the next `tzr_engine_frame` call. */
 void tzr_engine_input(TzrEngine *engine, const TzrInputEvent *events, size_t count);

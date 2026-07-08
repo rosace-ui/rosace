@@ -1,6 +1,6 @@
 # Phase 24 — Real Native Host Projects for Mobile (D106)
 
-> Status: IN PROGRESS (Step 1 landed 2026-07-08)
+> Status: IN PROGRESS (Steps 1-2 landed 2026-07-08)
 > Started: 2026-07-08
 > Completed: —
 > Decision: **D106** — winit cannot own the iOS app; mobile needs a real,
@@ -35,8 +35,64 @@
 >   actually rendered and presented a real frame (the theme's background
 >   color visibly on screen) for 9+ seconds with no crash before the
 >   throwaway app was uninstalled.
-> Remaining: Step 2 (real `.xcodeproj` + Swift `AppDelegate`/`SceneDelegate`
-> template in `tzr new`), Step 3 (Android Gradle project + JNI), Step 4
+> - Step 2 ✅ Real `.xcodeproj` + Swift host — `tzr new` now generates
+>   `ios/App.xcodeproj/` (a genuine Xcode project) alongside `ios/App/`
+>   (`AppDelegate.swift`, `SceneDelegate.swift`, `EngineViewController.swift`
+>   — real code, not winit's implicit AppDelegate) when `ios` is selected.
+>   **`.pbxproj` format choice, de-risked before any codegen was written**:
+>   used `PBXFileSystemSynchronizedRootGroup` (`objectVersion` 77, Xcode
+>   16+) — Xcode auto-discovers `.swift` files added to `App/` with no
+>   `PBXFileReference`/`PBXBuildFile` pair needed per file, unlike the
+>   legacy pbxproj format. Confirmed real (this machine has Xcode 26.2) by
+>   reading an actual Xcode-generated `.pbxproj` shipped in
+>   `/Applications/Xcode.app/.../visionOS/Application/App.xctemplate/` for
+>   the exact object shapes, then hand-authoring + verifying a minimal
+>   single-target spike with real `xcodebuild -list`/`build` in the
+>   scratchpad *before* wiring any generator code around it.
+>   `GENERATE_INFOPLIST_FILE = YES` (build-setting-driven, no physical
+>   `Info.plist` inside the synced folder — avoids a known gotcha where a
+>   physical file there collides with Xcode's own Info.plist processing).
+>   The physical `ios/Info.plist` this module also generates is unrelated —
+>   kept only for the older Phase 20-22 hand-rolled `tzr run --target ios`
+>   harness, untouched per the Migration Rule.
+>   A `PBXShellScriptBuildPhase` runs `cargo build --lib --target
+>   <triple>` (triple picked from Xcode's own `$PLATFORM_NAME`) before
+>   Swift compilation, copying the resulting `.a` into `$BUILT_PRODUCTS_DIR`
+>   (already on Xcode's default search path — no explicit
+>   `LIBRARY_SEARCH_PATHS` needed); `OTHER_LDFLAGS` carries `-l<crate_name>`
+>   plus the system frameworks Step 1's stub verification had already
+>   determined are needed (UIKit/QuartzCore/Metal/Foundation/CoreGraphics/
+>   Security/CoreFoundation).
+>   **`tzr_engine_resize` ABI grew 4 params** (`safe_top/right/bottom/left`)
+>   — `Engine::resize` now calls `tezzera_core::set_safe_area` before
+>   resizing, and `EngineViewController.viewDidLayoutSubviews` feeds it real
+>   `UIView.safeAreaInsets`, replacing the Phase 20-22 winit
+>   `outer_size()`/`inner_size()`-diffing workaround as this step's doc text
+>   called for. `tezzera-ffi/examples/ios_stub.rs` updated to match.
+>   `tzr new`'s `Cargo.toml` gains `crate-type = ["cdylib", "staticlib",
+>   "rlib"]` + a `tezzera-ffi` path dependency when iOS/Android is selected;
+>   a new `src/ffi.rs` (mirroring `ios_stub.rs`'s pattern) wires the app's
+>   own `AppRoot` — the SAME root component desktop/web already drive.
+>   `icons.rs`'s iOS output moved to `ios/App/Assets.xcassets/
+>   AppIcon.appiconset/`, the real asset-catalog location
+>   `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` wires.
+>   **Verified for real, exceeding Step 1's bar**: `tzr new --platforms
+>   desktop,ios` scaffolded a real app; `xcodebuild -project
+>   ios/App.xcodeproj -scheme App -sdk iphonesimulator build` succeeded
+>   (the Cargo build script phase genuinely built and linked the Rust
+>   staticlib); installed + launched on a booted iOS 17.4 Simulator — a
+>   screenshot shows the REAL app UI (AppBar with title + theme-toggle
+>   button, the "Counter" list tile with its subtitle), not just a blank
+>   frame, proving the full FrameEngine/paint pipeline renders identically
+>   to desktop through the native host. Stayed alive with no crash across
+>   the verification window. Touch-tap interaction specifically (beyond
+>   render correctness) could not be verified in this sandbox — GUI
+>   automation via AppleScript/System Events was blocked by a missing
+>   accessibility permission that couldn't be granted non-interactively;
+>   noted as a manual follow-up rather than silently skipped. Desktop/web-
+>   only scaffolds confirmed byte-for-byte unaffected (diffed against
+>   current behavior); full workspace build + all 73 test suites green.
+> Remaining: Step 3 (Android Gradle project + JNI), Step 4
 > (`tzr run --target ios|android` drives real toolchains), Step 5
 > (capability-plumbing proof).
 

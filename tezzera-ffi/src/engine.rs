@@ -63,8 +63,20 @@ impl Engine {
     }
 
     /// Resizes the surface, presenter, and canvases (e.g. on device rotation
-    /// or `viewWillLayoutSubviews`). A no-op if nothing changed.
-    pub fn resize(&mut self, width: u32, height: u32, scale: f32) {
+    /// or `viewWillLayoutSubviews`), and updates the safe-area insets (e.g.
+    /// from a real `UIView.safeAreaInsets` on iOS — Phase 24 Step 2). The
+    /// safe-area update always applies, even when the size/scale portion is
+    /// a no-op, since insets can change independently (status bar changes,
+    /// keyboard) without a size change.
+    pub fn resize(
+        &mut self,
+        width: u32,
+        height: u32,
+        scale: f32,
+        safe_area: tezzera_core::SafeArea,
+    ) {
+        tezzera_core::set_safe_area(safe_area);
+
         if width == 0 || height == 0 { return; }
         if self.width == width && self.height == height && (self.scale - scale).abs() < 0.01 {
             return;

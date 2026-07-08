@@ -76,9 +76,19 @@ pub unsafe extern "C" fn tzr_engine_init(
 /// `engine` must be a live pointer previously returned by `tzr_engine_init`
 /// (or null, which is a no-op).
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_resize(engine: *mut Engine, width: u32, height: u32, scale: f32) {
+pub unsafe extern "C" fn tzr_engine_resize(
+    engine: *mut Engine,
+    width: u32,
+    height: u32,
+    scale: f32,
+    safe_top: f32,
+    safe_right: f32,
+    safe_bottom: f32,
+    safe_left: f32,
+) {
     if engine.is_null() { return; }
-    unsafe { (*engine).resize(width, height, scale) };
+    let safe_area = tezzera_core::SafeArea { top: safe_top, right: safe_right, bottom: safe_bottom, left: safe_left };
+    unsafe { (*engine).resize(width, height, scale, safe_area) };
 }
 
 /// # Safety

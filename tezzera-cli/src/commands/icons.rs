@@ -145,11 +145,19 @@ fn write_icns(path: impl AsRef<Path>) -> Result<(), String> {
 
 /// iOS: a single 1024x1024 "universal" App Icon — the modern (Xcode 14+)
 /// single-size `AppIcon.appiconset` format; Xcode derives every smaller
-/// slot from it at build time. Sits next to `ios/Info.plist` today, ready
-/// to drop into the real `Assets.xcassets` a future Xcode-project generator
-/// (Phase 24 Step 2) produces.
+/// slot from it at build time. Lives under `ios/App/Assets.xcassets/`, the
+/// real asset catalog the Phase 24 Step 2 Xcode project generator wires via
+/// `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`.
 fn write_ios_icon(app_dir: &Path) -> Result<(), String> {
-    let dir = app_dir.join("ios").join("AppIcon.appiconset");
+    let xcassets = app_dir.join("ios").join("App").join("Assets.xcassets");
+    fs::create_dir_all(&xcassets).map_err(|e| e.to_string())?;
+    fs::write(
+        xcassets.join("Contents.json"),
+        "{\n  \"info\" : {\n    \"author\" : \"tzr\",\n    \"version\" : 1\n  }\n}\n",
+    )
+    .map_err(|e| e.to_string())?;
+
+    let dir = xcassets.join("AppIcon.appiconset");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     write_png(dir.join("AppIcon-1024.png"), 1024)?;
     fs::write(
@@ -336,8 +344,9 @@ mod tests {
         let platforms = [Platform::Desktop, Platform::Web, Platform::Ios, Platform::Android];
         generate(&dir, &platforms).expect("generate should succeed");
 
-        assert!(dir.join("ios/AppIcon.appiconset/AppIcon-1024.png").exists());
-        assert!(dir.join("ios/AppIcon.appiconset/Contents.json").exists());
+        assert!(dir.join("ios/App/Assets.xcassets/Contents.json").exists());
+        assert!(dir.join("ios/App/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png").exists());
+        assert!(dir.join("ios/App/Assets.xcassets/AppIcon.appiconset/Contents.json").exists());
         assert!(dir.join("android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png").exists());
         assert!(dir.join("desktop/icon.icns").exists());
         assert!(dir.join("desktop/icon.ico").exists());
