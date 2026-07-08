@@ -22,10 +22,24 @@ use super::new::Platform;
 const ICON_SVG: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/icon/tezzera_icon_tiles.svg"));
 
-/// Rasterizes the bundled icon to a square PNG of `size` x `size` pixels.
-fn render_png(size: u32) -> Result<Vec<u8>, String> {
+/// The same icon with the background rect removed (transparent) — Android
+/// adaptive icons composite a separate background (a flat color, below)
+/// under a foreground layer that the system independently masks/zooms/
+/// parallaxes; baking a background into the foreground defeats that.
+const ICON_SVG_FOREGROUND: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../assets/icon/tezzera_icon_tiles_foreground.svg"
+));
+
+/// The bundled icon's background fill (`assets/icon/tezzera_icon_tiles.svg`'s
+/// `rect`), reused as the Android adaptive icon's background color resource
+/// so the two layers stay visually consistent with the flattened icon.
+const ICON_BACKGROUND_COLOR: &str = "#071019";
+
+/// Rasterizes `svg` to a square PNG of `size` x `size` pixels.
+fn render_svg_png(svg: &[u8], size: u32) -> Result<Vec<u8>, String> {
     let opt = usvg::Options::default();
-    let tree = usvg::Tree::from_data(ICON_SVG, &opt)
+    let tree = usvg::Tree::from_data(svg, &opt)
         .map_err(|e| format!("failed to parse bundled icon SVG: {e}"))?;
     let src = tree.size();
     let mut pixmap = tiny_skia::Pixmap::new(size, size)
@@ -38,8 +52,19 @@ fn render_png(size: u32) -> Result<Vec<u8>, String> {
     pixmap.encode_png().map_err(|e| format!("failed to encode {size}x{size} PNG: {e}"))
 }
 
+/// Rasterizes the bundled (background-included) icon to a square PNG.
+fn render_png(size: u32) -> Result<Vec<u8>, String> {
+    render_svg_png(ICON_SVG, size)
+}
+
 fn write_png(path: impl AsRef<Path>, size: u32) -> Result<(), String> {
     let bytes = render_png(size)?;
+    fs::write(&path, &bytes)
+        .map_err(|e| format!("failed to write {}: {}", path.as_ref().display(), e))
+}
+
+fn write_svg_png(path: impl AsRef<Path>, svg: &[u8], size: u32) -> Result<(), String> {
+    let bytes = render_svg_png(svg, size)?;
     fs::write(&path, &bytes)
         .map_err(|e| format!("failed to write {}: {}", path.as_ref().display(), e))
 }
@@ -148,12 +173,15 @@ fn write_ios_icon(app_dir: &Path) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-/// Android: legacy (pre-adaptive-icon) `mipmap-*` launcher icons at every
-/// standard density. Valid on every Android version — the OS applies its
-/// own mask/shape. True adaptive icons (separate foreground/background
-/// layers via `mipmap-anydpi-v26`) need a foreground-only asset without our
-/// icon's baked-in background rect; deferred until that art exists.
+/// Android: legacy (pre-API-26) `mipmap-*` launcher icons at every standard
+/// density — the OS applies its own mask/shape — PLUS real adaptive icons
+/// (API 26+): a flat-color background (`ICON_BACKGROUND_COLOR`, the same
+/// color the flattened icon's own background rect uses) composited under a
+/// transparent-background foreground layer (`ICON_SVG_FOREGROUND`) that the
+/// system independently masks, zooms, and parallaxes. Both are written so
+/// the app looks right on every Android version, old and new.
 fn write_android_icons(app_dir: &Path) -> Result<(), String> {
+    // Legacy square launcher icon, one raster per density.
     const DENSITIES: &[(&str, u32)] = &[
         ("mipmap-mdpi", 48),
         ("mipmap-hdpi", 72),
@@ -161,13 +189,55 @@ fn write_android_icons(app_dir: &Path) -> Result<(), String> {
         ("mipmap-xxhdpi", 144),
         ("mipmap-xxxhdpi", 192),
     ];
+    // Adaptive icon foreground layer: standard 108/162/216/324/432dp sizes
+    // (Android's adaptive-icon canvas is larger than the legacy launcher
+    // icon to allow for system masking/zoom without clipping content).
+    const ADAPTIVE_DENSITIES: &[(&str, u32)] = &[
+        ("mipmap-mdpi", 108),
+        ("mipmap-hdpi", 162),
+        ("mipmap-xhdpi", 216),
+        ("mipmap-xxhdpi", 324),
+        ("mipmap-xxxhdpi", 432),
+    ];
+
     let res_dir = app_dir.join("android").join("app").join("src").join("main").join("res");
+
     for (dir_name, size) in DENSITIES {
         let dir = res_dir.join(dir_name);
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         write_png(dir.join("ic_launcher.png"), *size)?;
         write_png(dir.join("ic_launcher_round.png"), *size)?;
     }
+
+    for (dir_name, size) in ADAPTIVE_DENSITIES {
+        let dir = res_dir.join(dir_name);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        write_svg_png(dir.join("ic_launcher_foreground.png"), ICON_SVG_FOREGROUND, *size)?;
+    }
+
+    let values_dir = res_dir.join("values");
+    fs::create_dir_all(&values_dir).map_err(|e| e.to_string())?;
+    fs::write(
+        values_dir.join("ic_launcher_background.xml"),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <resources>\n    \
+             <color name=\"ic_launcher_background\">{ICON_BACKGROUND_COLOR}</color>\n\
+             </resources>\n"
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let anydpi_dir = res_dir.join("mipmap-anydpi-v26");
+    fs::create_dir_all(&anydpi_dir).map_err(|e| e.to_string())?;
+    let adaptive_icon_xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+        <adaptive-icon xmlns:android=\"http://schemas.android.com/apk/res/android\">\n    \
+        <background android:drawable=\"@color/ic_launcher_background\"/>\n    \
+        <foreground android:drawable=\"@mipmap/ic_launcher_foreground\"/>\n\
+        </adaptive-icon>\n";
+    fs::write(anydpi_dir.join("ic_launcher.xml"), adaptive_icon_xml).map_err(|e| e.to_string())?;
+    fs::write(anydpi_dir.join("ic_launcher_round.xml"), adaptive_icon_xml).map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
@@ -273,6 +343,43 @@ mod tests {
         assert!(dir.join("desktop/icon.ico").exists());
         assert!(dir.join("web/favicon.ico").exists());
         assert!(dir.join("web/site.webmanifest").exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn android_adaptive_icon_layers_are_generated() {
+        let dir = std::env::temp_dir().join(format!("tzr_gen_adaptive_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        write_android_icons(&dir).expect("android icon generation should succeed");
+
+        let res = dir.join("android/app/src/main/res");
+        assert!(res.join("mipmap-anydpi-v26/ic_launcher.xml").exists());
+        assert!(res.join("mipmap-anydpi-v26/ic_launcher_round.xml").exists());
+        assert!(res.join("values/ic_launcher_background.xml").exists());
+        assert!(res.join("mipmap-xxxhdpi/ic_launcher_foreground.png").exists());
+
+        // Adaptive foreground layer must be transparent where the diamond
+        // cluster doesn't cover — that's the whole point of splitting it
+        // from the background. Legacy ic_launcher.png must NOT be (it's the
+        // flattened icon with the background rect baked in).
+        let fg_bytes = fs::read(res.join("mipmap-mdpi/ic_launcher_foreground.png")).unwrap();
+        let fg = tiny_skia::Pixmap::decode_png(&fg_bytes).unwrap();
+        let corner = fg.pixel(0, 0).unwrap();
+        assert_eq!(corner.alpha(), 0, "foreground corner should be transparent");
+
+        // The bundled icon's background rect has rounded corners (rx=114 on
+        // a 512 canvas), so (0,0) is transparent on the legacy icon too —
+        // sample the center instead, which is always inside the rounded
+        // rect regardless of icon size.
+        let legacy_bytes = fs::read(res.join("mipmap-mdpi/ic_launcher.png")).unwrap();
+        let legacy = tiny_skia::Pixmap::decode_png(&legacy_bytes).unwrap();
+        let (cx, cy) = (legacy.width() / 2, legacy.height() / 2);
+        let legacy_center = legacy.pixel(cx, cy).unwrap();
+        assert_eq!(legacy_center.alpha(), 255, "legacy icon center should be opaque");
+
+        let bg_xml = fs::read_to_string(res.join("values/ic_launcher_background.xml")).unwrap();
+        assert!(bg_xml.contains(ICON_BACKGROUND_COLOR));
 
         fs::remove_dir_all(&dir).ok();
     }
