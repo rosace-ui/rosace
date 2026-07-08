@@ -15,10 +15,23 @@ pub enum ScrollAxis {
 }
 
 /// Maximum content extent (logical px) on the scroll axis that the GPU-layer
-/// path (D090) can composite as a single placed texture. Content beyond this
-/// needs re-render windowing (Phase 20 Step 6 remainder, not yet built) — the
-/// automatic-default heuristic (`should_auto_gpu`) falls back to the base
-/// (CPU-painted) path above this size so it never silently mis-renders.
+/// path (D090) can composite as a single placed texture. Content taller than
+/// this automatically uses the base (CPU-painted) path instead — correct,
+/// just without the zero-repaint scroll optimization — via the
+/// automatic-default heuristic (`should_auto_gpu`), so it never silently
+/// mis-renders.
+///
+/// This is intentionally NOT solved with GPU-layer re-render windowing (a
+/// moving texture window re-rendered as scroll approaches its edge). For
+/// content that's actually large because it's a LONG LIST, [`super::ListView`]
+/// already solves this the better way: real virtualization — only the rows
+/// intersecting the viewport are ever built, laid out, or painted (O(visible)
+/// cost, no texture-size limit to hit at all, since the full content is never
+/// materialized). Reach for `ListView::builder` for that case rather than
+/// wrapping a huge item list in a `ScrollView`. The base-path fallback here
+/// exists for the much narrower remaining case — one large *non-virtualized*
+/// widget subtree (e.g. a single big `Image`) — where it's correct but not
+/// GPU-accelerated.
 pub const MAX_TL_DIM: f32 = 4096.0;
 
 /// A scrollable viewport. The child can exceed the available size; content

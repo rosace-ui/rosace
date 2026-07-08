@@ -17,6 +17,13 @@ use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h, intersec
 /// no measurement of off-screen rows ever happens. Variable-extent rows are
 /// a future extension.
 ///
+/// Prefer this over [`super::ScrollView`] for long lists — `ScrollView`'s
+/// GPU-composited layer path (D090) composites its ENTIRE content as one
+/// texture, capped at [`super::MAX_TL_DIM`] (4096 logical px); content past
+/// that silently falls back to a plain (still correct, non-GPU) paint.
+/// `ListView` never materializes off-screen content at all, so it has no
+/// such limit regardless of `count`.
+///
 /// ```rust,ignore
 /// let scroll = ctx.state(0.0f32);
 /// ListView::builder(1_000, 48.0, scroll, |i| {

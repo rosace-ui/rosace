@@ -110,7 +110,7 @@ pub use render_tree::{NodeId, RenderTree, ScrollAxes, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
-pub use scroll_view::{ScrollView, ScrollAxis};
+pub use scroll_view::{ScrollView, ScrollAxis, MAX_TL_DIM};
 pub use slider::Slider;
 pub use spacer::{Expanded, Spacer};
 pub use stack::Stack;
