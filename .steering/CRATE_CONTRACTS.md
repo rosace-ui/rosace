@@ -3,31 +3,87 @@
 > Dependencies only flow downward.
 > A crate never reaches into another crate's internals.
 
+> **Rewritten 2026-07-08** against the actual workspace (34 crates) — the
+> previous version was Phase-1 planning fiction, frozen since early
+> development: it covered 16 of 34 crates, named two crates that don't exist
+> (`tezzera-ffi`, `tezzera-test`), and described widgets (`Navigator`,
+> `Snackbar`, `BottomSheet`, `SizedBox`) under the wrong crate or not shipped
+> at all. Every entry below was verified against each crate's actual
+> `src/lib.rs` and `Cargo.toml`, not inferred from the old document.
+
 ---
 
 ## DEPENDENCY HIERARCHY
 
+The only place the intended layering was actually written down was a header
+comment in `tezzera/Cargo.toml` — reproduced here as the source of truth,
+extended to place the 22 "service" crates the original 8-layer sketch didn't
+individually order (see **Known Issues** below — that gap is exactly how two
+real violations went unnoticed).
+
 ```
-tezzera-macros          (no tezzera deps)
-tezzera-trace           (no tezzera deps)
-tezzera-core            (← trace, macros)
-tezzera-state           (← core, trace)
-tezzera-layout          (← core, state, trace)
-tezzera-render          (← core, layout, trace)
-tezzera-animate         (← core, state, render, trace)
-tezzera-scroll          (← core, state, layout, render, trace)
-tezzera-nav             (← core, state, render, animate, trace)
-tezzera-platform        (← core, state, trace)
-tezzera-ffi             (← core, trace)
-tezzera-theme           (← core, state, layout, trace)
-tezzera-widgets         (← all above)
-tezzera-test            (← all above)
-tezzera-devtools        (← trace, core, state)
-tezzera-cli             (← all above)
+Layer 0  tezzera-trace        zero tezzera deps
+         tezzera-macros       zero tezzera deps (proc-macro crate)
+         tezzera-compositor   zero tezzera deps (GPU presenter; external wgpu only)
+Layer 1  tezzera-state        → trace
+Layer 2  tezzera-core         → trace, state
+Layer 3  tezzera-layout       → core, trace
+Layer 4  tezzera-render       → core, layout, trace
+         tezzera-theme        → core, state, trace
+Layer 5  (services — see below) → layers 0-4 only, in principle
+Layer 6  tezzera-widgets      → layers 0-5
+Layer 7  tezzera              → everything (app code only depends on this)
 ```
 
-**Rule**: If crate A is above crate B in this hierarchy,
-A cannot depend on B. Ever.
+**Layer 5 services** (22 crates; the original doc only ever named a handful
+of these and never gave them a relative order — see Known Issues):
+`tezzera-anim`, `tezzera-animate`, `tezzera-scroll`, `tezzera-nav`,
+`tezzera-nav-anim`, `tezzera-hot-reload`, `tezzera-devtools`,
+`tezzera-forms`, `tezzera-a11y`, `tezzera-gesture`, `tezzera-net`,
+`tezzera-text`, `tezzera-shaping`, `tezzera-bidi`, `tezzera-i18n`,
+`tezzera-clipboard`, `tezzera-ws`, `tezzera-ime`, `tezzera-media`,
+`tezzera-style`, `tezzera-platform`, `tezzera-test-utils`.
+
+**Rule**: If crate A is above crate B in this hierarchy, A cannot depend on
+B. Ever. Enforced today only by convention (never adding `tezzera` as a dep
+inside any sub-crate) — there is no automated check.
+
+---
+
+## KNOWN ISSUES (found during the 2026-07-08 audit, not yet fixed)
+
+These are real findings, not just doc staleness — flagged here rather than
+silently baked into the contracts below, per the project's violation policy
+(§ bottom of this file: redesign or document, never silently absorb).
+
+1. **`tezzera-anim` is dead code.** It compiles and is re-exported as
+   `tezzera::anim`, but grepping the whole workspace for `tezzera_anim::`
+   finds zero consumers outside its own crate and that one re-export.
+   `tezzera-animate` (a similarly-named, independently-implemented crate) is
+   the one actually used by `tezzera-widgets`, `tezzera-platform`,
+   `tezzera-nav-anim`, and `tezzera-examples`. These are NOT a shim/alias
+   pair — they're two real, separately-maintained animation systems, and one
+   of them is unused. Needs a decision: remove `tezzera-anim`, or find/state
+   its intended purpose.
+2. **`tezzera-gesture` depends on `tezzera-platform`.** Both are Layer-5
+   services; the documented layer rule only governs Layers 0–4 → nothing
+   stops one service depending on another. This ties gesture recognition
+   (conceptually input-source-agnostic) to the concrete windowing crate.
+   Not caught by any existing rule because Layer 5 has no internal ordering.
+3. **`tezzera-test-utils` depends on `tezzera-platform`** (winit/softbuffer)
+   for what's meant to be lightweight headless test infrastructure, AND is
+   pulled into the umbrella `tezzera` crate as a normal `[dependencies]`
+   entry — contradicting its own doc comment ("use it only in
+   `[dev-dependencies]`"). Test/snapshot infrastructure currently ships
+   inside the production SDK crate.
+4. **`tezzera-style` is unintegrated.** A CSS-like stylesheet system exists
+   (selectors, rules, computed/inline styles) but `tezzera-widgets` does not
+   depend on it — nothing in the actual widget rendering path uses it. Either
+   it's mid-migration or abandoned; worth a decision either way.
+
+None of these are fixed by this doc rewrite — this is the audit that found
+them. Fixing them (removing `tezzera-anim`, reordering `gesture`, moving
+`test-utils` to dev-deps, deciding `tezzera-style`'s fate) is separate work.
 
 ---
 
@@ -35,352 +91,393 @@ A cannot depend on B. Ever.
 
 ---
 
-### tezzera-macros
-**Job**: Provide all proc macros. Nothing else.
-**Exports**:
-- #[component] — define a component
-- #[state] — local atom declaration
-- #[derived] — derived atom
-- #[persist(...)] — atom persistence
-- #[global_state] — global atom
-- #[scoped_state] — scoped atom
-- #[async_state] — async atom
-- #[routes] — route enum
-- #[route("...")] — route attribute
-- #[lazy] / #[eager] — loading strategy
-- #[tezzera_ffi(...)] — FFI bridge
-- #[tezzera_test] — test macro
-- #[tezzera_snapshot] — snapshot test
-- atom!() — atom constructor macro
-- trace!() — trace emission macro
-- batch!() — batch macro
-
-**Must NOT**:
-- Contain any runtime logic
-- Import any tezzera-* crate
-- Contain UI logic of any kind
+### tezzera-trace  (Layer 0)
+**Job**: The framework's tracing/instrumentation bus — a global event bus
+(`TRACING_BUS`) that every other crate emits structured events to.
+**Exports**: `TezzeraTrace` (event enum), `TracingBus`, `TRACE_BUS`,
+`TraceSubscriber` (trait), plus `pub mod bus`/`event`/`subscribers`.
+**Must NOT**: Depend on any other `tezzera-*` crate. Contain UI logic.
 
 ---
 
-### tezzera-trace
-**Job**: Define TezzeraTrace event type, TracingBus, and all subscribers.
-**Exports**:
-- TezzeraTrace enum
-- TracingBus struct
-- TraceSubscriber trait
-- RingBufferSubscriber
-- ConsoleSubscriber
-- FileSubscriber
-- DevToolsSubscriber (transport only)
-- TraceProtocol (serialization)
-- TRACING_BUS global
-
-**Must NOT**:
-- Contain any UI logic
-- Import any tezzera-* crate (except macros)
-- Do any rendering or layout
-
-**Rule**: Every other crate depends on this.
-It must be lean, fast, and stable.
+### tezzera-macros  (Layer 0)
+**Job**: Proc-macro crate — component/state codegen sugar and the `view!`
+declarative element-tree DSL.
+**Exports**: `#[component]`, `#[state]`, `view!`.
+**Must NOT**: Depend on any other `tezzera-*` crate (verified: it doesn't).
+Contain runtime logic — everything here is macro expansion only.
 
 ---
 
-### tezzera-core
-**Job**: Define the component model, element tree, and lifecycle.
-**Exports**:
-- TezzeraComponent trait
-- Element type
-- RenderObject trait
-- SemanticNode type
-- Context struct
-- ChildContainer trait
-- ErrorBoundary widget
-- TezzeraResult, TezzeraError
-- Lifecycle hooks: on_mount, on_update, on_unmount
-- Key type
-- ComponentId, AtomId types
-- TezzeraApp builder
-
-**Must NOT**:
-- Know about specific widgets (Button, Text etc.)
-- Implement any layout algorithms
-- Touch Skia or rendering
-- Know about navigation routes
+### tezzera-compositor  (Layer 0)
+**Job**: GPU compositor — uploads CPU RGBA pixel buffers (from `SkiaCanvas`)
+as wgpu textures and blits them onto the window surface via a fullscreen-quad
+shader, with per-layer dirty-tracking to skip redundant uploads/presents.
+**Exports**: `GpuPresenter` (`new`/`resize`/`present`/`present_layers`/
+`surface_size`), `CompositorLayer` (+ `opaque`/`tracked`/`placed`
+constructors), `LayerRect`.
+**Must NOT**: Depend on any `tezzera-*` crate (verified: it doesn't — only
+external `wgpu`/`pollster`/`log`). Know about widgets, layout, or components.
+**Note**: a model example of correct layering — sophisticated and
+framework-specific, yet zero internal deps. `tezzera-platform` is its only
+consumer.
 
 ---
 
-### tezzera-state
-**Job**: Implement the atom system, reactivity, and refresh engine.
-**Exports**:
-- Atom<T> struct
-- GlobalAtom<T> struct
-- AtomProvider widget
-- use_atom() hook
-- use_async() family
-- use_stream()
-- batch() / batch_async()
-- RefreshEngine
-- Priority enum
-- AsyncState<T> enum
-- Derived atom support
-
-**Must NOT**:
-- Know about layout or rendering
-- Import tezzera-layout or tezzera-render
-- Contain any widget implementations
+### tezzera-state  (Layer 1)
+**Job**: Reactive atom-based state — `Atom<T>`/`GlobalAtom<T>` values that
+auto-subscribe reading components, plus the `RefreshEngine` that computes
+minimal rebuild sets.
+**Exports**: `Atom`, `GlobalAtom`, `AsyncState`, `batch`/`is_batching`,
+`Priority`, `RefreshEngine`, `mark_dirty`/`is_global_dirty`/
+`take_dirty_components`, `request_frame`/`take_frame_requested`,
+`scroll_offset`/`set_scroll_offset`/`scroll_offset_by` (the non-reactive
+scroll channel, D090), `hook_state`.
+**Must NOT**: Depend on anything but `tezzera-trace`. Know about layout or
+rendering.
 
 ---
 
-### tezzera-layout
-**Job**: Implement the Flexure constraint layout engine and text layout.
-**Exports**:
-- Constraints struct
-- AxisBound enum
-- LayoutResult struct
-- Flexure engine
-- All layout widgets: Column, Row, Stack, Grid, Flex, Wrap,
-  Spacer, SizedBox, AspectRatio, Expanded, FractionallySizedBox
-- IntrinsicHeight, IntrinsicWidth, IntrinsicSize
-- Width / Height sizing enums
-- Alignment, Baseline alignment
-- Overlay system (layers 0-5)
-- Directionality
-- Text layout via cosmic-text + HarfBuzz + fontdue
-- RTL support
-
-**Must NOT**:
-- Call Skia directly
-- Know about navigation
-- Know about animation
-- Import tezzera-render
+### tezzera-core  (Layer 2)
+**Job**: The component/element model — `Component`, `Element`, `Context`,
+`App`, plus shared geometric/id types used everywhere.
+**Exports**: `App`, `Component`, `Context`, `Element`/`NativeElement`/
+`ComponentElement`/`TextElement`, `ChildContainer`, `ErrorBoundary`,
+`TezzeraError`/`TezzeraResult`, `AxisBound`/`Canvas`/`Constraints`/
+`RenderObject`, `SafeArea`/`use_safe_area`/`set_safe_area` (D106 groundwork),
+`Role`/`SemanticNode` (D099 accessibility tree — see also `tezzera-a11y`,
+which has its own, richer `Role`; not yet unified, see D107 planning notes),
+`AtomId`/`ComponentId`/`Key`/`Location`/`Point`/`Rect`/`Size`.
+**Must NOT**: Know about specific widgets. Implement layout algorithms. Touch
+rendering. Depend on anything but `trace`, `state`.
 
 ---
 
-### tezzera-render
-**Job**: Bridge between layout engine and Skia. Manage GPU layers, dirty regions, frame rendering.
-**Exports**:
-- SkiaCanvas wrapper
-- RenderPipeline
-- LayerCompositor
-- DirtyRegionTracker
-- CustomPaint widget
-- Image handling (Image::network, Image::asset etc.)
-- ImageCache (memory + disk)
-- SemanticTree builder
-- Platform accessibility bridges
-- TezzeraRenderer trait (custom pipelines)
-
-**Must NOT**:
-- Implement layout algorithms
-- Know about navigation
-- Know about animation state
+### tezzera-layout  (Layer 3)
+**Job**: Constraint-based layout math (`Flexure`) plus the handful of
+layout-only widgets that are pure geometry (no painting of their own beyond
+what their children provide).
+**Exports**: `Constraints`/`AxisBound` (re-exported from `tezzera-core`),
+`Flexure`, `LayoutResult`, `CrossAxisAlignment`/`MainAxisAlignment`,
+`Height`/`Width`, `layout_column`/`layout_row`, `AspectRatio`, `Flex`/
+`FlexDirection`, `Grid`, `Wrap`.
+**Must NOT**: Call into `tezzera-render` (rasterization is a higher layer).
+Know about navigation, animation, or theme.
+**Note**: most user-facing layout widgets (`Column`, `Row`, `Stack`,
+`Container`, `ScrollView`, ...) actually live in `tezzera-widgets`, NOT here
+— this crate is the underlying constraint-solving math plus a few widgets
+(`AspectRatio`, `Grid`, `Wrap`) that are pure geometry with no paint logic of
+their own beyond delegating to children.
 
 ---
 
-### tezzera-animate
-**Job**: Implement all animation systems.
-**Exports**:
-- Animation (timeline)
-- AnimatedContainer
-- Implicit animation (.animate() modifier)
-- SpringAnimation
-- DragAnimation
-- Curve enum
-- Transition types
-- SharedElement transition
-
-**Must NOT**:
-- Touch Skia directly (use tezzera-render)
-- Know about navigation routes
-- Implement layout
+### tezzera-render  (Layer 4)
+**Job**: Software rasterizer and display-list recording — `SkiaCanvas`
+(tiny-skia backed), `PictureRecorder`/`Picture` for recording/replaying draw
+commands, `FontCache` for glyph rasterization.
+**Exports**: `Color`, `SkiaCanvas`, `DrawCommand`, `FontCache`, `Picture`/
+`PictureRecorder`, `ImageHandle`/`ImageFit`/`CachePolicy`.
+**Must NOT**: Implement layout algorithms. Know about navigation or
+animation state. Depend on anything but `core`, `layout`, `trace`.
 
 ---
 
-### tezzera-scroll
-**Job**: Implement scrolling, virtualization, and gesture arbitration.
-**Exports**:
-- ScrollView widget
-- VirtualList widget
-- ScrollController
-- ScrollPhysics
-- GestureArbitrator
-- PullToRefresh
-- StickyHeader support
-- ScrollAnchor
-- KeyboardAvoidBehavior
-
-**Must NOT**:
-- Implement navigation
-- Touch Skia directly
-- Implement layout algorithms
+### tezzera-theme  (Layer 4)
+**Job**: Design tokens and the reactive global theme — colors, typography,
+spacing/radius/shadow scales, `use_theme()`/`set_theme()`.
+**Exports**: `ThemeData`, `ColorScheme`, `Color`, `Typography`/`TextStyle`/
+`FontFamily`, `Spacing`, `BorderRadius`, `Shadows`/`ShadowLayer`,
+`AnimationConfig` (the theme-global animation toggle, not per-widget),
+`set_theme`/`use_theme`/`set_animations`, `built_in::{light_theme,
+dark_theme}`.
+**Must NOT**: Implement rendering or layout. Know about specific widgets.
+Depend on anything but `core`, `state`, `trace`.
 
 ---
 
-### tezzera-nav
-**Job**: Implement routing, navigation, and transitions.
-**Exports**:
-- Navigator
-- StackNavigator
-- TabNavigator
-- DrawerNavigator
-- AppRoute traits
-- NavigationDecision enum
-- use_before_leave() hook
-- use_back_handler() hook
-- use_route() hook
-- NavigationGuard
-- Transition types
-- KeepAlive widget
-- Deep link handling
-- Web URL sync
-
-**Must NOT**:
-- Implement animations from scratch (use tezzera-animate)
-- Know about specific screen content
-- Implement scroll behavior
-
----
-
-### tezzera-platform
-**Job**: Provide platform-specific APIs in a unified interface.
-**Exports**:
-- Platform struct
-- Permission API
-- App lifecycle (LifecycleState atom)
-- Haptics API
-- Safe area insets
-- File picker, camera, share, clipboard
-- Biometrics
-- Notifications
-- PlatformChannel
-- use_network_status()
-- use_file_watch()
-- use_sensor()
-- use_app_lifecycle()
-- Localization (LOCALE atom, use_locale())
-
-**Must NOT**:
-- Implement UI widgets
-- Know about navigation routes
-- Implement rendering
+### tezzera-widgets  (Layer 6)
+**Job**: The built-in widget library — the primary tree app authors build
+UIs from (`Column`/`Row`/`Stack`/`Container`, buttons/inputs/dialogs, the
+overlay system, scroll views, etc.) plus the widget-authoring plumbing
+(`Widget` trait, `PaintCtx`, hit-testing/focus/semantics declarations —
+Phase 21, see `.steering/WIDGET_AUTHORING_GUIDE.md`).
+**Exports** (representative — the real list is ~60 items):
+- Protocol: `Widget`, `BoxedWidget`, `Children`, `PaintCtx`, `Semantics`,
+  `HitTarget`/`ScrollTarget`, `WidgetApp`
+- Structure: `Column`, `Row`, `Stack`, `Container`, `Scaffold`, `Positioned`,
+  `Expanded`, `Spacer`, `ScrollView`/`ScrollAxis`, `ListView`
+- Components: `AppBar`, `Avatar`, `Badge`, `Button`, `Card`, `Checkbox`,
+  `Chip`, `Dialog`, `Divider`, `Dropdown`, `Drawer`, `Expander`, `Radio`,
+  `SegmentedControl`, `Menu`, `NavRail`, `ProgressBar`/`CircularProgress`,
+  `Sheet`, `Toast`, `Slider`, `Switch`, `TabBar`, `TextInput`, `Tooltip`,
+  `ListTile`, `Skeleton`
+- Overlay system: `push_overlay`/`drain_overlays`/`clear_overlays`,
+  `OverlayEntry`/`OverlayKind`/`LayerPosition`, `FocusApi`
+- Text/image: `Text`, `Image`/`ImageWidget`/`ImageCache`
+- Escape hatches: `CustomPaint`, `RepaintBoundary`, `TransformLayer`,
+  `RectReader`
+**Must NOT**: Bypass the `Widget`/render-tree protocol. Import internals of
+lower crates directly instead of their public API.
+**Depends on**: `a11y`, `animate` (not `anim` — see Known Issues), `scroll`,
+`text`, plus `core`/`state`/`layout`/`render`/`theme`/`trace`. Does NOT
+depend on `tezzera-style` (see Known Issues).
 
 ---
 
-### tezzera-ffi
-**Job**: Provide all FFI bridges and synchronous platform bridge.
-**Exports**:
-- C FFI macros and safe wrappers
-- Swift FFI bridge
-- Kotlin FFI bridge
-- JS/WASM FFI bridge
-- sync_bridge module
-- SharedMemory
-- ForeignBox
-- KYRA_CHANNEL (FFI to UI thread channel)
-- catch_unwind wrappers
-
-**Must NOT**:
-- Contain UI logic
-- Import tezzera-widgets
-- Implement platform APIs (use tezzera-platform)
+### tezzera-cli  (`tzr`, Layer 7 — bin only)
+**Job**: The `tzr` command-line tool.
+**Commands** (`src/commands/`): `new` (scaffold an app — D104/D106),
+`dev` (dev server, trace output), `build`, `run` (per-platform build/run:
+desktop/web/iOS — D106), `package`, `analyze` (workspace health), `snapshot`,
+`workspace`.
+**Depends on**: `trace`, `core`, `hot-reload`.
+**Must NOT**: Contain framework logic. Be imported by any other crate.
 
 ---
 
-### tezzera-theme
-**Job**: Implement the theme system, design tokens, and localization files.
-**Exports**:
-- TezzeraTheme derive macro support
-- ThemeData struct
-- TextStyle struct
-- SpacingScale
-- ColorScheme
-- BorderRadius types
-- Shadow types
-- Locale system
-- Translation file loading (TOML)
-
-**Must NOT**:
-- Implement rendering
-- Know about specific widgets
-- Implement layout
+### tezzera-examples  (Layer 7 — bin/example only)
+**Job**: Sample apps exercising the framework end-to-end.
+**Contents**: `src/bin/{counter, animated_counter, app_showcase, app_demo,
+widget_authoring_demo}.rs`, `examples/web.rs` (wasm cdylib entry, browser
+MVP).
+**Depends on**: the umbrella `tezzera` crate, `animate`, `state`.
+**Must NOT**: Be imported by any other crate.
 
 ---
 
-### tezzera-widgets
-**Job**: Implement the official widget library.
-**Exports**: All built-in widgets:
-- Text, RichText, SelectableText, TextInput
-- Button, IconButton, FloatingActionButton
-- Image
-- Icon
-- Column, Row, Stack (re-exported from layout)
-- Scaffold, AppBar, BottomNavigationBar
-- Card, Dialog, AlertDialog, BottomSheet
-- ListTile, Divider
-- Checkbox, Switch, Slider, Radio
-- TextField, Form
-- CircularProgressIndicator, LinearProgressIndicator
-- Tooltip, Snackbar
-- Chip, Badge
-- Avatar
-- Skeleton
-- Empty, Spacer (re-exported)
-- AdaptiveButton (platform-adaptive)
-
-**Must NOT**:
-- Implement any framework internals
-- Bypass the RenderObject system
-- Import tezzera-core internals directly
+### tezzera-platform  (Layer 5 — service)
+**Job**: Windowing/platform integration — owns the winit event loop and
+window, translates OS input into `InputEvent`, provides the wasm32 web entry
+point (`run_web`), tracks scroll-layer state for the compositor.
+**Exports**: `PlatformWindow`, `InputEvent`/`MouseButton`/`Key`,
+`ScrollLayer`/`publish_scroll_layers`/`take_scroll_layers`, `run_web`
+(wasm32-only).
+**Depends on**: `animate`, `compositor`, `core`, `render`, `state`, `trace`;
+external `winit`, `softbuffer`, plus wasm32-only `wasm-bindgen`/`web-sys`.
+**Must NOT**: Implement widgets. Know about navigation routes.
+**Note (D106)**: on iOS this crate's winit-owns-the-app-lifecycle model is
+being replaced by a real native host (Xcode project + our own AppDelegate) —
+see D106/`PHASE_24.md`. Desktop/web keep winit.
 
 ---
 
-### tezzera-test
-**Job**: Provide testing utilities and snapshot testing.
-**Exports**:
-- render!() macro
-- render_constrained!() macro
-- assert_text!() macro
-- assert_size!() macro
-- tap!() macro
-- snapshot!() macro
-- Golden file comparison
-- Per-platform test runners
-
-**Must NOT**:
-- Ship in production builds
-- Import production-only crates
+### tezzera-anim  (Layer 5 — service, DEAD CODE, see Known Issues)
+**Job as implemented**: Pure-math animation primitives (`Tween`, `Easing`,
+`Timeline`/`Keyframe`, `AnimationController`) explicitly documented as
+"driven by external dt," with no hook/state integration.
+**Exports**: `easing_fn`/`Easing`, `Lerp`, `Keyframe`/`Timeline`,
+`AnimationController`/`AnimationState`, `Tween`.
+**Depends on**: `tezzera-theme` only.
+**Status**: compiles, re-exported as `tezzera::anim`, but has zero real
+consumers anywhere in the framework. See Known Issues #1.
 
 ---
 
-### tezzera-devtools
-**Job**: Implement the dev tools server and hot reload system.
-**Exports**:
-- DevToolsServer
-- HotReloadWatcher
-- TimeTravel
-- DevToolsTransport (WebSocket + shared memory)
-- Frame profiler
-- Component tree serializer
-
-**Must NOT**:
-- Ship in production builds (#[cfg(debug_assertions)] everything)
-- Import production-only crates in release
+### tezzera-animate  (Layer 5 — service, the ACTIVE animation system)
+**Job**: Animation wired into the reactive-state/hook model —
+`use_animation`/`use_spring` let widgets drive per-frame animated values
+through `Context`. This is what actually backs Switch/Checkbox/Radio's
+theme-global animation and every animated transition in the widget set.
+**Exports**: `use_animation`, `AnimCtrl`, `Progress`, `frame_dt`/
+`set_frame_dt`, `AnimationController`/`AnimationState`, `Easing`,
+`Keyframe`/`KeyframeStop`, `Lerp`, `Spring`, `Tween`, `use_spring`,
+`Animated`, `SpringController`/`SpringState`.
+**Depends on**: `core`, `state`, `trace`.
+**Consumed by**: `tezzera-widgets`, `tezzera-platform`, `tezzera-nav-anim`,
+`tezzera-examples`, the umbrella `tezzera` crate.
 
 ---
 
-### tezzera-cli (tzr)
-**Job**: Implement the tzr command-line tool.
-**Commands**:
-- tzr dev [--trace=...] [--profile] [--time-travel]
-- tzr build --target [web|desktop|ios|android|all]
-- tzr build --web-routing=[hash|history]
-- tzr test [--update-goldens] [--platform=...]
-- tzr analyze
-- tzr snapshot --update
+### tezzera-scroll  (Layer 5 — service)
+**Job**: Momentum-scroll physics — `ScrollController` with configurable
+`ScrollPhysics` (momentum/friction), page snapping, scrollbar geometry.
+**Exports**: `ScrollController`, `ScrollPhysics`, `clamp_offset`/
+`snap_to_page`, `MomentumState`/`ScrollDirection`, `render_scrollbar`/
+`ScrollbarMetrics`, `ScrollView` (a lower-level one — the widget most apps
+use is `tezzera_widgets::ScrollView`, which builds on this).
+**Depends on**: `core`, `state`, `layout`, `render`, `trace`.
 
-**Must NOT**:
-- Contain framework logic
-- Be imported by other crates
+---
+
+### tezzera-nav  (Layer 5 — service)
+**Job**: The navigation router — typed-enum `Route`s (never stringly-typed),
+per-`Navigator` independent history stack, navigation guards, keep-alive
+memory for navigated-away screens.
+**Exports**: `Navigator` (the real one — NOT in `tezzera-widgets`),
+`Route`, `NavigationDecision`, `NavigationStack` (not `StackNavigator`),
+`ScreenNav`, `NavigationGuard`/`AllowAllGuard`/`BlockWhenGuard`,
+`HistoryEntry`, `KeepAliveRegistry`.
+**Depends on**: `core`, `state`, `trace`.
+
+---
+
+### tezzera-nav-anim  (Layer 5 — service, composes two other services)
+**Job**: Animated screen transitions layered on `tezzera-nav` — slide/other
+transition styles driven per-frame.
+**Exports**: `NavigatorAnimated`, `ScreenTransition`/`SlideDirection`/
+`TransitionStyle`.
+**Depends on**: `animate`, `nav`, `trace`.
+
+---
+
+### tezzera-hot-reload  (Layer 5 — service)
+**Job**: Dev-time hot reload — watches source directories for `.rs` changes
+(debounced) and triggers rebuilds for a target platform. Groundwork for
+D102/D103's fuller hot-reload architecture (PLANNED, not yet built).
+**Exports**: `Debouncer`, `ChangeEvent`, `RebuildRunner`/`RebuildTarget`,
+`FileWatcher`.
+**Depends on**: `trace` only.
+
+---
+
+### tezzera-devtools  (Layer 5 — service)
+**Job**: Developer tooling — trace viewer, atom-state inspector,
+component/layout inspector, frame profiler, aggregated into `DevConsole`.
+**Exports**: `DevConsole`, `AtomInspector`/`AtomEntry`/`AtomSnapshot`,
+`ComponentInspector`/`LayoutNode`, `FrameProfiler`, `TraceViewer`.
+**Depends on**: `core`, `state`, `trace`.
+**Must NOT**: Ship in release builds without `#[cfg(debug_assertions)]`
+gating.
+
+---
+
+### tezzera-forms  (Layer 5 — service)
+**Job**: Form state and validation — `Form`/`FormField` with composable
+`Validator`s.
+**Exports**: `Form`, `FormField`, `FieldError`, `Validator` (trait) +
+`Required`/`Email`/`MinLength`/`MaxLength`/`Range`/`Contains`.
+**Depends on**: `state`, `trace`.
+
+---
+
+### tezzera-a11y  (Layer 5 — service)
+**Job**: Accessibility semantic tree and focus management — `A11yTree`/
+`A11yNode`/`Role` data model, `FocusManager` for keyboard/screen-reader
+focus traversal. Platform AT-SPI/UIA bindings explicitly deferred (see
+D107's web-SEO plan, which reuses this tree for a different purpose:
+`RenderTree::collect_semantics()` in `tezzera-widgets` derives from
+`tezzera_core::SemanticNode`, a parallel/simpler type — the two `Role`
+enums are not yet unified; see Known Issues in `PHASE_25.md`).
+**Exports**: `A11yTree`/`A11yNode`, `Role`, `FocusManager`, `FocusNode`.
+**Depends on**: `core`, `state`.
+
+---
+
+### tezzera-gesture  (Layer 5 — service, see Known Issues #2)
+**Job**: Gesture recognition — converts raw `InputEvent`s into higher-level
+gestures (tap, double-tap, drag, swipe, pinch).
+**Exports**: `GestureRecognizer` (trait), `TapRecognizer`, `DragRecognizer`/
+`DragPhase`, `SwipeRecognizer`/`SwipeDirection`, `PinchRecognizer`,
+`GestureEvent`.
+**Depends on**: `platform` (for `InputEvent` — see Known Issues #2), `trace`.
+
+---
+
+### tezzera-net  (Layer 5 — service)
+**Job**: Non-blocking network image loading via `std::thread`/`mpsc` — no
+async runtime dependency.
+**Exports**: `ImageLoader`, `RemoteImage`/`RemoteImageFit`, `LoadState`.
+**Depends on**: `core`, `trace`.
+
+---
+
+### tezzera-text  (Layer 5 — service)
+**Job**: Rich text layout — styled spans, paragraph word-wrapping, cursor/
+selection, basic direction detection.
+**Exports**: `RichText`, `TextSpan`/`TextStyle`, `TextLayout`/`TextLine`,
+`word_wrap`/`word_wrap_simple`, `measure_text`, `TextCursor`/
+`TextSelection`, `detect_direction`/`TextDirection`.
+**Depends on**: `core`, `render`, `theme`.
+
+---
+
+### tezzera-shaping  (Layer 5 — service)
+**Job**: Text shaping abstraction — `ShapingEngine` trait with a
+`FallbackShaper` (fontdue-backed, one-glyph-per-char). A real HarfBuzz
+shaper is explicitly deferred to v1.0 (D014).
+**Exports**: `ShapingEngine` (trait), `FallbackShaper`, `GlyphRun`/
+`ShapedGlyph`, `ShapingPipeline`, `Script`.
+**Depends on**: `core`, `render`, `text`, `trace`.
+
+---
+
+### tezzera-bidi  (Layer 5 — service)
+**Job**: A simplified subset of the Unicode Bidirectional Algorithm (UAX #9)
+for mixed LTR/RTL (Latin + Arabic + Hebrew) text. Full ICU/`unicode-bidi`
+integration deferred to v1.0.
+**Exports**: `bidi_class`/`BidiClass`, `paragraph_level`/`resolve_levels`,
+`BidiParagraph`, `reorder`/`reorder_line`.
+**Depends on**: `trace` only.
+
+---
+
+### tezzera-i18n  (Layer 5 — service)
+**Job**: Localization — `MessageBundle`/`Locale`, global-locale accessor,
+`t()` translation lookup with graceful fallback to the key itself.
+**Exports**: `MessageBundle`, `Locale`, `t`, `set_locale`/`current_locale`.
+**Depends on**: `state`, `trace`.
+
+---
+
+### tezzera-clipboard  (Layer 5 — service)
+**Job**: OS clipboard integration — shells out to `pbcopy`/`pbpaste` (macOS)
+or `xclip`/`xsel` (Linux); `NoopClipboard` for tests/wasm.
+**Exports**: `ClipboardProvider` (trait), `SystemClipboard`, `NoopClipboard`,
+`ClipboardError`.
+**Depends on**: `trace` only.
+
+---
+
+### tezzera-ws  (Layer 5 — service)
+**Job**: WebSocket client with no async runtime and no `tungstenite` dep —
+hand-rolled RFC 6455 handshake over `std::net::TcpStream`, non-blocking
+`recv()` safe to poll every frame.
+**Exports**: `WsClient`, `WsMessage`, `WsState`/`WsStream`, `WsError`.
+**Depends on**: `trace` only.
+
+---
+
+### tezzera-ime  (Layer 5 — service)
+**Job**: IME (CJK/complex-script input) data model — composition/preedit/
+commit events. Real OS/winit IME wiring deferred to v1.0; only `NoopIme`
+exists today.
+**Exports**: `ImeHandler` (trait), `NoopIme`, `ImeComposition`, `ImeEvent`,
+`ImeState`.
+**Depends on**: `trace` only.
+
+---
+
+### tezzera-media  (Layer 5 — service)
+**Job**: Audio/video data-model stubs — every operation currently returns
+`MediaError::PlatformUnavailable` pending real rodio/cpal/platform decode in
+v1.0.
+**Exports**: `AudioPlayer`/`AudioHandle`, `VideoDecoder`/`VideoFrame`,
+`AudioFormat`/`VideoFormat`, `MediaError`.
+**Depends on**: `trace` only.
+
+---
+
+### tezzera-style  (Layer 5 — service, UNINTEGRATED, see Known Issues #4)
+**Job as implemented**: CSS-like style system — stylesheets, rules,
+selectors, computed/inline styles, decoupling appearance from structure.
+**Exports**: `StyleSheet`/`StyleRule`/`Selector`, `ComputedStyle`,
+`InlineStyle`/`InlineStyleBuilder`, `StyleProperty`/`StyleValue`,
+`LengthUnit`.
+**Depends on**: `theme`, `core`.
+**Status**: not depended on by `tezzera-widgets` — nothing in the actual
+widget rendering path uses it today. See Known Issues #4.
+
+---
+
+### tezzera-test-utils  (Layer 5-ish — see Known Issues #3)
+**Job**: Test infrastructure for widget/render tests — `WidgetEnv` (headless
+render canvas), `EventSim` (input simulation), `SnapshotAssert` (PNG pixel
+comparison). Its own doc comment: "use it only in `[dev-dependencies]`."
+**Exports**: `WidgetEnv`, `EventSim`, `SnapshotAssert`.
+**Depends on**: `render`, `platform`, `core`.
+**Must NOT** (per its own stated contract, currently VIOLATED — see Known
+Issues #3): ship inside the production `tezzera` SDK crate as a regular
+dependency.
 
 ---
 
@@ -391,3 +488,9 @@ If any crate violates its contract:
 2. Redesign the boundary
 3. Update this document if the contract needs adjusting
 4. Never just add the import and move on
+
+This document itself went eighteen crates and several renamed widgets stale
+before anyone noticed — re-verify it against real code (`grep pub use`,
+`Cargo.toml` deps) periodically rather than trusting it as permanently
+accurate; the note at the top of this rewrite is a reminder, not a guarantee
+this won't happen again.
