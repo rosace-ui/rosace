@@ -4,6 +4,8 @@ pub mod analyze;
 pub mod build;
 /// `tzr dev` — development server with terminal trace output.
 pub mod dev;
+/// App icon generation for `tzr new` — bundled SVG rasterized per platform.
+pub mod icons;
 /// `tzr new` — scaffold a new TEZZERA app project.
 pub mod new;
 /// `tzr package` — bundle for distribution (.app / .deb / .exe).

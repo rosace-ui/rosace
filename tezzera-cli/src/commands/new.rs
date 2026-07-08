@@ -194,6 +194,9 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
             "Android harness scaffolding is not generated yet.\n")?;
     }
 
+    // ── App icons ───────────────────────────────────────────────────────────
+    crate::commands::icons::generate(dir, &opts.platforms)?;
+
     println!();
     println!("  \u{2713} Created '{}'", name);
     println!();
@@ -209,6 +212,10 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
     println!("    src/screens/       home + counter screens");
     if has(Platform::Web) { println!("    web/index.html     web host page"); }
     if has(Platform::Ios) { println!("    ios/Info.plist     iOS app bundle plist"); }
+    println!("    desktop/icon.{{icns,ico}}  desktop app icon (macOS/Windows)");
+    if has(Platform::Ios) { println!("    ios/AppIcon.appiconset/  iOS app icon"); }
+    if has(Platform::Android) { println!("    android/.../mipmap-*/    Android launcher icon"); }
+    if has(Platform::Web) { println!("    web/favicon.ico, icon-*.png  web/PWA icons"); }
     println!("    tzr.toml           app manifest");
     println!();
     println!("  Run it:");
@@ -529,6 +536,9 @@ fn web_index_html(name: &str, crate_name: &str) -> String {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>{name}</title>
+  <link rel="icon" href="favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="manifest" href="site.webmanifest" />
   <style>html, body {{ margin: 0; padding: 0; background: #14141a; }}</style>
 </head>
 <body>
@@ -558,6 +568,7 @@ fn ios_info_plist(name: &str, crate_name: &str, bundle_id: &str) -> String {
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UILaunchScreen</key><dict/>
   <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
