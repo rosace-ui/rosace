@@ -17,6 +17,10 @@ pub struct SnapshotOptions {
 
 impl SnapshotOptions {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            print_help();
+            std::process::exit(0);
+        }
         let mut example = None;
         let mut out_dir = "snapshots".to_string();
         let mut package = "tezzera-examples".to_string();
@@ -51,6 +55,19 @@ impl SnapshotOptions {
         let example = example.ok_or_else(|| "missing --example <name>".to_string())?;
         Ok(Self { example, out_dir, package })
     }
+}
+
+pub fn print_help() {
+    println!("tzr snapshot — run an example binary and save its PNG output");
+    println!();
+    println!("USAGE:");
+    println!("  tzr snapshot --example <name> [OPTIONS]");
+    println!();
+    println!("OPTIONS:");
+    println!("  --example <name>   Example binary to run (required)");
+    println!("  --out <dir>        Directory to copy the snapshot PNG into (default: snapshots)");
+    println!("  --package <name>   Cargo package that owns the example (default: tezzera-examples)");
+    println!("  -h, --help         Print this message");
 }
 
 pub fn run_snapshot(opts: &SnapshotOptions) -> CommandResult {

@@ -11,10 +11,18 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-/// A target platform the scaffolder can wire up. Desktop is always included.
+/// A target platform the scaffolder can wire up.
+///
+/// No "Desktop" catch-all — macOS/Windows/Linux each need their own icon +
+/// config file (`Info.plist`+entitlements, a manifest, a `.desktop` entry
+/// respectively), so lumping them into one bucket would mean generating
+/// files for OSes the user never asked for. Mirrors the flat style
+/// `tezzera_core::Platform` already uses for the same reason (D105).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Platform {
-    Desktop,
+    MacOs,
+    Windows,
+    Linux,
     Web,
     Ios,
     Android,
@@ -23,7 +31,9 @@ pub enum Platform {
 impl Platform {
     fn key(&self) -> &'static str {
         match self {
-            Platform::Desktop => "desktop",
+            Platform::MacOs => "macos",
+            Platform::Windows => "windows",
+            Platform::Linux => "linux",
             Platform::Web => "web",
             Platform::Ios => "ios",
             Platform::Android => "android",
@@ -31,26 +41,45 @@ impl Platform {
     }
     fn from_key(s: &str) -> Option<Self> {
         match s {
-            "desktop" => Some(Platform::Desktop),
+            "macos" => Some(Platform::MacOs),
+            "windows" => Some(Platform::Windows),
+            "linux" => Some(Platform::Linux),
             "web" => Some(Platform::Web),
             "ios" => Some(Platform::Ios),
             "android" => Some(Platform::Android),
             _ => None,
         }
     }
+    /// The host OS `tzr` itself is running on, as a `Platform` — used to
+    /// auto-include a sensible desktop default instead of forcing all three.
+    fn host_os() -> Option<Self> {
+        if cfg!(target_os = "macos") { Some(Platform::MacOs) }
+        else if cfg!(target_os = "windows") { Some(Platform::Windows) }
+        else if cfg!(target_os = "linux") { Some(Platform::Linux) }
+        else { None }
+    }
 }
 
 pub struct NewOptions {
     pub name: String,
-    /// Selected platforms (always contains Desktop).
+    /// Selected platforms.
     pub platforms: Vec<Platform>,
+    /// App bundle/package identifier (e.g. `dev.tezzera.myapp`) — shared by
+    /// iOS `CFBundleIdentifier`, the Xcode `PRODUCT_BUNDLE_IDENTIFIER`, and
+    /// macOS `Info.plist`. Updatable later via `tzr bundle-id <id>`.
+    pub bundle_id: String,
 }
 
 impl NewOptions {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            print_help();
+            std::process::exit(0);
+        }
+
         let name = args
             .first()
-            .ok_or_else(|| "usage: tzr new <name> [--platforms desktop,web,ios,android] [--all]".to_string())?
+            .ok_or_else(|| "usage: tzr new <name> [--platforms macos,windows,linux,web,ios,android] [--all] [--bundle-id <id>]".to_string())?
             .clone();
         if name.starts_with("--") {
             return Err("usage: tzr new <name> [--platforms ...]".to_string());
@@ -58,43 +87,61 @@ impl NewOptions {
         if !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
             return Err(format!("invalid project name '{}': use letters, numbers, - or _", name));
         }
+        let crate_name = name.replace('-', "_");
 
-        // Parse flags. `--platforms a,b,c` or `--all` skip the interactive prompt.
-        let mut explicit: Option<Vec<Platform>> = None;
+        // Parse flags. `--platforms a,b,c` or `--all` skip the interactive
+        // platform prompt; `--bundle-id` skips the bundle-id prompt.
+        let mut explicit_platforms: Option<Vec<Platform>> = None;
+        let mut explicit_bundle_id: Option<String> = None;
         let mut i = 1;
         while i < args.len() {
             let arg = &args[i];
             if arg == "--all" {
-                explicit = Some(vec![Platform::Desktop, Platform::Web, Platform::Ios, Platform::Android]);
+                explicit_platforms = Some(vec![
+                    Platform::MacOs, Platform::Windows, Platform::Linux,
+                    Platform::Web, Platform::Ios, Platform::Android,
+                ]);
             } else if let Some(v) = arg.strip_prefix("--platforms=") {
-                explicit = Some(parse_platforms(v)?);
+                explicit_platforms = Some(parse_platforms(v)?);
             } else if arg == "--platforms" {
                 i += 1;
                 let v = args.get(i).ok_or_else(|| "--platforms requires a value".to_string())?;
-                explicit = Some(parse_platforms(v)?);
+                explicit_platforms = Some(parse_platforms(v)?);
+            } else if let Some(v) = arg.strip_prefix("--bundle-id=") {
+                validate_bundle_id(v)?;
+                explicit_bundle_id = Some(v.to_string());
+            } else if arg == "--bundle-id" {
+                i += 1;
+                let v = args.get(i).ok_or_else(|| "--bundle-id requires a value".to_string())?;
+                validate_bundle_id(v)?;
+                explicit_bundle_id = Some(v.clone());
             }
             i += 1;
         }
 
-        let platforms = match explicit {
-            Some(mut p) => {
-                if !p.contains(&Platform::Desktop) {
-                    p.insert(0, Platform::Desktop);
-                }
-                p
-            }
+        let platforms = match explicit_platforms {
+            Some(p) if !p.is_empty() => p,
+            Some(_) => return Err("--platforms requires at least one platform".to_string()),
             None => prompt_platforms(),
         };
 
-        Ok(Self { name, platforms })
+        let default_bundle_id = format!("dev.tezzera.{}", crate_name);
+        let bundle_id = match explicit_bundle_id {
+            Some(b) => b,
+            None => prompt_text("  Bundle/package identifier?", &default_bundle_id),
+        };
+        validate_bundle_id(&bundle_id)?;
+
+        Ok(Self { name, platforms, bundle_id })
     }
 }
 
 fn parse_platforms(v: &str) -> Result<Vec<Platform>, String> {
     let mut out = Vec::new();
     for part in v.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let p = Platform::from_key(part)
-            .ok_or_else(|| format!("unknown platform '{}'. Use: desktop, web, ios, android", part))?;
+        let p = Platform::from_key(part).ok_or_else(|| {
+            format!("unknown platform '{}'. Use: macos, windows, linux, web, ios, android", part)
+        })?;
         if !out.contains(&p) {
             out.push(p);
         }
@@ -102,18 +149,45 @@ fn parse_platforms(v: &str) -> Result<Vec<Platform>, String> {
     Ok(out)
 }
 
-/// Interactive checkbox-style prompt. Desktop is always on; ask about the rest.
+/// Also used by `tzr bundle-id` to validate an id typed after project
+/// creation, not just at `tzr new` time.
+pub(crate) fn validate_bundle_id(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("bundle id cannot be empty".to_string());
+    }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
+        return Err(format!(
+            "invalid bundle id '{}': use letters, numbers, '.', '-', '_' (e.g. dev.tezzera.myapp)",
+            id
+        ));
+    }
+    Ok(())
+}
+
+/// Interactive checkbox-style prompt. The host OS (whichever `tzr` itself is
+/// running on) is auto-included without asking — a reasonable default, not
+/// a forced one, since it's the one platform this run can actually build
+/// and run locally. Every other platform is opt-in.
 fn prompt_platforms() -> Vec<Platform> {
-    let mut platforms = vec![Platform::Desktop];
+    let mut platforms = Vec::new();
     println!();
-    println!("  Which platforms should this app target?");
-    println!("  (Desktop is always included.)");
+    if let Some(host) = Platform::host_os() {
+        platforms.push(host);
+        println!("  Detected host OS: {} (included automatically)", host.key());
+    }
+    println!("  Which other platforms should this app target?");
     println!();
     for (p, label) in [
+        (Platform::MacOs, "macOS"),
+        (Platform::Windows, "Windows"),
+        (Platform::Linux, "Linux"),
         (Platform::Web, "Web (WebAssembly)"),
         (Platform::Ios, "iOS (simulator)"),
         (Platform::Android, "Android"),
     ] {
+        if platforms.contains(&p) {
+            continue; // already included as the host OS
+        }
         if ask_yes_no(&format!("  Include {}?", label), false) {
             platforms.push(p);
         }
@@ -139,10 +213,50 @@ fn ask_yes_no(question: &str, default: bool) -> bool {
     }
 }
 
+/// Prompt for free text with a default shown in brackets. Non-tty / EOF /
+/// an empty line all fall back to `default`, same convention as `ask_yes_no`.
+fn prompt_text(question: &str, default: &str) -> String {
+    print!("{} [{}] ", question, default);
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) => default.to_string(), // EOF
+        Ok(_) => {
+            let trimmed = line.trim();
+            if trimmed.is_empty() { default.to_string() } else { trimmed.to_string() }
+        }
+        Err(_) => default.to_string(),
+    }
+}
+
+/// Prints `tzr new --help`'s focused usage.
+pub fn print_help() {
+    println!("tzr new <name> — scaffold a new TEZZERA app");
+    println!();
+    println!("USAGE:");
+    println!("  tzr new <name> [OPTIONS]");
+    println!();
+    println!("OPTIONS:");
+    println!("  --platforms <list>  Comma list: macos,windows,linux,web,ios,android");
+    println!("                      (skips the interactive platform prompt)");
+    println!("  --all               Every platform (skips the prompt)");
+    println!("  --bundle-id <id>    App bundle/package id, e.g. dev.tezzera.myapp");
+    println!("                      (skips the bundle-id prompt; update later with `tzr bundle-id`)");
+    println!("  -h, --help          Print this message");
+    println!();
+    println!("With no --platforms/--all, you're prompted interactively; the host OS");
+    println!("(the one running `tzr`) is included automatically.");
+    println!();
+    println!("EXAMPLES:");
+    println!("  tzr new myapp");
+    println!("  tzr new myapp --platforms macos,ios --bundle-id com.example.myapp");
+    println!("  tzr new myapp --all");
+}
+
 pub fn run(opts: NewOptions) -> Result<(), String> {
     let name = &opts.name;
     let crate_name = name.replace('-', "_");
-    let bundle_id = format!("dev.tezzera.{}", crate_name);
+    let bundle_id = opts.bundle_id.clone();
     let framework = framework_root();
     let dir = Path::new(name);
 
@@ -220,6 +334,19 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
         write(dir.join("android").join("README.md"),
             "Android harness scaffolding is not generated yet.\n")?;
     }
+    if has(Platform::MacOs) {
+        fs::create_dir_all(dir.join("macos")).map_err(|e| e.to_string())?;
+        write(dir.join("macos").join("Info.plist"), &macos_info_plist(name, &crate_name, &bundle_id))?;
+        write(dir.join("macos").join("entitlements.plist"), &macos_entitlements_plist())?;
+    }
+    if has(Platform::Windows) {
+        fs::create_dir_all(dir.join("windows")).map_err(|e| e.to_string())?;
+        write(dir.join("windows").join("app.manifest"), &windows_app_manifest(name))?;
+    }
+    if has(Platform::Linux) {
+        fs::create_dir_all(dir.join("linux")).map_err(|e| e.to_string())?;
+        write(dir.join("linux").join("app.desktop"), &linux_desktop_entry(name))?;
+    }
 
     // ── App icons ───────────────────────────────────────────────────────────
     crate::commands::icons::generate(dir, &opts.platforms)?;
@@ -246,15 +373,19 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
         println!("    ios/App/           AppDelegate/SceneDelegate/EngineViewController.swift");
         println!("    ios/Info.plist     legacy plist (tzr run --target ios only, superseded by App.xcodeproj)");
     }
-    println!("    desktop/icon.{{icns,ico}}  desktop app icon (macOS/Windows)");
+    if has(Platform::MacOs) { println!("    macos/             icon.icns, Info.plist, entitlements.plist"); }
+    if has(Platform::Windows) { println!("    windows/           icon.ico, app.manifest"); }
+    if has(Platform::Linux) { println!("    linux/             icon.png, app.desktop"); }
     if has(Platform::Ios) { println!("    ios/App/Assets.xcassets/  iOS app icon"); }
     if has(Platform::Android) { println!("    android/.../mipmap-*/    Android launcher icon"); }
     if has(Platform::Web) { println!("    web/favicon.ico, icon-*.png  web/PWA icons"); }
-    println!("    tzr.toml           app manifest");
+    println!("    tzr.toml           app manifest (name, bundle id — `tzr bundle-id` to change)");
     println!();
     println!("  Run it:");
     println!("    cd {}", name);
-    println!("    tzr run                 # desktop");
+    if has(Platform::MacOs) { println!("    tzr run --mac           # macOS"); }
+    if has(Platform::Windows) { println!("    tzr run --win           # Windows (build only — see Known Issues)"); }
+    if has(Platform::Linux) { println!("    tzr run --lnx           # Linux (build only on this host)"); }
     if has(Platform::Web) { println!("    tzr run --target web    # browser"); }
     if has(Platform::Ios) {
         println!("    tzr run --target ios    # iOS simulator (hand-rolled harness, Phase 20-22)");
@@ -627,6 +758,119 @@ fn ios_info_plist(name: &str, crate_name: &str, bundle_id: &str) -> String {
   <key>MinimumOSVersion</key><string>13.0</string>
 </dict>
 </plist>
+"#
+    )
+}
+
+// ── macOS / Windows / Linux ─────────────────────────────────────────────────
+//
+// Each desktop OS gets its own top-level folder (parallel to ios/android/
+// web) with plain, editable files — generated ONCE here, consumed (not
+// regenerated) by `tzr package`. See package.rs for the consuming side.
+
+/// `macos/Info.plist` — the real bundle plist `tzr package`'s `bundle_macos`
+/// copies into `<App>.app/Contents/Info.plist` (it used to build this
+/// inline from scratch on every package, throwing away any edit the user
+/// made — see package.rs's history). `CFBundleIconFile` points at the
+/// `macos/icon.icns` `icons.rs` writes alongside this file.
+fn macos_info_plist(name: &str, crate_name: &str, bundle_id: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>{crate_name}</string>
+  <key>CFBundleIdentifier</key><string>{bundle_id}</string>
+  <key>CFBundleName</key><string>{name}</string>
+  <key>CFBundleDisplayName</key><string>{name}</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.1</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleIconFile</key><string>icon</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+</dict>
+</plist>
+"#
+    )
+}
+
+/// `macos/entitlements.plist` — a starter file with no entitlements granted.
+/// Real distribution (Mac App Store sandboxing, hardened-runtime + Developer
+/// ID notarization) needs specific entitlements added here by hand; `tzr`
+/// can't know what a given app needs (network client? file access? camera?).
+fn macos_entitlements_plist() -> String {
+    // NOTE for whoever edits this template: keep the XML comment free of
+    // literal angle-bracket tag examples AND "--" sequences. Apple's
+    // entitlements parser (AMFIUnserializeXML, used by `codesign
+    // --entitlements`) is stricter than general XML/plist readers and
+    // fails on comments containing embedded "<...>"-looking text —
+    // confirmed by hand: a comment quoting real entitlement keys in angle
+    // brackets produced "Failed to parse entitlements: AMFIUnserializeXML:
+    // syntax error", even though that's valid per the XML spec (and "--"
+    // inside a comment is technically invalid XML regardless of parser).
+    // Plain prose, no "<tag>" shapes, no literal "--", is the safe subset.
+    r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Starts empty. Add entitlements here as your app needs them, e.g. for a
+  sandboxed, Mac App Store, or notarized build: com.apple.security.app-sandbox
+  and com.apple.security.network.client are common starting points. See
+  Apple's entitlements reference for the full key list.
+  tzr package's identity flag (see tzr package help) passes this file to
+  codesign's entitlements flag when set.
+-->
+<dict/>
+</plist>
+"#
+    .to_string()
+}
+
+/// `windows/app.manifest` — a side-by-side manifest (`<exe>.exe.manifest`,
+/// no resource compiler needed — Windows loads it automatically if it sits
+/// next to the executable). Declares DPI awareness and a normal (non-admin)
+/// execution level. Icon-in-exe embedding would need `rc.exe`, which isn't
+/// available to verify on the machines this was built on — see the Known
+/// Issues note in `.steering/CRATE_CONTRACTS.md`.
+fn windows_app_manifest(name: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="{name}" version="0.1.0.0" processorArchitecture="*"/>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <application xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <!-- DPI awareness: render at native resolution instead of being scaled/blurred. -->
+  </application>
+  <asmv3:application xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
+    <asmv3:windowsSettings xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">
+      <dpiAware>true/PM</dpiAware>
+    </asmv3:windowsSettings>
+  </asmv3:application>
+</assembly>
+"#
+    )
+}
+
+/// `linux/app.desktop` — the freedesktop.org entry that makes the app show
+/// up in application menus/launchers with a real name and icon. `Exec`/
+/// `Icon` are filled in at `tzr package` time (paths depend on install
+/// location); this template ships placeholders `tzr package` substitutes.
+fn linux_desktop_entry(name: &str) -> String {
+    format!(
+        r#"[Desktop Entry]
+Type=Application
+Name={name}
+Exec={{exec}}
+Icon={{icon}}
+Categories=Utility;
+Terminal=false
 "#
     )
 }

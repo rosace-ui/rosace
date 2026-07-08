@@ -27,6 +27,11 @@ impl DevOptions {
     /// Accepts both space-separated (`--target web`) and equals-separated
     /// (`--target=web`) forms.
     pub fn from_args(args: &[String]) -> Result<Self, String> {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            print_help();
+            std::process::exit(0);
+        }
+
         let mut target = DevTarget::Desktop;
         let mut port = 3000u16;
         let mut watch = false;
@@ -88,6 +93,20 @@ impl DevOptions {
 
         Ok(Self { target, port, watch, bin })
     }
+}
+
+pub fn print_help() {
+    println!("tzr dev — start the desktop app in dev mode (cargo run)");
+    println!();
+    println!("USAGE:");
+    println!("  tzr dev [OPTIONS]");
+    println!();
+    println!("OPTIONS:");
+    println!("  --target <t>   desktop (default) | web");
+    println!("  --port <n>     Dev server port for web (default: 3000)");
+    println!("  --watch        Rebuild on source changes");
+    println!("  --bin <name>   Binary name, for workspaces with multiple [[bin]] entries");
+    println!("  -h, --help     Print this message");
 }
 
 /// Run the dev command.

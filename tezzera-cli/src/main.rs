@@ -1,6 +1,8 @@
 mod commands;
+#[cfg(test)]
+mod test_support;
 
-use commands::{analyze, build, dev, new, snapshot};
+use commands::{analyze, build, bundle_id, dev, new, snapshot};
 use commands::package;
 use commands::run;
 use commands::workspace;
@@ -75,6 +77,20 @@ fn main() {
             match new::NewOptions::from_args(rest) {
                 Ok(opts) => {
                     if let Err(e) = new::run(opts) {
+                        eprintln!("error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("bundle-id") => {
+            match bundle_id::BundleIdOptions::from_args(rest) {
+                Ok(opts) => {
+                    if let Err(e) = bundle_id::run(opts) {
                         eprintln!("error: {}", e);
                         std::process::exit(1);
                     }
@@ -172,9 +188,12 @@ fn print_usage() {
     println!();
     println!("COMMANDS:");
     println!("  new <name>          Scaffold a new TEZZERA app (interactive platform picker)
-    --platforms <list> desktop,web,ios,android (skips the prompt); --all for every platform");
+    --platforms <list> macos,windows,linux,web,ios,android (skips the prompt); --all for every platform
+    --bundle-id <id>   app bundle/package id (skips that prompt too)");
     println!("  run                 Build + run the app on a platform
-    --target <t>       desktop (default), web, ios; --port <n> (web), --device <name> (ios)");
+    --mac/--win/--lnx  shorthand for --target macos|windows|linux; --target web/ios also work
+    --port <n> (web), --device <name> (ios)");
+    println!("  bundle-id [<id>]    Print (no arg) or update the app's bundle id everywhere it's embedded");
     println!("  dev               Start desktop app in dev mode (cargo run)");
     println!("  build             Build the app for a target platform");
     println!("  package           Bundle for distribution (.app / .deb / .exe)");

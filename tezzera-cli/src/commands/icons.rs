@@ -249,14 +249,29 @@ fn write_android_icons(app_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Desktop: `.icns` (macOS dock/Finder) + `.ico` (Windows taskbar/
-/// shortcuts). Always generated — desktop is always in `NewOptions.platforms`.
-fn write_desktop_icons(app_dir: &Path) -> Result<(), String> {
-    let dir = app_dir.join("desktop");
+/// macOS: `.icns` for the dock/Finder — `new.rs`'s `macos_info_plist`
+/// references it via `CFBundleIconFile`, and `package.rs::bundle_macos`
+/// copies it into the built `.app`.
+fn write_macos_icon(app_dir: &Path) -> Result<(), String> {
+    let dir = app_dir.join("macos");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    write_icns(dir.join("icon.icns"))?;
-    write_ico(dir.join("icon.ico"), &[16, 32, 48, 256])?;
-    Ok(())
+    write_icns(dir.join("icon.icns"))
+}
+
+/// Windows: `.ico` for the taskbar/shortcuts — `package.rs::bundle_windows`
+/// copies it alongside the built `.exe`.
+fn write_windows_icon(app_dir: &Path) -> Result<(), String> {
+    let dir = app_dir.join("windows");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    write_ico(dir.join("icon.ico"), &[16, 32, 48, 256])
+}
+
+/// Linux: a plain 256x256 PNG — the standard `hicolor` icon theme size
+/// desktop environments expect (`usr/share/icons/hicolor/256x256/apps/`).
+fn write_linux_icon(app_dir: &Path) -> Result<(), String> {
+    let dir = app_dir.join("linux");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    write_png(dir.join("icon.png"), 256)
 }
 
 /// Web: favicon + PWA/manifest icons, plus a minimal `site.webmanifest`.
@@ -291,7 +306,15 @@ pub fn generate(app_dir: &Path, platforms: &[Platform]) -> Result<(), String> {
     if platforms.contains(&Platform::Android) {
         write_android_icons(app_dir)?;
     }
-    write_desktop_icons(app_dir)?;
+    if platforms.contains(&Platform::MacOs) {
+        write_macos_icon(app_dir)?;
+    }
+    if platforms.contains(&Platform::Windows) {
+        write_windows_icon(app_dir)?;
+    }
+    if platforms.contains(&Platform::Linux) {
+        write_linux_icon(app_dir)?;
+    }
     if platforms.contains(&Platform::Web) {
         write_web_icons(app_dir)?;
     }
@@ -341,17 +364,37 @@ mod tests {
     fn generate_writes_expected_files_for_all_platforms() {
         let dir = std::env::temp_dir().join(format!("tzr_gen_icons_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let platforms = [Platform::Desktop, Platform::Web, Platform::Ios, Platform::Android];
+        let platforms = [
+            Platform::MacOs, Platform::Windows, Platform::Linux,
+            Platform::Web, Platform::Ios, Platform::Android,
+        ];
         generate(&dir, &platforms).expect("generate should succeed");
 
         assert!(dir.join("ios/App/Assets.xcassets/Contents.json").exists());
         assert!(dir.join("ios/App/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png").exists());
         assert!(dir.join("ios/App/Assets.xcassets/AppIcon.appiconset/Contents.json").exists());
         assert!(dir.join("android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png").exists());
-        assert!(dir.join("desktop/icon.icns").exists());
-        assert!(dir.join("desktop/icon.ico").exists());
+        assert!(dir.join("macos/icon.icns").exists());
+        assert!(dir.join("windows/icon.ico").exists());
+        assert!(dir.join("linux/icon.png").exists());
         assert!(dir.join("web/favicon.ico").exists());
         assert!(dir.join("web/site.webmanifest").exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn generate_only_writes_folders_for_selected_platforms() {
+        let dir = std::env::temp_dir().join(format!("tzr_gen_icons_partial_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        generate(&dir, &[Platform::MacOs]).expect("generate should succeed");
+
+        assert!(dir.join("macos/icon.icns").exists());
+        assert!(!dir.join("windows").exists());
+        assert!(!dir.join("linux").exists());
+        assert!(!dir.join("ios").exists());
+        assert!(!dir.join("android").exists());
+        assert!(!dir.join("web").exists());
 
         fs::remove_dir_all(&dir).ok();
     }

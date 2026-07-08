@@ -1,5 +1,7 @@
 /// `tzr analyze` — workspace health analytics.
 pub mod analyze;
+/// `tzr bundle-id [<id>]` — read or update the app's bundle identifier.
+pub mod bundle_id;
 /// `tzr build` — release build for a target platform.
 pub mod build;
 /// `tzr dev` — development server with terminal trace output.

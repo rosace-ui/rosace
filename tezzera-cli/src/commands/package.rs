@@ -10,13 +10,23 @@ pub struct PackageOptions {
     pub app_version: Option<String>,
     /// Output directory (default: dist/)
     pub out_dir: String,
+    /// macOS code-signing identity (e.g. `"Developer ID Application: Jane
+    /// Doe (TEAMID)"`). Defaults to ad-hoc (`-`) when not given — enough to
+    /// run locally, not enough to distribute past Gatekeeper.
+    pub identity: Option<String>,
 }
 
 impl PackageOptions {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            print_help();
+            std::process::exit(0);
+        }
+
         let mut app_name = None;
         let mut app_version = None;
         let mut out_dir = "dist".to_string();
+        let mut identity = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -33,6 +43,10 @@ impl PackageOptions {
                     out_dir = args[i + 1].clone();
                     i += 2;
                 }
+                "--identity" if i + 1 < args.len() => {
+                    identity = Some(args[i + 1].clone());
+                    i += 2;
+                }
                 other if other.starts_with("--name=") => {
                     app_name = Some(other.trim_start_matches("--name=").to_string());
                     i += 1;
@@ -45,19 +59,42 @@ impl PackageOptions {
                     out_dir = other.trim_start_matches("--out=").to_string();
                     i += 1;
                 }
+                other if other.starts_with("--identity=") => {
+                    identity = Some(other.trim_start_matches("--identity=").to_string());
+                    i += 1;
+                }
                 other => return Err(format!("unknown flag: {}", other)),
             }
         }
 
-        Ok(Self { app_name, app_version, out_dir })
+        Ok(Self { app_name, app_version, out_dir, identity })
     }
 }
 
-pub fn run(opts: PackageOptions) -> Result<(), String> {
-    // Determine app name + version from Cargo.toml if not specified
-    let (name, version) = resolve_app_meta(&opts)?;
+pub fn print_help() {
+    println!("tzr package — bundle the release build for distribution");
+    println!();
+    println!("USAGE:");
+    println!("  tzr package [OPTIONS]");
+    println!();
+    println!("OPTIONS:");
+    println!("  --name <name>       App name (default: from Cargo.toml)");
+    println!("  --version <ver>     App version (default: from Cargo.toml)");
+    println!("  --out <dir>         Output directory (default: dist/)");
+    println!("  --identity <name>   macOS codesign identity, e.g. \"Developer ID Application: ...\"");
+    println!("                      (default: ad-hoc — runs locally, not notarized/distributable)");
+    println!("  -h, --help          Print this message");
+    println!();
+    println!("Consumes macos/Info.plist + macos/icon.icns + macos/entitlements.plist,");
+    println!("windows/icon.ico + windows/app.manifest, linux/icon.png + linux/app.desktop —");
+    println!("whichever `tzr new` generated — rather than rebuilding them from scratch.");
+}
 
-    println!("Packaging '{}' v{} for {}...", name, version, current_platform());
+pub fn run(opts: PackageOptions) -> Result<(), String> {
+    // Determine app name + version + bundle id from tzr.toml/Cargo.toml if not specified
+    let (name, version, bundle_id) = resolve_app_meta(&opts)?;
+
+    println!("Packaging '{}' v{} ({}) for {}...", name, version, bundle_id, current_platform());
     println!();
 
     // Step 1: release build
@@ -75,7 +112,7 @@ pub fn run(opts: PackageOptions) -> Result<(), String> {
         .map_err(|e| format!("cannot create {}: {}", opts.out_dir, e))?;
 
     #[cfg(target_os = "macos")]
-    bundle_macos(&name, &version, &opts.out_dir)?;
+    bundle_macos(&name, &version, &bundle_id, &opts.out_dir, opts.identity.as_deref())?;
 
     #[cfg(target_os = "linux")]
     bundle_linux(&name, &version, &opts.out_dir)?;
@@ -91,7 +128,7 @@ pub fn run(opts: PackageOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_app_meta(opts: &PackageOptions) -> Result<(String, String), String> {
+fn resolve_app_meta(opts: &PackageOptions) -> Result<(String, String, String), String> {
     let name = if let Some(n) = &opts.app_name {
         n.clone()
     } else {
@@ -104,7 +141,13 @@ fn resolve_app_meta(opts: &PackageOptions) -> Result<(String, String), String> {
         read_cargo_field("version")
             .unwrap_or_else(|| "0.1.0".to_string())
     };
-    Ok((name, version))
+    // Read from tzr.toml (the single source of truth `tzr new`/`tzr
+    // bundle-id` maintain) rather than inventing a separate id here — this
+    // used to independently derive `com.tezzera.<name>`, which silently
+    // diverged from whatever `tzr new` had actually written everywhere else.
+    let bundle_id = read_tzr_toml_field("bundle_id")
+        .unwrap_or_else(|| format!("dev.tezzera.{}", name.replace(['-', ' '], "_")));
+    Ok((name, version, bundle_id))
 }
 
 fn read_cargo_field(field: &str) -> Option<String> {
@@ -122,6 +165,18 @@ fn read_cargo_field(field: &str) -> Option<String> {
     None
 }
 
+fn read_tzr_toml_field(field: &str) -> Option<String> {
+    let content = fs::read_to_string("tzr.toml").ok()?;
+    for line in content.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == field {
+                return Some(v.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+    None
+}
+
 fn current_platform() -> &'static str {
     #[cfg(target_os = "macos")]   { "macOS" }
     #[cfg(target_os = "linux")]   { "Linux" }
@@ -133,7 +188,13 @@ fn current_platform() -> &'static str {
 // ── macOS .app bundle ──────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-fn bundle_macos(name: &str, version: &str, out_dir: &str) -> Result<(), String> {
+fn bundle_macos(
+    name: &str,
+    _version: &str,
+    bundle_id: &str,
+    out_dir: &str,
+    identity: Option<&str>,
+) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
     let app_dir = format!("{}/{}.app", out_dir, name);
@@ -166,42 +227,56 @@ fn bundle_macos(name: &str, version: &str, out_dir: &str) -> Result<(), String> 
     fs::set_permissions(&dst_bin, perms)
         .map_err(|e| format!("chmod: {}", e))?;
 
-    // Write Info.plist
-    let bundle_id = format!("com.tezzera.{}", bin_name);
-    let plist = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>{name}</string>
-    <key>CFBundleDisplayName</key>
-    <string>{name}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{bundle_id}</string>
-    <key>CFBundleVersion</key>
-    <string>{version}</string>
-    <key>CFBundleShortVersionString</key>
-    <string>{version}</string>
-    <key>CFBundleExecutable</key>
-    <string>{name}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
-</dict>
-</plist>
-"#);
-    fs::write(format!("{}/Info.plist", contents), plist)
-        .map_err(|e| format!("cannot write Info.plist: {}", e))?;
+    // Copy Info.plist — generated ONCE by `tzr new` (see new.rs's
+    // `macos_info_plist`) and left alone since; consuming it here (instead
+    // of rebuilding it from scratch every package, like this function used
+    // to) means a user's manual edits actually persist.
+    let plist_src = Path::new("macos/Info.plist");
+    if !plist_src.exists() {
+        return Err(
+            "macos/Info.plist not found — scaffold with `tzr new --platforms macos`, \
+             or a project created before this file existed needs one written by hand"
+                .to_string(),
+        );
+    }
+    fs::copy(plist_src, format!("{}/Info.plist", contents))
+        .map_err(|e| format!("cannot copy macos/Info.plist: {}", e))?;
 
-    // Minimal icon placeholder (actual icon would be an .icns file in Resources/)
-    fs::write(format!("{}/icon.txt", resources_dir), "Replace with AppIcon.icns\n")
-        .map_err(|e| format!("cannot write icon placeholder: {}", e))?;
+    // Copy the icon — Info.plist's CFBundleIconFile is "icon" (no
+    // extension), so macOS looks for exactly "icon.icns" in Resources/.
+    let icon_src = Path::new("macos/icon.icns");
+    if icon_src.exists() {
+        fs::copy(icon_src, format!("{}/icon.icns", resources_dir))
+            .map_err(|e| format!("cannot copy macos/icon.icns: {}", e))?;
+    } else {
+        println!("  Note: macos/icon.icns not found — bundle will use the default OS icon");
+    }
+
+    // Code-sign — even a local .app needs SOME signature to run on Apple
+    // Silicon. Ad-hoc (`-`) by default; pass `--identity` for a real
+    // Developer ID certificate + `macos/entitlements.plist` if present.
+    let sign_identity = identity.unwrap_or("-");
+    let mut codesign_args = vec!["--force", "--sign", sign_identity];
+    let entitlements_path = "macos/entitlements.plist";
+    if Path::new(entitlements_path).exists() {
+        codesign_args.push("--entitlements");
+        codesign_args.push(entitlements_path);
+    }
+    codesign_args.push(&app_dir);
+    let status = Command::new("codesign")
+        .args(&codesign_args)
+        .status()
+        .map_err(|e| format!("failed to invoke codesign: {}", e))?;
+    if !status.success() {
+        return Err("codesign failed".to_string());
+    }
 
     println!("  Created {}/{}.app", out_dir, name);
     println!("  Bundle ID: {}", bundle_id);
+    println!(
+        "  Signed: {}",
+        if identity.is_some() { sign_identity } else { "ad-hoc (local use only — pass --identity to distribute)" }
+    );
     Ok(())
 }
 
@@ -218,9 +293,9 @@ fn bundle_linux(name: &str, version: &str, out_dir: &str) -> Result<(), String> 
     let dst_bin = format!("{}/{}", out_dir, bin_name);
     fs::copy(&src_bin, &dst_bin)
         .map_err(|e| format!("cannot copy binary: {}", e))?;
-    let mut perms = fs::metadata(&dst_bin)?.permissions();
+    let mut perms = fs::metadata(&dst_bin).map_err(|e| format!("metadata: {}", e))?.permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&dst_bin, perms)?;
+    fs::set_permissions(&dst_bin, perms).map_err(|e| format!("chmod: {}", e))?;
     println!("  Copied binary → {}", dst_bin);
 
     // 2. Build .deb structure
@@ -237,9 +312,9 @@ fn bundle_linux(name: &str, version: &str, out_dir: &str) -> Result<(), String> 
     let deb_dst = format!("{}/{}", deb_bin_dir, bin_name);
     fs::copy(&src_bin, &deb_dst)
         .map_err(|e| format!("cannot copy binary to deb tree: {}", e))?;
-    let mut p = fs::metadata(&deb_dst)?.permissions();
+    let mut p = fs::metadata(&deb_dst).map_err(|e| format!("metadata: {}", e))?.permissions();
     p.set_mode(0o755);
-    fs::set_permissions(&deb_dst, p)?;
+    fs::set_permissions(&deb_dst, p).map_err(|e| format!("chmod: {}", e))?;
 
     // Write DEBIAN/control
     let control = format!(
@@ -248,6 +323,33 @@ fn bundle_linux(name: &str, version: &str, out_dir: &str) -> Result<(), String> 
     );
     fs::write(format!("{}/control", deb_control_dir), control)
         .map_err(|e| format!("cannot write control: {}", e))?;
+
+    // Icon + freedesktop .desktop entry — generated ONCE by `tzr new` (see
+    // new.rs's `linux_desktop_entry`); `{exec}`/`{icon}` placeholders get
+    // filled in here since they depend on the install path, which `tzr
+    // new` can't know in advance.
+    let icon_src = Path::new("linux/icon.png");
+    if icon_src.exists() {
+        let icon_dir = format!("{}/usr/share/icons/hicolor/256x256/apps", deb_root);
+        fs::create_dir_all(&icon_dir).map_err(|e| format!("cannot create icon dir: {}", e))?;
+        fs::copy(icon_src, format!("{}/{}.png", icon_dir, bin_name))
+            .map_err(|e| format!("cannot copy linux/icon.png: {}", e))?;
+        // Also drop a loose copy next to the standalone binary for the
+        // non-.deb case (someone just runs the raw executable).
+        fs::copy(icon_src, format!("{}/{}.png", out_dir, bin_name)).ok();
+    }
+    let desktop_src = Path::new("linux/app.desktop");
+    if desktop_src.exists() {
+        let template = fs::read_to_string(desktop_src)
+            .map_err(|e| format!("cannot read linux/app.desktop: {}", e))?;
+        let filled = template
+            .replace("{exec}", &format!("/usr/local/bin/{}", bin_name))
+            .replace("{icon}", &bin_name);
+        let apps_dir = format!("{}/usr/share/applications", deb_root);
+        fs::create_dir_all(&apps_dir).map_err(|e| format!("cannot create applications dir: {}", e))?;
+        fs::write(format!("{}/{}.desktop", apps_dir, bin_name), filled)
+            .map_err(|e| format!("cannot write .desktop entry: {}", e))?;
+    }
 
     // Try dpkg-deb if available
     let deb_output = format!("{}/{}_{}_amd64.deb", out_dir, bin_name, version);
@@ -281,6 +383,28 @@ fn bundle_windows(name: &str, version: &str, out_dir: &str) -> Result<(), String
     fs::copy(&src_bin, &dst_bin)
         .map_err(|e| format!("cannot copy exe: {}", e))?;
     println!("  Copied → {}", dst_bin);
+
+    // Icon, alongside the .exe — real icon-in-exe embedding needs `rc.exe`
+    // resource compilation, deliberately not attempted here (see the
+    // Windows note in .steering/CRATE_CONTRACTS.md's Known Issues: no
+    // Windows toolchain existed on the machines this was developed on to
+    // verify it). This is a plain loose file instead.
+    let icon_src = Path::new("windows/icon.ico");
+    if icon_src.exists() {
+        fs::copy(icon_src, format!("{}\\{}-{}.ico", out_dir, bin_name, version))
+            .map_err(|e| format!("cannot copy windows/icon.ico: {}", e))?;
+    }
+
+    // Side-by-side manifest (DPI awareness + execution level) — Windows
+    // loads `<exe>.exe.manifest` automatically if present next to the
+    // binary, no resource compiler needed. Also generated ONCE by `tzr
+    // new` (see new.rs's `windows_app_manifest`).
+    let manifest_src = Path::new("windows/app.manifest");
+    if manifest_src.exists() {
+        fs::copy(manifest_src, format!("{}\\{}-{}.exe.manifest", out_dir, bin_name, version))
+            .map_err(|e| format!("cannot copy windows/app.manifest: {}", e))?;
+    }
+
     println!("  Note: sign with signtool.exe before distribution");
     Ok(())
 }
@@ -295,6 +419,21 @@ mod tests {
         assert!(opts.app_name.is_none());
         assert!(opts.app_version.is_none());
         assert_eq!(opts.out_dir, "dist");
+        assert!(opts.identity.is_none());
+    }
+
+    #[test]
+    fn package_opts_identity_flag() {
+        let args = vec!["--identity".to_string(), "Developer ID Application: Jane Doe (TEAMID)".to_string()];
+        let opts = PackageOptions::from_args(&args).unwrap();
+        assert_eq!(opts.identity.unwrap(), "Developer ID Application: Jane Doe (TEAMID)");
+    }
+
+    #[test]
+    fn package_opts_identity_eq_syntax() {
+        let args = vec!["--identity=Developer ID Application: X".to_string()];
+        let opts = PackageOptions::from_args(&args).unwrap();
+        assert_eq!(opts.identity.unwrap(), "Developer ID Application: X");
     }
 
     #[test]
@@ -338,23 +477,62 @@ mod tests {
             app_name: Some("Explicit".to_string()),
             app_version: Some("3.0.0".to_string()),
             out_dir: "dist".to_string(),
+            identity: None,
         };
-        let (name, ver) = resolve_app_meta(&opts).unwrap();
+        let (name, ver, _bundle_id) = resolve_app_meta(&opts).unwrap();
         assert_eq!(name, "Explicit");
         assert_eq!(ver, "3.0.0");
     }
 
     #[test]
-    fn current_platform_is_non_empty() {
-        assert!(!current_platform().is_empty());
+    fn resolve_meta_falls_back_to_dev_tezzera_prefix_without_tzr_toml() {
+        // No tzr.toml in the test's cwd (the workspace root, which has no
+        // tzr.toml of its own) — should derive dev.tezzera.<name>, not the
+        // old hardcoded com.tezzera.<name> this function used to invent
+        // independently of tzr.toml.
+        let _guard = crate::test_support::CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("tzr_pkg_meta_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let opts = PackageOptions {
+            app_name: Some("my-app".to_string()),
+            app_version: Some("1.0.0".to_string()),
+            out_dir: "dist".to_string(),
+            identity: None,
+        };
+        let (_, _, bundle_id) = resolve_app_meta(&opts).unwrap();
+        assert_eq!(bundle_id, "dev.tezzera.my_app");
+
+        std::env::set_current_dir(cwd).unwrap();
+        fs::remove_dir_all(&dir).ok();
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn bundle_macos_plist_content() {
-        // We test the plist generation logic inline (not the full fn which needs cargo build)
-        let bundle_id = format!("com.tezzera.{}", "my_app");
-        assert!(bundle_id.contains("tezzera"));
-        assert!(bundle_id.contains("my_app"));
+    fn resolve_meta_reads_bundle_id_from_tzr_toml_when_present() {
+        let _guard = crate::test_support::CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("tzr_pkg_meta_toml_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        fs::write("tzr.toml", "name = \"myapp\"\nbundle_id = \"com.example.myapp\"\nplatforms = [\"macos\"]\n").unwrap();
+        let opts = PackageOptions {
+            app_name: Some("myapp".to_string()),
+            app_version: Some("1.0.0".to_string()),
+            out_dir: "dist".to_string(),
+            identity: None,
+        };
+        let (_, _, bundle_id) = resolve_app_meta(&opts).unwrap();
+        assert_eq!(bundle_id, "com.example.myapp");
+
+        std::env::set_current_dir(cwd).unwrap();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn current_platform_is_non_empty() {
+        assert!(!current_platform().is_empty());
     }
 }

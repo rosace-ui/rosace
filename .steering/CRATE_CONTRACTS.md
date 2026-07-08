@@ -94,6 +94,29 @@ silently baked into the contracts below, per the project's violation policy
    leftover nobody finished wiring up. **Explicitly DEFERRED (user,
    2026-07-08)** — no action now; revisit the question above before
    deciding anything.
+5. **`tezzera-cli`'s Windows packaging/build support is generated but
+   unverified.** `tzr new`'s `windows/` output (`icon.ico`, `app.manifest`),
+   `tzr run --win`, and `package.rs::bundle_windows` all exist and
+   type-check (confirmed via `cargo check --target x86_64-pc-windows-gnu` —
+   no Windows rustup target/toolchain was installed on this machine before
+   this work, so it had never been compile-checked at all before), but
+   nothing here has been through a real Windows build+run, because no
+   Windows execution environment or cross-linker (mingw-w64) exists on the
+   machines this was developed on. `windows/app.manifest` deliberately uses
+   a side-by-side manifest (`<exe>.exe.manifest`, loaded automatically by
+   Windows with no resource compiler) rather than `rc.exe` icon-in-exe
+   embedding, specifically because the side-by-side form is inspectable
+   without a Windows toolchain and `rc.exe` embedding isn't. `tzr run --win`
+   preflights the rustup target and prints install instructions
+   (`rustup target add x86_64-pc-windows-gnu` + `brew install mingw-w64`)
+   rather than pretending to succeed; it only ever cross-*builds*, never
+   attempts to run the result. Flag this whole area for a real end-to-end
+   verification pass once a Windows environment is available. Linux
+   packaging (`bundle_linux`) is in a similar but lesser position: also
+   type-checked via a cross target (`x86_64-unknown-linux-gnu`) rather than
+   run on a real Linux box, but Linux's toolchain requirements are much
+   lighter (no separate resource compiler / manifest system to get right),
+   so the residual risk is smaller.
 
 None of these are fixed by this doc rewrite — this is the audit that found
 them. Fixing them (removing `tezzera-anim`, reordering `gesture`, moving

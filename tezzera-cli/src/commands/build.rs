@@ -22,6 +22,11 @@ impl BuildOptions {
     /// Accepts both `--target desktop` (space-separated) and
     /// `--target=desktop` (equals-separated) forms.
     pub fn from_args(args: &[String]) -> Result<Self, String> {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            print_help();
+            std::process::exit(0);
+        }
+
         let target_str = args
             .iter()
             .find(|a| a.starts_with("--target"))
@@ -57,6 +62,17 @@ impl BuildOptions {
 
         Ok(Self { target })
     }
+}
+
+pub fn print_help() {
+    println!("tzr build — release build for a target platform");
+    println!();
+    println!("USAGE:");
+    println!("  tzr build --target <target>");
+    println!();
+    println!("OPTIONS:");
+    println!("  --target <target>   desktop | web");
+    println!("  -h, --help          Print this message");
 }
 
 /// Run the build for the given options.

@@ -10,6 +10,10 @@ pub struct AnalyzeOptions {
 
 impl AnalyzeOptions {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
+        if args.iter().any(|a| a == "--help" || a == "-h") {
+            print_help();
+            std::process::exit(0);
+        }
         let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
         let workspace_dir = args.windows(2)
             .find(|w| w[0] == "--dir")
@@ -17,6 +21,18 @@ impl AnalyzeOptions {
             .unwrap_or_else(|| ".".to_string());
         Ok(Self { verbose, workspace_dir })
     }
+}
+
+pub fn print_help() {
+    println!("tzr analyze — workspace health: crate count, member list");
+    println!();
+    println!("USAGE:");
+    println!("  tzr analyze [OPTIONS]");
+    println!();
+    println!("OPTIONS:");
+    println!("  --verbose, -v   Also print the member crate list");
+    println!("  --dir <path>    Workspace root (default: current directory)");
+    println!("  -h, --help      Print this message");
 }
 
 /// Workspace analysis report.
