@@ -50,11 +50,35 @@
 > its own picture, attaches a transform entry, wheel→channel, scrollbar
 > from the channel offset. Fixed/controlled/::new keep the base path
 > (zero regression). Verified in the GPU Scroll Layer demo route.
+> Step 6 D090 TRANSPARENT DEFAULT + DRAG FIX LANDED (commit 144d062):
+> (a) fixed the positional-drag (hits_at) coordinate-mapping bug through a
+> transform — hit_test_node found hits inside a GPU-composited scroll view's
+> content correctly (via child_coords), but returned the callback unmapped;
+> every subsequent drag-continuation call (tezzera/src/lib.rs's active_drag,
+> which invokes the stored callback directly with raw screen coords on every
+> MouseMove without re-hit-testing) bypassed the transform. Fixed by wrapping
+> the callback, at the transform-hosting node, to re-apply the remap on every
+> future invocation, not just the first — composes for nested transforms.
+> Unit-tested (positional_hit_through_transform_remaps_every_invocation).
+> (b) `ScrollView::new` ("live" in this doc's earlier language) now
+> auto-composites as a GPU layer via `should_auto_gpu`: enabled once content
+> actually overflows the viewport on the scroll axis AND fits within
+> `MAX_TL_DIM` (4096px — now a real constant, not just a doc comment).
+> Content that doesn't overflow, or exceeds MAX_TL_DIM, stays on the base
+> (CPU) path automatically — safe by construction since windowing (below)
+> isn't built yet. `.gpu_layer()`/`::gpu` remain as an explicit override;
+> `::fixed`/`::controlled` unaffected. `cargo test --workspace` passes;
+> desktop-verified the existing explicit GPU Scroll Layer demo route still
+> renders correctly post-refactor (regression check).
+> STILL OPEN — needs a manual interactive pass (no OS accessibility
+> permission available to automate clicking in this environment): app_demo's
+> Gallery/Typography/Overlays/Showcase routes were plain ScrollView::new
+> before this change and may now auto-compose as GPU layers if their content
+> overflows. Gallery specifically contains a Slider — open app_demo, go to
+> Gallery, and confirm the slider tracks the cursor correctly while scrolled
+> (the exact scenario the drag-fix above targets).
 > REMAINS in Step 6 (D090 polish, not blocking Phase-20 mechanics):
-> (a) make the GPU path the TRANSPARENT default for ScrollView::live —
-> needs per-route interactive validation + a size heuristic + fixing
-> positional-drag (hits_at) coord mapping through a transform (sliders in
-> scroll); (b) content > MAX_TL_DIM (4096) re-render windowing.
+> content > MAX_TL_DIM (4096) re-render windowing — the one item left.
 >
 > DESIGN NOTE for the remaining block (found while scoping): per-node
 > picture caching cannot key on constraints alone — widgets are rebuilt
