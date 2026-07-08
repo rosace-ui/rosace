@@ -169,6 +169,25 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             ));
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
 
+        // On iOS, the native UIWindow's frame/bounds — what actually
+        // determines how large our rendered buffer appears on screen — is set
+        // from winit's OWN internal screen-geometry computation at window
+        // creation, which is unreliable on at least this winit/iOS-simulator
+        // combination (verified: `outer_size()`/`inner_size()` reported
+        // 1260x2280 physical vs the true, independently-confirmed 1179x2556 —
+        // see `physical_canvas_size`). Sizing our own canvas/GPU surface
+        // correctly (below) does NOT fix this: the OS still stretches that
+        // buffer to fill whatever (wrong) frame the UIWindow already has,
+        // which is what produced both the blurry/stretched look and the
+        // right-edge clipping. `set_fullscreen(Borderless(None))` makes winit
+        // call `UIWindow.setFrame(UIScreen.bounds)` internally (its exact
+        // fullscreen-transition path — see winit's ios/window.rs
+        // `set_fullscreen`) — the ONLY public API that corrects the frame to
+        // the real screen bounds, so we drive it explicitly rather than trust
+        // whatever frame the window started with.
+        #[cfg(target_os = "ios")]
+        window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+
         #[cfg(target_os = "ios")]
         sync_ios_safe_area(&window);
 
@@ -587,15 +606,25 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
 }
 
 /// The physical size our canvas/presenter should use. On every platform but
-/// iOS this is just `window.inner_size()`. On iOS, `inner_size()` reports the
-/// safe-area-reduced rect — smaller than the true screen — which would leave
-/// the canvas short at the bottom by exactly the inset amount. We instead
-/// always render the FULL screen and apply the safe area purely as layout
-/// padding (`sync_ios_safe_area` + `Scaffold`), so there is one source of
-/// truth for the inset, not a canvas-size effect plus a padding effect.
+/// iOS this is just `window.inner_size()`. On iOS we need the TRUE full-screen
+/// size (the safe area is applied as Scaffold padding, not by shrinking the
+/// canvas — see `sync_ios_safe_area`) — but `window.outer_size()` is NOT a
+/// reliable source of that on this winit/iOS-simulator combination: verified
+/// by cross-checking against `current_monitor().size()` (a separate winit
+/// code path) and the actual simulator screenshot resolution. On iPhone 15
+/// Pro sim, `outer_size()` reported 1260x2280 physical while the monitor API
+/// and real screenshots agree on 1179x2556 — `outer_size()`/`inner_size()` are
+/// wrong in ABSOLUTE terms here (a winit bug in `screen_frame()`'s coordinate
+/// conversion, not our math), which showed up as a widget on the right edge
+/// (18pt inset from a canvas 27pt too wide) getting clipped by the real
+/// screen. `current_monitor().size()` is independently correct, so use it as
+/// the canvas size; keep `outer_size() - inner_size()` for the safe-area
+/// INSET (the systematic error cancels in that subtraction — the result,
+/// 59pt top / 34pt bottom, matches Apple's published iPhone 15 Pro status-bar
+/// + home-indicator constants exactly).
 #[cfg(target_os = "ios")]
 fn physical_canvas_size(window: &winit::window::Window) -> winit::dpi::PhysicalSize<u32> {
-    window.outer_size()
+    window.current_monitor().map(|m| m.size()).unwrap_or_else(|| window.outer_size())
 }
 #[cfg(not(target_os = "ios"))]
 fn physical_canvas_size(window: &winit::window::Window) -> winit::dpi::PhysicalSize<u32> {
