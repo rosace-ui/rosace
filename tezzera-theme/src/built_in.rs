@@ -33,6 +33,7 @@ pub fn light_theme() -> ThemeData {
         spacing: Spacing::default(),
         radius: BorderRadius::default(),
         is_dark: false,
+        app_bar: crate::theme::AppBarStyle::default(),
     }
 }
 
@@ -63,6 +64,38 @@ pub fn dark_theme() -> ThemeData {
         spacing: Spacing::default(),
         radius: BorderRadius::default(),
         is_dark: true,
+        app_bar: crate::theme::AppBarStyle::default(),
+    }
+}
+
+/// A Material (Android-flavored) theme (D105 Phase 23 Step 5, early
+/// groundwork): built on [`light_theme`]'s tokens, with an AppBar left-title,
+/// 56dp-tall, elevated look — Android Material app-bar conventions.
+pub fn material() -> ThemeData {
+    ThemeData {
+        app_bar: crate::theme::AppBarStyle {
+            title_align: crate::theme::TitleAlign::Leading,
+            show_traffic_lights: false,
+            height: 56.0,
+            elevation: 4.0,
+        },
+        ..light_theme()
+    }
+}
+
+/// A Cupertino (iOS-flavored) theme (D105 Phase 23 Step 5, early
+/// groundwork): built on [`light_theme`]'s tokens, with an AppBar
+/// centered-title, 44pt-tall, flat (hairline-only) look — iOS navigation-bar
+/// conventions.
+pub fn cupertino() -> ThemeData {
+    ThemeData {
+        app_bar: crate::theme::AppBarStyle {
+            title_align: crate::theme::TitleAlign::Center,
+            show_traffic_lights: false,
+            height: 44.0,
+            elevation: 0.0,
+        },
+        ..light_theme()
     }
 }
 

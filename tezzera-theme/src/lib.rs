@@ -24,6 +24,7 @@ pub mod radius;
 pub mod shadow;
 pub mod spacing;
 pub mod theme;
+pub mod themes;
 pub mod typography;
 
 // Flat re-exports for convenience.
@@ -32,7 +33,8 @@ pub use provider::{set_theme, use_theme, set_animations};
 pub use radius::BorderRadius;
 pub use shadow::{ShadowLayer, Shadows};
 pub use spacing::Spacing;
-pub use theme::{AnimationConfig, ThemeData, TezzeraTheme};
+pub use theme::{AnimationConfig, ThemeData, TezzeraTheme, AppBarStyle, TitleAlign};
+pub use themes::Themes;
 pub use typography::{FontFamily, FontWeight, TextStyle, Typography};
 
 // ---------------------------------------------------------------------------

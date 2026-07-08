@@ -47,6 +47,13 @@ pub struct App {
     width: u32,
     height: u32,
     theme: ThemeData,
+    /// Platform-keyed theme bundle (D105 Phase 23 Step 2). When set, this
+    /// takes priority over `theme` — the active theme is resolved from it
+    /// once at startup, keyed by the running platform.
+    themes: Option<tezzera_theme::Themes>,
+    /// Forces the running platform for theme resolution (preview) instead of
+    /// the real detected one (D105 Phase 23 Step 1).
+    platform_override: Option<tezzera_core::Platform>,
 }
 
 impl App {
@@ -56,6 +63,8 @@ impl App {
             width: 800,
             height: 600,
             theme: built_in::dark_theme(),
+            themes: None,
+            platform_override: None,
         }
     }
 
@@ -64,6 +73,25 @@ impl App {
     pub fn dark(mut self) -> Self { self.theme = built_in::dark_theme(); self }
     pub fn light(mut self) -> Self { self.theme = built_in::light_theme(); self }
     pub fn theme(mut self, t: ThemeData) -> Self { self.theme = t; self }
+
+    /// Supplies a platform-keyed set of themes (D105). When set, this is
+    /// resolved once at startup against the running platform and takes
+    /// priority over `.theme(..)`/`.dark()`/`.light()`. Apps that don't call
+    /// this are unaffected — a single `.theme(..)` keeps working exactly as
+    /// before.
+    pub fn themes(mut self, themes: tezzera_theme::Themes) -> Self {
+        self.themes = Some(themes);
+        self
+    }
+
+    /// Forces the platform used for theme resolution, regardless of the
+    /// real detected one — e.g. `.platform(Platform::Ios)` to preview an iOS
+    /// theme on desktop. Only affects which entry of `.themes(..)` gets
+    /// picked; has no effect without a `Themes` bundle.
+    pub fn platform(mut self, p: tezzera_core::Platform) -> Self {
+        self.platform_override = Some(p);
+        self
+    }
 
     /// Run the app with a root [`Component`]. This is the only call needed in `main`.
     ///
@@ -102,7 +130,16 @@ impl App {
         let font = tezzera_render::FontCache::system_ui()
             .or_else(tezzera_render::FontCache::system_mono)
             .unwrap_or_else(tezzera_render::FontCache::embedded);
-        let theme = self.theme;
+        // Platform resolution (D105 Phase 23 Step 1): forced override, else
+        // the real detected platform. Themes::resolve (Step 2) reads this to
+        // pick the active theme; widgets never see the platform directly.
+        if let Some(p) = self.platform_override {
+            tezzera_core::set_platform(p);
+        }
+        let theme = match &self.themes {
+            Some(themes) => themes.resolve(tezzera_core::use_platform()),
+            None => self.theme,
+        };
         let width = self.width;
         let height = self.height;
 
@@ -938,8 +975,11 @@ pub use tezzera_widgets::{
 pub use tezzera_widgets::{TextAlign, FontWeight};
 
 // Theme
-pub use tezzera_theme::{ThemeData, ColorScheme};
-pub use tezzera_theme::built_in::{dark_theme, light_theme};
+pub use tezzera_theme::{ThemeData, ColorScheme, Themes, AppBarStyle, TitleAlign};
+pub use tezzera_theme::built_in::{dark_theme, light_theme, material, cupertino};
+
+// Platform (D105)
+pub use tezzera_core::Platform;
 
 // Geometry
 pub use tezzera_core::types::{Point, Rect, Size};
@@ -998,8 +1038,9 @@ pub mod prelude {
     pub use tezzera_nav::ScreenNav;
     pub use crate::AppBarNavExt;
     pub use tezzera_render::canvas::Color;
-    pub use tezzera_theme::{ThemeData, ColorScheme};
-    pub use tezzera_theme::built_in::{dark_theme, light_theme};
+    pub use tezzera_theme::{ThemeData, ColorScheme, Themes, AppBarStyle, TitleAlign};
+    pub use tezzera_theme::built_in::{dark_theme, light_theme, material, cupertino};
+    pub use tezzera_core::Platform;
     pub use tezzera_core::types::{Point, Rect, Size};
     pub use tezzera_layout::{Constraints, CrossAxisAlignment, MainAxisAlignment};
     pub use tezzera_state::Atom;
