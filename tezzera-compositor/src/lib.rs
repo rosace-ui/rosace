@@ -493,6 +493,21 @@ impl GpuPresenter {
 
     /// Create a persistent texture + bind group for a fresh layer slot and
     /// upload its initial pixels (D089).
+    ///
+    /// Format is `Rgba8UnormSrgb`, not `Rgba8Unorm` — the bytes `tiny-skia`
+    /// produces are already gamma-encoded sRGB (standard 8-bit display
+    /// bytes), and the swapchain surface is configured to an sRGB format
+    /// too (`.find(|f| f.is_srgb())` above). An `*Srgb` texture format tells
+    /// the GPU to sample-time-decode this texture's bytes to linear before
+    /// the fragment shader sees them; the sRGB surface then re-encodes on
+    /// write — one correct round-trip. Using plain `Unorm` here (the bug,
+    /// fixed 2026-07-08) skipped the decode, so every already-encoded byte
+    /// got sRGB-encoded a SECOND time on write to the surface — verified by
+    /// sampling actual rendered pixels: a `#2B2D30` (43,45,48) theme surface
+    /// color rendered as (96,98,102), a ~2.2x lightening concentrated in
+    /// darks (exactly the sRGB curve's shape) and negligible near white —
+    /// which is why this went unnoticed until a proper dark theme made the
+    /// washed-out/low-contrast result obvious.
     fn build_cached_layer(&self, layer: &CompositorLayer<'_>, surface_w: u32, surface_h: u32) -> CachedLayer {
         let texture = self.device.create_texture_with_data(
             &self.queue,
@@ -506,7 +521,7 @@ impl GpuPresenter {
                 mip_level_count: 1,
                 sample_count:    1,
                 dimension:       wgpu::TextureDimension::D2,
-                format:          wgpu::TextureFormat::Rgba8Unorm,
+                format:          wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage:           wgpu::TextureUsages::TEXTURE_BINDING
                                | wgpu::TextureUsages::COPY_DST,
                 view_formats:    &[],

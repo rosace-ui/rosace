@@ -3,9 +3,13 @@
 //! Replaced the original Material Design 3 palette (2026-07-08) — MD3's
 //! purple-tinted surfaces (`#FFFBFE`/`#1C1B1F`) read as dated next to native
 //! macOS/JetBrains-tool UI conventions. Dark is Darcula-inspired (neutral
-//! charcoal panels, soft off-white text, a clean blue accent — not
-//! MD3's purple-on-navy); light is a genuinely neutral white/near-black
-//! pair instead of MD3's warm-purple-tinted "white".
+//! charcoal panels, soft off-white text, a lavender-violet accent —
+//! matching JetBrains' actual Darcula/New UI accent family, not MD3's
+//! purple-on-navy); light is a genuinely neutral white/near-black pair
+//! instead of MD3's warm-purple-tinted "white", with a deeper violet accent
+//! for contrast. (Accent was blue at first landing, swapped to violet same
+//! day per direct user feedback — "much better [dark contrast], but the
+//! color choices are terrible" re: the blue.)
 
 use crate::color::{Color, ColorScheme};
 use crate::radius::BorderRadius;
@@ -15,16 +19,16 @@ use crate::typography::Typography;
 
 /// Constructs the built-in light theme.
 ///
-/// Primary: `#2F6FE4` (clean modern blue). Neutral near-white surfaces and
-/// near-black text — no purple/warm tint.
+/// Primary: `#7C4DFF` (deep vivid violet). Neutral near-white surfaces and
+/// near-black text — no warm/MD3 tint.
 pub fn light_theme() -> ThemeData {
     ThemeData {
         animation: crate::AnimationConfig::default(),
         colors: ColorScheme {
-            primary:               Color::from_hex(0x2F6FE4),
+            primary:               Color::from_hex(0x7C4DFF),
             on_primary:            Color::from_hex(0xFFFFFF),
-            primary_container:     Color::from_hex(0xDCE7FF),
-            on_primary_container:  Color::from_hex(0x06264F),
+            primary_container:     Color::from_hex(0xE9DDFF),
+            on_primary_container:  Color::from_hex(0x2B0B54),
             secondary:             Color::from_hex(0x5B5F66),
             on_secondary:          Color::from_hex(0xFFFFFF),
             surface:               Color::from_hex(0xFFFFFF),
@@ -49,18 +53,19 @@ pub fn light_theme() -> ThemeData {
 /// Constructs the built-in dark theme — the framework default (`App::new()`
 /// starts dark; see `tezzera/src/lib.rs`).
 ///
-/// Primary: `#589DF6` (bright modern blue). Darcula-inspired neutral
-/// charcoal panels (`#2B2D30`/`#1E1F22`, not MD3's purple-black `#1C1B1F`)
-/// with soft off-white text (`#DFE1E5`, not stark `#FFFFFF`) — easier on
-/// the eyes and closer to how native dark-mode dev tools actually look.
+/// Primary: `#BB86FC` (soft lavender-violet, Darcula/JetBrains-accent
+/// family). Neutral charcoal panels (`#2B2D30`/`#1E1F22`, not MD3's
+/// purple-black `#1C1B1F`) with soft off-white text (`#DFE1E5`, not stark
+/// `#FFFFFF`) — easier on the eyes and closer to how native dark-mode dev
+/// tools actually look.
 pub fn dark_theme() -> ThemeData {
     ThemeData {
         animation: crate::AnimationConfig::default(),
         colors: ColorScheme {
-            primary:               Color::from_hex(0x589DF6),
-            on_primary:            Color::from_hex(0x0B1B2B),
-            primary_container:     Color::from_hex(0x2B4870),
-            on_primary_container:  Color::from_hex(0xC7DEFF),
+            primary:               Color::from_hex(0xBB86FC),
+            on_primary:            Color::from_hex(0x2B0B54),
+            primary_container:     Color::from_hex(0x4A2E7A),
+            on_primary_container:  Color::from_hex(0xEADDFF),
             secondary:             Color::from_hex(0x8C8F93),
             on_secondary:          Color::from_hex(0x1E1F22),
             surface:               Color::from_hex(0x2B2D30),
@@ -145,18 +150,18 @@ mod tests {
     }
 
     #[test]
-    fn light_theme_primary_is_modern_blue() {
+    fn light_theme_primary_is_deep_violet() {
         let theme = light_theme();
-        let expected = Color::from_hex(0x2F6FE4);
+        let expected = Color::from_hex(0x7C4DFF);
         assert!((theme.colors.primary.r - expected.r).abs() < 1e-5);
         assert!((theme.colors.primary.g - expected.g).abs() < 1e-5);
         assert!((theme.colors.primary.b - expected.b).abs() < 1e-5);
     }
 
     #[test]
-    fn dark_theme_primary_is_bright_blue() {
+    fn dark_theme_primary_is_lavender_violet() {
         let theme = dark_theme();
-        let expected = Color::from_hex(0x589DF6);
+        let expected = Color::from_hex(0xBB86FC);
         assert!((theme.colors.primary.r - expected.r).abs() < 1e-5);
         assert!((theme.colors.primary.g - expected.g).abs() < 1e-5);
         assert!((theme.colors.primary.b - expected.b).abs() < 1e-5);
