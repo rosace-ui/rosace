@@ -14,6 +14,13 @@ pub enum ScrollAxis {
     Both,
 }
 
+/// Maximum content extent (logical px) on the scroll axis that the GPU-layer
+/// path (D090) can composite as a single placed texture. Content beyond this
+/// needs re-render windowing (Phase 20 Step 6 remainder, not yet built) — the
+/// automatic-default heuristic (`should_auto_gpu`) falls back to the base
+/// (CPU-painted) path above this size so it never silently mis-renders.
+pub const MAX_TL_DIM: f32 = 4096.0;
+
 /// A scrollable viewport. The child can exceed the available size; content
 /// is painted at the scroll offset and clipped to the viewport bounds.
 ///
@@ -21,6 +28,16 @@ pub enum ScrollAxis {
 /// node and survives rebuilds — no wiring needed. Pass a
 /// [`ScrollController`] (`::controlled` / `.controller()`) only when the app
 /// needs programmatic control.
+///
+/// The GPU-composited layer path (D090) is now the TRANSPARENT DEFAULT for
+/// plain [`ScrollView::new`] scroll views: once content is measured, a scroll
+/// view whose content actually overflows the viewport on the scroll axis and
+/// stays within [`MAX_TL_DIM`] automatically composites as a placed GPU layer
+/// (scrolling becomes a compositor UV shift, zero component repaint) — no
+/// `.gpu_layer()` call needed. Content that doesn't overflow, or that exceeds
+/// `MAX_TL_DIM`, uses the base (CPU-painted) path automatically. `::fixed`
+/// and `::controlled` always use the base path — programmatic control and
+/// snapshot modes need exact, un-composited semantics.
 pub struct ScrollView {
     child: BoxedWidget,
     /// Fixed offset for [`ScrollView::fixed`] snapshot mode.
@@ -30,15 +47,20 @@ pub struct ScrollView {
     pub axis: ScrollAxis,
     pub show_scrollbar: bool,
     pub scrollbar_color: Color,
-    /// Composite the content as a placed GPU layer (D090) instead of painting
-    /// it into the base canvas. Scrolling then shifts the compositor UV offset
-    /// with zero component repaint. Content is capped at `MAX_TL_DIM` (4096px).
+    /// Force the GPU-layer path on even when the automatic heuristic
+    /// (`should_auto_gpu`) would not have chosen it (e.g. content smaller
+    /// than the viewport that the app still wants pre-composited). The
+    /// automatic default (see struct docs) already enables it when it helps;
+    /// this flag is now an override for the exceptional case, not the only
+    /// way to get the GPU path.
     gpu_layer: bool,
 }
 
 impl ScrollView {
     /// A vertical scroll view. Just scrolls — position is implicit per-node
-    /// state (D101).
+    /// state (D101). Automatically GPU-composited once content overflows the
+    /// viewport and fits within [`MAX_TL_DIM`] (see struct docs) — no
+    /// `.gpu_layer()` call needed for the common case.
     pub fn new(child: impl Widget + 'static) -> Self {
         Self {
             child: Box::new(child),
@@ -51,15 +73,15 @@ impl ScrollView {
         }
     }
 
-    /// A scroll view whose content is composited as a placed GPU layer (D090):
-    /// the content rasterizes once into its own texture and a scroll is a
-    /// compositor UV shift with zero CPU repaint. Best for content that fits
-    /// the 4096px texture cap; taller content should use [`ScrollView::new`].
+    /// Force the GPU-layer path on regardless of the automatic size
+    /// heuristic (see struct docs — [`ScrollView::new`] already auto-detects
+    /// the common case). Content is capped at [`MAX_TL_DIM`]; taller content
+    /// silently falls back to the base path (windowing is not yet built).
     pub fn gpu(child: impl Widget + 'static) -> Self {
         Self { gpu_layer: true, ..Self::new(child) }
     }
 
-    /// Opt this scroll view into GPU-layer compositing (see [`ScrollView::gpu`]).
+    /// Force GPU-layer compositing on (see [`ScrollView::gpu`]).
     pub fn gpu_layer(mut self) -> Self { self.gpu_layer = true; self }
 
     /// A horizontal scroll view — carousels, chip rows, code blocks.
@@ -93,20 +115,12 @@ impl ScrollView {
     pub fn no_scrollbar(mut self) -> Self { self.show_scrollbar = false; self }
     pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar_color = c; self }
 
-    /// GPU-layer paint path (D090). Records the content once into its own
-    /// sub-tree/picture at content-local `(0,0)`, attaches it as a
-    /// TransformLayer entry (the platform composites it as a placed layer), and
-    /// registers wheel scrolling straight into the non-reactive offset channel
-    /// so a scroll tick is a compositor UV shift with no component repaint.
-    fn paint_gpu(&self, ctx: &mut PaintCtx) {
-        use super::TransformLayerEntry;
-        let vp = ctx.rect;
-        let node_id = ctx.node as u64;
-        let off = tezzera_state::scroll_offset(node_id);
-
-        // Lay out the content with the unbounded scroll axis (API_DESIGN §6).
+    /// Content constraints (unbounded-axis doctrine, API_DESIGN §6): on the
+    /// scroll axis min = viewport, max = Unbounded. Shared by both the GPU
+    /// and base paint paths so content is measured identically either way.
+    fn child_constraints(&self, vp: Rect) -> Constraints {
         use tezzera_layout::AxisBound;
-        let child_constraints = match self.axis {
+        match self.axis {
             ScrollAxis::Vertical => Constraints {
                 min_width: vp.size.width,
                 max_width: AxisBound::Bounded(vp.size.width),
@@ -125,8 +139,39 @@ impl ScrollView {
                 min_height: vp.size.height,
                 max_height: AxisBound::Unbounded,
             },
+        }
+    }
+
+    /// The automatic-default heuristic (D090 transparent default): GPU-layer
+    /// compositing helps only when there is actually something to scroll
+    /// (content overflows the viewport on the scroll axis) and only when the
+    /// content fits in a single placed texture ([`MAX_TL_DIM`] — taller
+    /// content needs re-render windowing, not yet built, so it must stay on
+    /// the base path rather than silently mis-render).
+    fn should_auto_gpu(&self, vp: Size, child_size: Size) -> bool {
+        let (overflow, extent) = match self.axis {
+            ScrollAxis::Vertical => (child_size.height > vp.height, child_size.height),
+            ScrollAxis::Horizontal => (child_size.width > vp.width, child_size.width),
+            ScrollAxis::Both => (
+                child_size.height > vp.height || child_size.width > vp.width,
+                child_size.height.max(child_size.width),
+            ),
         };
-        let child_size = self.child.layout(&ctx.layout_ctx(child_constraints));
+        overflow && extent <= MAX_TL_DIM
+    }
+
+    /// GPU-layer paint path (D090). Records the content once into its own
+    /// sub-tree/picture at content-local `(0,0)`, attaches it as a
+    /// TransformLayer entry (the platform composites it as a placed layer), and
+    /// registers wheel scrolling straight into the non-reactive offset channel
+    /// so a scroll tick is a compositor UV shift with no component repaint.
+    /// `child_size` is measured once by the caller ([`Widget::paint`]) and
+    /// passed in — this never re-measures.
+    fn paint_gpu(&self, ctx: &mut PaintCtx, child_size: Size) {
+        use super::TransformLayerEntry;
+        let vp = ctx.rect;
+        let node_id = ctx.node as u64;
+        let off = tezzera_state::scroll_offset(node_id);
 
         // Record the content at (0,0) into its own node/picture (D090).
         let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
@@ -195,22 +240,11 @@ impl ScrollView {
             }, self.scrollbar_color);
         }
     }
-}
 
-impl Widget for ScrollView {
-    fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let constraints = ctx.constraints;
-        Size { width: avail_w(constraints), height: avail_h(constraints) }
-    }
-
-    fn paint(&self, ctx: &mut PaintCtx) {
-        // GPU-layer path (D090) — live mode only (fixed/controlled keep the
-        // base-canvas path so programmatic control and snapshots are exact).
-        if self.gpu_layer && self.fixed_offset.is_none() && self.controller.is_none() {
-            self.paint_gpu(ctx);
-            return;
-        }
-
+    /// Base (CPU-painted) path: content painted directly into the main
+    /// canvas at the scroll offset, clipped to the viewport. `child_size` is
+    /// measured once by the caller ([`Widget::paint`]) and passed in.
+    fn paint_base(&self, ctx: &mut PaintCtx, child_size: Size) {
         let vp = ctx.rect;
 
         // Resolve the controller: explicit override, or the node's implicit
@@ -232,31 +266,6 @@ impl Widget for ScrollView {
             },
             (None, None) => (0.0, 0.0),
         };
-
-        // Content constraints (unbounded-axis doctrine, API_DESIGN §6):
-        // on the scroll axis min = viewport, max = Unbounded.
-        use tezzera_layout::AxisBound;
-        let child_constraints = match self.axis {
-            ScrollAxis::Vertical => Constraints {
-                min_width: vp.size.width,
-                max_width: AxisBound::Bounded(vp.size.width),
-                min_height: vp.size.height,
-                max_height: AxisBound::Unbounded,
-            },
-            ScrollAxis::Horizontal => Constraints {
-                min_width: vp.size.width,
-                max_width: AxisBound::Unbounded,
-                min_height: vp.size.height,
-                max_height: AxisBound::Bounded(vp.size.height),
-            },
-            ScrollAxis::Both => Constraints {
-                min_width: vp.size.width,
-                max_width: AxisBound::Unbounded,
-                min_height: vp.size.height,
-                max_height: AxisBound::Unbounded,
-            },
-        };
-        let child_size = self.child.layout(&ctx.layout_ctx(child_constraints));
 
         let (ox, oy) = match self.axis {
             ScrollAxis::Vertical   => (0.0, -scroll_y),
@@ -324,6 +333,33 @@ impl Widget for ScrollView {
                     size: Size { width: bar_w, height: 3.0 },
                 }, self.scrollbar_color);
             }
+        }
+    }
+}
+
+impl Widget for ScrollView {
+    fn layout(&self, ctx: &LayoutCtx) -> Size {
+        let constraints = ctx.constraints;
+        Size { width: avail_w(constraints), height: avail_h(constraints) }
+    }
+
+    fn paint(&self, ctx: &mut PaintCtx) {
+        let vp = ctx.rect;
+        let child_size = self.child.layout(&ctx.layout_ctx(self.child_constraints(vp)));
+
+        // `::fixed` and `::controlled` always use the base path — exact,
+        // un-composited semantics for programmatic control and snapshots.
+        // Otherwise: explicit `.gpu_layer()` forces the GPU path on; plain
+        // `ScrollView::new` auto-detects it via the size heuristic (D090
+        // transparent default).
+        let eligible = self.fixed_offset.is_none() && self.controller.is_none();
+        let use_gpu = eligible
+            && (self.gpu_layer || self.should_auto_gpu(vp.size, child_size));
+
+        if use_gpu {
+            self.paint_gpu(ctx, child_size);
+        } else {
+            self.paint_base(ctx, child_size);
         }
     }
 }

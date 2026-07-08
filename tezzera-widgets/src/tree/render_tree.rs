@@ -244,8 +244,32 @@ impl RenderTree {
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
-                if let Some(cb) = self.hit_test_node(child, cx, cy) {
-                    return Some(cb);
+                if let Some((cb, positional)) = self.hit_test_node(child, cx, cy) {
+                    // Wrap so LATER invocations are remapped too, not just this
+                    // one. `child_coords` only converts the coordinates used to
+                    // find the hit; the returned callback was previously handed
+                    // straight to the caller, which re-invokes it directly with
+                    // raw SCREEN coords on every subsequent MouseMove during a
+                    // drag (`active_drag` in tezzera/src/lib.rs — the callback
+                    // is never re-hit-tested once a drag starts). A positional
+                    // widget (e.g. Slider) declared inside a GPU-composited
+                    // scroll view (D090) expects content-space coordinates on
+                    // every call, so bake the SAME remap into the callback
+                    // itself whenever this node is a transform host — it then
+                    // self-corrects on every future invocation, not just the
+                    // first. Composes for nested transforms: each ancestor
+                    // wraps once more as the recursion unwinds.
+                    let wrapped: Arc<dyn Fn(f32, f32) + Send + Sync> = match n.transforms.first() {
+                        Some(entry) => {
+                            let vp = entry.viewport_rect;
+                            Arc::new(move |sx: f32, sy: f32| {
+                                let off = tezzera_state::scroll_offset(id as u64);
+                                cb(sx - vp.origin.x + off[0], sy - vp.origin.y + off[1]);
+                            })
+                        }
+                        None => cb,
+                    };
+                    return Some((wrapped, positional));
                 }
             }
         }
@@ -603,6 +627,55 @@ mod tests {
 
         // Screen (75, 40): ABOVE the viewport → clipped, no hit.
         assert!(t.hit_test(75.0, 40.0).is_none(), "clicks outside the viewport are clipped");
+
+        tezzera_state::clear_scroll_offset(tl as u64);
+    }
+
+    #[test]
+    fn positional_hit_through_transform_remaps_every_invocation() {
+        // A positional widget (e.g. a Slider knob) declared inside a
+        // GPU-composited scroll view (D090). The app dispatch loop invokes
+        // the returned callback once at press time AND again on every
+        // subsequent MouseMove for the rest of the drag, WITHOUT re-running
+        // hit_test (see the `active_drag` mechanism in tezzera/src/lib.rs) —
+        // so the callback itself must remap raw screen coords through the
+        // transform on every call, not just the one made at hit-test time.
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let tl = t.slot(RenderTree::ROOT, true);
+        t.node_mut(tl).transforms.push(TransformLayerEntry {
+            picture: tezzera_render::PictureRecorder::new().finish(),
+            child_size: Size { width: 100.0, height: 1000.0 },
+            viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let child = t.slot(tl, true);
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let r = received.clone();
+        t.node_mut(child).hits_at.push((rect(0.0, 220.0, 100.0, 40.0), Arc::new(move |cx, cy| {
+            r.lock().unwrap().push((cx, cy));
+        })));
+        t.finalize();
+
+        tezzera_state::set_scroll_offset(tl as u64, [0.0, 200.0]);
+
+        // Screen (75,90): content = (75-50+0, 90-50+200) = (25, 240) → inside [220,260).
+        let (cb, positional) = t.hit_test(75.0, 90.0).expect("must hit the positional region");
+        assert!(positional, "hits_at region must report positional=true");
+        cb(75.0, 90.0); // initial press — dispatch calls back with the same raw coords used to find it
+
+        // Simulated drag continuation: fresh raw screen coords, same callback,
+        // no re-hit-test. Before this fix these would leak straight through
+        // unmapped.
+        cb(80.0, 95.0); // content = (80-50+0, 95-50+200) = (30, 245)
+
+        let got = received.lock().unwrap();
+        assert_eq!(
+            *got,
+            vec![(25.0, 240.0), (30.0, 245.0)],
+            "every invocation must be remapped through the transform, not just the first"
+        );
 
         tezzera_state::clear_scroll_offset(tl as u64);
     }
