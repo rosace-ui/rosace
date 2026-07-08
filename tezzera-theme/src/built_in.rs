@@ -70,9 +70,10 @@ pub fn dark_theme() -> ThemeData {
     }
 }
 
-/// A Material (Android-flavored) theme (D105 Phase 23 Step 5, early
-/// groundwork): built on [`light_theme`]'s tokens, with an AppBar left-title,
-/// 56dp-tall, elevated look — Android Material app-bar conventions.
+/// A Material (Android-flavored) theme (D105 Phase 23 Step 5): built on
+/// [`light_theme`]'s MD3-purple tokens (already Material-appropriate), with
+/// an AppBar left-title, 56dp-tall, elevated look — Android Material
+/// app-bar conventions.
 pub fn material() -> ThemeData {
     ThemeData {
         app_bar: crate::theme::AppBarStyle {
@@ -85,12 +86,22 @@ pub fn material() -> ThemeData {
     }
 }
 
-/// A Cupertino (iOS-flavored) theme (D105 Phase 23 Step 5, early
-/// groundwork): built on [`light_theme`]'s tokens, with an AppBar
-/// centered-title, 44pt-tall, flat (hairline-only) look — iOS navigation-bar
-/// conventions.
+/// A Cupertino (iOS-flavored) theme (D105 Phase 23 Step 5): an AppBar with a
+/// centered title, 44pt-tall, flat (hairline-only) look — iOS navigation-bar
+/// conventions — plus iOS system-blue accents in place of Material's purple,
+/// since reusing [`light_theme`]'s MD3 palette verbatim would look
+/// Android-branded on an iOS device. Every other token (typography, spacing,
+/// radius) still comes from [`light_theme`] — only the accent color and the
+/// AppBar structure are iOS-specific.
 pub fn cupertino() -> ThemeData {
     ThemeData {
+        colors: ColorScheme {
+            primary:              Color::from_hex(0x007AFF),
+            on_primary:           Color::from_hex(0xFFFFFF),
+            primary_container:    Color::from_hex(0xD6E8FF),
+            on_primary_container: Color::from_hex(0x00265A),
+            ..light_theme().colors
+        },
         app_bar: crate::theme::AppBarStyle {
             title_align: crate::theme::TitleAlign::Center,
             show_traffic_lights: false,
@@ -153,5 +164,27 @@ mod tests {
         let r = BorderRadius::default();
         let light = light_theme();
         assert_eq!(light.radius.md, r.md);
+    }
+
+    #[test]
+    fn material_and_cupertino_are_structurally_distinct() {
+        let m = material();
+        let c = cupertino();
+        assert_eq!(m.app_bar.title_align, crate::theme::TitleAlign::Leading);
+        assert_eq!(c.app_bar.title_align, crate::theme::TitleAlign::Center);
+        assert_eq!(m.app_bar.height, 56.0);
+        assert_eq!(c.app_bar.height, 44.0);
+    }
+
+    #[test]
+    fn cupertino_uses_ios_system_blue_not_md3_purple() {
+        let expected = Color::from_hex(0x007AFF);
+        let c = cupertino();
+        assert!((c.colors.primary.r - expected.r).abs() < 1e-5);
+        assert!((c.colors.primary.g - expected.g).abs() < 1e-5);
+        assert!((c.colors.primary.b - expected.b).abs() < 1e-5);
+        // Material keeps the MD3 purple already asserted by
+        // `light_theme_primary_is_md3_purple` (material() is built on it).
+        assert_ne!(c.colors.primary, material().colors.primary);
     }
 }

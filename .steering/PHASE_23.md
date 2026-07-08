@@ -1,8 +1,8 @@
 # Phase 23 — Platform-Adaptive Theming (D105)
 
-> Status: IN PROGRESS (Steps 1-4 landed 2026-07-08)
+> Status: COMPLETE (Steps 1-5 landed 2026-07-08)
 > Started: 2026-07-08
-> Completed: —
+> Completed: 2026-07-08
 > Decision: **D105** — ONE widget set; the theme is the only platform authority.
 >
 > Progress:
@@ -38,7 +38,28 @@
 >   (two different ext structs don't collide) — a hypothetical `BadgeStyle`
 >   proves a widget outside `tezzera-theme` can theme itself with zero edits
 >   to `ThemeData`'s fields.
-> Remaining: Step 5 (finish material()/cupertino(), wire into tzr new).
+> - Step 5 ✅ Finished material()/cupertino() + tzr new wiring —
+>   tezzera-theme/src/built_in.rs, tezzera-cli/src/commands/new.rs.
+>   `cupertino()` now sets iOS system-blue (`#007AFF`) primary colors
+>   instead of reusing `light_theme()`'s MD3 purple verbatim (colors, not
+>   just AppBar structure, were still Android-branded before this) —
+>   `material()` keeps the MD3 purple, which was already Material-
+>   appropriate. `tzr new` now generates a `themes()` fn in the scaffolded
+>   `src/theme.rs` (a `Themes` bundle: iOS → cupertino(), Android →
+>   material(), fallback → light()) and wires `.themes(theme::themes())`
+>   into `App::new()` in `src/lib.rs`, but ONLY when iOS and/or Android is
+>   selected — desktop/web-only scaffolds keep the plain single-theme path
+>   unchanged (verified: generated both variants, both build clean via
+>   `cargo build`, confirming the back-compat rule holds for freshly
+>   scaffolded apps too, not just hand-written ones).
+>
+> Phase 23 (D105) is now COMPLETE: one widget set, theme is the sole
+> platform authority, AppBar is the proof-of-concept, ThemeExtension lets
+> new widgets theme themselves, and `tzr new` scaffolds native-appropriate
+> themes with no hand-editing. Follow-up widget conversions (ButtonStyle,
+> SwitchStyle, …) are out of scope here — Step 3's note about doing them
+> "one widget at a time" still applies whenever those widgets get their own
+> phase/decision.
 
 ## Why This Phase
 

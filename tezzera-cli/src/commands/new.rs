@@ -171,9 +171,9 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
 
     // ── Structured source ──────────────────────────────────────────────────
     write(dir.join("src").join("main.rs"), &main_rs(&crate_name))?;
-    write(dir.join("src").join("lib.rs"), &lib_rs(name))?;
+    write(dir.join("src").join("lib.rs"), &lib_rs(name, &opts))?;
     write(dir.join("src").join("app.rs"), &app_rs(name))?;
-    write(dir.join("src").join("theme.rs"), THEME_RS)?;
+    write(dir.join("src").join("theme.rs"), &theme_rs(&opts))?;
     write(dir.join("src").join("screens").join("mod.rs"), SCREENS_MOD_RS)?;
     write(dir.join("src").join("screens").join("home.rs"), HOME_RS)?;
     write(dir.join("src").join("screens").join("counter.rs"), COUNTER_RS)?;
@@ -201,7 +201,11 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
     println!("    src/main.rs        native entry");
     println!("    src/lib.rs         launch() + web entry");
     println!("    src/app.rs         root component (routing + theme)");
-    println!("    src/theme.rs       light/dark theme");
+    if has(Platform::Ios) || has(Platform::Android) {
+        println!("    src/theme.rs       light/dark theme + per-platform Themes bundle");
+    } else {
+        println!("    src/theme.rs       light/dark theme");
+    }
     println!("    src/screens/       home + counter screens");
     if has(Platform::Web) { println!("    web/index.html     web host page"); }
     if has(Platform::Ios) { println!("    ios/Info.plist     iOS app bundle plist"); }
@@ -296,7 +300,12 @@ fn main_rs(crate_name: &str) -> String {
     )
 }
 
-fn lib_rs(name: &str) -> String {
+fn lib_rs(name: &str, opts: &NewOptions) -> String {
+    // iOS and/or Android selected → wire a platform-keyed Themes bundle so
+    // each looks native-appropriate out of the box (D105 Phase 23 Step 5).
+    // Desktop/web-only apps keep the simpler single-theme path.
+    let wants_platform_themes = opts.platforms.contains(&Platform::Ios) || opts.platforms.contains(&Platform::Android);
+    let themes_call = if wants_platform_themes { ".themes(theme::themes())\n        " } else { "" };
     format!(
         r#"//! {name} — a TEZZERA app.
 //!
@@ -316,7 +325,7 @@ pub fn launch() {{
     App::new()
         .title("{name}")
         .size(960, 640)
-        .launch(app::AppRoot);
+        {themes_call}.launch(app::AppRoot);
 }}
 
 /// Web (wasm) entry — invoked automatically when the module is instantiated.
@@ -386,7 +395,17 @@ impl Component for AppRoot {{
     )
 }
 
-const THEME_RS: &str = r#"//! App theme. Edit these to customize colors, or build a `ThemeData` from
+/// Generates `src/theme.rs`. Always emits `dark()`/`light()` (used by the
+/// in-app theme toggle in `app.rs`); when iOS and/or Android are selected it
+/// also emits `themes()`, a platform-keyed `Themes` bundle wiring Cupertino
+/// for iOS and Material for Android (D105 Phase 23 Step 5) so a generated
+/// app looks native-appropriate on each target with no hand-editing.
+fn theme_rs(opts: &NewOptions) -> String {
+    let has_ios = opts.platforms.contains(&Platform::Ios);
+    let has_android = opts.platforms.contains(&Platform::Android);
+
+    let mut out = String::from(
+        r#"//! App theme. Edit these to customize colors, or build a `ThemeData` from
 //! scratch — the built-ins are just a convenient starting point.
 
 use tezzera::prelude::ThemeData;
@@ -400,7 +419,34 @@ pub fn dark() -> ThemeData {
 pub fn light() -> ThemeData {
     tezzera::prelude::light_theme()
 }
-"#;
+"#,
+    );
+
+    if has_ios || has_android {
+        out.push_str(
+            r#"
+/// Per-platform look (D105): iOS gets Cupertino chrome, Android gets
+/// Material chrome; every other platform (desktop, web) falls back to
+/// `light()`. Passed to `App::themes(..)` in `lib.rs`.
+pub fn themes() -> tezzera::prelude::Themes {
+    tezzera::prelude::Themes::new(light())
+"#,
+        );
+        if has_ios {
+            out.push_str(
+                "        .platform(tezzera::prelude::Platform::Ios, tezzera::prelude::cupertino())\n",
+            );
+        }
+        if has_android {
+            out.push_str(
+                "        .platform(tezzera::prelude::Platform::Android, tezzera::prelude::material())\n",
+            );
+        }
+        out.push_str("}\n");
+    }
+
+    out
+}
 
 const SCREENS_MOD_RS: &str = r#"//! One file per screen. Re-export each screen's builder here.
 
