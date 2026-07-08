@@ -1,9 +1,35 @@
 # Phase 23 — Platform-Adaptive Theming (D105)
 
-> Status: PLANNED (not started)
-> Started: —
+> Status: IN PROGRESS (Steps 1-3 landed 2026-07-08)
+> Started: 2026-07-08
 > Completed: —
 > Decision: **D105** — ONE widget set; the theme is the only platform authority.
+>
+> Progress:
+> - Step 1 ✅ Platform enum + detect() + use_platform()/set_platform()
+>   (commit 30f7e28) — tezzera-core/src/platform.rs, mirrors the safe_area
+>   GlobalAtom pattern exactly. Flat enum (MacOs/Windows/Linux/Ios/Android/
+>   Web), no separate Desktop catch-all — the AppBar proof needed macOS told
+>   apart from other desktop OSes.
+> - Step 2 ✅ Themes bundle + App::themes(..)/.platform(..) (commit 30f7e28)
+>   — tezzera-theme/src/themes.rs. Falls back to the existing single-theme
+>   path when no bundle given; existing apps unaffected.
+> - Step 3 ✅ AppBarStyle in ThemeData; AppBar converted (commit 30f7e28) —
+>   height/show_traffic_lights become Option<T> (None = follow theme);
+>   per-instance builder calls still override. show_traffic_lights stays
+>   false on EVERY theme including macOS — deviation from this doc's
+>   original text ("desktop default sets traffic-lights on for macOS"),
+>   corrected after re-reading the widget's own doc comment: traffic lights
+>   are decorative mockup-only chrome (real windows already have real OS
+>   ones), so a theme enabling them for real apps would double them up, not
+>   help. Added minimal material()/cupertino() theme constructors (Step 5
+>   will build on these). Verified PIXEL-EXACT (not eyeballed): elevation-
+>   driven border present/absent at the correct row, and the material bar's
+>   border sits exactly 24 physical px (12pt logical * 2x retina) below the
+>   default's — matching the 56pt vs 44pt height difference precisely. See
+>   tezzera-examples/src/bin/theming_demo.rs.
+> Remaining: Step 4 (ThemeExtension type-map), Step 5 (finish material()/
+> cupertino(), wire into tzr new).
 
 ## Why This Phase
 
