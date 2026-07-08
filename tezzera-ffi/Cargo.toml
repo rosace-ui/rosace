@@ -20,6 +20,22 @@ tezzera-compositor = { path = "../tezzera-compositor" }
 # `GpuPresenter::new`'s bound without a second raw-window-handle in the tree.
 wgpu = "24"
 
+# Android only (D106 Phase 24 Step 3): a Kotlin host calls into Rust via JNI,
+# not a plain C ABI like iOS — `jni` gives safe `JNIEnv`/`JObject` wrappers,
+# `ndk-sys` gives the raw `ANativeWindow_fromSurface`/`_release` bindings
+# needed to turn the JNI `Surface` object handed across into the same
+# `RawSurface::from_native_window` pointer iOS's `CAMetalLayer*` path already
+# uses (see `android.rs`). New dependencies, approved as part of Step 3 —
+# `jni` is the de facto standard crate for this (used by `winit`/`wgpu`'s own
+# Android backends); there's no real alternative to weigh.
+[target.'cfg(target_os = "android")'.dependencies]
+jni     = "0.21"
+ndk-sys = "0.6"
+
 [[example]]
 name = "ios_stub"
 crate-type = ["staticlib"]
+
+[[example]]
+name = "android_stub"
+crate-type = ["cdylib"]

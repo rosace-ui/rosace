@@ -117,6 +117,29 @@ silently baked into the contracts below, per the project's violation policy
    run on a real Linux box, but Linux's toolchain requirements are much
    lighter (no separate resource compiler / manifest system to get right),
    so the residual risk is smaller.
+6. **`tzr new`'s Android support (D106 Phase 24 Step 3) is unverified on a
+   real device/emulator.** Unlike the Windows gap above, the NDK
+   cross-compile and Gradle build ARE both verified for real on this
+   machine — `cargo build --target aarch64-linux-android` produces a
+   genuine ARM64 `.so` with correctly JNI-mangled exported symbols
+   (confirmed via `llvm-nm -D`), and `./gradlew assembleDebug` against a
+   real `tzr new --platforms android`-scaffolded project produced a real
+   APK containing that `.so` plus compiled Kotlin (`classes.dex`). What's
+   NOT verified: actually installing and launching on an emulator or
+   device. No Android system image could be installed on this machine
+   without risking a disk-full failure (free disk hovered around 2-3GB for
+   most of this work; a system image download is 1GB+) — `adb devices`
+   was empty throughout. `tzr run --target android` handles this honestly
+   (builds, detects no device, prints a manual `adb install` instruction)
+   rather than claiming success. `MainActivity.kt`'s safe-area handling is
+   also a known simplification — it passes zero insets to `nativeResize`
+   rather than deriving them from a real `WindowInsets` callback (iOS's
+   Step 2 equivalent uses real `UIView.safeAreaInsets`). NDK/linker
+   discovery in the generated `cargoBuildAndroid` Gradle task only handles
+   macOS/Linux/Windows x86_64 host tags, not ARM hosts. Flag all of this
+   for a real on-device verification pass once an Android environment
+   (device or a machine with enough disk for an emulator image) is
+   available.
 
 None of these are fixed by this doc rewrite — this is the audit that found
 them. Fixing them (removing `tezzera-anim`, reordering `gesture`, moving

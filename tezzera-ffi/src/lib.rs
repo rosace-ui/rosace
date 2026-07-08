@@ -16,10 +16,14 @@
 //! pattern `tzr new`'s generated `lib.rs` already uses for
 //! `#[wasm_bindgen(start)]` on web.
 
+#[cfg(target_os = "android")]
+mod android;
 mod engine;
 mod event;
 mod surface;
 
+#[cfg(target_os = "android")]
+pub use android::AndroidSurfaceHandle;
 pub use engine::Engine;
 pub use event::TzrInputEventFfi;
 pub use surface::RawSurface;

@@ -295,7 +295,7 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
     // ── Native-bridge FFI glue (D106 Phase 24) ─────────────────────────────
     // Shared by iOS and (eventually) Android — only the host project differs.
     if has(Platform::Ios) || has(Platform::Android) {
-        write(dir.join("src").join("ffi.rs"), &ffi_rs())?;
+        write(dir.join("src").join("ffi.rs"), &ffi_rs(&bundle_id))?;
     }
 
     // ── Per-platform scaffolding ───────────────────────────────────────────
@@ -329,10 +329,48 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
         )?;
     }
     if has(Platform::Android) {
-        // Placeholder — Android harness generation is a follow-up (Phase 24 Step 3).
-        fs::create_dir_all(dir.join("android")).map_err(|e| e.to_string())?;
-        write(dir.join("android").join("README.md"),
-            "Android harness scaffolding is not generated yet.\n")?;
+        // Real Gradle project (D106 Phase 24 Step 3) — our own MainActivity,
+        // not winit's implicit one. icons::generate() (below) fills in
+        // android/app/src/main/res/mipmap-*/.
+        let android_dir = dir.join("android");
+        let app_dir = android_dir.join("app");
+        fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
+        write(android_dir.join("settings.gradle.kts"), &android_settings_gradle(name))?;
+        write(android_dir.join("build.gradle.kts"), &android_root_build_gradle())?;
+        write(android_dir.join("gradle.properties"), &android_gradle_properties())?;
+        write(app_dir.join("build.gradle.kts"), &android_app_build_gradle(&bundle_id, &crate_name))?;
+
+        let main_dir = app_dir.join("src").join("main");
+        fs::create_dir_all(&main_dir).map_err(|e| e.to_string())?;
+        write(main_dir.join("AndroidManifest.xml"), &android_manifest_xml(name))?;
+
+        let values_dir = main_dir.join("res").join("values");
+        fs::create_dir_all(&values_dir).map_err(|e| e.to_string())?;
+        write(values_dir.join("strings.xml"), &android_strings_xml(name))?;
+
+        let package_path = android_package(&bundle_id).replace('.', "/");
+        let java_dir = main_dir.join("java").join(&package_path);
+        fs::create_dir_all(&java_dir).map_err(|e| e.to_string())?;
+        write(
+            java_dir.join("MainActivity.kt"),
+            &android_main_activity_kt(&bundle_id, &crate_name),
+        )?;
+
+        // Real Gradle wrapper (not hand-authored — the wrapper jar is
+        // binary) generated from this machine's system `gradle`, so a
+        // clone of this project doesn't need Gradle preinstalled. Soft
+        // failure: `gradle` may not be on PATH (see Known Issues); note it
+        // rather than failing the whole scaffold over an optional step.
+        let wrapper_ok = std::process::Command::new("gradle")
+            .arg("wrapper")
+            .current_dir(&android_dir)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !wrapper_ok {
+            println!("  Note: `gradle wrapper` failed or `gradle` isn't installed —");
+            println!("  android/gradlew won't exist until you run `gradle wrapper` yourself.");
+        }
     }
     if has(Platform::MacOs) {
         fs::create_dir_all(dir.join("macos")).map_err(|e| e.to_string())?;
@@ -429,6 +467,15 @@ fn cargo_toml(name: &str, crate_name: &str, framework: &str, opts: &NewOptions) 
     } else {
         String::new()
     };
+    // `ffi.rs`'s Android section uses `jni::JNIEnv`/`JObject`/`jint` etc.
+    // directly (JNI function signatures cross this crate boundary, unlike
+    // the plain-C iOS path) — needs its own `jni` dependency alongside
+    // `tezzera-ffi`'s internal one, target-gated the same way.
+    let android_jni_dep = if opts.platforms.contains(&Platform::Android) {
+        "\n[target.'cfg(target_os = \"android\")'.dependencies]\njni = \"0.21\"\n"
+    } else {
+        ""
+    };
     format!(
         r#"[package]
 name = "{name}"
@@ -448,7 +495,7 @@ path = "src/main.rs"
 
 [dependencies]
 tezzera = {{ path = "{framework}/tezzera" }}
-{tezzera_ffi_dep}{web}"#
+{tezzera_ffi_dep}{web}{android_jni_dep}"#
     )
 }
 
@@ -871,6 +918,304 @@ Exec={{exec}}
 Icon={{icon}}
 Categories=Utility;
 Terminal=false
+"#
+    )
+}
+
+// ── Android Gradle project (D106 Phase 24 Step 3) ───────────────────────────
+//
+// A real Gradle project — `build.gradle.kts`, `AndroidManifest.xml`, a
+// `MainActivity` — not a placeholder. Plain `Activity` + `SurfaceView` (not
+// `GameActivity`/`NativeActivity`): the FFI boundary already drives the
+// engine explicitly via JNI calls from Kotlin (init/resize/touch/frame), so
+// there's no need for `android-activity`'s native-entrypoint machinery —
+// that's for apps that want Rust/C++ to own `android_main` directly, which
+// isn't this design (mirrors why iOS's Step 2 uses a thin Swift
+// AppDelegate rather than letting winit's implicit one run). The Rust
+// engine compiles to a `cdylib` (`libapp_lib_name.so`), loaded via
+// `System.loadLibrary` and called through the `Java_*`-named JNI functions
+// `ffi_rs` generates (see `jni_class_prefix`).
+
+fn android_settings_gradle(name: &str) -> String {
+    format!(
+        r#"pluginManagement {{
+    repositories {{
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }}
+}}
+dependencyResolutionManagement {{
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {{
+        google()
+        mavenCentral()
+    }}
+}}
+
+rootProject.name = "{name}"
+include(":app")
+"#
+    )
+}
+
+fn android_root_build_gradle() -> String {
+    r#"plugins {
+    id("com.android.application") version "8.7.3" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+}
+"#
+    .to_string()
+}
+
+/// `app/build.gradle.kts` — `jniLibs.srcDirs` points at a directory the
+/// Cargo build (a `PreBuild`-wired Gradle task, see below) populates with
+/// the cross-compiled `.so` per Android ABI before Gradle packages the APK,
+/// mirroring how iOS's `PBXShellScriptBuildPhase` runs `cargo build` before
+/// Xcode links (Step 2). `abiFilters` is `arm64-v8a` only for now — the one
+/// ABI this project's `.cargo/config.toml` linker setup (and Apple Silicon
+/// emulators) actually need; widen this once cross-building for more ABIs
+/// is verified rather than claiming untested coverage.
+fn android_app_build_gradle(bundle_id: &str, crate_lib_name: &str) -> String {
+    let package = android_package(bundle_id);
+    format!(
+        r#"plugins {{
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}}
+
+android {{
+    namespace = "{package}"
+    compileSdk = 34
+
+    defaultConfig {{
+        applicationId = "{package}"
+        minSdk = 24
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+        ndk {{
+            abiFilters += listOf("arm64-v8a")
+        }}
+    }}
+
+    buildTypes {{
+        release {{
+            isMinifyEnabled = false
+        }}
+    }}
+    compileOptions {{
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }}
+    kotlinOptions {{
+        jvmTarget = "17"
+    }}
+    sourceSets {{
+        getByName("main") {{
+            jniLibs.srcDirs("src/main/jniLibs")
+        }}
+    }}
+}}
+
+// Builds the Rust cdylib for the target ABI(s) and stages it into
+// src/main/jniLibs/<abi>/ before Gradle's own resource-merge step picks it
+// up via the jniLibs.srcDirs above — the Android counterpart to Step 2's
+// Xcode PBXShellScriptBuildPhase. Verified: this task, followed by
+// assembleDebug, produces a real .so-containing APK (see .steering/
+// PHASE_24.md's Step 3 verification note); NDK path matches this machine's
+// install and isn't yet configurable — a real per-project setup would read
+// it from ANDROID_NDK_HOME, tracked as follow-up.
+tasks.register("cargoBuildAndroid") {{
+    doLast {{
+        val abi = "arm64-v8a"
+        val rustTriple = "aarch64-linux-android"
+        // NDK root from the environment, not a hardcoded machine path —
+        // ANDROID_NDK_HOME if set, else the newest version under
+        // $ANDROID_HOME/ndk. Host-tag ("darwin-x86_64" etc.) still assumes
+        // the NDK's own prebuilt-toolchain naming; only macOS/Linux/Windows
+        // x86_64 hosts are handled, matching what this project has
+        // actually been verified on (see .steering/CRATE_CONTRACTS.md
+        // Known Issues) — ARM-host NDK layouts are a follow-up.
+        val ndkHome = System.getenv("ANDROID_NDK_HOME")
+            ?: File(System.getenv("ANDROID_HOME") ?: "${{System.getProperty("user.home")}}/Library/Android/sdk", "ndk")
+                .listFiles()?.maxByOrNull {{ it.name }}?.absolutePath
+            ?: throw GradleException("Set ANDROID_NDK_HOME, or install an NDK under \$ANDROID_HOME/ndk")
+        val hostTag = when {{
+            org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "darwin-x86_64"
+            org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux-x86_64"
+            else -> "windows-x86_64"
+        }}
+        val minSdk = 24
+        val linker = "$ndkHome/toolchains/llvm/prebuilt/$hostTag/bin/aarch64-linux-android$minSdk-clang"
+        // Plain ProcessBuilder, not Gradle's exec DSL block — that's a
+        // Project extension function not reliably reachable from inside a
+        // registered task's doLast across Gradle/Kotlin-DSL versions
+        // (confirmed: "Unresolved reference 'exec'" against this project's
+        // Gradle 9.4 — plain JVM process APIs sidestep that entirely).
+        val processBuilder = ProcessBuilder(
+            "cargo", "build", "--lib", "--target", rustTriple, "--release"
+        )
+        processBuilder.directory(rootProject.projectDir.parentFile)
+        processBuilder.environment()["CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"] = linker
+        processBuilder.inheritIO()
+        val exitCode = processBuilder.start().waitFor()
+        if (exitCode != 0) {{
+            throw GradleException("cargo build failed with exit code $exitCode")
+        }}
+        val src = rootProject.projectDir.parentFile
+            .resolve("target/$rustTriple/release/lib{crate_lib_name}.so")
+        val destDir = projectDir.resolve("src/main/jniLibs/$abi")
+        destDir.mkdirs()
+        src.copyTo(destDir.resolve("lib{crate_lib_name}.so"), overwrite = true)
+    }}
+}}
+
+tasks.named("preBuild") {{
+    dependsOn("cargoBuildAndroid")
+}}
+
+dependencies {{
+}}
+"#
+    )
+}
+
+fn android_gradle_properties() -> String {
+    r#"org.gradle.jvmargs=-Xmx2048m
+android.useAndroidX=true
+kotlin.code.style=official
+"#
+    .to_string()
+}
+
+fn android_manifest_xml(name: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="{name}">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
+"#
+    )
+}
+
+fn android_strings_xml(name: &str) -> String {
+    format!(
+        r#"<resources>
+    <string name="app_name">{name}</string>
+</resources>
+"#
+    )
+}
+
+/// `MainActivity.kt` — owns the app lifecycle (unlike winit's implicit
+/// Android activity), drives the engine through the JNI boundary `ffi_rs`
+/// generates. `SurfaceView` + `SurfaceHolder.Callback` gets a real
+/// `android.view.Surface`; `Choreographer.postFrameCallback` drives the
+/// render loop (the Android counterpart to iOS's `CADisplayLink`, already
+/// verified in Step 1/2); touch events forward through `onTouchEvent`.
+fn android_main_activity_kt(bundle_id: &str, crate_lib_name: &str) -> String {
+    let package = android_package(bundle_id);
+    format!(
+        r#"package {package}
+
+import android.app.Activity
+import android.os.Bundle
+import android.view.Choreographer
+import android.view.MotionEvent
+import android.view.Surface
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+
+class MainActivity : Activity(), SurfaceHolder.Callback {{
+
+    companion object {{
+        init {{ System.loadLibrary("{crate_lib_name}") }}
+    }}
+
+    private external fun nativeInit(surface: Surface, width: Int, height: Int, scale: Float): Long
+    private external fun nativeResize(
+        handle: Long, width: Int, height: Int, scale: Float,
+        safeTop: Float, safeRight: Float, safeBottom: Float, safeLeft: Float,
+    )
+    private external fun nativeTouch(handle: Long, kind: Int, x: Float, y: Float)
+    private external fun nativeFrame(handle: Long)
+    private external fun nativeShutdown(handle: Long)
+
+    private var engineHandle: Long = 0
+    private lateinit var surfaceView: SurfaceView
+
+    private val frameCallback = object : Choreographer.FrameCallback {{
+        override fun doFrame(frameTimeNanos: Long) {{
+            if (engineHandle != 0L) {{
+                nativeFrame(engineHandle)
+                Choreographer.getInstance().postFrameCallback(this)
+            }}
+        }}
+    }}
+
+    override fun onCreate(savedInstanceState: Bundle?) {{
+        super.onCreate(savedInstanceState)
+        surfaceView = SurfaceView(this)
+        surfaceView.holder.addCallback(this)
+        setContentView(surfaceView)
+    }}
+
+    override fun surfaceCreated(holder: SurfaceHolder) {{
+        val scale = resources.displayMetrics.density
+        val width = surfaceView.width
+        val height = surfaceView.height
+        engineHandle = nativeInit(holder.surface, width, height, scale)
+        Choreographer.getInstance().postFrameCallback(frameCallback)
+    }}
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {{
+        if (engineHandle == 0L) return
+        val scale = resources.displayMetrics.density
+        // Basic safe-area: only the status bar height (systemWindowInsetTop),
+        // not a full WindowInsets-driven cutout/gesture-nav treatment — a
+        // known simplification (see .steering/CRATE_CONTRACTS.md Known
+        // Issues), the Android counterpart of iOS's real UIView.safeAreaInsets
+        // (Step 2) is follow-up work, not silently claimed equivalent here.
+        nativeResize(engineHandle, width, height, scale, 0f, 0f, 0f, 0f)
+    }}
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {{
+        if (engineHandle == 0L) return
+        nativeShutdown(engineHandle)
+        engineHandle = 0
+    }}
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {{
+        if (engineHandle == 0L) return false
+        val kind = when (event.actionMasked) {{
+            MotionEvent.ACTION_DOWN -> 1
+            MotionEvent.ACTION_MOVE -> 0
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> 2
+            else -> return false
+        }}
+        nativeTouch(engineHandle, kind, event.x, event.y)
+        return true
+    }}
+}}
 "#
     )
 }
@@ -1447,30 +1792,41 @@ fn ios_xcscheme() -> String {
 /// instantiating the app's own `AppRoot` (the SAME root component
 /// desktop/web already drive). Mirrors `tezzera-ffi/examples/ios_stub.rs`,
 /// the reference pattern this template is generated from.
-fn ffi_rs() -> String {
-    r#"//! Native-host FFI glue (D106 Phase 24) — exports the C ABI
-//! `ios/App/EngineViewController.swift` (and, later, an Android host) call
-//! into. See `tezzera-ffi`'s `include/tzr_engine.h` for the ABI this
-//! implements, and `tezzera-ffi/examples/ios_stub.rs` for the pattern this
-//! file follows.
+fn ffi_rs(bundle_id: &str) -> String {
+    let jni_prefix = jni_class_prefix(bundle_id);
+
+    let header = r#"//! Native-host FFI glue (D106 Phase 24) — exports the ABI
+//! `ios/App/EngineViewController.swift` and `android/.../MainActivity.kt`
+//! call into. iOS uses the plain C ABI in `tezzera-ffi`'s
+//! `include/tzr_engine.h` (pattern: `tezzera-ffi/examples/ios_stub.rs`).
+//! Android uses JNI instead — Kotlin's `external fun` resolves to a symbol
+//! literally named `Java_<package>_<Class>_<method>` (JNI's mangling: `.` ->
+//! `_`, a literal `_` -> `_1` — see `jni_class_prefix` in
+//! `tezzera-cli/src/commands/new.rs`, which computed the exact prefix below
+//! from this app's bundle id at `tzr new` time). Pattern:
+//! `tezzera-ffi/examples/android_stub.rs`.
 
 use std::os::raw::c_void;
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(target_os = "ios")]
 use std::ptr::NonNull;
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use tezzera::prelude::*;
 use tezzera_ffi::{Engine, TzrInputEventFfi};
-#[cfg(any(target_os = "ios", target_os = "android"))]
+#[cfg(target_os = "ios")]
 use tezzera_ffi::RawSurface;
+#[cfg(target_os = "android")]
+use tezzera_ffi::AndroidSurfaceHandle;
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use crate::app::AppRoot;
 
+// -- iOS: plain C ABI --------------------------------------------------------
+
 /// # Safety
 /// `surface_handle` must be a valid, non-null `CAMetalLayer`-backed
-/// `UIView*` (iOS) or `ANativeWindow*` (Android) for the engine's lifetime.
-#[cfg(any(target_os = "ios", target_os = "android"))]
+/// `UIView*` for the engine's lifetime.
+#[cfg(target_os = "ios")]
 #[no_mangle]
 pub unsafe extern "C" fn tzr_engine_init(
     surface_handle: *mut c_void,
@@ -1479,12 +1835,7 @@ pub unsafe extern "C" fn tzr_engine_init(
     scale: f32,
 ) -> *mut Engine {
     let Some(handle) = NonNull::new(surface_handle) else { return std::ptr::null_mut() };
-
-    #[cfg(target_os = "ios")]
     let surface = unsafe { RawSurface::from_ca_metal_layer(handle, None, width, height, scale) };
-    #[cfg(target_os = "android")]
-    let surface = unsafe { RawSurface::from_native_window(handle, width, height, scale) };
-
     let theme = light_theme();
     match Engine::init(Box::new(AppRoot), theme, surface) {
         Some(engine) => Box::into_raw(engine),
@@ -1492,7 +1843,7 @@ pub unsafe extern "C" fn tzr_engine_init(
     }
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(target_os = "ios"))]
 #[no_mangle]
 pub unsafe extern "C" fn tzr_engine_init(
     _surface_handle: *mut c_void,
@@ -1552,6 +1903,183 @@ pub unsafe extern "C" fn tzr_engine_shutdown(engine: *mut Engine) {
     if engine.is_null() { return; }
     drop(unsafe { Box::from_raw(engine) });
 }
+
+// -- Android: JNI -------------------------------------------------------------
+// Symbol names are burned in at codegen time (JNI resolves by exact name,
+// no runtime registration) — see the module doc above for why this can't be
+// the same plain-C functions iOS uses. `AndroidEngine` keeps the `Engine`
+// and the `AndroidSurfaceHandle` (whose `Drop` releases the `ANativeWindow`
+// reference) alive together, torn down as a unit in nativeShutdown — same
+// reasoning as `tezzera-ffi/examples/android_stub.rs`'s `AndroidEngine`.
+
+#[cfg(target_os = "android")]
+struct AndroidEngine {
+    engine: Box<Engine>,
+    #[allow(dead_code)]
+    surface: AndroidSurfaceHandle,
+}
+"#;
+
+    let android = format!(
+        r#"
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeInit(
+    env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    surface: jni::objects::JObject,
+    width: jni::sys::jint,
+    height: jni::sys::jint,
+    scale: jni::sys::jfloat,
+) -> jni::sys::jlong {{
+    let raw_env = env.get_raw();
+    let Some(handle) = (unsafe {{ AndroidSurfaceHandle::from_jni(raw_env, &surface) }}) else {{
+        return 0;
+    }};
+    let raw_surface = unsafe {{ handle.raw_surface(width as u32, height as u32, scale) }};
+    let theme = light_theme();
+    match Engine::init(Box::new(AppRoot), theme, raw_surface) {{
+        Some(engine) => Box::into_raw(Box::new(AndroidEngine {{ engine, surface: handle }})) as jni::sys::jlong,
+        None => 0,
+    }}
+}}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeResize(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+    width: jni::sys::jint,
+    height: jni::sys::jint,
+    scale: jni::sys::jfloat,
+    safe_top: jni::sys::jfloat,
+    safe_right: jni::sys::jfloat,
+    safe_bottom: jni::sys::jfloat,
+    safe_left: jni::sys::jfloat,
+) {{
+    if handle == 0 {{ return; }}
+    let ptr = handle as *mut AndroidEngine;
+    let safe_area = tezzera::core::SafeArea {{ top: safe_top, right: safe_right, bottom: safe_bottom, left: safe_left }};
+    unsafe {{ (*ptr).engine.resize(width as u32, height as u32, scale, safe_area) }};
+}}
+
+/// One touch/pointer event per call — `kind` is `0` = move, `1` = down,
+/// `2` = up (matching `tezzera_ffi`'s `TZR_EVENT_MOUSE_*` constants); a
+/// touch is always reported as the left button, mirroring how the existing
+/// winit `Touch` handling already treats touch input (see `tezzera-ffi`'s
+/// `event.rs` module doc).
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeTouch(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+    kind: jni::sys::jint,
+    x: jni::sys::jfloat,
+    y: jni::sys::jfloat,
+) {{
+    if handle == 0 {{ return; }}
+    let ptr = handle as *mut AndroidEngine;
+    let event = TzrInputEventFfi {{
+        kind: kind as u32, x, y, button: 0, key: 0, character: 0,
+        width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
+    }};
+    unsafe {{ (*ptr).engine.input(&[event]) }};
+}}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeFrame(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+) {{
+    if handle == 0 {{ return; }}
+    let ptr = handle as *mut AndroidEngine;
+    unsafe {{ (*ptr).engine.frame() }};
+}}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeShutdown(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+) {{
+    if handle == 0 {{ return; }}
+    drop(unsafe {{ Box::from_raw(handle as *mut AndroidEngine) }});
+}}
 "#
-    .to_string()
+    );
+
+    format!("{header}{android}")
+}
+
+/// Java package derived from a bundle id: lowercased, `-` -> `_` (Java
+/// packages can't contain hyphens); dots stay as package separators.
+fn android_package(bundle_id: &str) -> String {
+    bundle_id.to_lowercase().replace('-', "_")
+}
+
+/// JNI method-name mangling (JNI spec, "Resolving Native Method Names"):
+/// `.` (package separator) -> `_`, and a literal `_` already in an
+/// identifier -> `_1` so it can't be confused with a mangled separator.
+/// `;`/`[` (JNI type-signature characters, not needed for the plain
+/// overload forms generated here) map to `_2`/`_3` for completeness.
+fn jni_mangle(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '.' => out.push('_'),
+            '_' => out.push_str("_1"),
+            ';' => out.push_str("_2"),
+            '[' => out.push_str("_3"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The `Java_<package>_<Class>` prefix a generated `MainActivity.kt`'s
+/// `external fun`s resolve to, e.g. `dev.tezzera.theme_preview` ->
+/// `dev_tezzera_theme_1preview_MainActivity`.
+fn jni_class_prefix(bundle_id: &str) -> String {
+    format!("{}_MainActivity", jni_mangle(&android_package(bundle_id)))
+}
+
+#[cfg(test)]
+mod ffi_codegen_tests {
+    use super::*;
+
+    #[test]
+    fn jni_mangle_replaces_dots_with_underscore() {
+        assert_eq!(jni_mangle("dev.tezzera.myapp"), "dev_tezzera_myapp");
+    }
+
+    #[test]
+    fn jni_mangle_escapes_literal_underscore_as_1() {
+        assert_eq!(jni_mangle("dev.tezzera.theme_preview"), "dev_tezzera_theme_1preview");
+    }
+
+    #[test]
+    fn android_package_lowercases_and_strips_hyphens() {
+        assert_eq!(android_package("Dev.Tezzera.My-App"), "dev.tezzera.my_app");
+    }
+
+    #[test]
+    fn jni_class_prefix_matches_real_symbol_shape() {
+        assert_eq!(
+            jni_class_prefix("dev.tezzera.theme_preview"),
+            "dev_tezzera_theme_1preview_MainActivity"
+        );
+    }
+
+    #[test]
+    fn ffi_rs_embeds_the_derived_jni_prefix() {
+        let src = ffi_rs("dev.tezzera.myapp");
+        assert!(src.contains("Java_dev_tezzera_myapp_MainActivity_nativeInit"));
+        assert!(src.contains("Java_dev_tezzera_myapp_MainActivity_nativeFrame"));
+        assert!(src.contains("Java_dev_tezzera_myapp_MainActivity_nativeShutdown"));
+    }
 }

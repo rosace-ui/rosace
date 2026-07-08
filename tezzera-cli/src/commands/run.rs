@@ -19,6 +19,7 @@ pub enum Target {
     Linux,
     Web,
     Ios,
+    Android,
 }
 
 pub struct RunOptions {
@@ -91,8 +92,9 @@ fn parse_target(s: Option<&str>) -> Result<Target, String> {
         Some("linux") => Ok(Target::Linux),
         Some("web") => Ok(Target::Web),
         Some("ios") => Ok(Target::Ios),
-        Some(other) => Err(format!("unknown target '{}'. Use: macos, windows, linux, web, ios", other)),
-        None => Err("--target requires a value (macos, windows, linux, web, ios)".to_string()),
+        Some("android") => Ok(Target::Android),
+        Some(other) => Err(format!("unknown target '{}'. Use: macos, windows, linux, web, ios, android", other)),
+        None => Err("--target requires a value (macos, windows, linux, web, ios, android)".to_string()),
     }
 }
 
@@ -103,7 +105,7 @@ pub fn print_help() {
     println!("  tzr run [OPTIONS]");
     println!();
     println!("OPTIONS:");
-    println!("  --target <t>        macos | windows | linux | web | ios (default: host OS)");
+    println!("  --target <t>        macos | windows | linux | web | ios | android (default: host OS)");
     println!("  --mac / --win / --lnx   shorthand for --target macos|windows|linux");
     println!("  --port <n>          Web dev server port (default: 8080)");
     println!("  --device <name>     iOS simulator device (default: \"iPhone 15 Pro\")");
@@ -130,6 +132,7 @@ pub fn run(opts: RunOptions) -> Result<(), String> {
         Target::Linux => run_linux_cross_build(&app),
         Target::Web => run_web(&app, opts.port),
         Target::Ios => run_ios(&app, &opts.device),
+        Target::Android => run_android(&app),
     }
 }
 
@@ -141,7 +144,32 @@ fn preflight(target: Target) -> Result<(), String> {
         Target::Windows => preflight_cross_target("x86_64-pc-windows-gnu", "Windows", Some("mingw-w64")),
         Target::Linux => preflight_cross_target("x86_64-unknown-linux-gnu", "Linux", None),
         Target::Web | Target::Ios => Ok(()), // existing inline checks in run_web/run_ios cover these
+        Target::Android => preflight_android(),
     }
+}
+
+/// Checks the tools `run_android` needs before touching Gradle: `adb`
+/// (installs/launches — soft-checked, since building without a device
+/// connected is still useful) and `android/gradlew` (hard requirement —
+/// `tzr new --platforms android` generates this via `gradle wrapper`; its
+/// absence means either an old project or that step failed, both needing
+/// the same fix).
+fn preflight_android() -> Result<(), String> {
+    if !Path::new("android/gradlew").exists() {
+        return Err(
+            "android/gradlew not found. Either this project predates Android support \
+             (recreate with `tzr new --platforms android`), or `gradle wrapper` failed \
+             when it was created — run `gradle wrapper` inside android/ yourself \
+             (requires Gradle installed: https://gradle.org/install)."
+                .to_string(),
+        );
+    }
+    let adb_ok = Command::new("adb").arg("version").output().is_ok();
+    if !adb_ok {
+        println!("  Warning: adb not found — will build the APK but can't install/launch it.");
+        println!("  Install Android platform-tools (via Android Studio or `brew install android-platform-tools`).");
+    }
+    Ok(())
 }
 
 fn preflight_macos() -> Result<(), String> {
@@ -416,6 +444,51 @@ fn run_ios(app: &App, device: &str) -> Result<(), String> {
     run_checked("xcrun", &["simctl", "launch", "--console", "booted", &app.bundle_id], "simctl launch")
 }
 
+/// Builds via the generated Gradle project (which cross-compiles the Rust
+/// cdylib through its own `cargoBuildAndroid` task, then packages the APK —
+/// see `tzr new`'s `android_app_build_gradle` template), then installs +
+/// launches on a connected device/emulator if `adb` sees one. No device
+/// connected still ends in success (a built APK, not a crash) — the same
+/// "build if you can't run" honesty `run_windows_cross_build`/
+/// `run_linux_cross_build` already use for a cross-target with no local
+/// execution environment.
+fn run_android(app: &App) -> Result<(), String> {
+    if !Path::new("android").exists() {
+        return Err("android/ not found — scaffold with `tzr new --platforms android`".into());
+    }
+    println!("Building '{}' for Android (Gradle assembleDebug)...", app.name);
+    let ok = Command::new("./gradlew")
+        .args(["assembleDebug"])
+        .current_dir("android")
+        .status()
+        .map_err(|e| format!("gradlew: {}", e))?
+        .success();
+    if !ok {
+        return Err("Gradle build failed".into());
+    }
+    // AGP names the APK after the Gradle module ("app"), not the crate/app
+    // name — confirmed against a real `assembleDebug` output.
+    let apk = "android/app/build/outputs/apk/debug/app-debug.apk".to_string();
+    println!("  Built {}", apk);
+
+    let has_device = Command::new("adb")
+        .args(["devices"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().skip(1).any(|l| l.contains("device")))
+        .unwrap_or(false);
+    if !has_device {
+        println!("  No device/emulator connected (adb devices) — built the APK, not installed.");
+        println!("  Install manually: adb install {}", apk);
+        return Ok(());
+    }
+
+    println!("  Installing on device...");
+    run_checked("adb", &["install", "-r", &apk], "adb install")?;
+    let activity = format!("{}/.MainActivity", app.bundle_id);
+    println!("  Launching {}...", app.bundle_id);
+    run_checked("adb", &["shell", "am", "start", "-n", &activity], "adb shell am start")
+}
+
 fn run_checked(cmd: &str, args: &[&str], what: &str) -> Result<(), String> {
     let ok = Command::new(cmd)
         .args(args)
@@ -436,6 +509,7 @@ mod tests {
         assert_eq!(parse_target(Some("linux")).unwrap(), Target::Linux);
         assert_eq!(parse_target(Some("web")).unwrap(), Target::Web);
         assert_eq!(parse_target(Some("ios")).unwrap(), Target::Ios);
+        assert_eq!(parse_target(Some("android")).unwrap(), Target::Android);
     }
 
     #[test]
