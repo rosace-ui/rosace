@@ -33,6 +33,11 @@ Layer 4  tezzera-render       → core, layout, trace
 Layer 5  (services — see below) → layers 0-4 only, in principle
 Layer 6  tezzera-widgets      → layers 0-5
 Layer 7  tezzera              → everything (app code only depends on this)
+Layer 8  tezzera-ffi          → tezzera + layers 0-6 (D106 Phase 24 Step 1;
+                                 the first crate that depends on `tezzera`
+                                 itself, not just its layers — a native-host
+                                 adapter consumed by generated app code, not
+                                 by `tezzera`)
 ```
 
 **Layer 5 services** (22 crates; the original doc only ever named a handful
@@ -251,6 +256,32 @@ widget_authoring_demo}.rs`, `examples/web.rs` (wasm cdylib entry, browser
 MVP).
 **Depends on**: the umbrella `tezzera` crate, `animate`, `state`.
 **Must NOT**: Be imported by any other crate.
+
+---
+
+### tezzera-ffi  (Layer 8 — native host adapter; D106 Phase 24 Step 1)
+**Job**: The C-ABI boundary a native iOS/Android host (Swift `AppDelegate`,
+Kotlin `Activity`) drives instead of winit owning the app lifecycle — see
+`.steering/PHASE_24.md`.
+**Contents**: `Engine` (`src/engine.rs` — wraps `tezzera::FrameEngine` +
+`tezzera_compositor::GpuPresenter` + base/overlay `SkiaCanvas`, exposing safe
+`init`/`resize`/`input`/`frame`), `RawSurface` (`src/surface.rs` — implements
+`wgpu::rwh::HasWindowHandle`/`HasDisplayHandle` directly from a raw
+`CAMetalLayer*`/`ANativeWindow*` pointer; the only `unsafe` in the crate),
+`TzrInputEventFfi` (`src/event.rs` — one flat `#[repr(C)]` struct covering
+every `InputEvent` variant via a `kind` tag), `include/tzr_engine.h`
+(hand-written C header, not `cbindgen` — the surface is small and stable).
+**Must NOT**: Export `#[no_mangle] extern "C"` functions itself — only a
+concrete app knows its root `Component`, so the actual `tzr_engine_init/
+resize/input/frame/shutdown` symbols are per-app glue (~15 lines; see
+`examples/ios_stub.rs` for the reference pattern Step 2's `tzr new` codegen
+follows). Never imported by `tezzera` or any lower layer — dependency flows
+one direction only, `tezzera-ffi` → `tezzera`, never the reverse.
+**Depends on**: `tezzera` (for `FrameEngine`), `tezzera-core`,
+`tezzera-platform` (for `InputEvent`/`ScrollLayer`), `tezzera-render`,
+`tezzera-theme`, `tezzera-state`, `tezzera-compositor`, `wgpu` (only for the
+`wgpu::rwh` re-export of `raw-window-handle`, pinned to the same version
+`tezzera-compositor` uses).
 
 ---
 

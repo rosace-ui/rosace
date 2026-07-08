@@ -1,0 +1,25 @@
+[package]
+name = "tezzera-ffi"
+description = "Native-host FFI boundary (D106 Phase 24 Step 1) — lets a Swift/Kotlin host drive the TEZZERA engine directly, without winit owning the app lifecycle."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tezzera         = { path = "../tezzera" }
+tezzera-core    = { path = "../tezzera-core" }
+tezzera-platform = { path = "../tezzera-platform" }
+tezzera-render  = { path = "../tezzera-render" }
+tezzera-theme   = { path = "../tezzera-theme" }
+tezzera-state   = { path = "../tezzera-state" }
+tezzera-compositor = { path = "../tezzera-compositor" }
+# Only for the `wgpu::rwh` re-export of `raw-window-handle` — pinned to the
+# same version as `tezzera-compositor` so `RawSurface` satisfies
+# `GpuPresenter::new`'s bound without a second raw-window-handle in the tree.
+wgpu = "24"
+
+[[example]]
+name = "ios_stub"
+crate-type = ["staticlib"]

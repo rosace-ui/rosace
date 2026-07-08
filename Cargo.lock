@@ -2178,6 +2178,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tezzera-ffi"
+version = "0.1.0"
+dependencies = [
+ "tezzera",
+ "tezzera-compositor",
+ "tezzera-core",
+ "tezzera-platform",
+ "tezzera-render",
+ "tezzera-state",
+ "tezzera-theme",
+ "wgpu",
+]
+
+[[package]]
 name = "tezzera-forms"
 version = "0.1.0"
 dependencies = [
