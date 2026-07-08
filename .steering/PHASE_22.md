@@ -1,9 +1,8 @@
 # Phase 22 — API Consistency: One Law, Fewer Widgets
 
-> Status: COMPLETE (Steps 1–6 landed 2026-07-03; Step 7 doc leftovers —
-> CRATE_CONTRACTS refresh + README — folded into Phase 21 Step 6)
+> Status: COMPLETE
 > Started: 2026-07-03
-> Completed: —
+> Completed: 2026-07-08
 >
 > Progress:
 > - Step 1 ✅ vocabulary sweep (44d565a) — .background() everywhere
@@ -17,7 +16,16 @@
 >   Column/Row::scrollable
 > - Step 6 ✅ AppBarNavExt::back_button in facade prelude; ScreenNav was
 >   already the only prelude nav type
-> - Step 7 ✅ NAMING.md pointer; CRATE_CONTRACTS/README → Phase 21 Step 6
+> - Step 7 ✅ NAMING.md pointer done 2026-07-03; CRATE_CONTRACTS/README
+>   deferred to Phase 21 Step 6, which THEN also didn't cover it (the
+>   authoring guide isn't a crate-contracts refresh) — actually landed
+>   2026-07-08 as a full rewrite (commit 369fe1f): the old doc covered 16
+>   of 34 crates and named crates/widgets that don't exist. Found real,
+>   previously-unknown issues in the process (tezzera-anim is dead code;
+>   tezzera-gesture and tezzera-test-utils both depend on tezzera-platform,
+>   an undocumented Layer-5 cross-service dependency; tezzera-style is
+>   unintegrated) — recorded in CRATE_CONTRACTS.md's new "Known Issues"
+>   section, not yet fixed.
 > Decisions: D093 (constructor law), D094 (vocabulary), D095 (consolidation),
 > D096 (builder styling), D097 (scroll + nav canonicalization)
 > Constitution: `.steering/API_DESIGN.md`
