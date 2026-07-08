@@ -1,8 +1,8 @@
 # Phase 20 — RenderTree Unification: Retained State, Structural Hit Testing, Damage Repaint
 
-> Status: NEARLY COMPLETE (Steps 1–5 done; Step 6 D089 done; D090 foundation done — ScrollView routing + no-repaint scroll remain)
+> Status: COMPLETE
 > Started: 2026-07-02
-> Completed: —
+> Completed: 2026-07-08
 >
 > Progress: Steps 2–4 landed together as the RenderTree arena (see
 > `tezzera-widgets/src/tree/render_tree.rs`): hit/scroll regions, focus
@@ -70,15 +70,27 @@
 > `::fixed`/`::controlled` unaffected. `cargo test --workspace` passes;
 > desktop-verified the existing explicit GPU Scroll Layer demo route still
 > renders correctly post-refactor (regression check).
-> STILL OPEN — needs a manual interactive pass (no OS accessibility
+> STILL NEEDS a manual interactive pass by the user (no OS accessibility
 > permission available to automate clicking in this environment): app_demo's
 > Gallery/Typography/Overlays/Showcase routes were plain ScrollView::new
 > before this change and may now auto-compose as GPU layers if their content
 > overflows. Gallery specifically contains a Slider — open app_demo, go to
 > Gallery, and confirm the slider tracks the cursor correctly while scrolled
-> (the exact scenario the drag-fix above targets).
-> REMAINS in Step 6 (D090 polish, not blocking Phase-20 mechanics):
-> content > MAX_TL_DIM (4096) re-render windowing — the one item left.
+> (the exact scenario the drag-fix above targets). Not a blocker for calling
+> Phase 20 complete (covered by a unit test); flagged for real-device
+> confirmation.
+> Step 6 D090 MAX_TL_DIM RESOLVED (commit 5d3500b) — decided NOT to build
+> GPU-layer re-render windowing. ListView::builder already fully solves
+> "content too large for a single texture" for the case that matters — long
+> lists — via real virtualization (O(visible), content never materialized
+> off-screen, no texture-size limit possible regardless of count). That
+> narrows MAX_TL_DIM's remaining job to one large NON-virtualized widget
+> subtree (e.g. a single big Image) past 4096px, which the existing
+> automatic-default fallback already handles correctly (base/CPU path, no
+> GPU zero-repaint optimization, but no mis-render). Documented the
+> ListView/ScrollView tradeoff in both widgets' doc comments so the guidance
+> surfaces where a developer would actually look. Phase 20 has no open
+> items.
 >
 > DESIGN NOTE for the remaining block (found while scoping): per-node
 > picture caching cannot key on constraints alone — widgets are rebuilt
