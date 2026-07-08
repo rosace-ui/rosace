@@ -1,4 +1,11 @@
-//! Built-in light and dark themes (Material Design 3 inspired).
+//! Built-in light and dark themes.
+//!
+//! Replaced the original Material Design 3 palette (2026-07-08) — MD3's
+//! purple-tinted surfaces (`#FFFBFE`/`#1C1B1F`) read as dated next to native
+//! macOS/JetBrains-tool UI conventions. Dark is Darcula-inspired (neutral
+//! charcoal panels, soft off-white text, a clean blue accent — not
+//! MD3's purple-on-navy); light is a genuinely neutral white/near-black
+//! pair instead of MD3's warm-purple-tinted "white".
 
 use crate::color::{Color, ColorScheme};
 use crate::radius::BorderRadius;
@@ -8,25 +15,26 @@ use crate::typography::Typography;
 
 /// Constructs the built-in light theme.
 ///
-/// Primary: `#6750A4` (MD3 purple).
+/// Primary: `#2F6FE4` (clean modern blue). Neutral near-white surfaces and
+/// near-black text — no purple/warm tint.
 pub fn light_theme() -> ThemeData {
     ThemeData {
         animation: crate::AnimationConfig::default(),
         colors: ColorScheme {
-            primary:               Color::from_hex(0x6750A4),
+            primary:               Color::from_hex(0x2F6FE4),
             on_primary:            Color::from_hex(0xFFFFFF),
-            primary_container:     Color::from_hex(0xEADDFF),
-            on_primary_container:  Color::from_hex(0x21005D),
-            secondary:             Color::from_hex(0x625B71),
+            primary_container:     Color::from_hex(0xDCE7FF),
+            on_primary_container:  Color::from_hex(0x06264F),
+            secondary:             Color::from_hex(0x5B5F66),
             on_secondary:          Color::from_hex(0xFFFFFF),
-            surface:               Color::from_hex(0xFFFBFE),
-            on_surface:            Color::from_hex(0x1C1B1F),
-            surface_variant:       Color::from_hex(0xE7E0EC),
-            background:            Color::from_hex(0xFFFBFE),
-            on_background:         Color::from_hex(0x1C1B1F),
-            error:                 Color::from_hex(0xB3261E),
+            surface:               Color::from_hex(0xFFFFFF),
+            on_surface:            Color::from_hex(0x1E1F22),
+            surface_variant:       Color::from_hex(0xEFEFF0),
+            background:            Color::from_hex(0xFAFAFB),
+            on_background:         Color::from_hex(0x1E1F22),
+            error:                 Color::from_hex(0xD5433D),
             on_error:              Color::from_hex(0xFFFFFF),
-            outline:               Color::from_hex(0x79747E),
+            outline:               Color::from_hex(0xC6C7CA),
             shadow:                Color::BLACK,
         },
         typography: Typography::default(),
@@ -38,27 +46,31 @@ pub fn light_theme() -> ThemeData {
     }
 }
 
-/// Constructs the built-in dark theme.
+/// Constructs the built-in dark theme — the framework default (`App::new()`
+/// starts dark; see `tezzera/src/lib.rs`).
 ///
-/// Primary: `#D0BCFF` (MD3 purple, dark variant).
+/// Primary: `#589DF6` (bright modern blue). Darcula-inspired neutral
+/// charcoal panels (`#2B2D30`/`#1E1F22`, not MD3's purple-black `#1C1B1F`)
+/// with soft off-white text (`#DFE1E5`, not stark `#FFFFFF`) — easier on
+/// the eyes and closer to how native dark-mode dev tools actually look.
 pub fn dark_theme() -> ThemeData {
     ThemeData {
         animation: crate::AnimationConfig::default(),
         colors: ColorScheme {
-            primary:               Color::from_hex(0xD0BCFF),
-            on_primary:            Color::from_hex(0x381E72),
-            primary_container:     Color::from_hex(0x4F378B),
-            on_primary_container:  Color::from_hex(0xEADDFF),
-            secondary:             Color::from_hex(0xCCC2DC),
-            on_secondary:          Color::from_hex(0x332D41),
-            surface:               Color::from_hex(0x1C1B1F),
-            on_surface:            Color::from_hex(0xE6E1E5),
-            surface_variant:       Color::from_hex(0x49454F),
-            background:            Color::from_hex(0x1C1B1F),
-            on_background:         Color::from_hex(0xE6E1E5),
-            error:                 Color::from_hex(0xF2B8B5),
-            on_error:              Color::from_hex(0x601410),
-            outline:               Color::from_hex(0x938F99),
+            primary:               Color::from_hex(0x589DF6),
+            on_primary:            Color::from_hex(0x0B1B2B),
+            primary_container:     Color::from_hex(0x2B4870),
+            on_primary_container:  Color::from_hex(0xC7DEFF),
+            secondary:             Color::from_hex(0x8C8F93),
+            on_secondary:          Color::from_hex(0x1E1F22),
+            surface:               Color::from_hex(0x2B2D30),
+            on_surface:            Color::from_hex(0xDFE1E5),
+            surface_variant:       Color::from_hex(0x393B40),
+            background:            Color::from_hex(0x1E1F22),
+            on_background:         Color::from_hex(0xDFE1E5),
+            error:                 Color::from_hex(0xFF6B68),
+            on_error:              Color::from_hex(0x1E1F22),
+            outline:               Color::from_hex(0x4E5157),
             shadow:                Color::BLACK,
         },
         typography: Typography::default(),
@@ -133,21 +145,40 @@ mod tests {
     }
 
     #[test]
-    fn light_theme_primary_is_md3_purple() {
+    fn light_theme_primary_is_modern_blue() {
         let theme = light_theme();
-        let expected = Color::from_hex(0x6750A4);
+        let expected = Color::from_hex(0x2F6FE4);
         assert!((theme.colors.primary.r - expected.r).abs() < 1e-5);
         assert!((theme.colors.primary.g - expected.g).abs() < 1e-5);
         assert!((theme.colors.primary.b - expected.b).abs() < 1e-5);
     }
 
     #[test]
-    fn dark_theme_primary_is_light_purple() {
+    fn dark_theme_primary_is_bright_blue() {
         let theme = dark_theme();
-        let expected = Color::from_hex(0xD0BCFF);
+        let expected = Color::from_hex(0x589DF6);
         assert!((theme.colors.primary.r - expected.r).abs() < 1e-5);
         assert!((theme.colors.primary.g - expected.g).abs() < 1e-5);
         assert!((theme.colors.primary.b - expected.b).abs() < 1e-5);
+    }
+
+    #[test]
+    fn dark_theme_surface_is_neutral_charcoal_not_purple_tinted() {
+        // The old MD3 palette's dark surface (#1C1B1F) has a purple tint;
+        // Darcula-style neutral gray is the whole point of this palette.
+        let theme = dark_theme();
+        let surface = theme.colors.surface;
+        assert!((surface.r - surface.g).abs() < 0.02, "r/g should be near-equal (neutral gray)");
+        assert!((surface.g - surface.b).abs() < 0.02, "g/b should be near-equal (neutral gray)");
+    }
+
+    #[test]
+    fn light_theme_on_surface_is_not_pure_black() {
+        // Near-black (#1E1F22), not #000000 — softer, matches native dark
+        // text conventions instead of harsh pure black.
+        let theme = light_theme();
+        assert_ne!(theme.colors.on_surface, Color::BLACK);
+        assert!(theme.colors.on_surface.r > 0.05);
     }
 
     #[test]
@@ -177,14 +208,14 @@ mod tests {
     }
 
     #[test]
-    fn cupertino_uses_ios_system_blue_not_md3_purple() {
+    fn cupertino_uses_ios_system_blue_not_the_light_theme_default() {
         let expected = Color::from_hex(0x007AFF);
         let c = cupertino();
         assert!((c.colors.primary.r - expected.r).abs() < 1e-5);
         assert!((c.colors.primary.g - expected.g).abs() < 1e-5);
         assert!((c.colors.primary.b - expected.b).abs() < 1e-5);
-        // Material keeps the MD3 purple already asserted by
-        // `light_theme_primary_is_md3_purple` (material() is built on it).
+        // Material keeps light_theme()'s default blue already asserted by
+        // `light_theme_primary_is_modern_blue` (material() is built on it).
         assert_ne!(c.colors.primary, material().colors.primary);
     }
 }
