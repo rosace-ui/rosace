@@ -101,6 +101,24 @@ host model actually delivers what Info.plist-only could not.
 Exit: a demo app requests and receives a native permission result in Rust
 code, via the new bridge.
 
+**Scope note (added 2026-07-08, raised in discussion, not designed yet)**:
+this one-feature proof is the first slice of a broader **platform
+capabilities API** that belongs on this same FFI boundary — sensors, camera,
+biometrics, other permission prompts, and (per D105) "what platform am I on."
+`tezzera-platform` is purely windowing/input today (confirmed in the
+`CRATE_CONTRACTS.md` audit — an earlier planning pass imagined a
+`Permission`/`Haptics`/`Biometrics`/`use_sensor()` surface for it that was
+never built); winit cannot reach any of these on iOS for the same structural
+reason it can't own the AppDelegate (D106). Once Step 1's FFI boundary
+exists, each capability is just another message over it — no separate
+architecture needed. Display insets/orientation build on the already-shipped
+`tezzera_core::SafeArea`, now sourced from the real `UIView.safeAreaInsets`
+this phase gives us instead of the winit `outer_size()`/`inner_size()`
+workarounds. Desktop/web capability access doesn't need this FFI detour and
+can be designed independently. Don't over-build this in Step 5 — one proof
+is enough to validate the model; a fuller capabilities surface is later work
+once real apps show which capabilities are actually needed first.
+
 ## Migration Rule
 
 Desktop and web are UNCHANGED — winit continues to own them; this phase is
