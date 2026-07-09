@@ -144,9 +144,24 @@ fn build_web() -> Result<(), String> {
     std::fs::create_dir_all("dist")
         .map_err(|e| format!("failed to create dist/: {}", e))?;
 
+    // The wasm-bindgen output is always named after the INPUT wasm file
+    // (the crate name — e.g. "seo_test.js"/"seo_test_bg.wasm"), never a
+    // fixed "app.js". `generate_index_html` previously hardcoded "app.js"
+    // regardless of the real crate name — a real, long-standing bug: the
+    // generated dist/index.html never actually loaded the app for ANY
+    // project not literally named "app" (confirmed while verifying D107
+    // Phase 25 Step 4 — the app silently never ran, the import just
+    // 404'd). Fixed by deriving the real name from the same wasm file
+    // used to invoke wasm-bindgen, instead of a hardcoded string.
+    let wasm_files = glob_wasm_files("target/wasm32-unknown-unknown/release")?;
+    let crate_name = wasm_files
+        .first()
+        .and_then(|p| std::path::Path::new(p).file_stem())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "app".to_string());
+
     if wasm_bindgen_available {
         println!("  Running wasm-bindgen...");
-        let wasm_files = glob_wasm_files("target/wasm32-unknown-unknown/release")?;
         if let Some(wasm_path) = wasm_files.first() {
             let status = Command::new("wasm-bindgen")
                 .args([
@@ -166,15 +181,14 @@ fn build_web() -> Result<(), String> {
     } else {
         println!("  Note: wasm-bindgen not found — copying raw .wasm to dist/");
         println!("  Install with: cargo install wasm-bindgen-cli");
-        let wasm_files = glob_wasm_files("target/wasm32-unknown-unknown/release")?;
         if let Some(src) = wasm_files.first() {
-            std::fs::copy(src, "dist/app.wasm")
+            std::fs::copy(src, format!("dist/{crate_name}.wasm"))
                 .map_err(|e| format!("failed to copy wasm: {}", e))?;
         }
     }
 
     // Step 5: write dist/index.html
-    let mut html = generate_index_html();
+    let mut html = generate_index_html(&crate_name);
 
     // Step 6: build-time semantic HTML/SEO export (D107 Phase 25 Step 3) —
     // only for a project scaffolded after this Step landed (Migration
@@ -246,26 +260,39 @@ fn glob_wasm_files(dir: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn generate_index_html() -> String {
-    r#"<!DOCTYPE html>
+fn generate_index_html(crate_name: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TEZZERA App</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{
       background: #12121c;
       display: flex;
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-    }
-    canvas {
+    }}
+    canvas {{
       display: block;
       image-rendering: pixelated;
-    }
+    }}
+    /* D107 Phase 25: visually hidden but still in the accessibility tree —
+       "display: none"/"visibility: hidden" would also hide this from
+       screen readers, which defeats the point (crawlers AND assistive
+       tech read this; only SIGHTED users see the canvas instead). This is
+       the standard visually-hidden pattern, not display:none. */
+    #tzr-seo {{
+      position: absolute;
+      width: 1px; height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }}
   </style>
 </head>
 <body>
@@ -276,21 +303,25 @@ fn generate_index_html() -> String {
   <div id="tzr-seo"><!--TZR_SEO_SHADOW_DOM--></div>
   <canvas id="tezzera-canvas"></canvas>
   <script type="module">
-    // If wasm-bindgen output exists, use it; otherwise load raw wasm
-    try {
-      const { default: init } = await import('./app.js');
+    // If wasm-bindgen output exists, use it; otherwise load raw wasm.
+    // Filenames are the real crate name ("{crate_name}.js"/".wasm"), not a
+    // hardcoded "app.js" — that was a real bug (the app silently never
+    // loaded for any project not literally named "app"), fixed alongside
+    // D107 Phase 25 Step 4.
+    try {{
+      const {{ default: init }} = await import('./{crate_name}.js');
       await init();
-    } catch (e) {
+    }} catch (e) {{
       // Fallback: raw wasm (no wasm-bindgen)
-      const response = await fetch('app.wasm');
+      const response = await fetch('{crate_name}.wasm');
       const bytes = await response.arrayBuffer();
-      await WebAssembly.instantiate(bytes, {});
-    }
+      await WebAssembly.instantiate(bytes, {{}});
+    }}
   </script>
 </body>
 </html>
 "#
-    .to_string()
+    )
 }
 
 #[cfg(test)]
@@ -339,8 +370,29 @@ mod tests {
 
     #[test]
     fn index_html_contains_canvas() {
-        let html = generate_index_html();
+        let html = generate_index_html("my_app");
         assert!(html.contains("tezzera-canvas"));
         assert!(html.contains("<canvas"));
+    }
+
+    #[test]
+    fn index_html_imports_the_real_crate_name_not_a_hardcoded_app_js() {
+        // Regression test for a real bug: this used to hardcode "app.js"
+        // regardless of the actual crate name, so the app silently never
+        // loaded for any project not literally named "app".
+        let html = generate_index_html("seo_test");
+        assert!(html.contains("./seo_test.js"), "{html}");
+        assert!(html.contains("seo_test.wasm"), "{html}");
+        assert!(!html.contains("'./app.js'"), "{html}");
+    }
+
+    #[test]
+    fn index_html_hides_seo_container_from_sighted_users_without_hiding_from_screen_readers() {
+        let html = generate_index_html("my_app");
+        // display:none/visibility:hidden would ALSO hide it from most
+        // screen readers, defeating the point — must use the
+        // visually-hidden clip-rect pattern instead.
+        assert!(html.contains("clip: rect(0, 0, 0, 0)"));
+        assert!(!html.contains("#tzr-seo {\n      display: none"));
     }
 }

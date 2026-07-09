@@ -59,9 +59,34 @@ fn collect_text(node: &SemanticNode, out: &mut Vec<String>) {
     }
 }
 
+/// Renders `node`'s children, auto-wrapping any run of consecutive
+/// `Role::ListItem` siblings in a synthetic `<ul>`. Widgets like `ListTile`
+/// emit `Role::ListItem` whether or not an app wraps them in an explicit
+/// `Role::List` container (most don't — they're just placed in a `Column`),
+/// so without this a bare `<li>` with no `<ul>` ancestor loses its implicit
+/// `listitem` accessibility role and silently drops out of the a11y tree —
+/// confirmed via a real Chrome accessibility-tree read during D107 Step 5,
+/// not assumed from spec-reading. `Role::List`'s own branch renders its
+/// children directly (not through this function) since it already supplies
+/// the `<ul>` wrapper itself.
 fn render_children(node: &SemanticNode, out: &mut String) {
-    for child in &node.children {
-        render_node(child, out);
+    let children = &node.children;
+    let mut i = 0;
+    while i < children.len() {
+        if children[i].role == Role::ListItem {
+            let start = i;
+            while i < children.len() && children[i].role == Role::ListItem {
+                i += 1;
+            }
+            out.push_str("<ul>");
+            for child in &children[start..i] {
+                render_node(child, out);
+            }
+            out.push_str("</ul>");
+        } else {
+            render_node(&children[i], out);
+            i += 1;
+        }
     }
 }
 
@@ -94,7 +119,9 @@ fn render_node(node: &SemanticNode, out: &mut String) {
         }
         Role::List => {
             out.push_str("<ul>");
-            render_children(node, out);
+            for child in &node.children {
+                render_node(child, out);
+            }
             out.push_str("</ul>");
         }
         Role::ListItem => {
@@ -240,7 +267,30 @@ mod tests {
             .child(node(Role::ListItem, "Counter, A simple counter with + / \u{2212}"));
         let html = render_html(&tree);
         assert!(html.contains("<h1>theme_preview</h1>"));
-        assert!(html.contains("<li>Counter, A simple counter with"));
+        assert!(html.contains("<ul><li>Counter, A simple counter with"));
+    }
+
+    #[test]
+    fn orphan_list_items_get_a_synthetic_ul_wrapper() {
+        // A ListTile placed directly in a Column (no explicit List
+        // container) is the common case, not the exception — without this,
+        // a bare <li> with no <ul> ancestor loses its implicit listitem
+        // role in the accessibility tree (confirmed in a real browser).
+        let tree = SemanticNode::new().child(node(Role::ListItem, "Only item"));
+        assert_eq!(render_html(&tree), "<ul><li>Only item</li></ul>");
+    }
+
+    #[test]
+    fn consecutive_orphan_list_items_share_one_ul_non_list_items_dont_join_it() {
+        let tree = SemanticNode::new()
+            .child(node(Role::ListItem, "One"))
+            .child(node(Role::ListItem, "Two"))
+            .child(node(Role::Text, "Not a list item"))
+            .child(node(Role::ListItem, "Three"));
+        assert_eq!(
+            render_html(&tree),
+            "<ul><li>One</li><li>Two</li></ul><p>Not a list item</p><ul><li>Three</li></ul>"
+        );
     }
 
     #[test]

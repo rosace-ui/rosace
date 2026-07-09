@@ -854,7 +854,20 @@ fn web_index_html(name: &str, crate_name: &str) -> String {
   <link rel="icon" href="favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <link rel="manifest" href="site.webmanifest" />
-  <style>html, body {{ margin: 0; padding: 0; background: #14141a; }}</style>
+  <style>
+    html, body {{ margin: 0; padding: 0; background: #14141a; }}
+    /* D107 Phase 25: visually hidden but still in the accessibility tree —
+       "display: none"/"visibility: hidden" would also hide this from
+       screen readers, which defeats the point (crawlers AND assistive
+       tech read this; only SIGHTED users see the canvas instead). */
+    #tzr-seo {{
+      position: absolute;
+      width: 1px; height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }}
+  </style>
 </head>
 <body>
   <!-- D107 Phase 25 Step 3: `tzr build --target web` replaces this comment
