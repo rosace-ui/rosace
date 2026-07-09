@@ -402,6 +402,13 @@ impl<'a> PaintCtx<'a> {
         self.tree.borrow().node(self.node).hovered
     }
 
+    /// True from MouseDown until MouseUp while this widget is the pressed
+    /// target — pair with [`Self::animate_to`] for press/tap feedback
+    /// (D108/Phase 26 Step 1).
+    pub fn pressed(&self) -> bool {
+        self.tree.borrow().node(self.node).pressed
+    }
+
     /// Declare a hover-only region (tooltips): participates in hover
     /// tracking without swallowing clicks.
     pub fn hoverable(&self) {

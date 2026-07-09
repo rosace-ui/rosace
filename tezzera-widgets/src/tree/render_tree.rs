@@ -94,6 +94,10 @@ pub struct TreeNode {
     // ── Interaction state (dispatcher-owned) ─────────────────────────────
     /// True while the cursor is over this node's hit/hover region.
     pub hovered: bool,
+    /// True from MouseDown until MouseUp on this node — drives press/tap
+    /// feedback (D108/Phase 26 Step 1), same dispatcher-owned shape as
+    /// `hovered`.
+    pub pressed: bool,
     /// Pointer interception: 1 = ignore (subtree transparent to hits),
     /// 2 = absorb (consume everything in rect). Declared per paint.
     pub pointer_mode: u8,
@@ -195,6 +199,13 @@ impl RenderTree {
 
     pub fn node(&self, id: NodeId) -> &TreeNode {
         &self.nodes[id]
+    }
+
+    /// Every node in the arena, for callers that need to scan rather than
+    /// look up a specific id (e.g. tests asserting some node reached a
+    /// given interaction state without knowing its id in advance).
+    pub fn nodes_iter(&self) -> impl Iterator<Item = &TreeNode> {
+        self.nodes.iter()
     }
 
     // ── Derivations (D091/D092) ───────────────────────────────────────────
@@ -355,6 +366,25 @@ impl RenderTree {
         }
         if let Some(new) = target {
             self.nodes[new].hovered = true;
+            self.nodes[new].paint_dirty = true;
+        }
+        true
+    }
+
+    /// Set the pressed node, clearing the previous one — same shape as
+    /// [`Self::set_hover`], driven by MouseDown/MouseUp instead of
+    /// MouseMove. Returns true when the pressed target changed.
+    pub fn set_pressed(&mut self, target: Option<NodeId>) -> bool {
+        let current = self.nodes.iter().position(|n| n.pressed);
+        if current == target {
+            return false;
+        }
+        if let Some(old) = current {
+            self.nodes[old].pressed = false;
+            self.nodes[old].paint_dirty = true;
+        }
+        if let Some(new) = target {
+            self.nodes[new].pressed = true;
             self.nodes[new].paint_dirty = true;
         }
         true
@@ -563,6 +593,28 @@ mod tests {
 
         assert_eq!(a, a2);
         assert!(t.hit_test(5.0, 5.0).is_some(), "hit must survive the clean frame");
+    }
+
+    #[test]
+    fn set_pressed_clears_the_previous_target_and_reports_whether_it_changed() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let a = t.slot(RenderTree::ROOT, true);
+        let b = t.slot(RenderTree::ROOT, true);
+        t.finalize();
+
+        assert!(t.set_pressed(Some(a)), "unset -> Some(a) is a change");
+        assert!(t.node(a).pressed);
+        assert!(!t.node(b).pressed);
+
+        assert!(!t.set_pressed(Some(a)), "Some(a) -> Some(a) is not a change");
+
+        assert!(t.set_pressed(Some(b)), "Some(a) -> Some(b) is a change");
+        assert!(!t.node(a).pressed, "old target must be cleared");
+        assert!(t.node(b).pressed);
+
+        assert!(t.set_pressed(None), "Some(b) -> None is a change");
+        assert!(!t.node(b).pressed);
     }
 
     #[test]

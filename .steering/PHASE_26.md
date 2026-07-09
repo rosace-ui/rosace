@@ -1,6 +1,6 @@
 # Phase 26 — Pervasive Default Animation (D108)
 
-> Status: IN PROGRESS (scoped 2026-07-09; Step 1 starting)
+> Status: IN PROGRESS (scoped 2026-07-09; Step 1 landed 2026-07-09)
 > Started: 2026-07-09
 > Completed: —
 > Decision: **D108** — extend TEZZERA's existing theme-global, zero-per-app
@@ -74,6 +74,51 @@ lift on `Button`, `ListTile`, `Chip`, and other `Pressable`-driven widgets.
 Exit: pressing a button in a running app shows a smooth eased color
 transition (not an instant snap) on press and release, verified via real
 interaction, and snaps instantly when `set_animations(false)`.
+
+**Landed.** New dispatcher-owned `TreeNode::pressed: bool`
+(`render_tree.rs`, mirrors `hovered` exactly) + `RenderTree::set_pressed`
++ `PaintCtx::pressed()`. Wired into `tezzera/src/engine.rs`'s real
+MouseDown/MouseUp handlers — MouseDown resolves the target via the same
+`hover_test` the existing hover-tracking MouseMove handler already uses
+(deliberately reused, not a new hit-resolution path — lower risk than
+threading node ids through `hit_test`'s recursive scroll-transform
+wrapping). `Button` and `ListTile` (the two widgets that already called
+`ctx.hovered()` for their own styling) now ease a single "emphasis" scalar
+through `animate_to` across three levels — idle (0.0), hover (0.5, matches
+the old flat lift exactly, so no visual regression when animations are
+off), press (1.0, double the hover lift, so a tap reads as visually
+distinct). `Chip` was investigated and correctly left alone — unlike
+Button/ListTile it has no `on_press`/hover wiring of its own; it's only
+interactive via the external `.on_press()` (`Pressable`), which paints the
+child on a *different* render-tree node than the one press/hover state
+lands on. Giving `Pressable`-wrapped widgets press feedback is a real,
+separate architectural question (does `Pressable` need to expose its own
+node's interaction state down to the child?) — flagged, not solved here.
+
+**Verified for real**: two new integration tests in `tezzera/src/
+engine.rs` drive an actual headless `FrameEngine` (the same struct the
+real desktop/web/iOS/Android paths all use) with synthetic
+`InputEvent::MouseDown`/`MouseUp`, exactly like `tezzera-web-seo`/Phase 25
+used a headless `FrameEngine` for build-time SEO extraction — not a
+render-tree-only unit test. One confirms `MouseDown` sets `pressed` on a
+real node and `MouseUp` clears it; the other confirms the eased scalar
+actually advances toward the 1.0 press target over successive frames (with
+a synthetic `frame_dt` for determinism, not real wall-clock time — avoids
+a flaky test whose convergence speed depends on machine speed) and
+converges to 1.0. Also scaffolded a fresh `tzr new`-generated desktop app
+and ran it for real (screenshot confirms correct rendering, no visual
+regression). **Honest gap**: this environment has no native-desktop GUI
+automation tool (no `cliclick`/Quartz installed, no computer-use tool for
+non-browser windows) to literally move the OS mouse cursor and hold a
+button down for a live screenshot sequence — unlike Phase 25's Chrome
+automation, which was available for the web target. What WAS verified
+instead is the exact same dispatch code a real click would run, driven
+with synthetic events through the real `FrameEngine`, plus visual
+confirmation the app still renders correctly. If a literal physical-click
+screenshot sequence is wanted, it needs either a human at the mouse or an
+explicitly-authorized install of a click-automation tool.
+Full `cargo build --workspace` / `cargo test --workspace --no-fail-fast`
+clean (zero failures) after this step.
 
 ### Step 2 — Wire real momentum scroll
 `ScrollView` currently writes scroll offset instantly via

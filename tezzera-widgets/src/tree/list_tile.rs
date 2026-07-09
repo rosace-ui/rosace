@@ -75,8 +75,14 @@ impl Widget for ListTile {
         if let Some(f) = &self.press {
             let f = f.clone();
             ctx.on_press(move || f());
-            if ctx.hovered() {
-                ctx.fill_rect(ctx.rect, tezzera_render::Color::rgba(255, 255, 255, 14));
+            // Hover/press feedback, eased between three levels (D108 Phase
+            // 26 Step 1) — idle, hover (matches the old flat 14-alpha wash),
+            // press (double it).
+            let target = if ctx.pressed() { 1.0 } else if ctx.hovered() { 0.5 } else { 0.0 };
+            let emphasis = ctx.animate_to(target, 0.0);
+            if emphasis > 0.0 {
+                let a = (14.0 * emphasis * 2.0).min(255.0) as u8;
+                ctx.fill_rect(ctx.rect, tezzera_render::Color::rgba(255, 255, 255, a));
             }
         }
         let r = ctx.rect;

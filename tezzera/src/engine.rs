@@ -455,6 +455,14 @@ impl FrameEngine {
                             }
                         }
                     }
+                    // Press/tap feedback (D108/Phase 26 Step 1): mirror hover
+                    // resolution at the moment of MouseDown, held until
+                    // MouseUp regardless of small cursor drift meanwhile.
+                    let press_target = self.render_tree.borrow().hover_test(*x, *y);
+                    if self.render_tree.borrow_mut().set_pressed(press_target) {
+                        self.forced_repaint = true;
+                        tezzera_state::request_frame();
+                    }
                     // Arm a long-press timer if a region wants one.
                     self.press_origin = Some((*x, *y));
                     let lp = self.render_tree.borrow().long_press_test(*x, *y);
@@ -498,6 +506,10 @@ impl FrameEngine {
                     if let Some(c) = &self.lp_cancel { c.store(true, Ordering::Relaxed); }
                     self.lp_cancel = None;
                     self.press_origin = None;
+                    if self.render_tree.borrow_mut().set_pressed(None) {
+                        self.forced_repaint = true;
+                        tezzera_state::request_frame();
+                    }
                 }
                 tezzera_platform::InputEvent::Scroll { x, y, delta_x, delta_y } => {
                     let mut handled = false;
@@ -558,5 +570,89 @@ impl FrameEngine {
         }
 
         content_changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tezzera_core::{Component, Context, Element};
+    use tezzera_widgets::tree::{Button, ButtonVariant, Widget};
+
+    /// Root that fills the whole canvas with a single pressable Button
+    /// (tight root constraints, D108/Phase 26 Step 1's real integration
+    /// point: `engine.rs`'s MouseDown/MouseUp -> `RenderTree::set_pressed`
+    /// -> `PaintCtx::pressed()` -> `Button::paint`'s `animate_to`).
+    struct OneButton;
+    impl Component for OneButton {
+        fn build(&self, _ctx: &mut Context) -> Element {
+            Button::new("Press me").variant(ButtonVariant::Primary).on_press(|| {}).into_element()
+        }
+    }
+
+    fn headless_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas) {
+        let engine = FrameEngine::new(Box::new(OneButton), tezzera_render::FontCache::embedded());
+        (engine, SkiaCanvas::new(200, 60), SkiaCanvas::new(200, 60))
+    }
+
+    #[test]
+    fn press_then_release_sets_and_clears_render_tree_pressed_state() {
+        let (mut engine, mut canvas, mut overlay) = headless_engine();
+        // First frame: build + layout, no events — populates hit regions.
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let down = tezzera_platform::InputEvent::MouseDown {
+            x: 100.0, y: 30.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[down]);
+        assert!(
+            engine.render_tree.borrow().nodes_iter().any(|n| n.pressed),
+            "MouseDown over the button must mark some node pressed"
+        );
+
+        let up = tezzera_platform::InputEvent::MouseUp {
+            x: 100.0, y: 30.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[up]);
+        assert!(
+            engine.render_tree.borrow().nodes_iter().all(|n| !n.pressed),
+            "MouseUp must clear pressed state"
+        );
+    }
+
+    #[test]
+    fn press_eases_the_button_toward_full_emphasis_over_several_frames() {
+        // A deterministic synthetic frame_dt, not real wall-clock time
+        // between fast test calls — otherwise convergence speed (and thus
+        // this test's pass/fail) would depend on machine speed.
+        tezzera_animate::set_frame_dt(0.05);
+
+        let (mut engine, mut canvas, mut overlay) = headless_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let down = tezzera_platform::InputEvent::MouseDown {
+            x: 100.0, y: 30.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[down]);
+        let first = engine.render_tree.borrow().nodes_iter().find_map(|n| n.anim);
+
+        // Re-paint several more frames with no new events — animate_to keeps
+        // easing toward the 1.0 press target via its own frame-request loop.
+        for _ in 0..30 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+        }
+        let settled = engine.render_tree.borrow().nodes_iter().find_map(|n| n.anim);
+
+        assert!(first.is_some(), "first pressed frame must observe an eased value");
+        assert!(
+            settled.unwrap() > first.unwrap(),
+            "emphasis must have eased further toward the press target over subsequent frames: {:?} -> {:?}",
+            first, settled
+        );
+        assert!(
+            (settled.unwrap() - 1.0).abs() < 0.01,
+            "emphasis must settle at the full press target (1.0), got {:?}",
+            settled
+        );
     }
 }

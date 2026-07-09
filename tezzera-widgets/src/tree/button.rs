@@ -86,13 +86,17 @@ impl Widget for Button {
 
         let fg = if self.disabled { ctx.tc(t.outline) } else { fg };
 
-        // Hover feedback: lift the fill toward white (opaque variants) or
-        // add a faint wash (ghost/link). Only when enabled.
-        let bg = if !self.disabled && ctx.hovered() {
+        // Hover/press feedback: lift the fill toward white (opaque variants)
+        // or add a faint wash (ghost/link), eased between three levels (D108
+        // Phase 26 Step 1) — idle, hover (matches the old flat lift), press
+        // (double it, so a tap reads as visually distinct from a hover).
+        let target = if self.disabled { 0.0 } else if ctx.pressed() { 1.0 } else if ctx.hovered() { 0.5 } else { 0.0 };
+        let emphasis = ctx.animate_to(target, 0.0);
+        let bg = if emphasis > 0.0 {
             if bg.a == 0 {
-                Color::rgba(255, 255, 255, 22)
+                Color::rgba(255, 255, 255, (22.0 * emphasis * 2.0).min(255.0) as u8)
             } else {
-                lighten(bg, 0.12)
+                lighten(bg, (0.12 * emphasis * 2.0).min(1.0))
             }
         } else {
             bg
