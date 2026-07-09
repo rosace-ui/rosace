@@ -60,6 +60,21 @@ would have been.
   phase's default-animation foundation is solid and has revealed what
   primitives actually get reused enough to warrant a library.
 
+## Platform never hardcodes behavior (added 2026-07-09, governs Steps 2/3/5)
+
+Stated explicitly by the user and already the project's own D105 principle
+(`tezzera-core/src/platform.rs:1-7`): widgets/engines never hard-branch on
+platform (`if platform == Ios { ... }`). Platform only ever selects a
+DEFAULT preset through the existing theme-resolution mechanism
+(`Themes::platform(Platform::Ios, cupertino())`), and every default must
+be explicitly overridable by app code regardless of the detected platform
+— an Android app that wants iOS-style bounce scroll just sets it. Steps
+2 and 3 resolve their platform defaults through `ThemeData`'s existing
+type-keyed `ext` map (`tezzera-theme/src/theme.rs:83-86`, D105 Phase 23
+Step 4 — built exactly for this: "lets a custom widget stash and read its
+own theme-style struct without editing this type"), the same shape
+`AppBarStyle` already proved out — not a new mechanism.
+
 ## Steps
 
 ### Step 1 — Press/tap feedback
@@ -120,7 +135,7 @@ explicitly-authorized install of a click-automation tool.
 Full `cargo build --workspace` / `cargo test --workspace --no-fail-fast`
 clean (zero failures) after this step.
 
-### Step 2 — Wire real momentum scroll
+### Step 2 — Wire real momentum + bounce scroll (expanded 2026-07-09)
 `ScrollView` currently writes scroll offset instantly via
 `ScrollController::scroll_by`. Wires `tezzera-scroll`'s existing
 `MomentumState`/`ScrollPhysics::Momentum` in: on drag release with
@@ -128,21 +143,58 @@ residual velocity, decay the offset via friction each frame until it
 settles or a new drag interrupts it. Respects `theme.animation.enabled`
 (disabled → instant stop at release, no coast).
 
-Exit: a real drag-and-release in a running scrollable list visibly
-continues scrolling with decreasing speed after the pointer lifts,
-verified by interacting with a real running app, and stops instantly when
-animations are disabled.
+Adds `ScrollPhysics::Bounce { friction, spring_stiffness }` (overscroll
+resists then springs back — the iOS feel; Android's overscroll glow is a
+separate visual, not a different physics model, and is out of scope). The
+default physics resolves per-platform via a new `ScrollStyle` ext struct
+on `ThemeData` (`cupertino()` → `Bounce`, `material()`/desktop/web →
+`Momentum`) but an explicit `.physics(...)` on `ScrollView` always wins —
+see the platform rule above.
 
-### Step 3 — Wire real nav transitions
+Exit: a real drag-and-release in a running scrollable list visibly
+continues scrolling with decreasing speed (or bounces back, if
+`Bounce`-configured) after the pointer lifts, verified by interacting with
+a real running app; an explicit override to the non-default physics works
+regardless of detected platform; stops instantly when animations are
+disabled.
+
+### Step 3 — Wire real nav transitions (expanded 2026-07-09)
 `tezzera-nav`'s `Navigator`/`ScreenNav` has zero references to
 `tezzera-nav-anim` today — pushes/pops are instant. Wires
-`ScreenTransition` (slide) into the real push/pop path, default-on,
-respecting `theme.animation.enabled`.
+`NavigatorAnimated`/`ScreenTransition` into the real push/pop path,
+default-on, respecting `theme.animation.enabled`.
 
-Exit: pushing/popping a screen in a real running app shows a slide
-transition by default with zero app-level wiring (`tzr new`'s generated
-Home→Counter navigation is the concrete test case), off when animations
-are globally disabled.
+The default transition STYLE resolves per-platform via a new
+`NavTransitionStyle` ext struct on `ThemeData` (same mechanism as Step 2's
+`ScrollStyle`), always overridable via an explicit `Navigator::
+transition(...)` call regardless of detected platform.
+
+Exit: pushing/popping a screen in a real running app shows the
+platform-default transition with zero app-level wiring (`tzr new`'s
+generated Home→Counter navigation is the concrete test case), an explicit
+override to a different style works regardless of platform, off entirely
+when animations are globally disabled.
+
+### Step 5 — Hero / shared-element transitions (new 2026-07-09)
+Confirmed genuinely greenfield (grepped "hero"/"shared_element"/"morph" —
+zero real hits). Depends on Step 3 landing first (needs its transition
+progress signal to interpolate against).
+
+Revives the existing-but-completely-dead `Key`/`Element::with_key`
+identity primitive (`tezzera-core/src/{types,element}.rs` — no widget has
+a `.key(...)` builder today, and the reconciler never reads it; today's
+real identity, confirmed in `walk_element`/`RenderTree`, is purely
+positional and resets every navigation) as a widget-facing `.hero_tag(id)`
+builder. A new `HeroController` captures a hero-tagged widget's world
+rect + `Picture` right before its screen is pruned from the render tree
+on navigation, then paints it at the LERP'd rect between outgoing and
+incoming positions via the existing overlay-layer mechanism
+(`overlay_api.rs`) while Step 3's transition is in progress. Fully opt-in
+— no tag used, no behavior change.
+
+Exit: a real running app with two screens sharing a `.hero_tag(...)`'d
+image shows it visually morphing between their rects during a push
+transition, verified via a real screenshot sequence across frames.
 
 ### Step 4 — Image load-in fade
 `Image`/`ImageWidgetImpl` swaps placeholder→loaded instantly. Adds an
@@ -158,9 +210,10 @@ frames, not just code reading.
 Each step gets its own real-app exit-bar verification before the next
 starts — same discipline `PHASE_25.md` followed, and for the same reason:
 Phases 24 and 25 both found real, previously-unknown bugs specifically
-during real-app verification, not code review. Steps 1 and 4 are
-independent and could be reordered; Steps 2 and 3 (wiring an orphaned
-engine into a real path) carry the higher integration risk.
+during real-app verification, not code review. Step 1 is done. Steps 2
+and 3 are independent of each other and can be done in either order; Step
+4 is independent of everything and can slot in wherever convenient. Step
+5 must come after Step 3 (needs its progress signal).
 
 ## Migration Rule
 
