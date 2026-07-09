@@ -1,0 +1,11 @@
+[package]
+name = "tezzera-web-seo"
+description = "D107/Phase 25 — SemanticNode -> HTML mapping for web SEO/crawler-facing output. NOT compiled into iOS/Android/desktop builds: consumed only via a wasm32-target-gated dependency in tezzera/Cargo.toml (Step 4, runtime fallback) and directly by tezzera-cli (Step 3, build-time export — a dev-machine tool, never shipped inside any app binary for any platform)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tezzera-core = { path = "../tezzera-core" }

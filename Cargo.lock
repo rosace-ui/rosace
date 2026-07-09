@@ -2243,6 +2243,7 @@ dependencies = [
  "tezzera-text",
  "tezzera-theme",
  "tezzera-trace",
+ "tezzera-web-seo",
  "tezzera-widgets",
  "tezzera-ws",
 ]
@@ -2537,6 +2538,13 @@ name = "tezzera-trace"
 version = "0.1.0"
 dependencies = [
  "web-time",
+]
+
+[[package]]
+name = "tezzera-web-seo"
+version = "0.1.0"
+dependencies = [
+ "tezzera-core",
 ]
 
 [[package]]

@@ -35,6 +35,7 @@ members = [
     "tezzera-test-utils",
     "tezzera-compositor",
     "tezzera-ffi",
+    "tezzera-web-seo",
 ]
 resolver = "2"
 

@@ -62,3 +62,16 @@ tezzera-macros    = { path = "../tezzera-macros" }
 tezzera-hot-reload = { path = "../tezzera-hot-reload" }
 tezzera-devtools   = { path = "../tezzera-devtools" }
 tezzera-test-utils = { path = "../tezzera-test-utils" }
+
+# Web-only (D107/Phase 25 Step 4) — the runtime shadow-DOM fallback that
+# syncs SemanticNode -> live DOM after hydration. This is the FIRST
+# target-gated dependency in this crate; every other one above is
+# unconditional (a known gap — see [[project-cli-platforms]] memory /
+# CRATE_CONTRACTS.md). Gated to wasm32 specifically so this never compiles
+# into iOS/Android/macOS/Windows/Linux builds — not "probably stripped by
+# the linker," genuinely never part of that target's dependency graph at
+# all. tzr-cli (Step 3's build-time consumer) depends on tezzera-web-seo
+# directly in its own Cargo.toml instead — it's a dev-machine tool, never
+# shipped inside any app binary regardless of the app's target platform.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tezzera-web-seo = { path = "../tezzera-web-seo" }

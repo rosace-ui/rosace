@@ -1,6 +1,7 @@
 # Phase 25 — Web SEO/Accessibility via Semantic-Tree HTML Shadow (D107)
 
-> Status: IN PROGRESS (Steps 1-2 landed 2026-07-09)
+> Status: IN PROGRESS (Steps 1-2 landed 2026-07-09; Step 3's mapping
+> function + platform isolation landed, build-integration remaining)
 > Started: 2026-07-09
 > Completed: —
 > Decision: **D107** — canvas stays the only visual renderer; web additionally
@@ -46,13 +47,49 @@
 >   node here would be a spurious duplicate), `Skeleton` (a loading
 >   placeholder standing in for not-yet-loaded content — nothing
 >   meaningful to announce).
->   **Not yet verified end-to-end** (deferred to Step 3, which needs the
->   same proof anyway): actually running a scaffolded app and confirming
->   `collect_semantics()` produces a non-sparse tree matching the screen.
->   This session's verification was compile-level + the existing
->   `collect_semantics` unit tests, not a real running app — Step 3's
->   `curl`-the-built-HTML exit bar is the honest place to prove this for
->   real, per this project's verify-don't-assume standard.
+>   **Not yet verified end-to-end** (deferred to the rest of Step 3, which
+>   needs the same proof anyway): actually running a scaffolded app and
+>   confirming `collect_semantics()` produces a non-sparse tree matching
+>   the screen. This session's verification was compile-level + the
+>   existing `collect_semantics` unit tests, not a real running app —
+>   Step 3's `curl`-the-built-HTML exit bar is the honest place to prove
+>   this for real, per this project's verify-don't-assume standard.
+> - Step 3 (in progress) — `SemanticNode → HTML` mapping function +
+>   platform-isolation architecture landed; `tzr build --target web`
+>   integration (actually generating this per-route and embedding it in
+>   build output) remains.
+>   **A real architecture question came up mid-session and got resolved
+>   before writing the mapping code, not after**: does web-only code like
+>   this actually stay off iOS/Android/desktop binaries, or does it
+>   silently ship there as unreferenced dead weight? Checked: `tezzera`'s
+>   Cargo.toml had ZERO target-gated dependencies before this — all ~30
+>   sub-crates are unconditional (a real, separately-known gap — see
+>   `[[project-cli-platforms]]` memory). Relying on the linker to strip an
+>   unreferenced function isn't a real guarantee (doesn't happen in debug
+>   builds; not enforced against future accidental references) — so the
+>   mapping function lives in a NEW crate, `tezzera-web-seo` (Layer 5,
+>   alongside `tezzera-a11y`), which `tezzera/Cargo.toml` pulls in via
+>   `[target.'cfg(target_arch = "wasm32")'.dependencies]` — the same
+>   mechanism already used correctly elsewhere in this codebase for
+>   `jni`/`ndk-sys` (Android-only) and `wasm-bindgen`/`web-sys`
+>   (wasm32-only). `tzr-cli` (Step 3's other, build-time consumer) depends
+>   on it directly and unconditionally in its own `Cargo.toml` — safe
+>   regardless of the app's target platform, since `tzr` itself never
+>   ships inside any app binary for any platform.
+>   **Verified concretely, not asserted**: `cargo tree -p tezzera` (host/
+>   macOS target) and `cargo tree -p tezzera --target
+>   aarch64-apple-ios-sim`/`aarch64-linux-android` all show ZERO occurrences
+>   of `tezzera-web-seo` in the dependency graph — not stripped, never
+>   part of that target's build at all. `cargo tree -p tezzera --target
+>   wasm32-unknown-unknown` shows it present. This is the actual guarantee,
+>   compiler-enforced, not "probably fine after optimization."
+>   `tezzera-web-seo/src/lib.rs`: `render_html`/`render_shadow_dom_template`
+>   (the `<template shadowrootmode="open">` wrapper)/`render_text` (the
+>   `llms.txt` source), covering every `Role` variant with proper HTML/
+>   attribute escaping (a real XSS concern — `label`/`value`/`href` are
+>   arbitrary app data, not trusted HTML; tested directly). 11 tests, all
+>   passing, including one mirroring the real `AppBar`+`ListTile` shape
+>   from Step 2.
 
 ## Why This Phase
 
