@@ -302,6 +302,12 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
     if has(Platform::Web) {
         fs::create_dir_all(dir.join("web")).map_err(|e| e.to_string())?;
         write(dir.join("web").join("index.html"), &web_index_html(name, &crate_name))?;
+
+        // Build-time semantic HTML/SEO export (D107 Phase 25 Step 3) — a
+        // native (non-wasm) host binary `tzr build --target web` runs to
+        // extract the app's semantic tree, never shipped to browsers.
+        fs::create_dir_all(dir.join("examples")).map_err(|e| e.to_string())?;
+        write(dir.join("examples").join("seo_extract.rs"), &seo_extract_rs(&crate_name))?;
     }
     if has(Platform::Ios) {
         // Physical Info.plist — for the older Phase 20-22 hand-rolled
@@ -476,6 +482,22 @@ fn cargo_toml(name: &str, crate_name: &str, framework: &str, opts: &NewOptions) 
     } else {
         ""
     };
+    // `examples/seo_extract.rs` (D107 Phase 25 Step 3) needs
+    // `tezzera-web-seo` — as a dev-dependency specifically, not a plain
+    // one: dev-dependencies are excluded from `cargo build --bin
+    // <app-name>` (the real, shipped app, on ANY platform this project
+    // supports, web included — the wasm32 binary itself doesn't need this
+    // crate for Step 3's purely build-time extraction), only pulled in for
+    // `cargo run --example ...`. Same "never ships to a binary that
+    // doesn't need it" reasoning as the wasm32-target-gating in
+    // `tezzera/Cargo.toml`, applied via a different Cargo mechanism suited
+    // to a dev-machine-only *tool* rather than a platform-exclusive
+    // runtime *dependency*.
+    let web_seo_dev_dep = if opts.platforms.contains(&Platform::Web) {
+        format!("\n[dev-dependencies]\ntezzera-web-seo = {{ path = \"{framework}/tezzera-web-seo\" }}\n")
+    } else {
+        String::new()
+    };
     format!(
         r#"[package]
 name = "{name}"
@@ -495,7 +517,7 @@ path = "src/main.rs"
 
 [dependencies]
 tezzera = {{ path = "{framework}/tezzera" }}
-{tezzera_ffi_dep}{web}{android_jni_dep}"#
+{tezzera_ffi_dep}{web}{android_jni_dep}{web_seo_dev_dep}"#
     )
 }
 
@@ -543,15 +565,22 @@ fn lib_rs(name: &str, opts: &NewOptions) -> String {
     // and/or Android is selected; `mod ffi;` is gated the same as the
     // `tezzera-ffi` dependency in Cargo.toml.
     let ffi_mod = if wants_platform_themes { "mod ffi;\n" } else { "" };
+    // `examples/seo_extract.rs` (D107 Phase 25 Step 3) is a separate crate
+    // root (Cargo examples compile against the library as an external
+    // dependency) — it needs `app`/`theme` visible from outside this
+    // crate. Only widened when Web is selected; other platforms keep them
+    // private, matching the existing "only expose what's needed" pattern
+    // `ffi_mod` above already follows.
+    let app_theme_vis = if opts.platforms.contains(&Platform::Web) { "pub " } else { "" };
     format!(
         r#"//! {name} — a TEZZERA app.
 //!
 //! `launch()` is shared by every platform. The native binary calls it from
 //! `main`; the web build calls it from a `wasm-bindgen(start)` entry.
 
-mod app;
+{app_theme_vis}mod app;
 {ffi_mod}mod screens;
-mod theme;
+{app_theme_vis}mod theme;
 
 use tezzera::prelude::*;
 
@@ -758,6 +787,62 @@ pub fn counter_screen(count: &Atom<i32>) -> impl Widget {
 }
 "#;
 
+/// Build-time semantic-tree extraction (D107 Phase 25 Step 3). A native
+/// (host-arch, NOT wasm32) example binary `tzr build --target web` runs via
+/// `cargo run --example seo_extract` — never compiled to wasm, never
+/// shipped to a browser. Does one headless `FrameEngine` build+paint pass
+/// (a `SkiaCanvas` is just an in-memory CPU pixmap — no real window/GPU
+/// needed) purely to populate the render tree, reads `.semantics()`, and
+/// prints the Declarative Shadow DOM HTML + a plain-text (`llms.txt`)
+/// extraction to stdout, separated by a marker line `tzr build` splits on.
+fn seo_extract_rs(crate_name: &str) -> String {
+    format!(
+        r#"//! Build-time semantic HTML/SEO export (D107 Phase 25 Step 3) — run by
+//! `tzr build --target web` via `cargo run --example seo_extract`, NEVER
+//! compiled to wasm or shipped to a browser. See `tezzera-web-seo`'s
+//! module doc for why this mapping lives in its own crate rather than
+//! `tezzera-core` (platform isolation — verified via `cargo tree`, not
+//! assumed).
+//!
+//! A Cargo example is its own crate root — `crate::` here would NOT reach
+//! this package's own `src/lib.rs` modules, so `app`/`theme` are addressed
+//! by this crate's own library name instead (`{crate_name}::...`), same as
+//! any other external dependent would reach them. `lib_rs`'s codegen
+//! widens `app`/`theme` to `pub mod` specifically so this resolves.
+
+use tezzera::{{FontCache, FrameEngine, SkiaCanvas}};
+
+use {crate_name}::app::AppRoot;
+
+/// Matches `web_index_html`'s marker comment in `build_web`.
+const SPLIT_MARKER: &str = "\n---TZR-SEO-TEXT---\n";
+
+fn main() {{
+    tezzera::theme::set_theme({crate_name}::theme::light());
+
+    let font = FontCache::system_ui()
+        .or_else(FontCache::system_mono)
+        .unwrap_or_else(FontCache::embedded);
+
+    let mut engine = FrameEngine::new(Box::new(AppRoot), font);
+
+    // A representative desktop-web viewport — the semantic tree (roles/
+    // labels/structure) doesn't meaningfully depend on the exact size for
+    // typical layouts, so this doesn't need to match any real device.
+    let mut canvas = SkiaCanvas::new_hidpi(1280, 800, 1.0);
+    let mut overlay = SkiaCanvas::new_hidpi(1280, 800, 1.0);
+    engine.paint(&mut canvas, &mut overlay, &[]);
+
+    let tree = engine.semantics();
+    let html = tezzera_web_seo::render_shadow_dom_template(&tree);
+    let text = tezzera_web_seo::render_text(&tree);
+
+    print!("{{html}}{{SPLIT_MARKER}}{{text}}");
+}}
+"#
+    )
+}
+
 fn web_index_html(name: &str, crate_name: &str) -> String {
     format!(
         r#"<!doctype html>
@@ -772,6 +857,14 @@ fn web_index_html(name: &str, crate_name: &str) -> String {
   <style>html, body {{ margin: 0; padding: 0; background: #14141a; }}</style>
 </head>
 <body>
+  <!-- D107 Phase 25 Step 3: `tzr build --target web` replaces this comment
+       with a real <template shadowrootmode="open"> block — crawlable text/
+       structure baked into the raw HTML response, present whether or not
+       the crawler executes JS (a plain curl sees the literal bytes; a
+       shadow-DOM-aware crawler sees a real shadow root). The canvas the
+       script below creates paints over it for sighted users; nothing here
+       is itself rendered as a second visual layer. -->
+  <div id="tzr-seo"><!--TZR_SEO_SHADOW_DOM--></div>
   <script type="module">
     import init from './{crate_name}.js';
     init().catch((e) => {{

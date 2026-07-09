@@ -66,6 +66,18 @@ impl FrameEngine {
         }
     }
 
+    /// The current semantic (accessibility/SEO) tree, derived from the
+    /// render tree `paint` last built — call after at least one `paint()`
+    /// (the render tree is empty before that). Used both by D099 assistive
+    /// tech and, from D107/Phase 25, by build-time HTML/SEO export (see
+    /// `tezzera-web-seo`'s `render_html`) — a headless caller can call
+    /// `paint()` once into a throwaway `SkiaCanvas` purely to populate the
+    /// render tree, then read this, with no real window/GPU needed
+    /// (`SkiaCanvas` is a plain in-memory CPU pixmap).
+    pub fn semantics(&self) -> tezzera_core::SemanticNode {
+        self.render_tree.borrow().collect_semantics()
+    }
+
     /// Runs one frame: build (if dirty), layout, paint into `canvas` and
     /// `overlay_canvas`, then dispatch `events`. Callers are responsible for
     /// presenting the canvases afterward (winit's `PlatformWindow` does this

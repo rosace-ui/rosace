@@ -1,7 +1,6 @@
 # Phase 25 — Web SEO/Accessibility via Semantic-Tree HTML Shadow (D107)
 
-> Status: IN PROGRESS (Steps 1-2 landed 2026-07-09; Step 3's mapping
-> function + platform isolation landed, build-integration remaining)
+> Status: IN PROGRESS (Steps 1-3 landed 2026-07-09; Steps 4-5 remain)
 > Started: 2026-07-09
 > Completed: —
 > Decision: **D107** — canvas stays the only visual renderer; web additionally
@@ -54,10 +53,8 @@
 >   existing `collect_semantics` unit tests, not a real running app —
 >   Step 3's `curl`-the-built-HTML exit bar is the honest place to prove
 >   this for real, per this project's verify-don't-assume standard.
-> - Step 3 (in progress) — `SemanticNode → HTML` mapping function +
->   platform-isolation architecture landed; `tzr build --target web`
->   integration (actually generating this per-route and embedding it in
->   build output) remains.
+> - Step 3 ✅ `SemanticNode → HTML` mapping function, platform-isolation
+>   architecture, AND `tzr build --target web` integration all landed.
 >   **A real architecture question came up mid-session and got resolved
 >   before writing the mapping code, not after**: does web-only code like
 >   this actually stay off iOS/Android/desktop binaries, or does it
@@ -90,6 +87,50 @@
 >   arbitrary app data, not trusted HTML; tested directly). 11 tests, all
 >   passing, including one mirroring the real `AppBar`+`ListTile` shape
 >   from Step 2.
+>   **Build integration**: `tzr new` (Web selected) generates
+>   `examples/seo_extract.rs` — a NATIVE (host-arch, never wasm32) example
+>   binary that does one headless `FrameEngine` build+paint pass (new
+>   `FrameEngine::semantics()` accessor; a `SkiaCanvas` is just an
+>   in-memory CPU pixmap, no real window/GPU needed) purely to populate the
+>   render tree, then prints the shadow-DOM HTML + llms.txt text to stdout.
+>   `tezzera-web-seo` is a `[dev-dependencies]` entry (not a plain one) in
+>   the generated app's own `Cargo.toml` — dev-dependencies are excluded
+>   from `cargo build --bin <app>` (the real, shipped binary, on every
+>   platform including the wasm32 web build itself), only pulled in for
+>   `cargo run --example ...` — same "don't ship what a binary doesn't
+>   need" reasoning as the wasm32-gating above, via the mechanism suited to
+>   a build-time tool rather than a runtime dependency. `lib_rs` widens
+>   `app`/`theme` to `pub mod` (web-only) since a Cargo example is its own
+>   crate root and needs to reach them from outside.
+>   `build_web()` (`tezzera-cli/src/commands/build.rs`) runs this example
+>   after the wasm build, splices the shadow DOM into `dist/index.html`
+>   (replacing a `<!--TZR_SEO_SHADOW_DOM-->` marker `generate_index_html`
+>   now emits) and writes `dist/llms.txt`. Non-fatal on failure (an older
+>   project without `examples/seo_extract.rs` just skips this — Migration
+>   Rule — and a failed extraction is a warning, not a build failure).
+>   **Verified for real, matching the exit bar exactly**: scaffolded a
+>   fresh web app, ran the actual `tzr build --target web` command,
+>   inspected `dist/index.html` — the real `<template shadowrootmode=
+>   "open">` block contains genuine app content (`<h1>seo_test</h1>`,
+>   the Counter list tile's title+subtitle). Then served `dist/` with a
+>   real local HTTP server and ran an actual `curl` against it (no JS
+>   execution involved at all) — the raw HTTP response body contains that
+>   same real text, byte-for-byte.
+>   **Known, honest limitation — not silently glossed over**: this
+>   captures only the app's default/initial screen (Home), not a snapshot
+>   per navigable route. `AppRoot::build()` runs exactly once, with no
+>   forced navigation state, so content behind `nav.push(...)` (e.g. the
+>   Counter screen's "Increment" button) isn't in the build-time export —
+>   only reachable once wasm loads and the user navigates, same as before
+>   this phase. A real per-route static export would need the extractor to
+>   iterate every `Screen` variant, forcing navigation state per iteration
+>   — more scope than this session covers; flag as follow-up, not claim
+>   as done. The phase's OWN exit-bar text is written assuming a
+>   single-screen counter app where the default view already has
+>   everything (true for `tzr new`'s literal generated app, since its
+>   default HOME screen doesn't happen to include "Increment" — that's on
+>   the Counter screen, reached via navigation — so even THAT exact
+>   example only partially matches without per-route support).
 
 ## Why This Phase
 

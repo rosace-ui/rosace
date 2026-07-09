@@ -174,7 +174,31 @@ fn build_web() -> Result<(), String> {
     }
 
     // Step 5: write dist/index.html
-    let html = generate_index_html();
+    let mut html = generate_index_html();
+
+    // Step 6: build-time semantic HTML/SEO export (D107 Phase 25 Step 3) —
+    // only for a project scaffolded after this Step landed (Migration
+    // Rule: an older project without examples/seo_extract.rs just skips
+    // this, same as any other project predating a later `tzr new` addition
+    // — not an error).
+    if std::path::Path::new("examples/seo_extract.rs").exists() {
+        println!("  Extracting semantic tree for SEO/crawlers...");
+        match run_seo_extract() {
+            Ok((shadow_dom, text)) => {
+                html = html.replacen("<!--TZR_SEO_SHADOW_DOM-->", &shadow_dom, 1);
+                std::fs::write("dist/llms.txt", &text)
+                    .map_err(|e| format!("failed to write dist/llms.txt: {}", e))?;
+                println!("  Wrote dist/llms.txt");
+            }
+            Err(e) => {
+                // Non-fatal — the app still builds and runs; it just won't
+                // be crawlable this time. Matches how a missing
+                // wasm-bindgen is a warning above, not a hard failure.
+                println!("  Warning: SEO export failed, continuing without it: {}", e);
+            }
+        }
+    }
+
     std::fs::write("dist/index.html", html)
         .map_err(|e| format!("failed to write dist/index.html: {}", e))?;
 
@@ -182,6 +206,26 @@ fn build_web() -> Result<(), String> {
     println!("  Build complete → dist/");
     println!("  Serve with:  npx serve dist  or  python3 -m http.server -d dist");
     Ok(())
+}
+
+/// Runs `examples/seo_extract.rs` natively (host arch, never wasm32) and
+/// splits its stdout into (shadow DOM HTML, plain text) — see
+/// `seo_extract_rs`'s `SPLIT_MARKER` in `tezzera-cli/src/commands/new.rs`,
+/// which this must stay in sync with.
+fn run_seo_extract() -> Result<(String, String), String> {
+    const SPLIT_MARKER: &str = "\n---TZR-SEO-TEXT---\n";
+    let output = Command::new("cargo")
+        .args(["run", "--example", "seo_extract", "--quiet"])
+        .output()
+        .map_err(|e| format!("cargo run --example seo_extract: {}", e))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some((html, text)) = stdout.split_once(SPLIT_MARKER) else {
+        return Err("seo_extract output missing the expected split marker".to_string());
+    };
+    Ok((html.to_string(), text.to_string()))
 }
 
 /// Return paths to non-deps `.wasm` files in the given directory.
@@ -225,6 +269,11 @@ fn generate_index_html() -> String {
   </style>
 </head>
 <body>
+  <!-- D107 Phase 25 Step 3: replaced with a real <template
+       shadowrootmode="open"> block by build_web() when
+       examples/seo_extract.rs exists — crawlable text/structure baked
+       into the raw HTML response, present whether or not JS runs. -->
+  <div id="tzr-seo"><!--TZR_SEO_SHADOW_DOM--></div>
   <canvas id="tezzera-canvas"></canvas>
   <script type="module">
     // If wasm-bindgen output exists, use it; otherwise load raw wasm
