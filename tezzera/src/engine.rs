@@ -579,6 +579,17 @@ mod tests {
     use tezzera_core::{Component, Context, Element};
     use tezzera_widgets::tree::{Button, ButtonVariant, Widget};
 
+    /// `tezzera_theme::provider`'s theme is a process-wide `GlobalAtom` —
+    /// `cargo test` runs test functions on parallel threads within the same
+    /// process by default, so any test that mutates
+    /// `ThemeData.animation.enabled` (as
+    /// `disabling_animations_stops_coasting_immediately_on_release` does)
+    /// would otherwise race with any other test whose behavior depends on
+    /// that flag being `true` (the animate/coast tests). Discovered for
+    /// real — this test was flaky when run alongside the others until this
+    /// lock was added, not a hypothetical.
+    static ANIMATION_GLOBAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Root that fills the whole canvas with a single pressable Button
     /// (tight root constraints, D108/Phase 26 Step 1's real integration
     /// point: `engine.rs`'s MouseDown/MouseUp -> `RenderTree::set_pressed`
@@ -622,6 +633,13 @@ mod tests {
 
     #[test]
     fn press_eases_the_button_toward_full_emphasis_over_several_frames() {
+        // `frame_dt` is ALSO process-global (`tezzera_animate::set_frame_dt`)
+        // — same lock as the animation-enabled tests, for the same reason:
+        // another test setting a different frame_dt mid-run would corrupt
+        // this one's convergence math. Found for real: adding the wheel
+        // momentum test (which also sets frame_dt) made this test flaky
+        // under `cargo test`'s parallel execution.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A deterministic synthetic frame_dt, not real wall-clock time
         // between fast test calls — otherwise convergence speed (and thus
         // this test's pass/fail) would depend on machine speed.
@@ -654,5 +672,197 @@ mod tests {
             "emphasis must settle at the full press target (1.0), got {:?}",
             settled
         );
+    }
+
+    /// Root with a `ScrollView` over content taller than the viewport — the
+    /// real integration point for D108/Phase 26 Step 2 (`ctx.on_press_at`
+    /// drag-pan -> `ScrollController::apply_momentum`, `ctx.pressed()` ->
+    /// `ScrollController::coast`), driven through the actual `engine.rs`
+    /// MouseDown/MouseMove/MouseUp dispatch, not a controller-level unit test.
+    struct TallScroll;
+    impl Component for TallScroll {
+        fn build(&self, _ctx: &mut Context) -> Element {
+            // Content taller than `MAX_TL_DIM` (4096) keeps plain
+            // `ScrollView::new` on the base (CPU) path automatically
+            // (`should_auto_gpu` requires `extent <= MAX_TL_DIM`) — the
+            // GPU-layer path is explicitly out of scope for Step 2's
+            // drag/momentum (see `.steering/PHASE_26.md`), so this avoids
+            // silently exercising the wrong path.
+            tezzera_widgets::tree::ScrollView::new(tezzera_widgets::tree::Spacer::gap(200.0, 5000.0))
+                .into_element()
+        }
+    }
+
+    fn headless_scroll_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas) {
+        let engine = FrameEngine::new(Box::new(TallScroll), tezzera_render::FontCache::embedded());
+        (engine, SkiaCanvas::new(200, 400), SkiaCanvas::new(200, 400))
+    }
+
+    fn scroll_offset(engine: &FrameEngine) -> Option<[f32; 2]> {
+        engine.render_tree.borrow().nodes_iter().find_map(|n| n.scroll_ctrl.as_ref().map(|c| c.offset()))
+    }
+
+    #[test]
+    fn drag_pans_content_and_momentum_coasts_after_release() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        tezzera_animate::set_frame_dt(0.05);
+        let (mut engine, mut canvas, mut overlay) = headless_scroll_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert_eq!(scroll_offset(&engine), Some([0.0, 0.0]));
+
+        let down = tezzera_platform::InputEvent::MouseDown {
+            x: 100.0, y: 300.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[down]);
+
+        // Drag upward (finger/cursor moves to a smaller y) — content should
+        // follow, increasing the scroll offset, same as a real touch/mouse
+        // drag on any platform.
+        let move1 = tezzera_platform::InputEvent::MouseMove { x: 100.0, y: 260.0 };
+        engine.paint(&mut canvas, &mut overlay, &[move1]);
+        let after_first_move = scroll_offset(&engine).unwrap();
+        assert!(after_first_move[1] > 0.0, "dragging up must increase the scroll offset, got {after_first_move:?}");
+
+        let move2 = tezzera_platform::InputEvent::MouseMove { x: 100.0, y: 220.0 };
+        engine.paint(&mut canvas, &mut overlay, &[move2]);
+        let after_second_move = scroll_offset(&engine).unwrap();
+        assert!(
+            after_second_move[1] > after_first_move[1],
+            "continued drag must keep increasing offset: {after_first_move:?} -> {after_second_move:?}"
+        );
+
+        let up = tezzera_platform::InputEvent::MouseUp {
+            x: 100.0, y: 220.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[up]);
+        let at_release = scroll_offset(&engine).unwrap();
+
+        // Coast for several more frames with no new input — real momentum,
+        // tracked from the actual drag speed, must carry it further, not
+        // stop dead at release.
+        for _ in 0..10 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+        }
+        let after_coast = scroll_offset(&engine).unwrap();
+        assert!(
+            after_coast[1] > at_release[1],
+            "momentum must carry the offset further after release: {at_release:?} -> {after_coast:?}"
+        );
+    }
+
+    #[test]
+    fn wheel_scroll_does_not_coast_on_its_own_once_events_stop() {
+        // D108/Phase 26 Step 2, revised after real trackpad testing: wheel
+        // input applies its delta directly and does NOT inject a synthetic
+        // velocity for `coast` to keep decaying. Confirmed via winit's own
+        // macOS backend source: a trackpad's coast feel is largely the OS's
+        // OWN native momentum-phase event stream (`NSEvent.momentumPhase`),
+        // which winit collapses into the same `TouchPhase::Moved` as real
+        // finger movement — no reliable way to tell them apart from the
+        // event alone. An earlier version had TEZZERA inject its OWN
+        // momentum on top of wheel input too, which fought the OS's tail:
+        // confirmed via a real screen recording, frame-by-frame — settled
+        // at the bottom, then overscrolled again on its own a second later,
+        // then re-settled — a genuine oscillation, not a one-off glitch.
+        // This test proves the fix: once wheel events stop, the offset
+        // does NOT keep moving on its own (in-bounds, no coast source left
+        // to conflict with the OS's real momentum-phase stream).
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dt = 1.0 / 60.0;
+        tezzera_animate::set_frame_dt(dt);
+        let (mut engine, mut canvas, mut overlay) = headless_scroll_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        // A burst of wheel events, one per frame, simulating an active
+        // trackpad scroll gesture in progress. Small deltas, well within
+        // bounds (content is 5000px tall, viewport 400px) — no overscroll.
+        for _ in 0..15 {
+            let scroll = tezzera_platform::InputEvent::Scroll {
+                x: 100.0, y: 200.0, delta_x: 0.0, delta_y: -8.0,
+            };
+            engine.paint(&mut canvas, &mut overlay, &[scroll]);
+        }
+        let at_burst_end = scroll_offset(&engine).unwrap();
+        assert!(at_burst_end[1] > 0.0, "the burst itself must have moved the offset, got {at_burst_end:?}");
+
+        // Fingers lift — no more Scroll events. Wait past the wheel-idle
+        // grace period. In-bounds, so there's nothing to coast or spring
+        // back from — the offset must stay exactly where the wheel deltas
+        // left it, not keep drifting under its own synthetic momentum.
+        for _ in 0..20 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+        }
+        let after_idle = scroll_offset(&engine).unwrap();
+        assert_eq!(
+            after_idle, at_burst_end,
+            "in-bounds offset must not keep moving once wheel events stop: {at_burst_end:?} -> {after_idle:?}"
+        );
+    }
+
+    #[test]
+    fn wheel_scroll_still_springs_back_from_overscroll_once_idle_with_no_injected_velocity() {
+        // Companion to the test above: removing wheel's synthetic velocity
+        // must not also remove overscroll recovery. `coast`'s
+        // already-overscrolled check runs independent of velocity, so a
+        // wheel-driven overscroll (via `apply_momentum`'s own resistance)
+        // still springs back once the gesture goes idle, even though no
+        // velocity was ever tracked for it.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dt = 1.0 / 60.0;
+        tezzera_animate::set_frame_dt(dt);
+        let (mut engine, mut canvas, mut overlay) = headless_scroll_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        // Scroll up past the top edge (negative delta direction pushes
+        // toward 0 then past it) — many small events so resistance still
+        // lets it go negative.
+        for _ in 0..30 {
+            let scroll = tezzera_platform::InputEvent::Scroll {
+                x: 100.0, y: 200.0, delta_x: 0.0, delta_y: 8.0,
+            };
+            engine.paint(&mut canvas, &mut overlay, &[scroll]);
+        }
+        let at_burst_end = scroll_offset(&engine).unwrap();
+        assert!(at_burst_end[1] < 0.0, "must be overscrolled above the top, got {at_burst_end:?}");
+
+        // Wait past the wheel-idle grace period — spring-back should kick
+        // in even with zero tracked velocity.
+        for _ in 0..30 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+        }
+        let after_idle = scroll_offset(&engine).unwrap();
+        assert!(
+            after_idle[1] > at_burst_end[1] && after_idle[1] <= 0.0,
+            "must have eased back toward the top bound (0), not stayed frozen at the overscroll: {at_burst_end:?} -> {after_idle:?}"
+        );
+    }
+
+    #[test]
+    fn disabling_animations_stops_coasting_immediately_on_release() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        tezzera_animate::set_frame_dt(0.05);
+        tezzera_theme::provider::set_animations(false);
+        let (mut engine, mut canvas, mut overlay) = headless_scroll_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let down = tezzera_platform::InputEvent::MouseDown {
+            x: 100.0, y: 300.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[down]);
+        let move1 = tezzera_platform::InputEvent::MouseMove { x: 100.0, y: 220.0 };
+        engine.paint(&mut canvas, &mut overlay, &[move1]);
+        let up = tezzera_platform::InputEvent::MouseUp {
+            x: 100.0, y: 220.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[up]);
+        let at_release = scroll_offset(&engine).unwrap();
+
+        for _ in 0..10 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+        }
+        let after = scroll_offset(&engine).unwrap();
+        assert_eq!(after, at_release, "no coast at all once animations are disabled");
+
+        tezzera_theme::provider::set_animations(true); // don't leak into other tests
     }
 }

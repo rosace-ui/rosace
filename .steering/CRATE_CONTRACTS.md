@@ -177,6 +177,58 @@ silently baked into the contracts below, per the project's violation policy
    - **Web has no broader widget/layout test coverage** beyond the
      scaffolded counter MVP that's been used for verification throughout
      Phases 25 and the earlier multiplatform work.
+8. **`tezzera-state`'s `frame_scheduler` tests race each other under
+   `cargo test --workspace`'s parallel execution.** `request_frame_sets_flag`
+   /`take_clears_flag`/`multiple_requests_collapse_to_one`
+   (`tezzera-state/src/frame_scheduler.rs`) all read/write the same
+   process-global frame-requested flag with no per-test isolation — flaky
+   only under full-workspace parallel load, always passes when run in
+   isolation (`cargo test -p tezzera-state`). Found 2026-07-09 while
+   verifying Phase 26 Step 2 (unrelated code); not fixed here since it's
+   pre-existing and outside that step's scope. Same class of bug Phase 26
+   Step 2 itself hit and fixed in `tezzera/src/engine.rs`'s new tests (a
+   `static ... Mutex` guard around tests that mutate global state) — the
+   same fix shape would apply here.
+9. **`ScrollPhysics::Bounce` (D108/Phase 26 Step 2) still jitters/oscillates
+   on real macOS trackpad input — unresolved after multiple real-device
+   debugging rounds, left as a known issue rather than silently shipped as
+   working.** Drag-to-pan and the underlying momentum primitives
+   (`ScrollController::apply_momentum`/`coast`/`settle_bounce`,
+   `tezzera-scroll`) are real, tested, and correct in isolation (44 unit
+   tests, including regression tests for every bug found this round — unit
+   mismatch, frame-rate-dependent decay, unbounded overscroll, velocity
+   clamping). The unresolved part is specifically the FEEL of `Bounce`
+   physics driven by real trackpad wheel events, confirmed via a real
+   screen recording (frame-extracted with a one-off Swift/AVFoundation
+   script, not assumed): the view visibly settles at the content edge,
+   overscrolls again on its own about a second later, then re-settles — a
+   genuine oscillation, not a one-off glitch. Root-caused (not guessed) to
+   a real platform quirk: macOS delivers trackpad momentum as the OS's own
+   native event stream after the user's fingers lift
+   (`NSEvent.momentumPhase`, confirmed by reading winit 0.30.13's actual
+   macOS backend source at `platform_impl/macos/view.rs`'s
+   `scroll_wheel:`), and winit collapses both real finger movement and
+   that OS momentum tail into the same `TouchPhase::Moved` — there is no
+   reliable way to tell them apart from the event alone. The fix applied
+   (wheel input applies directly via `apply_momentum`, no longer injects a
+   synthetic velocity for TEZZERA's own `coast` to decay, avoiding a second
+   momentum source fighting the OS's) measurably changed the failure mode
+   across rounds but did not fully eliminate it in the reporter's live
+   testing. Real remaining candidates, not yet tried: (a) the
+   `WHEEL_IDLE_GRACE`/`COAST_STOP_THRESHOLD`/`MAX_VELOCITY` constants
+   (`tezzera-scroll/src/controller.rs`) may need further tuning against
+   real hardware rather than calculation alone; (b) `bounce_axis`'s
+   resistance model (35% flat factor, no true spring/mass simulation) may
+   need to become a real damped spring; (c) properly distinguishing
+   momentum-phase from user-phase wheel events would need
+   `tezzera_platform::InputEvent::Scroll` to carry that info end-to-end
+   (winit exposes it at the `WindowEvent::MouseWheel` boundary today but
+   `tezzera-platform/src/app.rs`'s conversion discards it) — real plumbing
+   work, not attempted here. `ScrollPhysics::Momentum` (the non-iOS/macOS
+   default) was not implicated in any of the live testing and is not
+   suspected of the same issue, since it has no overscroll/spring-back
+   phase to fight the OS's momentum tail. Revisit with either more
+   real-device iteration time or the plumbing work in (c).
 
 None of these are fixed by this doc rewrite — this is the audit that found
 them. Fixing them (removing `tezzera-anim`, reordering `gesture`, moving

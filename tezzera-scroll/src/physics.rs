@@ -15,11 +15,52 @@ pub enum ScrollPhysics {
     Clamped,
     /// Snaps to page boundaries.
     Paged { page_size: f32 },
+    /// Momentum with rubber-band overscroll (D108/Phase 26 Step 2) — content
+    /// can be dragged past its edge (resisted) and springs back once
+    /// released, the iOS scroll feel. `friction` decays velocity same as
+    /// [`ScrollPhysics::Momentum`]; `spring_stiffness` governs how quickly
+    /// an out-of-bounds offset eases back to the nearest bound once
+    /// velocity has settled (see `ScrollController::settle_bounce`) — an
+    /// exponential ease, the same shape `PaintCtx::animate_to` already uses
+    /// elsewhere in this codebase, not a full mass-spring simulation.
+    Bounce { friction: f32, spring_stiffness: f32 },
 }
 
 impl Default for ScrollPhysics {
     fn default() -> Self {
         ScrollPhysics::Momentum { friction: 0.92 }
+    }
+}
+
+/// Per-widget-type default physics, keyed by platform (D108/Phase 26 Step 2).
+/// This is the ONLY place platform is consulted for scroll behavior — one
+/// pure lookup, never branches scattered through widget code — and it is
+/// always the lowest-priority source: an app's own theme `ext` value or an
+/// explicit `.physics(...)` on a `ScrollView` both override it. See
+/// `tezzera-widgets/src/tree/scroll_view.rs`'s `resolve_physics`.
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollStyle {
+    pub physics: ScrollPhysics,
+}
+
+impl ScrollStyle {
+    /// iOS/macOS default to rubber-band `Bounce` (the platform-native feel);
+    /// every other platform defaults to plain `Momentum`. Android's overscroll
+    /// "glow" is a separate visual effect on similar physics, not modeled
+    /// here — out of scope (see `.steering/PHASE_26.md`).
+    pub fn default_for_platform(platform: tezzera_core::Platform) -> ScrollPhysics {
+        // friction=0.88 (not the earlier 0.92) — 0.92 measured out to a
+        // 1.2s-1.9s coast tail even for realistic release speeds (confirmed
+        // by direct calculation during real trackpad testing), which read
+        // as sluggish/stuck rather than a natural decelerating glide.
+        // Combined with `COAST_STOP_THRESHOLD`/`MAX_VELOCITY`, 0.88 brings
+        // the full realistic range down to ~0.35s-0.7s.
+        match platform {
+            tezzera_core::Platform::Ios | tezzera_core::Platform::MacOs => {
+                ScrollPhysics::Bounce { friction: 0.88, spring_stiffness: 12.0 }
+            }
+            _ => ScrollPhysics::Momentum { friction: 0.88 },
+        }
     }
 }
 
@@ -52,7 +93,7 @@ impl MomentumState {
                 self.velocity_y = 0.0;
                 out
             }
-            ScrollPhysics::Momentum { friction } => {
+            ScrollPhysics::Momentum { friction } | ScrollPhysics::Bounce { friction, .. } => {
                 let out = (self.velocity_x, self.velocity_y);
                 self.velocity_x *= friction;
                 self.velocity_y *= friction;
@@ -173,5 +214,38 @@ mod tests {
         state.velocity_x = 0.4;
         state.velocity_y = 0.4;
         assert!(state.is_settled());
+    }
+
+    #[test]
+    fn momentum_state_tick_bounce_decays_velocity_same_as_momentum() {
+        let mut state = MomentumState::new();
+        state.push(100.0, 80.0);
+        state.tick(ScrollPhysics::Bounce { friction: 0.92, spring_stiffness: 12.0 });
+        assert!((state.velocity_x - 92.0).abs() < 0.01);
+        assert!((state.velocity_y - 73.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn default_for_platform_is_bounce_on_ios_and_macos() {
+        assert!(matches!(
+            ScrollStyle::default_for_platform(tezzera_core::Platform::Ios),
+            ScrollPhysics::Bounce { .. }
+        ));
+        assert!(matches!(
+            ScrollStyle::default_for_platform(tezzera_core::Platform::MacOs),
+            ScrollPhysics::Bounce { .. }
+        ));
+    }
+
+    #[test]
+    fn default_for_platform_is_momentum_elsewhere() {
+        for p in [
+            tezzera_core::Platform::Android,
+            tezzera_core::Platform::Windows,
+            tezzera_core::Platform::Linux,
+            tezzera_core::Platform::Web,
+        ] {
+            assert!(matches!(ScrollStyle::default_for_platform(p), ScrollPhysics::Momentum { .. }));
+        }
     }
 }

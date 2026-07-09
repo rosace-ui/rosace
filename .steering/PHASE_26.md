@@ -1,6 +1,8 @@
 # Phase 26 — Pervasive Default Animation (D108)
 
-> Status: IN PROGRESS (scoped 2026-07-09; Step 1 landed 2026-07-09)
+> Status: IN PROGRESS (scoped 2026-07-09; Step 1 landed, Step 2 paused with
+> a known open issue — see Known Issue #9 in CRATE_CONTRACTS.md — moving to
+> Step 3)
 > Started: 2026-07-09
 > Completed: —
 > Decision: **D108** — extend TEZZERA's existing theme-global, zero-per-app
@@ -157,6 +159,115 @@ continues scrolling with decreasing speed (or bounces back, if
 a real running app; an explicit override to the non-default physics works
 regardless of detected platform; stops instantly when animations are
 disabled.
+
+**Landed, with a real scope correction mid-implementation.** Investigating
+the real input model (not assumed) found `ScrollView` had NO drag-to-pan
+gesture at all — only wheel/trackpad `Scroll` events existed; nothing
+turned a mouse/touch drag into a scroll offset change. User confirmed:
+build drag-to-pan first (with velocity tracked from the REAL drag speed,
+not an assumed constant), then momentum/bounce on top — this step ended up
+delivering both, not just wiring existing physics onto an existing
+gesture. Also found a real layer-rule conflict: `tezzera-theme` (Layer 4)
+can't depend on `tezzera-scroll` (Layer 5), so `cupertino()`/`material()`
+can't construct a `ScrollStyle` ext value directly. Resolved by keeping the
+platform-default computation as ONE pure function inside `tezzera-scroll`
+itself (`ScrollStyle::default_for_platform`, reads `tezzera-core::Platform`
+which IS a lower layer) — an app's theme `ext` override and an explicit
+per-`ScrollView` `.physics(...)` both still take priority over it, so the
+"platform is a default-picker only, never hardcoded" rule holds exactly as
+designed, just resolved in a different crate than first planned.
+
+New `ScrollController` methods (`tezzera-scroll/src/controller.rs`):
+`drag_delta`/`end_drag` (streamed absolute drag position → per-move delta),
+`track_velocity`/`velocity()` (real px/s from the actual offset delta each
+frame — not assumed), `apply_momentum` (rubber-band-aware offset step,
+resists overscroll under `Bounce`, hard-clamps otherwise), `settle_bounce`
+(exponential ease back to bounds once velocity settles, same shape as
+`animate_to`), `coast` (one frame of decay-or-settle, orchestrating
+`MomentumState`), `stop_coasting` (hard stop for the animations-disabled
+case). `ScrollView::paint_base` wires these together via `ctx.on_press_at`
+(the same positional-hit mechanism sliders use) and reuses Step 1's
+`ctx.pressed()` — no new engine.rs plumbing needed, since declaring the
+drag region makes `hover_test` (which Step 1's MouseDown handler already
+calls) pick it up for free. Scoped to the base (CPU) scroll path only —
+the GPU-layer path's separate non-reactive offset channel is flagged as
+real follow-up, not silently extended.
+
+**Two real bugs found and fixed via the headless `FrameEngine` integration
+tests** (same technique as Step 1 — synthetic `MouseDown`/`MouseMove`/
+`MouseUp` through the real engine dispatch, not controller-level unit
+tests alone):
+1. **Missing sign inversion.** The first implementation applied the raw
+   drag delta directly, so dragging up moved the offset the wrong way
+   (content chasing the cursor instead of following it, backwards from
+   every real scrollable surface). Fixed by negating, matching the
+   existing wheel-scroll callback's own sign convention exactly.
+2. **A spurious "fresh drag" reset caused by the well-known 1-frame lag**
+   between an input event and `ctx.pressed()` observing it (the same lag
+   `ctx.hovered()` already has). The first implementation reset
+   `last_drag_point` whenever it saw `was_pressed` transition false→true —
+   but because of the lag, that transition is observed on the SAME frame
+   as the drag's first `MouseMove`, one frame after `MouseDown`'s own
+   immediate callback invocation had already correctly established the
+   drag's starting point. The reset wiped that baseline out from under the
+   very next `drag_delta` call, making the first move of every drag
+   silently do nothing. Root-caused via targeted print debugging (atom ids
+   and pointer addresses to rule out a sharing bug first) after an
+   isolated standalone `Atom<Option<T>>` round-trip test proved the atom
+   primitive itself was correct — the bug was in this step's own new
+   control-flow logic, not the state layer. Fixed by removing the
+   redundant reset entirely; `end_drag` on release (which does NOT have
+   this lag problem, since it fires from the same frame's dispatch that
+   also updates `pressed`) is the only reset actually needed.
+
+**A third, unrelated pre-existing bug found along the way**: running the
+new tests alongside the existing suite intermittently failed with
+`disabling_animations_stops_coasting_immediately_on_release` racing
+`drag_pans_content_and_momentum_coasts_after_release` — `tezzera_theme`'s
+theme is a process-wide `GlobalAtom`, and `cargo test` runs test functions
+on parallel threads by default, so one test's `set_animations(false)`
+could flip the flag mid-coast for the other. Fixed with a `static ...
+Mutex` guard around both tests (`tezzera/src/engine.rs`) — confirmed
+stable across repeated runs afterward. **While chasing this down, found
+the SAME class of bug already existing, unrelated to this phase's own
+code**: `tezzera-state/src/frame_scheduler.rs`'s
+`request_frame_sets_flag`/`take_clears_flag`/`multiple_requests_collapse_to_one`
+tests race each other the same way and are flaky under
+`cargo test --workspace`'s full parallel load (always pass in isolation).
+Logged in `CRATE_CONTRACTS.md`'s Known Issues (#8) rather than fixed here
+— pre-existing, outside this step's scope, not introduced by this work.
+
+**Verified for real**: the two new `tezzera/src/engine.rs` integration
+tests (real `FrameEngine`, synthetic but real input events) cover drag
+panning content in real time, momentum continuing after release
+proportional to actual drag speed, and animations-disabled producing an
+immediate hard stop with zero coast. Full `cargo build --workspace` /
+`cargo test --workspace --no-fail-fast` clean throughout (the one
+exception, `tezzera-state`'s pre-existing parallel-test flake, is
+unrelated and logged separately — `CRATE_CONTRACTS.md` Known Issue #8).
+
+**Status: PAUSED with a known unresolved issue, not claimed as fully
+working — see `CRATE_CONTRACTS.md` Known Issue #9.** Real on-device
+testing (not just the headless engine tests above) went through many
+rounds against a real running macOS app: drag-to-pan direction, a
+dt-unit-mismatch bug, frame-rate-dependent friction decay, unbounded
+overscroll, a stale scrollbar read, a per-frame-flag wheel-gating bug, an
+overscroll-recovery timing bug, and a velocity clamp — each confirmed and
+fixed with a regression test (44 tests in `tezzera-scroll` total). The
+LAST round used a real screen recording (frame-extracted with a one-off
+Swift/AVFoundation script) to root-cause a genuine oscillation to a real
+platform quirk: macOS delivers trackpad momentum as the OS's own event
+stream after the user's fingers lift, and winit 0.30.13 collapses that
+into the same event phase as real finger movement (confirmed by reading
+winit's own macOS backend source), so TEZZERA's own momentum system was
+fighting the OS's. The fix (wheel input no longer injects synthetic
+velocity, applies directly instead) changed the failure mode but did not
+fully resolve it in the reporter's live testing. Per explicit user
+direction, this is being logged and left open rather than pursued
+further right now — drag-to-pan and the underlying momentum primitives
+are solid; `ScrollPhysics::Bounce`'s real-trackpad feel specifically is
+not. `ScrollPhysics::Momentum` (the default for every platform except
+iOS/macOS) was not implicated in any of the live testing.
 
 ### Step 3 — Wire real nav transitions (expanded 2026-07-09)
 `tezzera-nav`'s `Navigator`/`ScreenNav` has zero references to
