@@ -51,17 +51,26 @@ pub fn run() {
     let mut any_missing = false;
     for group in &checks {
         for c in group {
-            let mark = if c.ok { "\u{2713}" } else { "\u{2717}" };
-            println!("[{}] {} — {}", mark, c.label, c.detail);
+            let mark = if c.ok {
+                crate::color::green("\u{2713}")
+            } else {
+                crate::color::red("\u{2717}")
+            };
+            let label = if c.ok { c.label.clone() } else { crate::color::bold(&c.label) };
+            println!("[{}] {} — {}", mark, label, c.detail);
             if !c.ok { any_missing = true; }
         }
         println!();
     }
 
     if any_missing {
-        println!("Some tools are missing — see the [\u{2717}] lines above for exact fixes.");
+        println!("{}", crate::color::yellow(
+            "Some tools are missing — see the [\u{2717}] lines above for exact fixes.",
+        ));
     } else {
-        println!("Everything checked is installed. tzr new / tzr run should work for every target.");
+        println!("{}", crate::color::green(
+            "Everything checked is installed. tzr new / tzr run should work for every target.",
+        ));
     }
 }
 

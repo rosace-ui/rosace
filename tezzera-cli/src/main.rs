@@ -1,3 +1,4 @@
+pub mod color;
 mod commands;
 #[cfg(test)]
 mod test_support;
@@ -19,12 +20,12 @@ fn main() {
             match dev::DevOptions::from_args(rest) {
                 Ok(opts) => {
                     if let Err(e) = dev::run(opts) {
-                        eprintln!("error: {}", e);
+                        eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                         std::process::exit(1);
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
@@ -33,12 +34,12 @@ fn main() {
             match run::RunOptions::from_args(rest) {
                 Ok(opts) => {
                     if let Err(e) = run::run(opts) {
-                        eprintln!("error: {}", e);
+                        eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                         std::process::exit(1);
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
@@ -47,12 +48,12 @@ fn main() {
             match build::BuildOptions::from_args(rest) {
                 Ok(opts) => {
                     if let Err(e) = build::run(opts) {
-                        eprintln!("error: {}", e);
+                        eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                         std::process::exit(1);
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     eprintln!();
                     print_usage();
                     std::process::exit(1);
@@ -63,12 +64,12 @@ fn main() {
             match package::PackageOptions::from_args(rest) {
                 Ok(opts) => {
                     if let Err(e) = package::run(opts) {
-                        eprintln!("error: {}", e);
+                        eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                         std::process::exit(1);
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
@@ -77,12 +78,12 @@ fn main() {
             match new::NewOptions::from_args(rest) {
                 Ok(opts) => {
                     if let Err(e) = new::run(opts) {
-                        eprintln!("error: {}", e);
+                        eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                         std::process::exit(1);
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
@@ -91,12 +92,12 @@ fn main() {
             match bundle_id::BundleIdOptions::from_args(rest) {
                 Ok(opts) => {
                     if let Err(e) = bundle_id::run(opts) {
-                        eprintln!("error: {}", e);
+                        eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                         std::process::exit(1);
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
@@ -105,7 +106,7 @@ fn main() {
             match doctor::DoctorOptions::from_args(rest) {
                 Ok(_) => doctor::run(),
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
@@ -114,7 +115,7 @@ fn main() {
             match devices::DevicesOptions::from_args(rest) {
                 Ok(_) => devices::run(),
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
@@ -160,13 +161,13 @@ fn main() {
                             }
                         }
                         Err(e) => {
-                            eprintln!("error: {}", e);
+                            eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                             std::process::exit(1);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
@@ -181,7 +182,7 @@ fn main() {
                     std::process::exit(result.exit_code);
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprintln!("{}", crate::color::red(&format!("error: {}", e)));
                     std::process::exit(1);
                 }
             }
