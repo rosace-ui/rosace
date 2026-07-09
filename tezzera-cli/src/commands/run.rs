@@ -25,7 +25,12 @@ pub enum Target {
 pub struct RunOptions {
     pub target: Target,
     pub port: u16,
-    /// iOS simulator device name.
+    /// A device id/name/serial (`tzr devices`' ID column — an iOS
+    /// simulator UDID or name, an Android adb serial). Empty means "let
+    /// the target pick a sensible default" — iOS defaults to "iPhone 15
+    /// Pro", Android auto-detects whatever's connected. Deliberately not
+    /// defaulted here: an iOS-shaped default would be actively wrong for
+    /// Android (there's no "iPhone 15 Pro" to auto-detect against).
     pub device: String,
 }
 
@@ -38,7 +43,7 @@ impl RunOptions {
 
         let mut target = None;
         let mut port = 8080u16;
-        let mut device = "iPhone 15 Pro".to_string();
+        let mut device = String::new();
 
         let mut i = 0;
         while i < args.len() {
@@ -108,7 +113,8 @@ pub fn print_help() {
     println!("  --target <t>        macos | windows | linux | web | ios | android (default: host OS)");
     println!("  --mac / --win / --lnx   shorthand for --target macos|windows|linux");
     println!("  --port <n>          Web dev server port (default: 8080)");
-    println!("  --device <name>     iOS simulator device (default: \"iPhone 15 Pro\")");
+    println!("  --device <id>       iOS simulator (name or UDID, default: \"iPhone 15 Pro\") or");
+    println!("                      Android device/emulator (adb serial) — run `tzr devices` to list");
     println!("  -h, --help          Print this message");
     println!();
     println!("Before building, a preflight check confirms the tools each target needs");
@@ -132,7 +138,7 @@ pub fn run(opts: RunOptions) -> Result<(), String> {
         Target::Linux => run_linux_cross_build(&app),
         Target::Web => run_web(&app, opts.port),
         Target::Ios => run_ios(&app, &opts.device),
-        Target::Android => run_android(&app),
+        Target::Android => run_android(&app, &opts.device),
     }
 }
 
@@ -438,6 +444,7 @@ fn default_index_html(crate_name: &str) -> String {
 /// project that predates Step 2 (no `ios/App.xcodeproj`) — per the
 /// Migration Rule, that harness is superseded, not deleted.
 fn run_ios(app: &App, device: &str) -> Result<(), String> {
+    let device = if device.is_empty() { "iPhone 15 Pro" } else { device };
     if Path::new("ios/App.xcodeproj").exists() {
         run_ios_xcodeproj(app, device)
     } else {
@@ -497,34 +504,26 @@ fn run_ios_xcodeproj(app: &App, device: &str) -> Result<(), String> {
     run_checked("xcrun", &["simctl", "launch", "--console", &udid, &app.bundle_id], "simctl launch")
 }
 
-/// Finds the UDID for a simulator by exact device name (e.g. "iPhone 15
-/// Pro") via plain-text `simctl list devices` output — deliberately not
-/// `-j`/JSON (no JSON dependency in this crate; a plain line format is
-/// simple enough to parse directly, matching this codebase's existing
-/// manifest-parsing style elsewhere). Matches the device name up to the
-/// first `(`, so "iPhone 15 Pro" doesn't accidentally match "iPhone 15 Pro
-/// Max" (a real prefix collision this device list actually has).
+/// Resolves `device` to a simulator UDID. Three cases: empty (no `--device`
+/// given) defaults to "iPhone 15 Pro"; already UDID-shaped (e.g. pasted
+/// straight from `tzr devices`' ID column) is trusted as-is, no lookup
+/// needed; otherwise matched by exact name via `crate::commands::devices`'
+/// shared listing — same data `tzr devices` prints, so the two commands
+/// can't drift apart on what a given name resolves to.
 fn resolve_simulator_udid(device: &str) -> Result<String, String> {
-    let output = Command::new("xcrun")
-        .args(["simctl", "list", "devices", "available"])
-        .output()
-        .map_err(|e| format!("simctl list devices: {}", e))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        let Some(paren) = line.find('(') else { continue };
-        let name = line[..paren].trim();
-        if name != device { continue }
-        let Some(udid_start) = line.find('(') else { continue };
-        let rest = &line[udid_start + 1..];
-        if let Some(udid_end) = rest.find(')') {
-            return Ok(rest[..udid_end].to_string());
-        }
+    let device = if device.is_empty() { "iPhone 15 Pro" } else { device };
+    if crate::commands::devices::find_uuid(device).map(|(u, s)| s == 0 && u.len() == device.len()).unwrap_or(false) {
+        return Ok(device.to_string());
     }
-    Err(format!(
-        "no simulator named '{}' found. Run `xcrun simctl list devices available` to see real names \
-         (pass one via --device \"<name>\").",
-        device
-    ))
+    crate::commands::devices::list_devices()
+        .into_iter()
+        .find(|d| d.platform == "ios" && d.name == device)
+        .map(|d| d.id)
+        .ok_or_else(|| format!(
+            "no simulator named '{}' found. Run `tzr devices` to see real names/ids \
+             (pass either via --device).",
+            device
+        ))
 }
 
 /// Phase 20-22 hand-rolled harness: raw binary + physical Info.plist +
@@ -579,7 +578,12 @@ fn run_ios_legacy(app: &App, device: &str) -> Result<(), String> {
 /// "build if you can't run" honesty `run_windows_cross_build`/
 /// `run_linux_cross_build` already use for a cross-target with no local
 /// execution environment.
-fn run_android(app: &App) -> Result<(), String> {
+/// `device` is an adb serial (`tzr devices`' ID column for `android`
+/// entries) — empty means "let adb pick", which only works when exactly
+/// one device/emulator is connected; adb itself errors clearly
+/// ("more than one device/emulator") when that's ambiguous, so no extra
+/// disambiguation logic is needed here.
+fn run_android(app: &App, device: &str) -> Result<(), String> {
     if !Path::new("android").exists() {
         return Err("android/ not found — scaffold with `tzr new --platforms android`".into());
     }
@@ -598,22 +602,39 @@ fn run_android(app: &App) -> Result<(), String> {
     let apk = "android/app/build/outputs/apk/debug/app-debug.apk".to_string();
     println!("  Built {}", apk);
 
-    let has_device = Command::new("adb")
-        .args(["devices"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().skip(1).any(|l| l.contains("device")))
-        .unwrap_or(false);
-    if !has_device {
+    let connected = crate::commands::devices::list_devices()
+        .into_iter()
+        .filter(|d| d.platform == "android" && d.status == "device")
+        .count();
+    if connected == 0 {
         println!("  No device/emulator connected (adb devices) — built the APK, not installed.");
         println!("  Install manually: adb install {}", apk);
         return Ok(());
     }
+    if !device.is_empty() && connected > 1 {
+        // Confirm the requested serial is actually one of the connected
+        // devices before handing it to adb -s, so a typo gets a clear
+        // "not found" here instead of an opaque adb failure downstream.
+        let known = crate::commands::devices::list_devices()
+            .into_iter()
+            .any(|d| d.platform == "android" && d.id == device);
+        if !known {
+            return Err(format!("no Android device with id '{}' connected. Run `tzr devices` to see real ids.", device));
+        }
+    }
+
+    let adb_target: Vec<&str> = if device.is_empty() { vec![] } else { vec!["-s", device] };
 
     println!("  Installing on device...");
-    run_checked("adb", &["install", "-r", &apk], "adb install")?;
+    let mut install_args = adb_target.clone();
+    install_args.extend(["install", "-r", &apk]);
+    run_checked("adb", &install_args, "adb install")?;
+
     let activity = format!("{}/.MainActivity", app.bundle_id);
     println!("  Launching {}...", app.bundle_id);
-    run_checked("adb", &["shell", "am", "start", "-n", &activity], "adb shell am start")
+    let mut launch_args = adb_target;
+    launch_args.extend(["shell", "am", "start", "-n", &activity]);
+    run_checked("adb", &launch_args, "adb shell am start")
 }
 
 fn run_checked(cmd: &str, args: &[&str], what: &str) -> Result<(), String> {
@@ -680,6 +701,16 @@ mod tests {
         // running this test.
         let err = resolve_simulator_udid("definitely not a real simulator name").unwrap_err();
         assert!(err.contains("no simulator named"), "{err}");
+    }
+
+    #[test]
+    fn resolve_simulator_udid_trusts_an_already_uuid_shaped_device() {
+        // A UDID pasted straight from `tzr devices`' ID column should work
+        // directly, no lookup/network-of-simctl-calls needed — this must
+        // not depend on that exact UDID actually existing on the machine
+        // running the test.
+        let udid = resolve_simulator_udid("DA884712-56EF-4605-A4FD-C00865FCC084").unwrap();
+        assert_eq!(udid, "DA884712-56EF-4605-A4FD-C00865FCC084");
     }
 
     #[test]

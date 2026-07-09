@@ -2,7 +2,7 @@ mod commands;
 #[cfg(test)]
 mod test_support;
 
-use commands::{analyze, build, bundle_id, dev, new, snapshot};
+use commands::{analyze, build, bundle_id, dev, devices, doctor, new, snapshot};
 use commands::package;
 use commands::run;
 use commands::workspace;
@@ -95,6 +95,24 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("doctor") => {
+            match doctor::DoctorOptions::from_args(rest) {
+                Ok(_) => doctor::run(),
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("devices") => {
+            match devices::DevicesOptions::from_args(rest) {
+                Ok(_) => devices::run(),
                 Err(e) => {
                     eprintln!("error: {}", e);
                     std::process::exit(1);
@@ -194,6 +212,8 @@ fn print_usage() {
     --mac/--win/--lnx  shorthand for --target macos|windows|linux; --target web/ios also work
     --port <n> (web), --device <name> (ios)");
     println!("  bundle-id [<id>]    Print (no arg) or update the app's bundle id everywhere it's embedded");
+    println!("  doctor            Check this machine's toolchains for every target (Flutter-doctor-style)");
+    println!("  devices           List available run targets across platforms (id works with `run --device`)");
     println!("  dev               Start desktop app in dev mode (cargo run)");
     println!("  build             Build the app for a target platform");
     println!("  package           Bundle for distribution (.app / .deb / .exe)");

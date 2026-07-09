@@ -6,6 +6,10 @@ pub mod bundle_id;
 pub mod build;
 /// `tzr dev` — development server with terminal trace output.
 pub mod dev;
+/// `tzr devices` — list available run targets across platforms.
+pub mod devices;
+/// `tzr doctor` — environment diagnostics for every platform's toolchain.
+pub mod doctor;
 /// App icon generation for `tzr new` — bundled SVG rasterized per platform.
 pub mod icons;
 /// `tzr new` — scaffold a new TEZZERA app project.
