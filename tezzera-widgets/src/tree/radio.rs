@@ -29,6 +29,13 @@ impl Widget for Radio {
         ctx.constraints.constrain(Size { width: self.size, height: self.size })
     }
     fn paint(&self, ctx: &mut PaintCtx) {
+        // No intrinsic label — Radio is a bare visual toggle meant to sit
+        // next to its own Text (the app's job to pair them), same
+        // reasoning as Checkbox/Switch not taking a label param either.
+        ctx.semantics(
+            super::Semantics::new(tezzera_core::Role::Radio)
+                .value(if self.selected { "selected" } else { "not selected" }),
+        );
         let r = ctx.rect;
         let c = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.primary));
         let center = Point { x: r.origin.x + self.size / 2.0, y: r.origin.y + self.size / 2.0 };

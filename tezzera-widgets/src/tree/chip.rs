@@ -38,6 +38,12 @@ impl Widget for Chip {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // A filter/tag chip toggles like a checkbox — closest existing role.
+        ctx.semantics(
+            super::Semantics::new(tezzera_core::Role::Checkbox)
+                .label(&self.label)
+                .value(if self.selected { "selected" } else { "not selected" }),
+        );
         let r = ctx.rect;
         let bg = if self.selected { self.selected_color } else { self.color };
         let fg = if self.selected { self.selected_text_color } else { self.text_color };

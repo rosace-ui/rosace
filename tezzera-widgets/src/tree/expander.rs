@@ -46,7 +46,13 @@ impl Widget for Expander {
         ctx.draw_text_at(chev, Point { x: r.origin.x + r.size.width - cw - 4.0, y: r.origin.y + (HEADER_H - lh) / 2.0 }, fg, 15.0);
 
         let atom = self.expanded.clone();
-        ctx.child(header).register_hit(std::sync::Arc::new(move || atom.set(!atom.get())));
+        let header_ctx = ctx.child(header);
+        header_ctx.semantics(
+            super::Semantics::new(tezzera_core::Role::Button)
+                .label(&self.title)
+                .value(if open { "expanded" } else { "collapsed" }),
+        );
+        header_ctx.register_hit(std::sync::Arc::new(move || atom.set(!atom.get())));
 
         if open {
             let bc = Constraints::loose(r.size.width, f32::INFINITY);

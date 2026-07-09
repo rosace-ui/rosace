@@ -50,6 +50,10 @@ impl Widget for Sheet {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // No title field to label itself with (unlike Dialog) — still worth
+        // marking as a modal region boundary, unlabeled, so assistive tech
+        // knows it's entered one.
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Dialog));
         let r = ctx.rect;
         let surface = ctx.tc(ctx.theme.colors.surface);
 

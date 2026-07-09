@@ -31,13 +31,17 @@ impl Widget for Dropdown {
         ctx.constraints.constrain(Size { width: self.width, height: 36.0 })
     }
     fn paint(&self, ctx: &mut PaintCtx) {
+        let selected_label = self.options.get(self.selected).map(|s| s.as_str()).unwrap_or("");
+        // The trigger is a button that opens a menu — its own MenuItem
+        // children (via Menu, which already declares semantics) carry the
+        // option list; this is just the current-selection summary.
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Button).label(selected_label));
         let r = ctx.rect;
         ctx.fill_rrect(r, 8.0, ctx.tc(ctx.theme.colors.surface_variant));
         ctx.stroke_rrect(r, 8.0, ctx.tc(ctx.theme.colors.outline), 1.0);
         let fg = ctx.tc(ctx.theme.colors.on_surface);
-        let label = self.options.get(self.selected).map(|s| s.as_str()).unwrap_or("");
         let lh = ctx.font.line_height(13.0);
-        ctx.draw_text_at(label, Point { x: r.origin.x + 12.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, fg, 13.0);
+        ctx.draw_text_at(selected_label, Point { x: r.origin.x + 12.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, fg, 13.0);
         let chev = "\u{25be}";
         let cw = ctx.font.measure_text(chev, 13.0);
         ctx.draw_text_at(chev, Point { x: r.origin.x + r.size.width - cw - 10.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, fg, 13.0);

@@ -67,6 +67,11 @@ impl Widget for ListTile {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        let label = match &self.subtitle {
+            Some(sub) => format!("{}, {}", self.title, sub),
+            None => self.title.clone(),
+        };
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::ListItem).label(label));
         if let Some(f) = &self.press {
             let f = f.clone();
             ctx.on_press(move || f());

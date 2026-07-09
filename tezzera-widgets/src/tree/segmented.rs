@@ -60,10 +60,16 @@ impl Widget for SegmentedControl {
             let nearness = (1.0 - (pos - i as f32).abs()).clamp(0.0, 1.0);
             let col = super::lerp_color(fg, sel_fg, nearness);
             ctx.draw_text_at(label, Point { x: tx, y: ty }, col, 13.0);
+            let child = ctx.child(seg_rect);
+            child.semantics(
+                super::Semantics::new(tezzera_core::Role::Tab)
+                    .label(label)
+                    .value(if i == self.selected { "selected" } else { "not selected" }),
+            );
             if let Some(cb) = &self.on_change {
                 let cb = cb.clone();
                 let idx = i;
-                ctx.child(seg_rect).register_hit(Arc::new(move || cb(idx)));
+                child.register_hit(Arc::new(move || cb(idx)));
             }
         }
     }

@@ -33,6 +33,8 @@ impl Image {
     pub fn fit(mut self, f: ImageFit) -> Self { self.inner = self.inner.fit(f); self }
     pub fn width(mut self, w: f32) -> Self    { self.inner = self.inner.width(w); self }
     pub fn height(mut self, h: f32) -> Self   { self.inner = self.inner.height(h); self }
+    /// Accessible/SEO alt text (D107/Phase 25).
+    pub fn alt(mut self, alt: impl Into<String>) -> Self { self.inner = self.inner.alt(alt); self }
 }
 
 impl Widget for Image {
@@ -41,6 +43,11 @@ impl Widget for Image {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // No entry at all for a decorative image (no `.alt(...)` set) —
+        // matches HTML's own convention (see the `alt` field doc).
+        if let Some(alt) = &self.inner.alt {
+            ctx.semantics(super::Semantics::new(tezzera_core::Role::Image).label(alt));
+        }
         let x = ctx.rect.origin.x;
         let y = ctx.rect.origin.y;
         let w = self.inner.width;

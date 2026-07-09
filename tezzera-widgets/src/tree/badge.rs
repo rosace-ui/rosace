@@ -52,11 +52,13 @@ impl Widget for Badge {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         if self.dot {
+            // A bare status dot carries no text — nothing to announce.
             let cx = ctx.rect.origin.x + 4.0;
             let cy = ctx.rect.origin.y + 4.0;
             ctx.fill_circle(Point { x: cx, y: cy }, 4.0, self.color);
             return;
         }
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Text).label(&self.label));
         let r = ctx.rect;
         draw_rounded_rect_pub(ctx, r, self.color, r.size.height / 2.0);
         let text_w = ctx.font.measure_text(&self.label, self.font_size);

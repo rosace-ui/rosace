@@ -1,12 +1,58 @@
 # Phase 25 — Web SEO/Accessibility via Semantic-Tree HTML Shadow (D107)
 
-> Status: PLANNED (not started)
-> Started: —
+> Status: IN PROGRESS (Steps 1-2 landed 2026-07-09)
+> Started: 2026-07-09
 > Completed: —
 > Decision: **D107** — canvas stays the only visual renderer; web additionally
 > gets a semantic HTML shadow driven by the existing semantic tree, delivered
 > at BUILD TIME via Declarative Shadow DOM where possible, with a runtime
 > JS-driven fallback for post-hydration state changes.
+>
+> Progress:
+> - Step 1 ✅ Extended `tezzera_core::Role` with `Link`/`Heading`/`List`/
+>   `ListItem`/`Tab`/`TabPanel`; added `heading_level: Option<u8>` and
+>   `href: Option<String>` to `SemanticNode` and `Semantics`. Deliberately
+>   did NOT unify with `tezzera_a11y::role::Role` (confirmed via research:
+>   zero external users outside its own crate — it drives a11y's separate
+>   internal focus-management tree, unrelated to this phase). Also fixed a
+>   real adjacent bug: `collect_semantics_node` was silently dropping
+>   `Semantics::value` (and now `heading_level`/`href`) — fixed, with a
+>   test proving the fix. Commit `eb2807f`.
+> - Step 2 ✅ Added `Semantics` to 12 previously-bare widgets: `ListTile`
+>   (`ListItem`, title+subtitle label), `AppBar` (`Heading` level 1 — the
+>   screen's title), `Image` (`Image` role — but ONLY when `.alt(...)` is
+>   set; a genuinely new field, this widget had none before, matching
+>   HTML's own convention that an absent `alt` means decorative, not an
+>   empty string), `Avatar` (`Image`, initials as label), `Chip`
+>   (`Checkbox` — closest existing role to a toggleable tag), `Radio`
+>   (label-less, value = selected state), `SegmentedControl`/`TabBar`
+>   (`Tab` per segment, via `ctx.child(rect).semantics(...)` — each
+>   segment/tab is its own semantic node, not the whole bar as one),
+>   `Toast` (`Alert`), `Dropdown` (`Button`, current selection as label —
+>   its `Menu` options already had `MenuItem` semantics), `Sheet`
+>   (`Dialog`, unlabeled — no title field to work with, unlike the real
+>   `Dialog` widget, but still worth marking as a modal region boundary),
+>   `NavRail` (`Link` per item — the real-world `<nav><a>` shape; `Heading`
+>   level 3 for section headers), `Expander` (`Button`, value =
+>   expanded/collapsed), `Badge` (`Text`, only for the labeled variant —
+>   a bare status dot has no text to announce).
+>   New `Role::Radio` (distinct from `Checkbox` — real ARIA/HTML
+>   distinguishes mutually-exclusive select from independent toggle;
+>   approximating one as the other would be wrong, not just imprecise).
+>   Correctly left 4 widgets WITHOUT semantics, not as a gap but because
+>   they're pure structural wrappers carrying no content/identity of their
+>   own: `Card`/`Drawer` (arbitrary child content, already self-describing),
+>   `Tooltip` (wraps a child that already has its own semantics — a second
+>   node here would be a spurious duplicate), `Skeleton` (a loading
+>   placeholder standing in for not-yet-loaded content — nothing
+>   meaningful to announce).
+>   **Not yet verified end-to-end** (deferred to Step 3, which needs the
+>   same proof anyway): actually running a scaffolded app and confirming
+>   `collect_semantics()` produces a non-sparse tree matching the screen.
+>   This session's verification was compile-level + the existing
+>   `collect_semantics` unit tests, not a real running app — Step 3's
+>   `curl`-the-built-HTML exit bar is the honest place to prove this for
+>   real, per this project's verify-don't-assume standard.
 
 ## Why This Phase
 

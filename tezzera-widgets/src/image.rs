@@ -49,6 +49,11 @@ pub struct ImageWidget {
     pub width: f32,
     pub height: f32,
     pub placeholder_color: Color,
+    /// Accessible/SEO alt text (D107/Phase 25) — `None` produces no
+    /// semantics entry at all (an image with no `.alt(...)` call is
+    /// decorative, matching HTML's own convention of an empty/absent
+    /// `alt` attribute), not an empty-string placeholder.
+    pub alt: Option<String>,
 }
 
 impl ImageWidget {
@@ -60,7 +65,14 @@ impl ImageWidget {
             width: 200.0,
             height: 200.0,
             placeholder_color: Color::rgb(60, 65, 90),
+            alt: None,
         }
+    }
+
+    /// Sets the accessible/SEO alt text.
+    pub fn alt(mut self, alt: impl Into<String>) -> Self {
+        self.alt = Some(alt.into());
+        self
     }
 
     /// Set the image source to a file path.

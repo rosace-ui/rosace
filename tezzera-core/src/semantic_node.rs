@@ -9,10 +9,14 @@
 /// different concern (focus navigation, not HTML/SEO structure); merging
 /// them would touch already-working, unrelated code for no benefit this
 /// phase actually needs. `Link`/`Heading`/`List`/`ListItem`/`Tab`/
-/// `TabPanel` added here specifically for the HTML mapping Phase 25 needs
-/// (a heading's level and a link's href live on `SemanticNode`/`Semantics`
-/// directly, not on the enum, since they're per-instance data, not part of
-/// what kind of role it is).
+/// `TabPanel`/`Radio` added here specifically for the HTML mapping Phase 25
+/// needs (a heading's level and a link's href live on `SemanticNode`/
+/// `Semantics` directly, not on the enum, since they're per-instance data,
+/// not part of what kind of role it is). `Radio` is distinct from
+/// `Checkbox` — real ARIA/HTML (`role="radio"` vs `role="checkbox"`)
+/// distinguishes mutually-exclusive single-select from independent
+/// toggles; approximating one as the other would be wrong, not just
+/// imprecise, so it earns its own variant rather than reusing `Checkbox`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Role {
     Button,
@@ -22,6 +26,7 @@ pub enum Role {
     Alert,
     Dialog,
     Checkbox,
+    Radio,
     Switch,
     TextInput,
     MenuItem,

@@ -33,6 +33,7 @@ impl Widget for Avatar {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.semantics(super::Semantics::new(tezzera_core::Role::Image).label(&self.initials));
         let cx = ctx.rect.origin.x + self.size / 2.0;
         let cy = ctx.rect.origin.y + self.size / 2.0;
         ctx.fill_circle(Point { x: cx, y: cy }, self.size / 2.0, self.color);

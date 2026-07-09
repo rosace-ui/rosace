@@ -75,6 +75,12 @@ impl Widget for TabBar {
             let tx = tab_x + (tab_w - text_w) / 2.0;
             let ty = r.origin.y + (r.size.height - line_h) / 2.0;
             ctx.draw_text_at(&tab.label, Point { x: tx, y: ty }, label_color, self.font_size);
+            let tab_rect = Rect { origin: Point { x: tab_x, y: r.origin.y }, size: Size { width: tab_w, height: r.size.height } };
+            ctx.child(tab_rect).semantics(
+                super::Semantics::new(tezzera_core::Role::Tab)
+                    .label(&tab.label)
+                    .value(if active { "selected" } else { "not selected" }),
+            );
             if active {
                 ctx.fill_rect(Rect {
                     origin: Point { x: tab_x + tab_w * 0.1, y: r.origin.y + r.size.height - 2.0 },
