@@ -316,7 +316,40 @@ fn run_macos(app: &App) -> Result<(), String> {
     }
     println!("Running '{}' on macOS...", app.name);
     let status = Command::new("cargo")
-        .args(["run", "--bin", &app.name])
+        .args(["build", "--bin", &app.crate_name])
+        .status()
+        .map_err(|e| format!("failed to invoke cargo: {}", e))?;
+    if !status.success() {
+        return Err("cargo build failed".to_string());
+    }
+
+    // Wrap the debug binary in a real `.app` bundle (same assembly `tzr
+    // package` uses) before launching it — a bare binary run as a plain
+    // Unix process has no bundle for `NSBundle.mainBundle` to resolve, so
+    // AppKit shows a generic Dock icon regardless of `macos/icon.icns`.
+    // Skipped gracefully (falls back to the old bare-binary run) when
+    // `macos/Info.plist` doesn't exist — a project scaffolded before this
+    // file existed, or one that dropped macOS support after the fact.
+    if Path::new("macos/Info.plist").exists() {
+        let bin_src = format!("target/debug/{}", app.crate_name);
+        match crate::commands::package::assemble_macos_app(
+            &app.name, &app.crate_name, "target/tzr-run", Path::new(&bin_src), None,
+        ) {
+            Ok(app_dir) => {
+                let exe = format!("{}/Contents/MacOS/{}", app_dir, app.crate_name);
+                let status = Command::new(&exe)
+                    .status()
+                    .map_err(|e| format!("failed to launch {}: {}", exe, e))?;
+                return if status.success() { Ok(()) } else { Err("app exited with an error".to_string()) };
+            }
+            Err(e) => {
+                println!("  Note: couldn't assemble a .app bundle ({e}) — running the bare binary instead");
+            }
+        }
+    }
+
+    let status = Command::new("cargo")
+        .args(["run", "--bin", &app.crate_name])
         .status()
         .map_err(|e| format!("failed to invoke cargo: {}", e))?;
     if status.success() { Ok(()) } else { Err("app exited with an error".to_string()) }

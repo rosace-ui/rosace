@@ -195,6 +195,42 @@ fn bundle_macos(
     out_dir: &str,
     identity: Option<&str>,
 ) -> Result<(), String> {
+    let bin_name = name.to_lowercase().replace([' ', '-'], "_");
+    let src_bin = format!("target/release/{}", bin_name);
+    let sign_identity = identity.unwrap_or("-");
+    assemble_macos_app(name, &bin_name, out_dir, Path::new(&src_bin), identity)?;
+    println!("  Created {}/{}.app", out_dir, name);
+    println!("  Bundle ID: {}", bundle_id);
+    println!(
+        "  Signed: {}",
+        if identity.is_some() { sign_identity } else { "ad-hoc (local use only — pass --identity to distribute)" }
+    );
+    Ok(())
+}
+
+/// Assembles a real `.app` bundle around an already-built binary —
+/// `Contents/MacOS/<crate_name>` (the executable — must match
+/// `macos/Info.plist`'s `CFBundleExecutable`, which `tzr new` always
+/// writes as the crate name, NOT the possibly-hyphenated display name),
+/// `Contents/Info.plist`, `Contents/Resources/icon.icns`, ad-hoc (or
+/// `identity`) code-signed.
+///
+/// Factored out of `bundle_macos` (D108-adjacent CLI fix, 2026-07-09) so
+/// `tzr run --mac` can reuse the SAME real bundle assembly `tzr package`
+/// already used, instead of `cargo run`-ing the bare binary directly —
+/// which is why `tzr run --mac` showed a generic Dock icon instead of the
+/// app's `macos/icon.icns`: a bare executable run as a plain Unix process
+/// has no `.app` bundle for `NSBundle.mainBundle` to resolve, so AppKit
+/// falls back to a generic icon regardless of what's in `macos/`. Returns
+/// the assembled `.app` directory's path.
+#[cfg(target_os = "macos")]
+pub(crate) fn assemble_macos_app(
+    name: &str,
+    crate_name: &str,
+    out_dir: &str,
+    bin_src: &Path,
+    identity: Option<&str>,
+) -> Result<String, String> {
     use std::os::unix::fs::PermissionsExt;
 
     let app_dir = format!("{}/{}.app", out_dir, name);
@@ -213,12 +249,10 @@ fn bundle_macos(
     fs::create_dir_all(&resources_dir)
         .map_err(|e| format!("cannot create Resources dir: {}", e))?;
 
-    // Copy binary
-    let bin_name = name.to_lowercase().replace([' ', '-'], "_");
-    let src_bin = format!("target/release/{}", bin_name);
-    let dst_bin = format!("{}/{}", macos_dir, name);
-    fs::copy(&src_bin, &dst_bin)
-        .map_err(|e| format!("cannot copy binary {} → {}: {}", src_bin, dst_bin, e))?;
+    // Copy binary — filename must match Info.plist's CFBundleExecutable.
+    let dst_bin = format!("{}/{}", macos_dir, crate_name);
+    fs::copy(bin_src, &dst_bin)
+        .map_err(|e| format!("cannot copy binary {} → {}: {}", bin_src.display(), dst_bin, e))?;
 
     // Make executable
     let mut perms = fs::metadata(&dst_bin)
@@ -271,13 +305,7 @@ fn bundle_macos(
         return Err("codesign failed".to_string());
     }
 
-    println!("  Created {}/{}.app", out_dir, name);
-    println!("  Bundle ID: {}", bundle_id);
-    println!(
-        "  Signed: {}",
-        if identity.is_some() { sign_identity } else { "ad-hoc (local use only — pass --identity to distribute)" }
-    );
-    Ok(())
+    Ok(app_dir)
 }
 
 // ── Linux .deb + binary ────────────────────────────────────────────────────

@@ -43,15 +43,43 @@ impl Spring {
         self.target = t;
     }
 
+    /// Largest per-step `dt` the semi-implicit Euler integration below stays
+    /// numerically stable at, for every stiffness/damping this codebase
+    /// actually uses (verified numerically, not assumed — see the doc
+    /// comment on `update`). A real UI frame's `dt` can be much larger than
+    /// this after any idle gap; `update` sub-steps to stay under it.
+    const MAX_STABLE_STEP: f32 = 1.0 / 120.0;
+
     /// Step the spring simulation forward by `dt` seconds.
     ///
     /// Returns the current position after the step.
+    ///
+    /// Sub-steps internally at [`Self::MAX_STABLE_STEP`]-sized increments.
+    /// A single big step is NOT just "less smooth" — semi-implicit Euler on
+    /// a damped oscillator is only conditionally stable, and a step size
+    /// past that threshold makes position/velocity diverge exponentially
+    /// within a handful of calls (confirmed by direct simulation: stiffness
+    /// 280/damping 26 at `dt = 0.1` — a value `tezzera_animate::frame_dt`'s
+    /// own clamp allows, and a realistic one after any real idle gap between
+    /// frames — blows up from -800 to -1.8e14 in 20 steps). That diverged
+    /// value doesn't just look wrong: a real crash traced an overflow panic
+    /// in `tezzera-render`'s text rasterizer straight back to a
+    /// `ScreenTransitionView` slide offset that had exploded this way one
+    /// screen transition after the app sat idle for a moment. Sub-stepping
+    /// keeps every individual integration step inside the stable region
+    /// regardless of the caller's stiffness/damping/mass or how large a
+    /// single `dt` it's handed.
     pub fn update(&mut self, dt: f32) -> f32 {
-        let force = -self.stiffness * (self.position - self.target)
-            - self.damping * self.velocity;
-        let accel = force / self.mass;
-        self.velocity += accel * dt;
-        self.position += self.velocity * dt;
+        if dt <= 0.0 { return self.position; }
+        let steps = (dt / Self::MAX_STABLE_STEP).ceil().max(1.0) as u32;
+        let step = dt / steps as f32;
+        for _ in 0..steps {
+            let force = -self.stiffness * (self.position - self.target)
+                - self.damping * self.velocity;
+            let accel = force / self.mass;
+            self.velocity += accel * step;
+            self.position += self.velocity * step;
+        }
         self.position
     }
 
@@ -129,5 +157,37 @@ mod tests {
             (fast.position() - 100.0).abs() <= (slow.position() - 100.0).abs(),
             "stiffer spring should be closer to target"
         );
+    }
+
+    /// Regression test for a real crash: a `ScreenTransitionView` slide
+    /// (stiffness 280, damping 26 — `tezzera-nav`'s own transition springs)
+    /// hit a large real-world `dt` (a realistic idle gap between frames,
+    /// well within `frame_dt`'s own 0.1s clamp) and diverged to an
+    /// astronomical position within ~20 single-step calls, which downstream
+    /// overflowed an i32 cast in text rendering. `update` must stay bounded
+    /// and still make real forward progress toward the target even at the
+    /// largest `dt` the real engine can hand it.
+    #[test]
+    fn update_stays_bounded_and_converges_at_a_large_realistic_dt() {
+        let mut s = Spring::new(-800.0, 0.0).stiffness(280.0).damping(26.0).mass(1.0);
+        for _ in 0..40 {
+            s.update(0.1);
+            assert!(
+                s.position().is_finite() && s.position().abs() < 10_000.0,
+                "position must stay bounded at dt=0.1, got {}", s.position()
+            );
+        }
+        assert!(s.is_settled(), "must still settle near the target despite the large step size");
+    }
+
+    /// Even a single pathological `dt` (e.g. a real stall, not just an
+    /// ordinary idle gap) must sub-step down to something stable rather
+    /// than taking one giant unstable leap.
+    #[test]
+    fn update_does_not_diverge_on_a_single_very_large_dt() {
+        let mut s = Spring::new(-800.0, 0.0).stiffness(280.0).damping(26.0).mass(1.0);
+        s.update(2.0);
+        assert!(s.position().is_finite() && s.position().abs() < 10_000.0,
+            "a single large dt must not diverge, got {}", s.position());
     }
 }
