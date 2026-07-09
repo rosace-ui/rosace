@@ -1,8 +1,8 @@
 # Phase 26 — Pervasive Default Animation (D108)
 
 > Status: IN PROGRESS (scoped 2026-07-09; Step 1 landed, Step 2 paused with
-> a known open issue — see Known Issue #9 in CRATE_CONTRACTS.md — moving to
-> Step 3)
+> a known open issue — see Known Issue #9 in CRATE_CONTRACTS.md — Step 3
+> landed, on to Step 4)
 > Started: 2026-07-09
 > Completed: —
 > Decision: **D108** — extend TEZZERA's existing theme-global, zero-per-app
@@ -285,6 +285,81 @@ platform-default transition with zero app-level wiring (`tzr new`'s
 generated Home→Counter navigation is the concrete test case), an explicit
 override to a different style works regardless of platform, off entirely
 when animations are globally disabled.
+
+**Landed, with a real architecture correction found before writing any
+code.** A fresh audit found `ScreenNav<R>` (what real apps actually use —
+`tzr new`'s generated `app.rs` calls it, built through the real
+component-hook system) and `Navigator`/`NavigatorAnimated` (what had the
+transition math) are two COMPLETELY SEPARATE, non-overlapping
+implementations — `NavigatorAnimated` wraps `Navigator`, not `ScreenNav`,
+and has zero consumers outside its own tests. Worse, `tezzera-nav-anim`
+already depends on `tezzera-nav`, so `tezzera-nav` could not depend back on
+`tezzera-nav-anim` for the transition math without a circular crate
+dependency — confirmed by reading both `Cargo.toml`s directly, not
+assumed. Resolved by MOVING (not duplicating) `SlideDirection`/
+`TransitionStyle`/`ScreenTransition` (14 existing tests, carried over
+unchanged) from `tezzera-nav-anim` down into `tezzera-nav` itself;
+`tezzera-nav-anim/src/transition.rs` is now a one-line `pub use
+tezzera_nav::transition::*;` so `NavigatorAnimated` (left otherwise
+untouched — still not wired to anything real, same as Step 2's precedent
+of extending the actually-used type rather than the orphaned parallel
+one) keeps compiling against the same public names.
+
+`ScreenNav<R>` gained: transition state (`Arc<Mutex<ScreenTransition>>`),
+a `previous: Atom<Option<R>>` for building the outgoing screen's widget,
+and platform-default style resolution (`NavTransitionStyle::
+default_for_platform` — iOS/macOS/Android → `Slide`, Windows/Linux/Web →
+`Fade` — a pure lookup, three-layer override chain identical in shape to
+Step 2's `resolve_physics`: explicit `.transition_style(...)` > app theme
+`ext` > platform default). `push` triggers `Slide(Left)` (new screen
+enters from the right, matching real iOS/Android drill-in — confirmed by
+reading `SlideDirection::Left.enter_from() == (1.0, 0.0)` directly, not
+assumed); `pop` triggers the reverse, `Slide(Right)`; `replace` fades.
+
+New widget `ScreenTransitionView` (`tezzera-widgets/src/tree/
+screen_transition_view.rs`) is NOT generic over the app's route enum —
+takes only two already-built widgets plus the transition handle, the same
+"widget doesn't need to know the app's types" shape `ScrollController`
+already has for `ScrollView`. While transitioning, paints outgoing at the
+exit offset and incoming at the enter offset (via `ctx.child(rect)`, the
+same primitive `ScrollView`/`Positioned` already use — no new paint
+plumbing invented), clipped to viewport; steady-state, paints only the
+incoming screen at zero offset, byte-for-byte what handing the widget
+straight to `Scaffold::new(...)` produced before this step.
+`tzr new`'s `app_rs` codegen template now builds the outgoing screen with
+the SAME match arms as the incoming one and wraps both in
+`ScreenTransitionView`, in place of handing the current screen straight to
+`Scaffold::new(...)`.
+
+**A real, non-obvious bug found via a headless `FrameEngine` test, not
+live testing this time**: the first version of `ScreenNav::new`
+constructed a BRAND NEW `Arc::new(Mutex::new(ScreenTransition::new(...)))`
+on every call instead of persisting it through the same `ctx.state(...)`
+hook mechanism `atom`/`previous` already use. Since `ScreenNav::new` runs
+on every rebuild, and `push`/`pop` themselves always trigger a rebuild
+(they mutate `atom`), the freshly-triggered transition was being silently
+discarded and replaced by a fresh, never-triggered one on the very next
+rebuild — `is_active()` was permanently `false` no matter what. Root cause
+was NOT visible from a shallow test (only checking "did the stack change"
+passed); found because the test also asserted BOTH screens' `Semantics`
+labels appear simultaneously mid-transition, which failed cleanly and
+pointed straight at the real bug. Fixed by persisting `transition` through
+`ctx.state(...)` too.
+
+**Verified for real**: two new `tezzera/src/engine.rs` integration tests
+drive an actual headless `FrameEngine` through a real `MouseDown`/`MouseUp`
+click on a "push" button — one confirms BOTH the outgoing and incoming
+screens' `Semantics` labels are present in the SAME frame's collected
+semantic tree mid-transition (real proof the dual-paint wiring works, not
+just that the nav stack changed), settling to only the incoming screen's
+label after enough frames; the other confirms animations-disabled means
+an immediate switch with no second screen ever painted. Also scaffolded a
+fresh `tzr new` desktop app, confirmed it compiles and runs with no visual
+regression on the steady-state screens, and the user manually tested the
+live app and confirmed the slide transition itself is visually working.
+Full `cargo build --workspace` / `cargo test --workspace --no-fail-fast`
+clean throughout, including a full clean run with zero failures (even the
+`tezzera-state` pre-existing flake didn't trigger that run).
 
 ### Step 5 — Hero / shared-element transitions (new 2026-07-09)
 Confirmed genuinely greenfield (grepped "hero"/"shared_element"/"morph" —

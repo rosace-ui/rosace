@@ -7,6 +7,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-tezzera-animate = { path = "../tezzera-animate" }
 tezzera-nav     = { path = "../tezzera-nav" }
 tezzera-trace   = { path = "../tezzera-trace" }

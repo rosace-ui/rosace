@@ -51,6 +51,7 @@ pub use tree::{OverlayApi, OverlayKind};
 pub use tree::FocusApi;
 pub use tree::Row;
 pub use tree::Scaffold;
+pub use tree::ScreenTransitionView;
 pub use tree::{ScrollView, ScrollAxis};
 pub use tree::Sheet;
 pub use tree::{Toast, ToastKind};

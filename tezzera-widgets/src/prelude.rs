@@ -10,7 +10,7 @@ pub use crate::{
     AspectRatio, BoxShape, CircularProgress, Dropdown, Drawer, Expander, Dialog, Divider, EdgeInsets, Grid, Expanded, Icon, IconKind,
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
     AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
-    Positioned, Radio, Row, Scaffold, SegmentedControl, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,
+    Positioned, Radio, Row, Scaffold, ScreenTransitionView, SegmentedControl, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,
     Skeleton, Tab, TabBar, Wrap, Text, TextInput, Toast, ToastKind, Tooltip,
     Image, ImageCache, ImageFit, ImageSource, ImageWidget,
 };

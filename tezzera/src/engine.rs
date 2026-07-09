@@ -865,4 +865,119 @@ mod tests {
 
         tezzera_theme::provider::set_animations(true); // don't leak into other tests
     }
+
+    // ── D108/Phase 26 Step 3: nav transitions ──────────────────────────────
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum NavScreen { A, B }
+
+    /// Root with a two-screen `ScreenNav`, matching the real `tzr new`
+    /// codegen shape exactly (`ScreenTransitionView::new(body, outgoing,
+    /// nav.transition_handle())` in place of handing `body` straight to a
+    /// container) — the real integration point for Step 3. Both screens are
+    /// `Button`s (not bare `Text`) so both always declare real `Semantics`
+    /// regardless of `on_press`, giving the test a reliable signal for
+    /// "is this screen's content actually painted this frame."
+    struct NavRoot;
+    impl Component for NavRoot {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let nav = tezzera_nav::ScreenNav::new(ctx, NavScreen::A);
+            let build_screen = {
+                let nav = nav.clone();
+                move |s: NavScreen| -> tezzera_widgets::tree::BoxedWidget {
+                    match s {
+                        NavScreen::A => {
+                            let nav = nav.clone();
+                            Box::new(Button::new("Screen A").on_press(move || { nav.push(NavScreen::B); }))
+                        }
+                        NavScreen::B => Box::new(Button::new("Screen B")),
+                    }
+                }
+            };
+            let screen = nav.current().unwrap_or(NavScreen::A);
+            let body = build_screen(screen);
+            let outgoing = nav.previous().map(build_screen);
+            tezzera_widgets::tree::ScreenTransitionView::new(body, outgoing, nav.transition_handle())
+                .into_element()
+        }
+    }
+
+    fn headless_nav_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas) {
+        let engine = FrameEngine::new(Box::new(NavRoot), tezzera_render::FontCache::embedded());
+        (engine, SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200))
+    }
+
+    fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
+        fn walk(node: &tezzera_core::SemanticNode, out: &mut Vec<String>) {
+            if let Some(l) = &node.label { out.push(l.clone()); }
+            for c in &node.children { walk(c, out); }
+        }
+        let mut out = Vec::new();
+        walk(&engine.semantics(), &mut out);
+        out
+    }
+
+    #[test]
+    fn push_paints_both_screens_mid_transition_then_settles_to_only_the_incoming_one() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        tezzera_animate::set_frame_dt(1.0 / 60.0);
+        let (mut engine, mut canvas, mut overlay) = headless_nav_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let initial = semantic_labels(&engine);
+        assert!(initial.iter().any(|l| l == "Screen A"), "must start on Screen A, got {initial:?}");
+        assert!(!initial.iter().any(|l| l == "Screen B"), "Screen B must not exist yet, got {initial:?}");
+
+        // Click "Screen A" — its rect is the whole 300x200 canvas (root
+        // fills it under tight constraints, same pattern every other
+        // engine test in this file uses).
+        let down = tezzera_platform::InputEvent::MouseDown {
+            x: 150.0, y: 100.0, button: tezzera_platform::MouseButton::Left,
+        };
+        let up = tezzera_platform::InputEvent::MouseUp {
+            x: 150.0, y: 100.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[down, up]);
+
+        // Next frame: the transition is active, ScreenTransitionView paints
+        // BOTH the outgoing (Screen A) and incoming (Screen B) widgets —
+        // real proof `nav.push` -> `ScreenTransitionView` actually wired up,
+        // not just that the stack changed.
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let mid = semantic_labels(&engine);
+        assert!(mid.iter().any(|l| l == "Screen A"), "outgoing Screen A must still be painted mid-transition, got {mid:?}");
+        assert!(mid.iter().any(|l| l == "Screen B"), "incoming Screen B must be painted mid-transition, got {mid:?}");
+
+        // Let the spring settle — many frames, matching the pattern used to
+        // settle `ScreenTransition` in its own unit tests.
+        for _ in 0..120 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+        }
+        let settled = semantic_labels(&engine);
+        assert!(settled.iter().any(|l| l == "Screen B"), "must have settled showing Screen B, got {settled:?}");
+        assert!(!settled.iter().any(|l| l == "Screen A"), "outgoing Screen A must be gone once settled, got {settled:?}");
+    }
+
+    #[test]
+    fn push_is_instant_with_no_double_paint_when_animations_are_disabled() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        tezzera_theme::provider::set_animations(false);
+        tezzera_animate::set_frame_dt(1.0 / 60.0);
+        let (mut engine, mut canvas, mut overlay) = headless_nav_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let down = tezzera_platform::InputEvent::MouseDown {
+            x: 150.0, y: 100.0, button: tezzera_platform::MouseButton::Left,
+        };
+        let up = tezzera_platform::InputEvent::MouseUp {
+            x: 150.0, y: 100.0, button: tezzera_platform::MouseButton::Left,
+        };
+        engine.paint(&mut canvas, &mut overlay, &[down, up]);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let labels = semantic_labels(&engine);
+        assert!(labels.iter().any(|l| l == "Screen B"), "must show Screen B immediately, got {labels:?}");
+        assert!(!labels.iter().any(|l| l == "Screen A"), "must NOT still paint Screen A when animations are disabled, got {labels:?}");
+
+        tezzera_theme::provider::set_animations(true); // don't leak into other tests
+    }
 }

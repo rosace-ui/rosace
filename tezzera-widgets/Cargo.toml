@@ -13,6 +13,7 @@ tezzera-trace  = { path = "../tezzera-trace" }
 tezzera-core   = { path = "../tezzera-core" }
 tezzera-state  = { path = "../tezzera-state" }
 tezzera-layout = { path = "../tezzera-layout" }
+tezzera-nav    = { path = "../tezzera-nav" }
 tezzera-render = { path = "../tezzera-render" }
 tezzera-scroll = { path = "../tezzera-scroll" }
 tezzera-animate = { path = "../tezzera-animate" }

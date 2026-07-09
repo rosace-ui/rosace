@@ -2417,8 +2417,10 @@ dependencies = [
 name = "tezzera-nav"
 version = "0.1.0"
 dependencies = [
+ "tezzera-animate",
  "tezzera-core",
  "tezzera-state",
+ "tezzera-theme",
  "tezzera-trace",
 ]
 
@@ -2426,7 +2428,6 @@ dependencies = [
 name = "tezzera-nav-anim"
 version = "0.1.0"
 dependencies = [
- "tezzera-animate",
  "tezzera-nav",
  "tezzera-trace",
 ]
@@ -2556,6 +2557,7 @@ dependencies = [
  "tezzera-animate",
  "tezzera-core",
  "tezzera-layout",
+ "tezzera-nav",
  "tezzera-render",
  "tezzera-scroll",
  "tezzera-state",

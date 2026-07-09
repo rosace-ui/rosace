@@ -638,11 +638,23 @@ impl Component for AppRoot {{
         let count = ctx.state(0i32);
         let is_dark = ctx.state(true);
 
-        let screen = nav.current().unwrap_or(Screen::Home);
-        let body: BoxedWidget = match screen {{
-            Screen::Home => Box::new(home_screen(&nav)),
-            Screen::Counter => Box::new(counter_screen(&count)),
+        // Same match arms build both the current and (if mid-transition)
+        // previous screen, so ScreenTransitionView can animate between
+        // them — see nav.push/pop's docs (default-on, theme-governed).
+        let build_screen = {{
+            let nav = nav.clone();
+            let count = count.clone();
+            move |s: Screen| -> BoxedWidget {{
+                match s {{
+                    Screen::Home => Box::new(home_screen(&nav)),
+                    Screen::Counter => Box::new(counter_screen(&count)),
+                }}
+            }}
         }};
+        let screen = nav.current().unwrap_or(Screen::Home);
+        let body = build_screen(screen);
+        let outgoing = nav.previous().map(build_screen);
+        let view = ScreenTransitionView::new(body, outgoing, nav.transition_handle());
 
         // App bar: a back button appears off Home; a theme toggle on the right.
         let mut bar = AppBar::new(screen.title()).back_button(&nav);
@@ -654,7 +666,7 @@ impl Component for AppRoot {{
             set_theme(if next {{ crate::theme::dark() }} else {{ crate::theme::light() }});
         }}));
 
-        Scaffold::new(body).app_bar(bar).into_element()
+        Scaffold::new(view).app_bar(bar).into_element()
     }}
 }}
 "#

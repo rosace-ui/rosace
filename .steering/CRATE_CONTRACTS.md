@@ -354,7 +354,10 @@ Phase 21, see `.steering/WIDGET_AUTHORING_GUIDE.md`).
 - Protocol: `Widget`, `BoxedWidget`, `Children`, `PaintCtx`, `Semantics`,
   `HitTarget`/`ScrollTarget`, `WidgetApp`
 - Structure: `Column`, `Row`, `Stack`, `Container`, `Scaffold`, `Positioned`,
-  `Expanded`, `Spacer`, `ScrollView`/`ScrollAxis`, `ListView`
+  `Expanded`, `Spacer`, `ScrollView`/`ScrollAxis`, `ListView`,
+  `ScreenTransitionView` (D108/Phase 26 Step 3 — paints a `ScreenNav`
+  transition's outgoing/incoming screens at their spring-eased offsets;
+  not generic over the app's route enum)
 - Components: `AppBar`, `Avatar`, `Badge`, `Button`, `Card`, `Checkbox`,
   `Chip`, `Dialog`, `Divider`, `Dropdown`, `Drawer`, `Expander`, `Radio`,
   `SegmentedControl`, `Menu`, `NavRail`, `ProgressBar`/`CircularProgress`,
@@ -367,9 +370,10 @@ Phase 21, see `.steering/WIDGET_AUTHORING_GUIDE.md`).
   `RectReader`
 **Must NOT**: Bypass the `Widget`/render-tree protocol. Import internals of
 lower crates directly instead of their public API.
-**Depends on**: `a11y`, `animate` (not `anim` — see Known Issues), `scroll`,
-`text`, plus `core`/`state`/`layout`/`render`/`theme`/`trace`. Does NOT
-depend on `tezzera-style` (see Known Issues).
+**Depends on**: `a11y`, `animate` (not `anim` — see Known Issues), `nav`
+(D108/Phase 26 Step 3, for `ScreenTransitionView`), `scroll`, `text`, plus
+`core`/`state`/`layout`/`render`/`theme`/`trace`. Does NOT depend on
+`tezzera-style` (see Known Issues).
 
 ---
 
@@ -477,21 +481,42 @@ use is `tezzera_widgets::ScrollView`, which builds on this).
 ### tezzera-nav  (Layer 5 — service)
 **Job**: The navigation router — typed-enum `Route`s (never stringly-typed),
 per-`Navigator` independent history stack, navigation guards, keep-alive
-memory for navigated-away screens.
+memory for navigated-away screens. Since D108/Phase 26 Step 3, also owns
+the screen-transition spring physics that `ScreenNav` (the type real apps
+actually use) drives directly — moved here from `tezzera-nav-anim` because
+`tezzera-nav-anim` already depends on `tezzera-nav`, so the dependency
+could not run the other way without a cycle.
 **Exports**: `Navigator` (the real one — NOT in `tezzera-widgets`),
 `Route`, `NavigationDecision`, `NavigationStack` (not `StackNavigator`),
 `ScreenNav`, `NavigationGuard`/`AllowAllGuard`/`BlockWhenGuard`,
-`HistoryEntry`, `KeepAliveRegistry`.
-**Depends on**: `core`, `state`, `trace`.
+`HistoryEntry`, `KeepAliveRegistry`, `ScreenTransition`/`SlideDirection`/
+`TransitionStyle` (`transition` module), `NavTransitionStyle`/
+`TransitionStyleKind` (`screen_nav` module — platform-default resolution,
+same shape as `tezzera-scroll::ScrollStyle`).
+**Depends on**: `animate` (for `Spring`, transition physics), `core`,
+`state`, `theme` (for the `ext`-map platform-default-override read),
+`trace`.
+**Note (D108/Phase 26 Step 3)**: `ScreenNav<R>` and `Navigator<R>`/
+`NavigatorAnimated<R>` (`tezzera-nav-anim`) remain two separate,
+non-overlapping implementations — `NavigatorAnimated` wraps `Navigator`,
+not `ScreenNav`, and still has zero consumers outside its own tests. Only
+`ScreenNav` is wired to anything real (`tzr new`'s generated apps). Flagged
+as a known consolidation opportunity, not fixed — same spirit as
+`tezzera_scroll::ScrollView`'s already-flagged duplication (Known Issue
+above, D108 Phase 26 Step 2).
 
 ---
 
 ### tezzera-nav-anim  (Layer 5 — service, composes two other services)
-**Job**: Animated screen transitions layered on `tezzera-nav` — slide/other
-transition styles driven per-frame.
+**Job**: Animated screen transitions layered on `tezzera-nav::Navigator` —
+slide/other transition styles driven per-frame. Still not wired to
+anything real (see the note under `tezzera-nav` above) — `ScreenNav`
+(what real apps use) drives its own copy of the same transition math
+directly via `tezzera-nav::transition`, not through this crate.
 **Exports**: `NavigatorAnimated`, `ScreenTransition`/`SlideDirection`/
-`TransitionStyle`.
-**Depends on**: `animate`, `nav`, `trace`.
+`TransitionStyle` (re-exported from `tezzera-nav::transition`, which now
+owns the actual implementation).
+**Depends on**: `nav`, `trace`.
 
 ---
 
