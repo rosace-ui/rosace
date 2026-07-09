@@ -143,8 +143,35 @@ fn preflight(target: Target) -> Result<(), String> {
         Target::MacOs => preflight_macos(),
         Target::Windows => preflight_cross_target("x86_64-pc-windows-gnu", "Windows", Some("mingw-w64")),
         Target::Linux => preflight_cross_target("x86_64-unknown-linux-gnu", "Linux", None),
-        Target::Web | Target::Ios => Ok(()), // existing inline checks in run_web/run_ios cover these
+        Target::Web => Ok(()), // existing inline checks in run_web cover this
+        Target::Ios => preflight_ios(),
         Target::Android => preflight_android(),
+    }
+}
+
+/// `xcodebuild` requires actual Xcode (not just the Command Line Tools) to
+/// be selected — `xcode-select -p` alone succeeding isn't enough to prove
+/// that, so this actually invokes `xcodebuild -version` and checks it runs.
+/// Only gates the real `run_ios_xcodeproj` path; the Phase 20-22 legacy
+/// harness (`run_ios_legacy`) only needs `codesign`, already covered by
+/// the same check `preflight_macos` runs, so it's not duplicated here.
+fn preflight_ios() -> Result<(), String> {
+    if !Path::new("ios/App.xcodeproj").exists() {
+        return Ok(()); // legacy harness path — its own tools are covered by preflight_macos
+    }
+    let ok = Command::new("xcodebuild")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err(
+            "xcodebuild not found or not runnable. Install Xcode from the App Store, then run:\n    \
+             sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer"
+                .to_string(),
+        )
     }
 }
 
@@ -403,8 +430,108 @@ fn default_index_html(crate_name: &str) -> String {
 
 // ── iOS (simulator) ──────────────────────────────────────────────────────────
 
+/// Prefers the real `.xcodeproj` (D106 Phase 24 Step 2/4) — drives actual
+/// `xcodebuild`, so the Cargo build script phase, real code signing, and
+/// the exact project a user might also have open in Xcode are all the same
+/// path, not a second parallel pipeline. Falls back to the Phase 20-22
+/// hand-rolled raw-binary+Info.plist+adhoc-codesign harness only for a
+/// project that predates Step 2 (no `ios/App.xcodeproj`) — per the
+/// Migration Rule, that harness is superseded, not deleted.
 fn run_ios(app: &App, device: &str) -> Result<(), String> {
-    println!("Building '{}' for the iOS simulator...", app.name);
+    if Path::new("ios/App.xcodeproj").exists() {
+        run_ios_xcodeproj(app, device)
+    } else {
+        run_ios_legacy(app, device)
+    }
+}
+
+/// `-derivedDataPath` pins the build output to a predictable location
+/// instead of DerivedData's hashed-per-checkout default (confirmed hashed
+/// during Step 5's verification — `App-<random-hash>`) — otherwise there's
+/// no reliable path to hand `simctl install`. The project/target/product
+/// are always literally named "App" regardless of the app's own name (see
+/// `tzr new`'s `ios_pbxproj` template), so `Build/Products/.../App.app` is
+/// stable across every generated project.
+fn run_ios_xcodeproj(app: &App, device: &str) -> Result<(), String> {
+    println!("Building '{}' for the iOS simulator (xcodebuild)...", app.name);
+
+    // A name-based destination ("platform=iOS Simulator,name=<device>") is
+    // ambiguous whenever both arm64 and x86_64 runtime variants exist for
+    // the same device (common on this kind of Xcode install — confirmed:
+    // `xcodebuild -destination "platform=iOS Simulator,name=iPhone 15 Pro"`
+    // failed with "Unable to find a device matching the provided
+    // destination specifier" even though `xcrun simctl list devices`
+    // plainly shows exactly one such device). Resolving to a concrete UDID
+    // first sidesteps the ambiguity entirely — same form Step 5's
+    // verification already used successfully.
+    let udid = resolve_simulator_udid(device)?;
+    let derived_data = "target/ios-build";
+    let ok = Command::new("xcodebuild")
+        .args([
+            "-project", "ios/App.xcodeproj",
+            "-scheme", "App",
+            "-destination", &format!("id={}", udid),
+            "-derivedDataPath", derived_data,
+            "build",
+        ])
+        .status()
+        .map_err(|e| format!("xcodebuild: {}", e))?
+        .success();
+    if !ok {
+        return Err(
+            "xcodebuild failed. Common cause: Xcode Command Line Tools not selected \
+             (xcode-select --install).".to_string(),
+        );
+    }
+    let bundle = format!("{}/Build/Products/Debug-iphonesimulator/App.app", derived_data);
+    if !Path::new(&bundle).exists() {
+        return Err(format!("xcodebuild reported success but {} wasn't produced — unexpected", bundle));
+    }
+
+    let _ = Command::new("xcrun").args(["simctl", "boot", &udid]).status();
+    let _ = Command::new("open").args(["-a", "Simulator"]).status();
+
+    println!("  Installing on '{}'...", device);
+    run_checked("xcrun", &["simctl", "install", &udid, &bundle], "simctl install")?;
+    println!("  Launching {}...", app.bundle_id);
+    run_checked("xcrun", &["simctl", "launch", "--console", &udid, &app.bundle_id], "simctl launch")
+}
+
+/// Finds the UDID for a simulator by exact device name (e.g. "iPhone 15
+/// Pro") via plain-text `simctl list devices` output — deliberately not
+/// `-j`/JSON (no JSON dependency in this crate; a plain line format is
+/// simple enough to parse directly, matching this codebase's existing
+/// manifest-parsing style elsewhere). Matches the device name up to the
+/// first `(`, so "iPhone 15 Pro" doesn't accidentally match "iPhone 15 Pro
+/// Max" (a real prefix collision this device list actually has).
+fn resolve_simulator_udid(device: &str) -> Result<String, String> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "list", "devices", "available"])
+        .output()
+        .map_err(|e| format!("simctl list devices: {}", e))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let Some(paren) = line.find('(') else { continue };
+        let name = line[..paren].trim();
+        if name != device { continue }
+        let Some(udid_start) = line.find('(') else { continue };
+        let rest = &line[udid_start + 1..];
+        if let Some(udid_end) = rest.find(')') {
+            return Ok(rest[..udid_end].to_string());
+        }
+    }
+    Err(format!(
+        "no simulator named '{}' found. Run `xcrun simctl list devices available` to see real names \
+         (pass one via --device \"<name>\").",
+        device
+    ))
+}
+
+/// Phase 20-22 hand-rolled harness: raw binary + physical Info.plist +
+/// ad-hoc codesign, no real Xcode project involved. Only reached for a
+/// project scaffolded before Step 2 added `ios/App.xcodeproj` generation.
+fn run_ios_legacy(app: &App, device: &str) -> Result<(), String> {
+    println!("Building '{}' for the iOS simulator (legacy harness — no ios/App.xcodeproj found)...", app.name);
 
     // 1. Build the executable for the simulator target.
     let ok = Command::new("cargo")
@@ -542,6 +669,17 @@ mod tests {
         assert_eq!(opts.target, Target::Web);
         let opts = RunOptions::from_args(&["--target=ios".to_string()]).unwrap();
         assert_eq!(opts.target, Target::Ios);
+    }
+
+    #[test]
+    fn resolve_simulator_udid_rejects_prefix_collision() {
+        // "iPhone 15 Pro" must not match "iPhone 15 Pro Max" — a real
+        // collision this device list actually has (both start with the
+        // same prefix). A nonsense name proves the not-found path is
+        // reached without a real simulator having to exist on the machine
+        // running this test.
+        let err = resolve_simulator_udid("definitely not a real simulator name").unwrap_err();
+        assert!(err.contains("no simulator named"), "{err}");
     }
 
     #[test]

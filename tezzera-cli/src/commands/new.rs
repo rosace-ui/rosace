@@ -426,8 +426,8 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
     if has(Platform::Linux) { println!("    tzr run --lnx           # Linux (build only on this host)"); }
     if has(Platform::Web) { println!("    tzr run --target web    # browser"); }
     if has(Platform::Ios) {
-        println!("    tzr run --target ios    # iOS simulator (hand-rolled harness, Phase 20-22)");
-        println!("    open ios/App.xcodeproj  # real Xcode project (D106) — build & run from Xcode");
+        println!("    tzr run --target ios    # iOS simulator (drives real xcodebuild, D106 Step 4)");
+        println!("    open ios/App.xcodeproj  # same project, opened directly in Xcode");
     }
     println!();
     Ok(())
