@@ -2453,6 +2453,7 @@ dependencies = [
  "tezzera-render",
  "tezzera-state",
  "tezzera-trace",
+ "tezzera-web-seo",
  "wasm-bindgen",
  "web-sys",
  "web-time",

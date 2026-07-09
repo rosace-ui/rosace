@@ -82,18 +82,29 @@ impl FrameEngine {
     /// `overlay_canvas`, then dispatch `events`. Callers are responsible for
     /// presenting the canvases afterward (winit's `PlatformWindow` does this
     /// via `GpuPresenter`; an FFI host does the analogous thing).
+    ///
+    /// Returns whether any component's content may have changed this frame
+    /// (`global_dirty || !dirty_ids.is_empty()` — deliberately excludes
+    /// purely-visual causes like a resize or hover repaint, which affect
+    /// pixels but never `Semantics`/text content). Used by the web target's
+    /// D107/Phase 25 Step 4 shadow-DOM sync to decide whether it's worth
+    /// re-deriving the semantic tree at all this frame — computed here
+    /// rather than by the caller re-deriving it, since `dirty_ids` is
+    /// drained by `take_dirty_components()` below and can only be read once
+    /// per frame.
     pub fn paint(
         &mut self,
         canvas: &mut SkiaCanvas,
         overlay_canvas: &mut SkiaCanvas,
         events: &[tezzera_platform::InputEvent],
-    ) {
+    ) -> bool {
         let root = &self.root;
         let font = &self.font;
 
         // ── Drain dirty-component set for this frame ───────────────────
         let global_dirty = tezzera_state::is_global_dirty();
         let dirty_ids = tezzera_state::take_dirty_components();
+        let content_changed = global_dirty || !dirty_ids.is_empty();
 
         // ── Build root (only when dirty) ────────────────────────────────
         //
@@ -545,5 +556,7 @@ impl FrameEngine {
                 _ => {}
             }
         }
+
+        content_changed
     }
 }

@@ -158,7 +158,17 @@ impl App {
             .title(self.title)
             .size(width, height)
             .run_layered(move |canvas, overlay_canvas, events| {
-                engine.paint(canvas, overlay_canvas, events);
+                let content_changed = engine.paint(canvas, overlay_canvas, events);
+                // D107 Phase 25 Step 4 — web-only, and only when this
+                // frame's build may have changed something (the module's
+                // own string diff catches the rest, e.g. state that
+                // changed and changed back).
+                #[cfg(target_arch = "wasm32")]
+                if content_changed {
+                    tezzera_platform::web_seo_sync::sync(&engine.semantics());
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = content_changed;
             });
     }
 }
