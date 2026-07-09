@@ -648,6 +648,23 @@ impl<'a> PaintCtx<'a> {
         val
     }
 
+    /// Seeds this node's persistent animated scalar to `value` — but ONLY
+    /// if it has never been observed before (`None`). An already-set value
+    /// is left untouched. Pairs with `animate_to` to opt OUT of its "first
+    /// observation snaps straight to target" behavior for a genuine
+    /// appear-animation: call this with the START value (e.g. `0.0`)
+    /// before the first `animate_to` call on a node that should visibly
+    /// ease in rather than pop in fully-formed — e.g. an image fading in
+    /// from 0 opacity the first frame it has real decoded content
+    /// (D108/Phase 26 Step 4), not fully-formed from frame one.
+    pub fn seed_anim_if_unset(&self, value: f32) {
+        let mut tree = self.tree.borrow_mut();
+        let node = tree.node_mut(self.node);
+        if node.anim.is_none() {
+            node.anim = Some(value);
+        }
+    }
+
     /// Push a raw [`DrawCommand`] for advanced use.
     pub fn record(&mut self, cmd: DrawCommand) {
         self.recorder.push(cmd);

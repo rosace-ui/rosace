@@ -365,7 +365,12 @@ Phase 21, see `.steering/WIDGET_AUTHORING_GUIDE.md`).
   `ListTile`, `Skeleton`
 - Overlay system: `push_overlay`/`drain_overlays`/`clear_overlays`,
   `OverlayEntry`/`OverlayKind`/`LayerPosition`, `FocusApi`
-- Text/image: `Text`, `Image`/`ImageWidget`/`ImageCache`
+- Text/image: `Text`, `Image`/`ImageWidget`/`ImageCache` (`ImageCache` is
+  orphaned — `Image::paint` decodes PNGs inline via `std::fs::read` +
+  `tiny_skia::Pixmap::decode_png` on every paint call, uncached, and never
+  touches `ImageCache` at all; found during D108/Phase 26 Step 4, same
+  duplicate-parallel-implementation shape as `tezzera_scroll::ScrollView`
+  and `Navigator`/`NavigatorAnimated`)
 - Escape hatches: `CustomPaint`, `RepaintBoundary`, `TransformLayer`,
   `RectReader`
 **Must NOT**: Bypass the `Widget`/render-tree protocol. Import internals of

@@ -797,8 +797,8 @@ impl SkiaCanvas {
                 DrawCommand::DrawShadow { rect, radius, color, blur } => {
                     self.draw_shadow(sr(*rect), *radius * s, *color, *blur * s);
                 }
-                DrawCommand::BlitRgba { pixels, src_width, src_height, dest_rect } => {
-                    self.blit_rgba(pixels, *src_width, *src_height, sr(*dest_rect));
+                DrawCommand::BlitRgba { pixels, src_width, src_height, dest_rect, opacity } => {
+                    self.blit_rgba(pixels, *src_width, *src_height, sr(*dest_rect), *opacity);
                 }
             }
         }
@@ -812,8 +812,11 @@ impl SkiaCanvas {
     /// `pixels` must be `src_width × src_height × 4` bytes (straight RGBA).
     /// 1:1 blits take a direct row path; scaled blits are sampled bilinearly.
     /// Pixels outside the canvas bounds (and current clip) are skipped.
-    pub fn blit_rgba(&mut self, pixels: &[u8], src_w: u32, src_h: u32, dest: Rect) {
-        if src_w == 0 || src_h == 0 { return; }
+    /// `opacity` (0.0-1.0) scales every source pixel's alpha before
+    /// blending — D108/Phase 26 Step 4's image load-in fade.
+    pub fn blit_rgba(&mut self, pixels: &[u8], src_w: u32, src_h: u32, dest: Rect, opacity: f32) {
+        if src_w == 0 || src_h == 0 || opacity <= 0.0 { return; }
+        let opacity = opacity.min(1.0);
         let cw = self.pixmap.width() as i32;
         let ch = self.pixmap.height() as i32;
 
@@ -873,6 +876,7 @@ impl SkiaCanvas {
                     (lerp2(0), lerp2(1), lerp2(2), lerp2(3))
                 };
 
+                let a = a * opacity;
                 let alpha = a as u32;
                 if alpha == 0 { continue; }
                 let inv = 255 - alpha;

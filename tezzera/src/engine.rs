@@ -980,4 +980,78 @@ mod tests {
 
         tezzera_theme::provider::set_animations(true); // don't leak into other tests
     }
+
+    // ── D108/Phase 26 Step 4: image load-in fade ────────────────────────────
+
+    /// A real, valid 1x1 PNG (red pixel) — same bytes already proven to
+    /// decode correctly by `tezzera-render`'s own `image_handle_from_valid_png`.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+        0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+        0xD7, 0x63, 0xF8, 0xFF, 0xFF, 0x3F, 0x00, 0x05, 0xFE, 0x02, 0xFE, 0xDC, 0xCC, 0x59,
+        0xE7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    struct OneImage;
+    impl Component for OneImage {
+        fn build(&self, _ctx: &mut Context) -> Element {
+            tezzera_widgets::tree::Image::bytes(TINY_PNG.to_vec())
+                .width(50.0)
+                .height(50.0)
+                .into_element()
+        }
+    }
+
+    fn headless_image_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas) {
+        let engine = FrameEngine::new(Box::new(OneImage), tezzera_render::FontCache::embedded());
+        (engine, SkiaCanvas::new(100, 100), SkiaCanvas::new(100, 100))
+    }
+
+    fn image_node_opacity(engine: &FrameEngine) -> Option<f32> {
+        engine.render_tree.borrow().nodes_iter().find_map(|n| n.anim)
+    }
+
+    #[test]
+    fn real_decoded_image_fades_in_from_zero_instead_of_popping_in_at_full_opacity() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        tezzera_animate::set_frame_dt(0.05);
+        let (mut engine, mut canvas, mut overlay) = headless_image_engine();
+
+        // First paint: the image decodes successfully for the first time
+        // this frame. `seed_anim_if_unset(0.0)` runs immediately before
+        // `animate_to(1.0, ...)` in the SAME call, so by the time this
+        // frame's value is observable it has already eased one step past
+        // the literal 0 start (0 -> ~0.27 at this dt) — NOT the 1.0 it
+        // would be without the seed (`animate_to`'s own documented "first
+        // observation snaps straight to target" behavior). The real
+        // assertion is "clearly less than fully opaque," not "exactly 0."
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let first = image_node_opacity(&engine).unwrap();
+        assert!(
+            first > 0.0 && first < 0.9,
+            "the very first frame with real content must be mid-fade, not popped in at full opacity: got {first}"
+        );
+
+        // Subsequent frames: opacity eases upward, same self-sustaining
+        // `request_animation` loop every other animated widget in this
+        // phase uses.
+        for _ in 0..30 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+        }
+        let settled = image_node_opacity(&engine).unwrap();
+        assert!(settled > first, "opacity must have kept easing upward: {first} -> {settled}");
+        assert!((settled - 1.0).abs() < 0.01, "must settle at full opacity (1.0), got {settled}");
+    }
+
+    #[test]
+    fn image_fade_is_instant_when_animations_are_disabled() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        tezzera_theme::provider::set_animations(false);
+        let (mut engine, mut canvas, mut overlay) = headless_image_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let opacity = image_node_opacity(&engine);
+        assert_eq!(opacity, Some(1.0), "disabled animations must show the image at full opacity on the very first frame, got {opacity:?}");
+        tezzera_theme::provider::set_animations(true); // don't leak into other tests
+    }
 }

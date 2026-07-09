@@ -63,11 +63,26 @@ impl Widget for Image {
 
         if let Some(bytes) = raw_bytes {
             if let Ok(pixmap) = tiny_skia::Pixmap::decode_png(&bytes) {
+                // Load-in fade (D108/Phase 26 Step 4): decoding is fully
+                // synchronous in this crate today (no async pipeline, no
+                // cache — re-decoded every paint, see the crate's own
+                // orphaned `ImageCache`, flagged in CRATE_CONTRACTS.md),
+                // so there's no real async gap to fade across. What this
+                // fades is the honest thing available: the first frame
+                // THIS node has real decoded content, opacity starts at 0
+                // (via `seed_anim_if_unset`, which opts out of
+                // `animate_to`'s normal "first observation snaps"
+                // behavior) and eases to 1 — not a placeholder-to-loaded
+                // crossfade, since there is no tracked "was a placeholder"
+                // state to cross-fade from.
+                ctx.seed_anim_if_unset(0.0);
+                let opacity = ctx.animate_to(1.0, 0.0);
                 ctx.record(DrawCommand::BlitRgba {
                     pixels: Arc::new(pixmap.data().to_vec()),
                     src_width: pixmap.width(),
                     src_height: pixmap.height(),
                     dest_rect,
+                    opacity,
                 });
                 return;
             }

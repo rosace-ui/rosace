@@ -1,8 +1,8 @@
 # Phase 26 — Pervasive Default Animation (D108)
 
 > Status: IN PROGRESS (scoped 2026-07-09; Step 1 landed, Step 2 paused with
-> a known open issue — see Known Issue #9 in CRATE_CONTRACTS.md — Step 3
-> landed, on to Step 4)
+> a known open issue — see Known Issue #9 in CRATE_CONTRACTS.md — Steps 3
+> and 4 landed, on to Step 5)
 > Started: 2026-07-09
 > Completed: —
 > Decision: **D108** — extend TEZZERA's existing theme-global, zero-per-app
@@ -390,6 +390,66 @@ pixel data becomes available.
 Exit: loading a real image in a running app shows a visible fade-in over
 the theme's animation duration, verified via a screenshot sequence across
 frames, not just code reading.
+
+**Landed, with a real scope finding: image decoding in this crate is
+fully synchronous.** `Image::paint()` (`tezzera-widgets/src/tree/
+image.rs`) does `std::fs::read` + `tiny_skia::Pixmap::decode_png` INLINE
+on every single paint call, with no caching — confirmed by reading the
+whole file, not assumed. The `ImageCache` type
+(`tezzera-widgets/src/image.rs`) that would make a real async loading gap
+possible exists but is completely orphaned, referenced by nothing in the
+real paint path — the same "duplicate/orphaned parallel implementation"
+pattern already flagged for `tezzera_scroll::ScrollView` (Step 2) and
+`Navigator`/`NavigatorAnimated` (Step 3). So there is no genuine
+placeholder→loaded async gap to cross-fade across today. What this step
+fades instead is the honest thing actually available: the first frame a
+given render-tree node has real decoded pixel content, opacity starts at
+0 and eases to 1 — not a true crossfade from a placeholder, since no
+"was a placeholder" state is tracked per node.
+
+New primitive `PaintCtx::seed_anim_if_unset(value)` (`tezzera-widgets/
+src/tree/mod.rs`) was needed because `animate_to`'s own documented
+behavior is "first observation snaps straight to target, no
+appear-animation" — exactly wrong for a fade-in. `seed_anim_if_unset`
+sets the node's persistent `anim` scalar to `value` ONLY if it has never
+been observed (`None`), leaving an already-set value untouched; calling
+it with `0.0` immediately before `animate_to(1.0, ...)` opts a single
+node out of the snap-to-target behavior for a real eased appear. New
+`DrawCommand::BlitRgba::opacity: f32` field threads this through to
+`SkiaCanvas::blit_rgba`, which now scales the blended alpha by opacity
+before compositing (both the exact and bilinear-sampled code paths flow
+through the same point) — `opacity <= 0.0` short-circuits to a no-op,
+`opacity >= 1.0` is byte-identical to the pre-Step-4 behavior. Confirmed
+via repo-wide grep this was the only real `blit_rgba`/`BlitRgba` call
+site (`custom_paint.rs` only has a stale doc-comment reference), so
+making `opacity` a required (not optional/defaulted) field was safe.
+
+**Verified for real**: 3 new `tezzera-render` unit tests confirm
+`blit_rgba` at opacity 1.0/0.0/0.5 fully-replaces/leaves-untouched/blends
+the background correctly. 2 new `tezzera/src/engine.rs` headless
+`FrameEngine` integration tests (same technique as every prior step) —
+one decodes a real PNG through the real `Image` widget and confirms the
+very first frame with content is observably mid-fade (not popped in at
+full opacity) and later frames ease upward to settle at 1.0; the other
+confirms `set_animations(false)` shows full opacity immediately on the
+first frame, no fade. Also scaffolded a fresh `tzr new` app, added a real
+photo via `Image::file(...)`, ran it live, and screenshotted the
+steady-state render — correct, no corruption, confirming the new
+`opacity` parameter threading through `BlitRgba` didn't regress normal
+image rendering. **Honest gap, same shape as Steps 1-3**: this
+environment has no frame-precise capture tooling (no `cliclick`/Quartz,
+confirmed absent in earlier steps), and the fade's default duration is
+short (~theme's global `duration_ms`, ~160ms) — a live screenshot sequence
+did not reliably catch a mid-fade frame in the running app. The primary
+proof of the fade's correctness is the headless `FrameEngine` test (which
+directly observes the eased scalar's value across frames, stable across
+repeated runs), with the live screenshot serving as a steady-state
+visual-regression check, not a mid-fade capture.
+Full `cargo build --workspace` / `cargo test --workspace --no-fail-fast`
+clean throughout (the one exception, `tezzera-state`'s pre-existing
+parallel-test flake — Known Issue #8 — reconfirmed unrelated by running
+`cargo test -p tezzera-state` in isolation, passed 2/3 runs, matching its
+documented flake pattern; Step 4 never touched `tezzera-state`).
 
 ## Sequencing
 

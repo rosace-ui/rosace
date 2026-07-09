@@ -33,7 +33,9 @@ pub enum DrawCommand {
     /// leaks dark corner triangles.
     DrawShadow { rect: Rect, radius: f32, color: Color, blur: f32 },
     /// Raw pre-decoded RGBA pixel blit. `pixels` must be `width × height × 4` bytes.
-    BlitRgba   { pixels: Arc<Vec<u8>>, src_width: u32, src_height: u32, dest_rect: Rect },
+    /// `opacity` (0.0-1.0) scales the blit's alpha — D108/Phase 26 Step 4's
+    /// image load-in fade; `1.0` is the previous, fully-opaque behavior.
+    BlitRgba   { pixels: Arc<Vec<u8>>, src_width: u32, src_height: u32, dest_rect: Rect, opacity: f32 },
     /// Push a clip rect — subsequent commands are confined to `rect` (intersected
     /// with any already-active clip). Must be paired with [`DrawCommand::PopClip`].
     PushClip   { rect: Rect },
@@ -60,8 +62,8 @@ impl DrawCommand {
             Self::FillArc { center, radius, thickness, start_deg, sweep_deg, color } => Self::FillArc { center: Point { x: center.x + dx, y: center.y + dy }, radius, thickness, start_deg, sweep_deg, color },
             Self::DrawText   { text, origin, color, px, weight } => Self::DrawText { text, origin: Point { x: origin.x + dx, y: origin.y + dy }, color, px, weight },
             Self::DrawShadow { rect, radius, color, blur } => Self::DrawShadow { rect: shift(rect, dx, dy), radius, color, blur },
-            Self::BlitRgba   { pixels, src_width, src_height, dest_rect } =>
-                Self::BlitRgba { pixels, src_width, src_height, dest_rect: shift(dest_rect, dx, dy) },
+            Self::BlitRgba   { pixels, src_width, src_height, dest_rect, opacity } =>
+                Self::BlitRgba { pixels, src_width, src_height, dest_rect: shift(dest_rect, dx, dy), opacity },
             Self::PushClip   { rect }                  => Self::PushClip   { rect: shift(rect, dx, dy) },
             Self::PopClip                              => Self::PopClip,
         }
