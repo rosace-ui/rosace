@@ -1,8 +1,9 @@
 # Phase 26 — Pervasive Default Animation (D108)
 
-> Status: IN PROGRESS (scoped 2026-07-09; Step 1 landed, Step 2 paused with
-> a known open issue — see Known Issue #9 in CRATE_CONTRACTS.md — Steps 3
-> and 4 landed, on to Step 5)
+> Status: Steps 1, 3, 4, 5 landed. Step 2 paused with a known open issue —
+> see Known Issue #9 in CRATE_CONTRACTS.md. Phase substantially complete;
+> next priority is TextInput/text field + Forms (user request, queued
+> after this phase).
 > Started: 2026-07-09
 > Completed: —
 > Decision: **D108** — extend TEZZERA's existing theme-global, zero-per-app
@@ -381,6 +382,102 @@ incoming positions via the existing overlay-layer mechanism
 Exit: a real running app with two screens sharing a `.hero_tag(...)`'d
 image shows it visually morphing between their rects during a push
 transition, verified via a real screenshot sequence across frames.
+
+**Landed.** Confirmed via a fresh audit before writing code that `Key`/
+`Element::with_key` (`tezzera-core/src/{types,element}.rs`) is real but
+completely dead — no widget builder ever sets it, and `walk_element`
+(`tezzera/src/lib.rs`) never reads `NativeElement.key`/`ComponentElement.key`
+at all; today's real node identity is purely positional (`RenderTree::slot`'s
+per-parent cursor, `tezzera-widgets/src/tree/render_tree.rs`). Reviving it
+for Hero identity would have meant teaching the walker and the render-tree
+arena to key off it — a much bigger, riskier change than this step needed.
+Instead: Hero identity is a NEW, separate, purely out-of-band mechanism
+(a tag-keyed thread-local registry, `tezzera-widgets/src/tree/hero.rs`) that
+never touches node identity or the reconciler at all — `Key` stays exactly
+as dead as it was found; not revived, not extended, correctly left alone
+per this phase's "verify, don't assume" discipline.
+
+**How it works**: a new `.hero_tag("id")` widget wrapper (`Hero`/`HeroApi`,
+`tezzera-widgets/src/tree/hero_tag.rs`) is a total pass-through outside a
+transition — zero behavior/cost change, matching the phase's "no new
+widget opts in to anything by default" migration rule. `ScreenTransitionView`
+(Step 3's widget, which already paints BOTH the outgoing and incoming
+screens' full widget trees every animating frame — no new "keep the old
+tree alive" mechanism needed, it was already alive) sets a thread-local
+role flag (`Outgoing`/`Incoming`) immediately before painting each side.
+Any `Hero`-tagged widget that paints while a role is active captures its
+own world rect + a standalone `Picture` (via the existing `PaintCtx::capture`
+already used by `RepaintBoundary`) INSTEAD of painting itself in place, and
+registers it under its tag — the "hide the real one, capture a snapshot"
+half of the standard Hero/shared-element recipe. After both sides finish,
+`ScreenTransitionView` drains the registry, pairs entries sharing a tag
+(unmatched tags — no widget with that tag on the other side — are simply
+dropped, not an error), and paints ONE floating copy on top of both
+screens per pair, at a rect LERP'd between the two captures' rects by the
+transition's `progress` (Step 3's `ScreenTransition::update` already
+computed this value; it was previously unused).
+
+**The one genuinely new low-level primitive this needed**: a captured
+`Picture`'s draw commands only supported translation (`DrawCommand::offset`,
+Step 3/D088's mechanism) — a Hero morph needs to change SIZE too (a
+thumbnail growing into a full image), not just position. Added
+`DrawCommand::morph(src_origin, dst_origin, sx, sy)` (and
+`PaintCtx::replay_morphed`, `tezzera-widgets/src/tree/mod.rs`) covering
+all 12 `DrawCommand` variants — rects/points scale exactly; radius/stroke-
+width/font-size/blur (no independent x/y scale of their own) scale
+uniformly by the average of `sx`/`sy`, a documented approximation, not a
+gap discovered later.
+
+**Real, deliberate scope limits, not silently glossed over**:
+- The floating copy always replays the INCOMING side's captured picture
+  (the destination's appearance), not a crossfade between both sides' —
+  simpler, and correct for the common case (an image morphing between a
+  thumbnail and a detail view looks the same on both screens); an app
+  wanting a genuine content crossfade (e.g. text that changes) isn't
+  served by this MVP.
+- Both captured rects are whatever position the underlying screen slide
+  put them at THAT FRAME (each screen still slides independently via
+  Step 3's own spring), not a single fixed flight path decoupled from the
+  screen-level slide — the Hero LERP and the screen slide are two
+  independent springs running concurrently, which is a reasonable
+  approximation, not a literal Flutter-quality flight path. Both weigh to
+  zero at the transition's true start/end (progress 0 or 1), so the
+  approximation only shows during the middle of the flight.
+- Each screen's own copy of the tagged widget renders NOTHING (a plain
+  gap) at its normal position for the transition's duration, since it's
+  suppressed in place — no fade/placeholder/reflow around the hole. Fine
+  for the common case (an image in a list row / detail header) where nothing
+  else depends on that space, not addressed generally.
+
+**Verified for real**: 3 new `tezzera-render` unit tests for `DrawCommand::
+morph` (rect-to-different-size-and-position mapping, nested-geometry
+proportional scaling, identity no-op) plus 2 new `tezzera/src/engine.rs`
+headless `FrameEngine` integration tests driving a real two-screen
+`ScreenNav`/`ScreenTransitionView` push through real `MouseDown`/`MouseUp`
+— one confirms a `Hero`-tagged 20x20 widget on the source screen and an
+80x80 one with the same tag on the destination screen produce a real
+INTERMEDIATE size (sampled via actual rendered pixel counts on a real
+`SkiaCanvas`, not render-tree-level assertions — same rigor as
+`tezzera-render`'s own `blit_rgba` pixel tests) at some frame during the
+flight, not an instant jump, and settle to exactly the destination's
+natural size; the other confirms a `Hero`-tagged widget outside any
+transition renders identically to its untagged inner widget. Both stable
+across 5 repeated runs. Also scaffolded a fresh `tzr new` app, added a
+real photo `Image::file(...).hero_tag("photo")` at two sizes on two
+screens, built and ran it — the Home screen's steady-state (pre-transition)
+render confirmed correct with no regression from wiring `Hero`/`HeroApi`
+into the crate's public prelude. **Honest gap**: this environment has no
+click-automation tool (`cliclick` absent, `System Events` denied assistive
+access — confirmed by trying, not assumed, matching the exact gap already
+logged in Steps 1-4) to physically trigger the push and capture a live
+mid-flight screenshot sequence; the headless pixel-sampling `FrameEngine`
+test is the primary proof of the morph's correctness end-to-end through
+the real paint pipeline, with the live app screenshot serving as a
+steady-state visual-regression check only.
+Full `cargo build --workspace` / `cargo test --workspace --no-fail-fast`
+clean throughout (the one exception, `tezzera-state`'s pre-existing
+parallel-test flake — Known Issue #8 — reconfirmed unrelated in isolation;
+this step never touched `tezzera-state`).
 
 ### Step 4 — Image load-in fade
 `Image`/`ImageWidgetImpl` swaps placeholder→loaded instantly. Adds an

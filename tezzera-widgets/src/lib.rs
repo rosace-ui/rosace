@@ -31,6 +31,7 @@ pub use tree::Dialog;
 pub use tree::Divider;
 pub use tree::EdgeInsets;
 pub use tree::Expanded;
+pub use tree::{Hero, HeroApi};
 pub use tree::Icon;
 pub use tree::IconKind;
 pub use tree::ListTile;

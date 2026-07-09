@@ -577,7 +577,8 @@ impl FrameEngine {
 mod tests {
     use super::*;
     use tezzera_core::{Component, Context, Element};
-    use tezzera_widgets::tree::{Button, ButtonVariant, Widget};
+    use tezzera_render::Color;
+    use tezzera_widgets::tree::{Button, ButtonVariant, Column, Container, HeroApi, PressApi, Widget};
 
     /// `tezzera_theme::provider`'s theme is a process-wide `GlobalAtom` —
     /// `cargo test` runs test functions on parallel threads within the same
@@ -1053,5 +1054,120 @@ mod tests {
         let opacity = image_node_opacity(&engine);
         assert_eq!(opacity, Some(1.0), "disabled animations must show the image at full opacity on the very first frame, got {opacity:?}");
         tezzera_theme::provider::set_animations(true); // don't leak into other tests
+    }
+
+    // ── D108/Phase 26 Step 5: Hero/shared-element transitions ──────────────
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum HeroScreen { List, Detail }
+
+    /// A blue square hero-tagged "cover" — small (20x20) on `List`, large
+    /// (80x80) on `Detail`, same tag on both, same shape `NavRoot` above
+    /// uses (`ScreenTransitionView` fed `body`/`outgoing` built from
+    /// `ScreenNav`). Wrapped in a `Column` so its `paint()` actually
+    /// measures+positions it at its own declared size — `ScreenTransitionView`
+    /// paints its children at the FULL viewport rect regardless of their own
+    /// `layout()` (confirmed by reading `screen_transition_view.rs`), so an
+    /// un-wrapped `Container` as root would just fill the whole canvas and
+    /// give no size-morph signal to observe.
+    struct HeroRoot;
+    impl Component for HeroRoot {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let nav = tezzera_nav::ScreenNav::new(ctx, HeroScreen::List);
+            let build_screen = {
+                let nav = nav.clone();
+                move |s: HeroScreen| -> tezzera_widgets::tree::BoxedWidget {
+                    match s {
+                        HeroScreen::List => {
+                            let nav = nav.clone();
+                            Box::new(Column::new().child(
+                                Container::new()
+                                    .width(20.0)
+                                    .height(20.0)
+                                    .background(Color::rgb(0, 0, 255))
+                                    .on_press(move || { nav.push(HeroScreen::Detail); })
+                                    .hero_tag("cover"),
+                            ))
+                        }
+                        HeroScreen::Detail => Box::new(Column::new().child(
+                            Container::new()
+                                .width(80.0)
+                                .height(80.0)
+                                .background(Color::rgb(0, 0, 255))
+                                .hero_tag("cover"),
+                        )),
+                    }
+                }
+            };
+            let screen = nav.current().unwrap_or(HeroScreen::List);
+            let body = build_screen(screen);
+            let outgoing = nav.previous().map(build_screen);
+            tezzera_widgets::tree::ScreenTransitionView::new(body, outgoing, nav.transition_handle())
+                .into_element()
+        }
+    }
+
+    fn headless_hero_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas) {
+        let engine = FrameEngine::new(Box::new(HeroRoot), tezzera_render::FontCache::embedded());
+        (engine, SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200))
+    }
+
+    /// Count of pixels an exact, fully-opaque match for pure blue — a rough
+    /// but real area measurement read straight off the actual rendered
+    /// canvas (same rigor as `tezzera-render`'s own `blit_rgba` pixel
+    /// tests), not a render-tree-level assertion.
+    fn blue_pixel_count(canvas: &SkiaCanvas) -> usize {
+        canvas.pixels().chunks_exact(4)
+            .filter(|p| p[0] == 0 && p[1] == 0 && p[2] == 255 && p[3] == 255)
+            .count()
+    }
+
+    #[test]
+    fn hero_tagged_widget_morphs_position_and_size_across_a_push_transition() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        tezzera_animate::set_frame_dt(1.0 / 60.0);
+        let (mut engine, mut canvas, mut overlay) = headless_hero_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let list_area = blue_pixel_count(&canvas);
+        assert!(list_area > 300 && list_area < 500, "List screen's 20x20 hero must render at its natural size outside any transition, got {list_area} px");
+
+        // Click the hero-tagged Container itself (it carries `on_press`) —
+        // Column top-aligns its single child at the Column's own origin
+        // (0,0), so (10, 10) lands inside its 20x20 rect.
+        let down = tezzera_platform::InputEvent::MouseDown { x: 10.0, y: 10.0, button: tezzera_platform::MouseButton::Left };
+        let up = tezzera_platform::InputEvent::MouseUp { x: 10.0, y: 10.0, button: tezzera_platform::MouseButton::Left };
+        engine.paint(&mut canvas, &mut overlay, &[down, up]);
+
+        // Scan every frame of the flight for real evidence of interpolation:
+        // some frame's blue area must land strictly between the two
+        // screens' natural sizes (400 vs 6400 px), not jump straight from
+        // one to the other in a single frame.
+        let mut saw_intermediate = false;
+        for _ in 0..90 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+            let area = blue_pixel_count(&canvas);
+            if area > 600 && area < 6000 {
+                saw_intermediate = true;
+            }
+        }
+        assert!(saw_intermediate, "expected at least one frame with the hero mid-morph (blue area strictly between the 20x20 source and 80x80 destination), never saw one");
+
+        // Settled: only the Detail screen's natural 80x80 size remains —
+        // the floating morphed copy is gone, the real (no-longer-suppressed)
+        // Detail-screen Container renders normally in its place.
+        let detail_area = blue_pixel_count(&canvas);
+        assert!(detail_area > 6000 && detail_area < 6800, "Detail screen's 80x80 hero must render at its natural size once settled, got {detail_area} px");
+    }
+
+    #[test]
+    fn hero_tag_is_a_pass_through_with_no_active_transition() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        tezzera_animate::set_frame_dt(1.0 / 60.0);
+        let (mut engine, mut canvas, mut overlay) = headless_hero_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        // Steady state, never touched by a transition: renders at its own
+        // declared 20x20 size, same as a plain (untagged) Container would.
+        let area = blue_pixel_count(&canvas);
+        assert!(area > 300 && area < 500, "a Hero-tagged widget outside any transition must render exactly like its untagged inner widget, got {area} px");
     }
 }

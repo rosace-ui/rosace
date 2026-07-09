@@ -357,7 +357,15 @@ Phase 21, see `.steering/WIDGET_AUTHORING_GUIDE.md`).
   `Expanded`, `Spacer`, `ScrollView`/`ScrollAxis`, `ListView`,
   `ScreenTransitionView` (D108/Phase 26 Step 3 — paints a `ScreenNav`
   transition's outgoing/incoming screens at their spring-eased offsets;
-  not generic over the app's route enum)
+  not generic over the app's route enum), `Hero`/`HeroApi` (D108/Phase 26
+  Step 5 — `.hero_tag(id)` on any widget; a pass-through outside a
+  transition, morphs into a floating copy between two same-tagged widgets
+  on the outgoing/incoming screens during one — see `hero.rs`'s own doc
+  comment for the full mechanism; deliberately does NOT use `tezzera-core`'s
+  `Key`/`Element::with_key`, confirmed still completely dead — no widget
+  sets it, the reconciler never reads it, real node identity is purely
+  positional — Hero identity is a separate, out-of-band tag registry
+  instead)
 - Components: `AppBar`, `Avatar`, `Badge`, `Button`, `Card`, `Checkbox`,
   `Chip`, `Dialog`, `Divider`, `Dropdown`, `Drawer`, `Expander`, `Radio`,
   `SegmentedControl`, `Menu`, `NavRail`, `ProgressBar`/`CircularProgress`,

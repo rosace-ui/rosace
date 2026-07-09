@@ -12,6 +12,8 @@ pub mod app;
 pub mod drawer;
 pub mod dropdown;
 pub mod expander;
+mod hero;
+pub mod hero_tag;
 pub mod segmented;
 pub mod radio;
 pub mod skeleton;
@@ -81,6 +83,7 @@ pub use skeleton::Skeleton;
 pub use radio::Radio;
 pub use segmented::SegmentedControl;
 pub use expander::Expander;
+pub use hero_tag::{Hero, HeroApi};
 pub use dropdown::Dropdown;
 pub use drawer::Drawer;
 pub use positioned::Positioned;
@@ -497,6 +500,19 @@ impl<'a> PaintCtx<'a> {
     pub fn replay_offset(&mut self, picture: &tezzera_render::Picture, dx: f32, dy: f32) {
         for cmd in &picture.commands {
             self.recorder.push(cmd.offset(dx, dy));
+        }
+    }
+
+    /// Replay a [`Picture`] captured at `src` instead at `dst` — translates
+    /// AND scales every command's geometry, unlike [`Self::replay_offset`]'s
+    /// translate-only. Backs Hero/shared-element transitions (D108/Phase 26
+    /// Step 5): a widget's captured appearance on one screen re-painted at a
+    /// different-sized rect on the other screen's tagged match.
+    pub fn replay_morphed(&mut self, picture: &tezzera_render::Picture, src: Rect, dst: Rect) {
+        let sx = if src.size.width.abs() > f32::EPSILON { dst.size.width / src.size.width } else { 1.0 };
+        let sy = if src.size.height.abs() > f32::EPSILON { dst.size.height / src.size.height } else { 1.0 };
+        for cmd in &picture.commands {
+            self.recorder.push(cmd.morph(src.origin, dst.origin, sx, sy));
         }
     }
 
