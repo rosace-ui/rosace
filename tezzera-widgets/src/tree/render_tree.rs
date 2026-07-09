@@ -452,6 +452,14 @@ impl RenderTree {
         for s in &n.semantics {
             let mut sn = tezzera_core::SemanticNode::new().role(s.role.clone());
             if let Some(l) = &s.label { sn = sn.label(l.clone()); }
+            // `value`/`heading_level`/`href` were silently dropped here before
+            // D107/Phase 25 — a real gap for a `TextInput`'s current text, a
+            // `Slider`/`ProgressBar`'s value, and (once widgets start setting
+            // them) a heading's level or a link's target, all of which matter
+            // for a faithful HTML/SEO mapping, not just for assistive tech.
+            if let Some(v) = &s.value { sn = sn.value(v.clone()); }
+            if let Some(lvl) = s.heading_level { sn = sn.heading_level(lvl); }
+            if let Some(h) = &s.href { sn = sn.href(h.clone()); }
             parent.children.push(sn);
         }
         // Children nest under THIS node's last semantic entry when it declared
@@ -701,6 +709,35 @@ mod tests {
         assert_eq!(sem.children[0].role, Role::Button);
         assert_eq!(sem.children[0].children.len(), 1);
         assert_eq!(sem.children[0].children[0].role, Role::Text);
+    }
+
+    #[test]
+    fn collect_semantics_carries_value_heading_level_and_href() {
+        // D107/Phase 25: these three were silently dropped by
+        // collect_semantics_node before this fix — real gap for HTML/SEO
+        // mapping (a TextInput's current text, a heading's level, a link's
+        // target all matter for a faithful export, not just role/label).
+        use tezzera_core::Role;
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let input = t.slot(RenderTree::ROOT, true);
+        t.node_mut(input).semantics.push(
+            crate::tree::Semantics::new(Role::TextInput).label("Name").value("Ada"),
+        );
+        let heading = t.slot(RenderTree::ROOT, true);
+        t.node_mut(heading).semantics.push(
+            crate::tree::Semantics::new(Role::Heading).label("Section").heading_level(2),
+        );
+        let link = t.slot(RenderTree::ROOT, true);
+        t.node_mut(link).semantics.push(
+            crate::tree::Semantics::new(Role::Link).label("Docs").href("https://example.com"),
+        );
+        t.finalize();
+
+        let sem = t.collect_semantics();
+        assert_eq!(sem.children[0].value.as_deref(), Some("Ada"));
+        assert_eq!(sem.children[1].heading_level, Some(2));
+        assert_eq!(sem.children[2].href.as_deref(), Some("https://example.com"));
     }
 
     #[test]

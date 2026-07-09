@@ -206,19 +206,26 @@ impl Alignment {
 /// A declarative semantics entry (D099). Widgets push these during paint via
 /// [`PaintCtx::semantics`]; the frame derives the accessibility tree from the
 /// render tree. Roles come from `tezzera_core::Role`.
+///
+/// `heading_level`/`href` (D107/Phase 25) mirror `tezzera_core::SemanticNode`'s
+/// fields of the same name — carried through unchanged by `collect_semantics`.
 #[derive(Clone, Debug)]
 pub struct Semantics {
     pub role: tezzera_core::Role,
     pub label: Option<String>,
     pub value: Option<String>,
+    pub heading_level: Option<u8>,
+    pub href: Option<String>,
 }
 
 impl Semantics {
     pub fn new(role: tezzera_core::Role) -> Self {
-        Self { role, label: None, value: None }
+        Self { role, label: None, value: None, heading_level: None, href: None }
     }
     pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
     pub fn value(mut self, v: impl Into<String>) -> Self { self.value = Some(v.into()); self }
+    pub fn heading_level(mut self, level: u8) -> Self { self.heading_level = Some(level); self }
+    pub fn href(mut self, href: impl Into<String>) -> Self { self.href = Some(href.into()); self }
 }
 
 // ── HitTarget ────────────────────────────────────────────────────────────────
