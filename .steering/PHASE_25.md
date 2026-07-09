@@ -1,8 +1,8 @@
 # Phase 25 — Web SEO/Accessibility via Semantic-Tree HTML Shadow (D107)
 
-> Status: IN PROGRESS (Steps 1-3 landed 2026-07-09; Steps 4-5 remain)
+> Status: COMPLETE (Steps 1-5 all landed 2026-07-09)
 > Started: 2026-07-09
-> Completed: —
+> Completed: 2026-07-09
 > Decision: **D107** — canvas stays the only visual renderer; web additionally
 > gets a semantic HTML shadow driven by the existing semantic tree, delivered
 > at BUILD TIME via Declarative Shadow DOM where possible, with a runtime
@@ -131,6 +131,92 @@
 >   default HOME screen doesn't happen to include "Increment" — that's on
 >   the Counter screen, reached via navigation — so even THAT exact
 >   example only partially matches without per-route support).
+> - Step 4 ✅ Runtime shadow-DOM fallback. `FrameEngine::paint()`
+>   (`tezzera/src/engine.rs`) now returns `bool` (`content_changed`, derived
+>   from the existing D091 dirty-tracking: `global_dirty ||
+>   !dirty_ids.is_empty()`) instead of `()` — kept entirely internal to
+>   `App::launch()`'s own closure in `tezzera/src/lib.rs` rather than
+>   threading it through `tezzera-platform`'s public `PlatformWindow::
+>   run_layered` closure signature, to avoid rippling a breaking change
+>   through every platform caller (desktop/iOS-FFI/Android-FFI binaries)
+>   for a value only the web target needs. New `FrameEngine::semantics()`
+>   accessor. New `tezzera-platform/src/web_seo_sync.rs` (wasm32-only):
+>   `sync(&SemanticNode)` renders via `tezzera-web-seo::render_html`, diffs
+>   against the previous frame's HTML (cheap string compare — a second,
+>   finer gate beyond the caller's `content_changed` check, since a
+>   re-render can legitimately produce identical output), and on a real
+>   change calls `set_inner_html` on the `#tzr-seo` shadow root — reusing
+>   Step 3's build-time Declarative Shadow DOM root via `element.
+>   shadow_root()` if the browser already attached one, or attaching a
+>   fresh one via `attach_shadow()` otherwise (covers `tzr dev`, which
+>   skips the build-time export). Wired into `App::launch()`'s paint
+>   closure, wasm32-gated.
+>   **Two real, previously-unknown bugs found via actual browser
+>   verification (not code review) and fixed along the way**:
+>   1. `#tzr-seo` had no CSS at all — Step 3's build-time shadow DOM HTML
+>      was genuinely VISIBLE on screen to sighted users (confirmed via
+>      screenshot). Fixed with a visually-hidden pattern (`position:
+>      absolute; clip: rect(0,0,0,0); ...` — deliberately NOT
+>      `display:none`, which also hides from screen readers) in both
+>      `tzr new`'s `web_index_html()` and `tzr build`'s
+>      `generate_index_html()`.
+>   2. `generate_index_html()` had ALWAYS hardcoded `import('./app.js')`/
+>      `fetch('app.wasm')` regardless of the real crate name — meaning
+>      `tzr build --target web`'s output silently never actually loaded
+>      the wasm app for any project not literally named "app", for this
+>      function's entire prior history. Pre-existing, unrelated to this
+>      phase's other work, but directly blocking Step 4's browser
+>      verification (found via: canvas stuck at default 300×150 size, zero
+>      console output, `ls dist/` showing the real files were
+>      `seo_test.js`/`seo_test_bg.wasm`). Fixed by deriving `crate_name`
+>      from the built wasm file's basename in `build_web()` and threading
+>      it through `generate_index_html(crate_name: &str)`.
+>   **Verified for real, matching the exit bar exactly**: scaffolded a
+>   fresh web app, built it, served `dist/` over real HTTP, drove it in an
+>   actual Chrome tab (`claude-in-chrome`) — navigated Home → Counter,
+>   read `document.getElementById('tzr-seo').shadowRoot.innerHTML` BEFORE
+>   clicking Increment (`<p>0</p>`), clicked the real Increment button,
+>   read it again AFTER (`<p>1</p>`) — the shadow DOM tracked the live
+>   state change from a real user interaction, not a simulated one. No
+>   console errors either side.
+> - Step 5 ✅ Verified with real tools. No-JS text extraction: `curl`ed the
+>   built `dist/index.html` directly (no JS execution) and separately ran
+>   it through a standalone `html.parser`-based text extractor (Python) to
+>   simulate a JS-skipping crawler — both surfaced the real app text
+>   ("seo_test", "Counter, A simple counter with + / −"), matching what's
+>   visually on screen. `llms.txt` contains the same real text (this
+>   phase's `llms.txt` is deliberately a flat plain-text summary per this
+>   doc's own Step 3 description, not a claim of full compliance with the
+>   `llmstxt.org` markdown-headers convention — nothing in this phase's
+>   design committed to that stricter format).
+>   **A third real, previously-unknown bug found here, via Chrome's own
+>   accessibility tree (`read_page`), not spec-reading**: a lone
+>   `Role::ListItem` (e.g. a `ListTile` placed directly in a `Column`, with
+>   no explicit `Role::List` container — the common case; most screens
+>   don't wrap a single list tile in one) rendered as a bare `<li>` with no
+>   `<ul>` ancestor. Per HTML-AAM, an `<li>` outside a `<ul>`/`<ol>`/`<menu>`
+>   loses its implicit `listitem` accessibility role — confirmed
+>   concretely: Chrome's accessibility tree exposed the sibling `<h1>` but
+>   silently dropped the `<li>` entirely. Fixed in `tezzera-web-seo/src/
+>   lib.rs`: `render_children` now auto-wraps any run of consecutive
+>   `Role::ListItem` siblings in a synthetic `<ul>` (an explicit
+>   `Role::List` still renders its own `<ul>` directly, unaffected — no
+>   double-wrapping). Re-verified after the fix: rebuilt, re-served,
+>   confirmed the raw build-time HTML now contains `<ul><li>...</li></ul>`.
+>   **Honest limitation, not glossed over**: actual VoiceOver (the system
+>   screen reader) was NOT run — doing so would mean enabling a system-wide
+>   accessibility feature via automation, outside what this session
+>   attempts unprompted. What WAS verified is spec-correct DOM structure
+>   (the exact thing VoiceOver's own accessibility-tree consumption depends
+>   on) plus Chrome's own accessibility-tree API, which is the same
+>   underlying tree VoiceOver reads from on this platform — not a
+>   simulation of VoiceOver itself. If a real VoiceOver pass is wanted,
+>   it needs a human (or a separate, explicitly-authorized session) at the
+>   keyboard.
+>   Full workspace `cargo build --workspace` and `cargo test --workspace
+>   --no-fail-fast` both clean (zero failures) after all Step 4/5 changes;
+>   `cargo check -p tezzera-web-seo --target wasm32-unknown-unknown` and
+>   `-p tezzera-platform --target wasm32-unknown-unknown` both clean.
 
 ## Why This Phase
 
