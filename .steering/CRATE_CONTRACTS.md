@@ -140,6 +140,43 @@ silently baked into the contracts below, per the project's violation policy
    for a real on-device verification pass once an Android environment
    (device or a machine with enough disk for an emulator image) is
    available.
+7. **Web (D107 Phase 25) leftovers, flagged 2026-07-09 when the phase
+   completed — none blocking, all explicitly deferred rather than fixed:**
+   - **No per-route static SEO export.** `tzr build --target web`'s
+     build-time semantic-HTML export runs `AppRoot::build()` exactly once,
+     with no forced navigation — it only captures the app's default/
+     initial screen. Content behind `nav.push(...)` (e.g. a counter
+     screen reached via a list tile) isn't in the crawler-visible HTML
+     until wasm loads and Step 4's runtime shadow-DOM sync catches up. A
+     real per-route export would need the extractor to iterate every
+     `Screen` variant, forcing navigation state per iteration.
+   - **Two independently hand-maintained `index.html` templates.** `tzr
+     new`'s `web_index_html()` (writes `web/index.html`) and `tzr build`'s
+     `generate_index_html()` (writes the real `dist/index.html` output)
+     are separate functions kept in sync by hand — `build_web()` never
+     reads the scaffolded `web/index.html` at all. Already caused one real
+     bug this session (`generate_index_html()` hardcoding `app.js`/
+     `app.wasm` instead of the real crate name); a second divergence could
+     recur silently.
+   - **`llms.txt` output isn't spec-compliant** with the emerging
+     `llmstxt.org` markdown convention (`#`/`>` headers, link lists) — it's
+     a flat plain-text summary. That was the phase's actual design intent
+     (see `PHASE_25.md`'s Step 3 description: "plain-text summary"), not
+     an oversight, but flag it if strict convention compliance is ever
+     wanted.
+   - **VoiceOver (the real macOS screen reader) was never run.** Step 5
+     verified spec-correct DOM structure and Chrome's own accessibility
+     tree (the same underlying tree VoiceOver consumes on this platform),
+     but not VoiceOver itself — that needs a human, or explicit
+     authorization to toggle a system-wide accessibility feature via
+     automation.
+   - **GPU rendering is disabled on web.** `GpuPresenter` (wgpu) is gated
+     off entirely on `wasm32` — web always uses the `softbuffer` CPU
+     fallback path. Never revisited for whether web should get
+     GPU-accelerated rendering (e.g. via `wgpu`'s WebGL/WebGPU backends).
+   - **Web has no broader widget/layout test coverage** beyond the
+     scaffolded counter MVP that's been used for verification throughout
+     Phases 25 and the earlier multiplatform work.
 
 None of these are fixed by this doc rewrite — this is the audit that found
 them. Fixing them (removing `tezzera-anim`, reordering `gesture`, moving
