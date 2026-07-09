@@ -270,6 +270,24 @@ are solid; `ScrollPhysics::Bounce`'s real-trackpad feel specifically is
 not. `ScrollPhysics::Momentum` (the default for every platform except
 iOS/macOS) was not implicated in any of the live testing.
 
+**A second, distinct real-user report (2026-07-09, via the `demo_app`
+example built for D108 Steps 1-5's showcase): drag tracking itself lags
+behind the cursor when the drag is moderately fast** — "if we move the
+mouse a bit fast, not too fast, it slowly follows" — not the settle-time
+bounce jitter above, and not yet root-caused. `MouseMove` dispatch (
+`tezzera/src/engine.rs`'s `active_drag` handling) forwards every event in
+the frame's batch to the drag callback with no visible throttling in the
+dispatch code itself, so the likely-but-UNVERIFIED suspects are:
+winit/OS-level `CursorMoved` coalescing under fast movement, or the
+paint loop not repainting once per real dispatched `MouseMove` (a
+render-frequency question, not an input-dispatch one) — both need real
+interactive reproduction (ideally a screen recording, same technique
+that root-caused the bounce jitter above) to actually confirm rather
+than guess. Logged, not fixed — per this project's own discipline, a
+blind change here would be exactly the kind of unverified "workaround"
+this phase has repeatedly had to walk back. See `CRATE_CONTRACTS.md`
+Known Issue #10.
+
 ### Step 3 — Wire real nav transitions (expanded 2026-07-09)
 `tezzera-nav`'s `Navigator`/`ScreenNav` has zero references to
 `tezzera-nav-anim` today — pushes/pops are instant. Wires

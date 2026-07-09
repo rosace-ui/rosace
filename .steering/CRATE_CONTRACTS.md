@@ -229,6 +229,35 @@ silently baked into the contracts below, per the project's violation policy
    suspected of the same issue, since it has no overscroll/spring-back
    phase to fight the OS's momentum tail. Revisit with either more
    real-device iteration time or the plumbing work in (c).
+10. **Drag tracking lags behind the cursor on a moderately fast drag** —
+    reported live against `demo_app` (2026-07-09), distinct from #9's
+    settle-time bounce oscillation. `tezzera/src/engine.rs`'s `MouseMove`
+    dispatch forwards every event in a frame's batch to `active_drag`'s
+    callback with no throttling visible in that code itself, so the
+    likely-but-UNVERIFIED suspects are OS/winit-level `CursorMoved`
+    coalescing under fast movement, or the paint loop not repainting once
+    per real dispatched move — neither confirmed. Not fixed here: real
+    interactive reproduction (ideally a screen recording, the same
+    technique that root-caused #9) is needed before changing anything: a
+    blind fix here would be exactly the unverified workaround this phase
+    has repeatedly had to walk back.
+
+**Fixed 2026-07-09, unrelated to #9/#10 above**: `tezzera-animate::Spring::
+update` used a single semi-implicit-Euler step per call, unconditionally
+stable only below a step-size threshold — a real wall-clock `dt` near
+`frame_dt`'s 0.1s clamp ceiling (a realistic idle gap between frames, never
+exercised by any of this project's headless tests, which always drove
+`Spring` with small fixed `dt`) made position/velocity diverge
+exponentially within ~20 calls, confirmed by direct numeric simulation.
+That astronomical value then overflowed an `i32` cast in
+`tezzera-render`'s text rasterizer, crashing any real app on any screen
+transition — found live (clicking a Hero transition, and separately just
+navigating to a plain second screen), not by inspection. Fixed by
+sub-stepping `update()` at a verified-stable fixed increment inside the
+function, regardless of the caller's stiffness/damping or how large a
+single `dt` it's handed — no call-site changes needed anywhere in
+`tezzera-nav`/`tezzera-widgets`. Two regression tests reproduce the exact
+real-world `dt` and assert bounded, convergent output.
 
 None of these are fixed by this doc rewrite — this is the audit that found
 them. Fixing them (removing `tezzera-anim`, reordering `gesture`, moving
