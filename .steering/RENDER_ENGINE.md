@@ -1,6 +1,6 @@
-# TEZZERA — Render Engine Architecture
+# ROSACE — Render Engine Architecture
 
-> This document is the authoritative reference for how TEZZERA renders a frame,
+> This document is the authoritative reference for how ROSACE renders a frame,
 > routes input, manages focus, and handles overlays and navigation.
 > Decisions referenced here are locked in DECISIONS.md.
 
@@ -66,7 +66,7 @@ One frame, start to finish:
 ```
 1.  VSync signal arrives (winit RedrawRequested)
 2.  Compute wall-clock dt = now - last_frame_time           (D054, D059)
-3.  tezzera_animate::set_frame_dt(dt)                       (D059)
+3.  rosace_animate::set_frame_dt(dt)                       (D059)
 4.  Atom::take_frame_requested() clears pending flag
 5.  Build pass: Component::build() for dirty components
 6.  Reconcile: diff new elements vs Element tree
@@ -300,9 +300,9 @@ Use push/pop for: new screens, settings pages, detail views, auth flows.
 ## VSync + Animation  (D054, D059)
 
 ```
-tezzera-state:   Atom::set() → request_frame() → wake event loop
-tezzera-animate: FRAME_DT clock, set_frame_dt(dt) called by platform
-tezzera-platform: tracks last_frame_time, computes real dt each frame
+rosace-state:   Atom::set() → request_frame() → wake event loop
+rosace-animate: FRAME_DT clock, set_frame_dt(dt) called by platform
+rosace-platform: tracks last_frame_time, computes real dt each frame
                   dt clamped to [0.001, 0.1]s
 
 use_spring → reads frame_dt() → self-perpetuates via atom write while unsettled
@@ -330,19 +330,19 @@ main tree. O(depth) not O(n).
 ## Crate Responsibilities
 
 ```
-tezzera-trace      zero-cost debug events
-tezzera-state      Atom, hook state, frame scheduler (D054)
-tezzera-core       Component, Element, Context, Key (D055)
-tezzera-layout     layout algorithms: column/row/grid/wrap/flex
-tezzera-render     SkiaCanvas, DrawCommand, PictureRecorder, FontCache
-tezzera-theme      ThemeData, ColorScheme, ShadowLayer
-tezzera-animate    AnimationController, use_spring, use_animation, frame clock (D059)
-tezzera-a11y       A11yTree, A11yNode, FocusManager (D060)
-tezzera-widgets    Widget trait, LayoutCtx, PaintCtx, all widget impls,
+rosace-trace      zero-cost debug events
+rosace-state      Atom, hook state, frame scheduler (D054)
+rosace-core       Component, Element, Context, Key (D055)
+rosace-layout     layout algorithms: column/row/grid/wrap/flex
+rosace-render     SkiaCanvas, DrawCommand, PictureRecorder, FontCache
+rosace-theme      ThemeData, ColorScheme, ShadowLayer
+rosace-animate    AnimationController, use_spring, use_animation, frame clock (D059)
+rosace-a11y       A11yTree, A11yNode, FocusManager (D060)
+rosace-widgets    Widget trait, LayoutCtx, PaintCtx, all widget impls,
                    OverlayEntry, RectReader, overlay registry (D057, D058)
-tezzera-nav        Navigator, Route stack (D061)
-tezzera-platform   VSync event loop, window, input routing, frame lifecycle (D054)
-tezzera            Umbrella: App, reconciler, render loop, prelude
+rosace-nav        Navigator, Route stack (D061)
+rosace-platform   VSync event loop, window, input routing, frame lifecycle (D054)
+rosace            Umbrella: App, reconciler, render loop, prelude
 ```
 
 ---
@@ -378,7 +378,7 @@ pub trait WithKey: Sized {
 impl<W: Widget + 'static> WithKey for W { ... }
 ```
 
-**`Key` struct (tezzera-core/src/element.rs):**
+**`Key` struct (rosace-core/src/element.rs):**
 ```rust
 pub struct Key(pub u64);
 impl From<&str>  for Key { fn from(s: &str) -> Key { Key(fnv_hash(s)) } }
@@ -404,7 +404,7 @@ Given old children [A, B, C, D, E] and new children [C, A, E, F]:
 Flutter has `GlobalKey` — a key that reaches across the tree for direct widget
 access. We deliberately omit this. It violates tree encapsulation and is
 unnecessary for the use cases it's meant to solve (overlay positioning, form
-validation). TEZZERA solves these with `RectReader` and `FocusNode` instead.
+validation). ROSACE solves these with `RectReader` and `FocusNode` instead.
 
 ---
 
@@ -412,7 +412,7 @@ validation). TEZZERA solves these with `RectReader` and `FocusNode` instead.
 
 ### Current state
 
-`tezzera-a11y` has a complete data model (`A11yTree`, `A11yNode`, `Role`,
+`rosace-a11y` has a complete data model (`A11yTree`, `A11yNode`, `Role`,
 `FocusManager`) but it is entirely **disconnected from the widget tree**. The
 semantic tree is never populated or sent to the platform.
 
@@ -541,12 +541,12 @@ without a platform-layer workaround.
 
 These are separate concerns handled by other systems:
 
-- **Text shaping / BiDi** — `tezzera-text`, `tezzera-bidi`
-- **Gesture recognition** — `tezzera-gesture` (swipe, pinch, long-press)
-- **Network images** — `tezzera-net`
-- **Style sheets** — `tezzera-style`
-- **Hot reload** — `tezzera-hot-reload`
-- **GPU compositor** — Phase 15, `tezzera-compositor` (not yet built)
+- **Text shaping / BiDi** — `rosace-text`, `rosace-bidi`
+- **Gesture recognition** — `rosace-gesture` (swipe, pinch, long-press)
+- **Network images** — `rosace-net`
+- **Style sheets** — `rosace-style`
+- **Hot reload** — `rosace-hot-reload`
+- **GPU compositor** — Phase 15, `rosace-compositor` (not yet built)
 - **Platform AT-SPI / UIA / AXKit** — Phase 21, screen reader integration
 
 ---
@@ -585,7 +585,7 @@ Phase 14:
   ⬜ TransformLayer — zero-repaint scroll (deferred post Phase 14)
 
 Phase 15:
-  ✅ wgpu GPU compositor — tezzera-compositor crate, GpuPresenter (D072–D075)
+  ✅ wgpu GPU compositor — rosace-compositor crate, GpuPresenter (D072–D075)
   ✅ CPU pixel buffer → GPU texture → fullscreen-quad blit (Metal/Vulkan/DX12)
   ✅ Softbuffer fallback when no GPU adapter available (D074)
   ⬜ Texture atlas for layer compositing (Phase 16)

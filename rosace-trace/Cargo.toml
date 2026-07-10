@@ -1,0 +1,10 @@
+[package]
+name = "rosace-trace"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+web-time = "1"

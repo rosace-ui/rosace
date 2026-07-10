@@ -67,7 +67,7 @@ clamps to the edge (via `ClampToEdge` sampler) — so content stops at boundarie
 Actually, for scroll we want transparent outside the content bounds, not clamped.
 Use `uv - offset / texture_size` where values outside [0,1] return transparent.
 
-### Step 2 — tezzera-compositor: transform pipeline
+### Step 2 — rosace-compositor: transform pipeline
 
 Add a third pipeline variant: `pipeline_transform` with a different fragment
 shader that samples with offset + transparency for out-of-range UV.

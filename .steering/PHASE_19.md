@@ -28,7 +28,7 @@ is the big Phase 19 addition to the compositor.
 - **D087** — TransformLayerEntry in PaintCtx: `PaintCtx` gains
   `transform_entries: Rc<RefCell<Vec<TransformLayerEntry>>>`.
   A `TransformLayerEntry` contains:
-  - `picture: tezzera_render::Picture` — recorded child draw commands
+  - `picture: rosace_render::Picture` — recorded child draw commands
   - `child_size: Size` — natural size of the child
   - `viewport_rect: Rect` — screen-space rect the TL occupies
   - `scroll_x: f32, scroll_y: f32` — current scroll offset in logical px
@@ -60,7 +60,7 @@ is the big Phase 19 addition to the compositor.
 
 ### Step 1 — TransformLayerEntry type
 
-New type in `tezzera-render`:
+New type in `rosace-render`:
 ```rust
 pub struct TransformLayerEntry {
     pub picture:       Picture,
@@ -128,7 +128,7 @@ at 0 during pure scroll steps (only the TransformLayer's dirty flag is false).
 ## Exit Criteria
 
 ```
-□ TransformLayerEntry type defined in tezzera-render (or tezzera-widgets)
+□ TransformLayerEntry type defined in rosace-render (or rosace-widgets)
 □ PaintCtx.transform_entries plumbed end-to-end
 □ TransformLayer::paint records into sub-recorder, not main recorder
 □ Platform: separate SkiaCanvas per transform layer, replayed when dirty

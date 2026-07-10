@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>demo_app</title>
+  <link rel="icon" href="favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="manifest" href="site.webmanifest" />
+  <style>
+    html, body { margin: 0; padding: 0; background: #14141a; }
+    /* D107 Phase 25: visually hidden but still in the accessibility tree —
+       "display: none"/"visibility: hidden" would also hide this from
+       screen readers, which defeats the point (crawlers AND assistive
+       tech read this; only SIGHTED users see the canvas instead). */
+    #rsc-seo {
+      position: absolute;
+      width: 1px; height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <!-- D107 Phase 25 Step 3: `rsc build --target web` replaces this comment
+       with a real <template shadowrootmode="open"> block — crawlable text/
+       structure baked into the raw HTML response, present whether or not
+       the crawler executes JS (a plain curl sees the literal bytes; a
+       shadow-DOM-aware crawler sees a real shadow root). The canvas the
+       script below creates paints over it for sighted users; nothing here
+       is itself rendered as a second visual layer. -->
+  <div id="rsc-seo"><!--TZR_SEO_SHADOW_DOM--></div>
+  <script type="module">
+    import init from './demo_app.js';
+    init().catch((e) => {
+      console.error('rosace init failed:', e);
+      document.body.innerHTML = '<pre style="color:#f66">' + e + '</pre>';
+    });
+  </script>
+</body>
+</html>

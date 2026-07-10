@@ -5,7 +5,7 @@
 
 ## Steps
 
-### Step 1 — Text shaping stub (`tezzera-shaping`)
+### Step 1 — Text shaping stub (`rosace-shaping`)
 - `ShapedGlyph { glyph_id: u32, x_advance: f32, y_advance: f32, x_offset: f32, y_offset: f32, cluster: u32 }`
 - `GlyphRun { glyphs: Vec<ShapedGlyph>, font_size: f32, direction: TextDirection, script: Script }`
 - `Script` enum: `Latin`, `Arabic`, `Hebrew`, `Devanagari`, `Han`, `Unknown`
@@ -14,7 +14,7 @@
 - `ShapingPipeline` — chains multiple engines with fallback
 - Designed so HarfBuzz can be slotted in as a `ShapingEngine` impl in v1.0
 
-### Step 2 — Style system (`tezzera-style`)
+### Step 2 — Style system (`rosace-style`)
 - `StyleValue` enum: `Color(Color)`, `Length(f32, LengthUnit)`, `Percent(f32)`, `Keyword(String)`, `None`
 - `LengthUnit` enum: `Px`, `Em`, `Rem`, `Vw`, `Vh`
 - `StyleProperty` enum (20 properties): `Background`, `Color`, `FontSize`, `FontWeight`, `Padding`, `PaddingTop/Right/Bottom/Left`, `Margin`, `MarginTop/Right/Bottom/Left`, `Width`, `Height`, `BorderRadius`, `BorderWidth`, `BorderColor`, `Opacity`, `Display`, `FlexDirection`, `Gap`
@@ -24,21 +24,21 @@
 - `InlineStyle` — `HashMap<StyleProperty, StyleValue>` for per-widget styles
 - `ComputedStyle` — merged result of stylesheet + inline, `get(prop)`, `color()`, `font_size()`, `padding_px()`
 
-### Step 3 — tzr CLI polish
-- Add `tzr check` — runs `cargo check --workspace`, prints errors in colored format
-- Add `tzr test` — runs `cargo test --workspace`, shows pass/fail counts per crate
-- Add `tzr lint` — runs `cargo clippy --workspace -- -D warnings`, shows lint count
-- Add `tzr fmt` — runs `cargo fmt --workspace --check`, reports unformatted files
+### Step 3 — rsc CLI polish
+- Add `rsc check` — runs `cargo check --workspace`, prints errors in colored format
+- Add `rsc test` — runs `cargo test --workspace`, shows pass/fail counts per crate
+- Add `rsc lint` — runs `cargo clippy --workspace -- -D warnings`, shows lint count
+- Add `rsc fmt` — runs `cargo fmt --workspace --check`, reports unformatted files
 - Each command: `CommandResult { exit_code: i32, stdout: String, stderr: String, duration_ms: u64 }`
 - `TzrCommand` trait: `name()`, `run(args: &[String]) -> Result<CommandResult, CliError>`
-- Add subcommands to existing `tezzera-cli` (read `tezzera-cli/src/main.rs` first)
+- Add subcommands to existing `rosace-cli` (read `rosace-cli/src/main.rs` first)
 
 ### Step 4 — Phase 9 showcase
-- `tezzera-examples/src/bin/phase9_demo.rs`
+- `rosace-examples/src/bin/phase9_demo.rs`
 - 1400×900 PNG, 4 panels:
   1. Text shaping — GlyphRun visualization, FallbackShaper glyph map, Script enum
   2. Style system — StyleSheet rule diagram, StyleProperty grid, ComputedStyle resolver
-  3. CLI commands — tzr check/test/lint/fmt flow diagram, CommandResult display
+  3. CLI commands — rsc check/test/lint/fmt flow diagram, CommandResult display
   4. Framework overview — all 25 crates in a dependency graph visualization
 
 ## Exit Criteria
@@ -48,7 +48,7 @@
 - [ ] `StyleSheet::rules_for(Selector::Class("btn"))` returns matching rules
 - [ ] `ComputedStyle::color()` returns the resolved color value
 - [ ] `ComputedStyle::padding_px()` returns the resolved padding
-- [ ] `tzr check`, `tzr test`, `tzr lint`, `tzr fmt` subcommands registered in CLI
+- [ ] `rsc check`, `rsc test`, `rsc lint`, `rsc fmt` subcommands registered in CLI
 - [ ] All workspace tests pass, zero warnings, clean release build
 
 ## Approved dependencies

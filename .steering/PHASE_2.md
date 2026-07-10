@@ -1,4 +1,4 @@
-# TEZZERA — PHASE 2
+# ROSACE — PHASE 2
 > Rich UI Layer: Polished, themed, animated apps
 > Prerequisite: Phase 1 exit criteria 100% complete
 > Target: Developer can build polished, themed, animated apps at 60fps
@@ -18,14 +18,14 @@ Scroll views have momentum. Multi-screen demo proves the system.
 > Phase 2 is NOT done until ALL of these pass.
 
 ```
-□ tezzera-theme crate ships with built-in Light and Dark themes
+□ rosace-theme crate ships with built-in Light and Dark themes
 □ All theme tokens typed — compile error for missing tokens
-□ tezzera-widgets ships Button, Text, TextInput, Image, Divider, ScrollView
+□ rosace-widgets ships Button, Text, TextInput, Image, Divider, ScrollView
 □ All widgets use #[component] macro and respect theme tokens
-□ tezzera-animate ships Tween, Spring, Keyframe — driven by Atom<f32>
+□ rosace-animate ships Tween, Spring, Keyframe — driven by Atom<f32>
 □ Animated counter example runs at 60fps with spring animations
-□ tezzera-scroll ships ScrollView with momentum scrolling
-□ A real multi-screen demo app (tezzera-examples) using all Phase 2 features
+□ rosace-scroll ships ScrollView with momentum scrolling
+□ A real multi-screen demo app (rosace-examples) using all Phase 2 features
 □ All new crate tests pass
 □ No warnings in release build
 □ No unsafe without SAFETY comments
@@ -35,7 +35,7 @@ Scroll views have momentum. Multi-screen demo proves the system.
 
 ## STEP-BY-STEP PLAN
 
-### STEP 1 — tezzera-theme crate
+### STEP 1 — rosace-theme crate
 **Build this first. Every widget in Phase 2 depends on it.**
 
 **1a — Core color type**
@@ -165,11 +165,11 @@ pub struct Elevation {
 }
 ```
 
-**1e — TezzeraTheme trait**
+**1e — RosaceTheme trait**
 ```rust
 /// Implement this to define a complete theme.
 /// All fields must be provided — missing tokens = compile error.
-pub trait TezzeraTheme: 'static + Send + Sync {
+pub trait RosaceTheme: 'static + Send + Sync {
     fn color_scheme(&self) -> &ColorScheme;
     fn typography(&self) -> &Typography;
     fn spacing(&self) -> &Spacing;
@@ -178,12 +178,12 @@ pub trait TezzeraTheme: 'static + Send + Sync {
 }
 ```
 
-**1f — #[derive(TezzeraTheme)] proc-macro (add to tezzera-macros)**
-- Add `TezzeraTheme` derive variant to tezzera-macros
-- Generates `TezzeraTheme` impl stubs with compiler-friendly errors for missing fields
+**1f — #[derive(RosaceTheme)] proc-macro (add to rosace-macros)**
+- Add `RosaceTheme` derive variant to rosace-macros
+- Generates `RosaceTheme` impl stubs with compiler-friendly errors for missing fields
 - Usage:
 ```rust
-#[derive(TezzeraTheme)]
+#[derive(RosaceTheme)]
 pub struct MyTheme {
     colors: ColorScheme,
     type_: Typography,
@@ -195,21 +195,21 @@ pub struct MyTheme {
 
 **1g — Built-in themes**
 ```rust
-pub struct TezzeraLightTheme { /* ... */ }
-pub struct TezzeraDarkTheme  { /* ... */ }
+pub struct RosaceLightTheme { /* ... */ }
+pub struct RosaceDarkTheme  { /* ... */ }
 
-impl TezzeraTheme for TezzeraLightTheme { /* ... */ }
-impl TezzeraTheme for TezzeraDarkTheme  { /* ... */ }
+impl RosaceTheme for RosaceLightTheme { /* ... */ }
+impl RosaceTheme for RosaceDarkTheme  { /* ... */ }
 ```
 
 **1h — ThemeProvider widget and use_theme() hook**
 ```rust
 /// Injects a theme into the widget tree. Widgets below can call use_theme().
 #[component]
-pub fn ThemeProvider(theme: Arc<dyn TezzeraTheme>, children: Element) -> Element { ... }
+pub fn ThemeProvider(theme: Arc<dyn RosaceTheme>, children: Element) -> Element { ... }
 
-/// In tezzera-state — reads the nearest ThemeProvider's theme.
-pub fn use_theme(ctx: &mut Context) -> Arc<dyn TezzeraTheme> { ... }
+/// In rosace-state — reads the nearest ThemeProvider's theme.
+pub fn use_theme(ctx: &mut Context) -> Arc<dyn RosaceTheme> { ... }
 ```
 
 Tests required:
@@ -232,12 +232,12 @@ fn theme_provider_nesting_prefers_inner() { }
 
 **Commit:**
 ```bash
-git commit -m "feat(theme): implement TezzeraTheme, ColorScheme, Typography, and built-in Light/Dark themes"
+git commit -m "feat(theme): implement RosaceTheme, ColorScheme, Typography, and built-in Light/Dark themes"
 ```
 
 ---
 
-### STEP 2 — tezzera-widgets core set
+### STEP 2 — rosace-widgets core set
 **Build each widget in this order. Each one must compile and render before moving on.**
 
 All widgets must:
@@ -396,7 +396,7 @@ git commit -m "feat(widgets): add Text, Button, TextInput, Divider, Image, Paddi
 
 ---
 
-### STEP 3 — tezzera-animate crate
+### STEP 3 — rosace-animate crate
 **Physics-based animation. All values driven through Atom<f32>.**
 
 **3a — Lerp trait**
@@ -567,7 +567,7 @@ git commit -m "feat(animate): implement Tween, Spring, Keyframe, AnimationContro
 
 ---
 
-### STEP 4 — tezzera-scroll crate
+### STEP 4 — rosace-scroll crate
 **Momentum scrolling. Build after widgets and animate.**
 
 **4a — ScrollView widget**
@@ -664,12 +664,12 @@ git commit -m "feat(scroll): implement ScrollView with momentum physics and Scro
 ### STEP 5 — Animated counter example
 **Proves animate + widgets + theme integrate correctly.**
 
-Update `tezzera-examples/src/counter_window.rs`:
+Update `rosace-examples/src/counter_window.rs`:
 
 ```rust
-use tezzera::prelude::*;
-use tezzera_animate::prelude::*;
-use tezzera_theme::prelude::*;
+use rosace::prelude::*;
+use rosace_animate::prelude::*;
+use rosace_theme::prelude::*;
 
 #[component]
 fn AnimatedCounter() -> Element {
@@ -707,8 +707,8 @@ fn AnimatedCounter() -> Element {
 }
 
 fn main() {
-    TezzeraApp::new()
-        .theme(TezzeraLightTheme::new())
+    RosaceApp::new()
+        .theme(RosaceLightTheme::new())
         .child(AnimatedCounter)
         .run();
 }
@@ -721,7 +721,7 @@ fn main() {
 □ Spring overshoots slightly (bouncy preset)
 □ Light theme colors applied correctly
 □ No jitter or missed frames during animation
-□ TezzeraTrace emits AnimationFrame events
+□ RosaceTrace emits AnimationFrame events
 ```
 
 **Commit:**
@@ -734,7 +734,7 @@ git commit -m "feat(examples): animated counter with spring animation and Light 
 ### STEP 6 — Multi-screen demo app
 **Proves the full Phase 2 stack in a realistic app.**
 
-Create `tezzera-examples/src/phase2_demo/` with these screens:
+Create `rosace-examples/src/phase2_demo/` with these screens:
 
 **Screen 1: Theme Gallery**
 - Shows all color tokens as swatches
@@ -771,14 +771,14 @@ git commit -m "feat(examples): phase2_demo — theme gallery, widget showcase, a
 **Run ALL exit criteria. Sign off every item.**
 
 ```
-□ tezzera-theme crate ships with built-in Light and Dark themes
+□ rosace-theme crate ships with built-in Light and Dark themes
 □ All theme tokens typed — compile error for missing tokens
-□ tezzera-widgets ships Button, Text, TextInput, Image, Divider, ScrollView
+□ rosace-widgets ships Button, Text, TextInput, Image, Divider, ScrollView
 □ All widgets use #[component] macro and respect theme tokens
-□ tezzera-animate ships Tween, Spring, Keyframe — driven by Atom<f32>
+□ rosace-animate ships Tween, Spring, Keyframe — driven by Atom<f32>
 □ Animated counter example runs at 60fps with spring animations
-□ tezzera-scroll ships ScrollView with momentum scrolling
-□ A real multi-screen demo app (tezzera-examples) using all Phase 2 features
+□ rosace-scroll ships ScrollView with momentum scrolling
+□ A real multi-screen demo app (rosace-examples) using all Phase 2 features
 □ All new crate tests pass
 □ No warnings in release build
 □ No unsafe without SAFETY comments
@@ -827,7 +827,7 @@ env_logger      → logger implementation (dev only)
 thiserror       → error types
 
 # Phase 2 additions — none required
-# All Phase 2 crates (tezzera-theme, tezzera-animate, tezzera-scroll, tezzera-widgets)
+# All Phase 2 crates (rosace-theme, rosace-animate, rosace-scroll, rosace-widgets)
 # are built on existing workspace crates only.
 # Any new external dependency needs explicit approval before adding.
 ```

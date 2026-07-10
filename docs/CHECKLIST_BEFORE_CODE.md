@@ -1,4 +1,4 @@
-# TEZZERA — CHECKLIST BEFORE CODE
+# ROSACE — CHECKLIST BEFORE CODE
 > Run this before writing ANY new code.
 > Every item must be checked. No exceptions.
 
@@ -40,8 +40,8 @@
 
 ### 5. Will this be traceable?
 ```
-□ If this is a new system → it emits TezzeraTrace events
-□ I know which TezzeraTrace variants to emit
+□ If this is a new system → it emits RosaceTrace events
+□ I know which RosaceTrace variants to emit
 □ Trace emissions are behind #[cfg(debug_assertions)]
 □ No trace overhead in release build
 ```

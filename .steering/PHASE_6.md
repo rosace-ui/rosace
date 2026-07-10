@@ -5,7 +5,7 @@
 
 ## Steps
 
-### Step 1 — Gesture recognition (`tezzera-gesture`)
+### Step 1 — Gesture recognition (`rosace-gesture`)
 - `GestureRecognizer` trait: `on_event(InputEvent) -> Option<GestureEvent>`
 - `GestureEvent` enum: `Tap { x, y }`, `DoubleTap { x, y }`, `LongPress { x, y, duration }`, `Swipe { direction, velocity }`, `Drag { dx, dy, phase: DragPhase }`, `Pinch { scale, center }` (desktop: scroll wheel)
 - `SwipeDirection`: Left/Right/Up/Down
@@ -15,7 +15,7 @@
 - `DragRecognizer`: continuous position delta from MouseDown to MouseUp
 - Platform: mouse events on desktop, touch events on WASM via web-sys TouchEvent
 
-### Step 2 — Rich text layout (`tezzera-text`)
+### Step 2 — Rich text layout (`rosace-text`)
 - `TextSpan { text, font_size, color, bold, italic, underline }`
 - `RichText` — list of `TextSpan`s forming a paragraph
 - `TextLayout` — wraps `RichText` to a given max width, returns laid-out lines
@@ -24,22 +24,22 @@
 - Text cursor: `TextCursor { line, col }`, `advance()`, `backspace()`
 - Render: `SkiaCanvas::draw_rich_text(layout, x, y)`
 
-### Step 3 — Network image loading (`tezzera-net`)
+### Step 3 — Network image loading (`rosace-net`)
 - `ImageLoader` — async-friendly loader using `std::thread` + channel
 - `LoadState<T>`: `Idle / Loading / Loaded(T) / Failed(String)`
 - `RemoteImage { url, fit, width, height }` widget — shows placeholder while loading, swaps to image when `LoadState::Loaded`
 - HTTP client: use `std::net::TcpStream` for basic GET requests (no reqwest dep)
-- Caching: `ImageCache` keyed by URL string (reuse existing `ImageCache` from tezzera-widgets)
+- Caching: `ImageCache` keyed by URL string (reuse existing `ImageCache` from rosace-widgets)
 - WASM: stub that returns `LoadState::Failed("net not available on web".into())`
 
 ### Step 4 — Custom painters (D034)
 - `PainterContext` — wrapper around `SkiaCanvas` with clip rect and transform stack
 - `CustomPainter` trait: `fn paint(&self, ctx: &mut PainterContext, size: Size)`
-- `PainterWidget { painter: Box<dyn CustomPainter>, width, height }` in `tezzera-widgets`
+- `PainterWidget { painter: Box<dyn CustomPainter>, width, height }` in `rosace-widgets`
 - Lets power users draw arbitrary shapes without wrapping every API
 
 ### Step 5 — Localization stubs (D044)
-- `tezzera-i18n/` new crate
+- `rosace-i18n/` new crate
 - `Locale` struct: `{ language: String, region: Option<String> }` (e.g. "en", "en-US", "fr")
 - `MessageBundle` — HashMap<String, String> (key → translated string)
 - `t!(key)` macro — looks up key in the current locale bundle, falls back to key if missing
@@ -47,7 +47,7 @@
 - Bundle loading: from `&str` (newline-delimited `key=value` format), no JSON/TOML dep
 
 ### Step 6 — Phase 6 showcase
-- `tezzera-examples/src/bin/phase6_demo.rs`
+- `rosace-examples/src/bin/phase6_demo.rs`
 - 1400×900 PNG, 4 panels:
   1. Gesture diagram — Tap/Swipe/Drag/Pinch event flows with arrows
   2. Rich text — paragraph with mixed bold/colored spans and word-wrap demo

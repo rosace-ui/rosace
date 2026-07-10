@@ -1,0 +1,112 @@
+use std::sync::{Arc, Mutex};
+
+use rosace_core::types::{Point, Rect, Size};
+use rosace_nav::ScreenTransition;
+use rosace_render::DrawCommand;
+use super::hero::{self, HeroRole};
+use super::{BoxedWidget, LayoutCtx, PaintCtx, Widget, avail_h, avail_w, intersect_rect};
+
+/// Paints the current screen, and — while a `ScreenNav`-driven transition
+/// is in progress — the previous screen too, each offset by the shared
+/// `ScreenTransition`'s spring-eased enter/exit values (D108/Phase 26 Step
+/// 3). Not generic over the app's route enum: it only needs already-built
+/// widgets plus the transition handle `ScreenNav::transition_handle()`
+/// returns, the same way `ScrollView` needs only a `ScrollController`, not
+/// the app's own types.
+///
+/// `rsc new`'s generated `app.rs` uses this in place of handing the
+/// current screen's widget straight to `Scaffold::new(...)`.
+pub struct ScreenTransitionView {
+    incoming: BoxedWidget,
+    outgoing: Option<BoxedWidget>,
+    transition: Arc<Mutex<ScreenTransition>>,
+}
+
+impl ScreenTransitionView {
+    pub fn new(
+        incoming: impl Widget + 'static,
+        outgoing: Option<BoxedWidget>,
+        transition: Arc<Mutex<ScreenTransition>>,
+    ) -> Self {
+        Self { incoming: Box::new(incoming), outgoing, transition }
+    }
+}
+
+impl Widget for ScreenTransitionView {
+    fn layout(&self, ctx: &LayoutCtx) -> rosace_core::types::Size {
+        let constraints = ctx.constraints;
+        rosace_core::types::Size { width: avail_w(constraints), height: avail_h(constraints) }
+    }
+
+    fn paint(&self, ctx: &mut PaintCtx) {
+        let vp = ctx.rect;
+        let dt = rosace_animate::frame_dt().max(0.0001);
+
+        let (ex, ey, ox, oy, progress, is_complete) = {
+            let mut t = self.transition.lock().unwrap_or_else(|e| e.into_inner());
+            t.set_viewport(vp.size.width, vp.size.height);
+            t.update(dt)
+        };
+
+        let animating = !is_complete && ctx.theme.animation.enabled;
+
+        if animating {
+            // Clip both layers to the viewport — an in-flight slide must
+            // not paint outside its own screen's bounds, same reasoning as
+            // ScrollView::paint_base's clip around its child.
+            ctx.record(DrawCommand::PushClip { rect: vp });
+            let effective_clip = ctx.clip_rect.and_then(|parent| intersect_rect(parent, vp)).unwrap_or(vp);
+
+            // D108/Phase 26 Step 5: any `Hero`-tagged widget painted while a
+            // role is active captures itself instead of painting in place —
+            // see `hero.rs`. Both sides always get marked (even when there's
+            // no `outgoing` widget yet, e.g. the very first screen) so a
+            // stale role never leaks into an unrelated later paint pass.
+            if let Some(outgoing) = &self.outgoing {
+                hero::set_active_role(Some(HeroRole::Outgoing));
+                let rect = Rect { origin: Point { x: vp.origin.x + ox, y: vp.origin.y + oy }, size: vp.size };
+                let mut child_ctx = ctx.child(rect);
+                child_ctx.clip_rect = Some(effective_clip);
+                outgoing.paint(&mut child_ctx);
+            }
+
+            hero::set_active_role(Some(HeroRole::Incoming));
+            let rect = Rect { origin: Point { x: vp.origin.x + ex, y: vp.origin.y + ey }, size: vp.size };
+            let mut child_ctx = ctx.child(rect);
+            child_ctx.clip_rect = Some(effective_clip);
+            self.incoming.paint(&mut child_ctx);
+            hero::set_active_role(None);
+
+            // Paint each matched Hero pair once, on top of both screens,
+            // at a rect LERP'd between its outgoing and incoming captures
+            // by the transition's progress — the floating "flight" element.
+            let t = progress.clamp(0.0, 1.0);
+            for (_tag, out_rect, _out_pic, in_rect, in_pic) in hero::drain_pairs() {
+                let interp = lerp_rect(out_rect, in_rect, t);
+                ctx.replay_morphed(&in_pic, in_rect, interp);
+            }
+
+            ctx.record(DrawCommand::PopClip);
+            ctx.request_animation();
+        } else {
+            // Steady state — paint only the incoming screen at zero offset,
+            // identical output to handing it straight to Scaffold::new(...).
+            // No active role: `Hero`-tagged widgets are plain pass-throughs.
+            self.incoming.paint(&mut ctx.child(vp));
+        }
+    }
+}
+
+/// Linear interpolation between two rects' position AND size at `t` (0..1).
+fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
+    Rect {
+        origin: Point {
+            x: a.origin.x + (b.origin.x - a.origin.x) * t,
+            y: a.origin.y + (b.origin.y - a.origin.y) * t,
+        },
+        size: Size {
+            width: a.size.width + (b.size.width - a.size.width) * t,
+            height: a.size.height + (b.size.height - a.size.height) * t,
+        },
+    }
+}

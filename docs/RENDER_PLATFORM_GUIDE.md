@@ -1,8 +1,8 @@
-# Render & Platform — How Tezzera Draws Pixels
+# Render & Platform — How Rosace Draws Pixels
 
-This guide explains the two crates that sit at the bottom of the Tezzera stack:
-`tezzera-render` (the pixel engine) and `tezzera-platform` (the window + event loop).
-It also covers `tezzera-renderer`, the abstraction layer that was built but not yet
+This guide explains the two crates that sit at the bottom of the Rosace stack:
+`rosace-render` (the pixel engine) and `rosace-platform` (the window + event loop).
+It also covers `rosace-renderer`, the abstraction layer that was built but not yet
 connected.
 
 ---
@@ -14,13 +14,13 @@ Your Component::build()
        ↓
    Element tree   ← pure data, no pixels yet
        ↓
-  tezzera (umbrella)  ← walks the tree, calls layout() + paint()
+  rosace (umbrella)  ← walks the tree, calls layout() + paint()
        ↓
-  tezzera-widgets      ← every widget's layout() and paint() live here
+  rosace-widgets      ← every widget's layout() and paint() live here
        ↓
-  tezzera-render       ← SkiaCanvas: the actual pixel buffer
+  rosace-render       ← SkiaCanvas: the actual pixel buffer
        ↓
-  tezzera-platform     ← winit window + softbuffer display
+  rosace-platform     ← winit window + softbuffer display
        ↓
      Screen
 ```
@@ -29,9 +29,9 @@ Each crate does exactly one job. No crate below can import from a crate above.
 
 ---
 
-## `tezzera-render` — The Pixel Engine
+## `rosace-render` — The Pixel Engine
 
-**Crate path:** `tezzera-render/src/`
+**Crate path:** `rosace-render/src/`
 
 This crate owns the CPU pixel buffer and all drawing primitives. Nothing here knows
 about widgets, components, or the element tree. It just draws shapes and text into
@@ -40,7 +40,7 @@ a grid of RGBA bytes.
 ### Files at a glance
 
 ```
-tezzera-render/src/
+rosace-render/src/
 ├── canvas.rs          ← SkiaCanvas — the pixel buffer + draw calls
 ├── font.rs            ← FontCache — loads TTF, rasterizes glyphs
 ├── image.rs           ← ImageHandle — decoded PNG pixels
@@ -79,7 +79,7 @@ SkiaCanvas {
 All coordinates are logical pixels (f32).
 
 **Why tiny-skia?** It is pure Rust, requires no system libraries, and compiles to WASM.
-When Tezzera matures it will be swapped for `skia-safe` (C++ Skia, GPU acceleration).
+When Rosace matures it will be swapped for `skia-safe` (C++ Skia, GPU acceleration).
 The plan is to abstract this behind a `Canvas` trait so the swap is zero widget changes.
 
 ### `FontCache` — `font.rs`
@@ -116,7 +116,7 @@ pixel of each character onto the canvas.
 
 ### The 6-Layer Stack — `layer.rs`
 
-Tezzera uses 6 composited layers, one for each visual concern. Higher layers sit
+Rosace uses 6 composited layers, one for each visual concern. Higher layers sit
 on top of lower ones, just like z-index in CSS.
 
 ```
@@ -191,16 +191,16 @@ it drives `SkiaCanvas` directly. The plan is to wire `PlatformWindow` through
 
 ---
 
-## `tezzera-renderer` — The Abstraction Layer
+## `rosace-renderer` — The Abstraction Layer
 
-**Crate path:** `tezzera-renderer/src/`
+**Crate path:** `rosace-renderer/src/`
 
 This crate defines the `Renderer` trait — a backend-agnostic drawing API. The idea
 is that widgets call `renderer.fill_rect(...)` without caring whether the backend
 is tiny-skia (CPU) or skia-safe (GPU).
 
 ```
-tezzera-renderer/src/
+rosace-renderer/src/
 ├── renderer.rs   ← Renderer trait (the swap point)
 ├── skia.rs       ← SkiaRenderer: implements Renderer using SkiaCanvas
 ├── backend.rs    ← RendererBackend enum (TinySkia | SkiaSafe)
@@ -227,15 +227,15 @@ pub trait Renderer {
 receives during paint) holds `&mut SkiaCanvas` directly — not `&mut dyn Renderer`.
 So the abstraction is defined but bypassed.
 
-**The plan:** Merge `tezzera-renderer` into `tezzera-render`, rename `Renderer` to
+**The plan:** Merge `rosace-renderer` into `rosace-render`, rename `Renderer` to
 `Canvas` (clearer name for a drawing surface), and change `PaintCtx` to hold
 `&mut dyn Canvas`. That one change makes swapping tiny-skia for skia-safe automatic.
 
 ---
 
-## `tezzera-platform` — The Window and Event Loop
+## `rosace-platform` — The Window and Event Loop
 
-**Crate path:** `tezzera-platform/src/`
+**Crate path:** `rosace-platform/src/`
 
 This crate creates an OS window, handles input events, and drives the render loop.
 It uses two external libraries:
@@ -243,7 +243,7 @@ It uses two external libraries:
 - **`softbuffer`** — copies pixel bytes from a `SkiaCanvas` to the screen framebuffer
 
 ```
-tezzera-platform/src/
+rosace-platform/src/
 ├── app.rs    ← PlatformWindow — the window + event loop
 ├── event.rs  ← InputEvent, MouseButton, Key enums
 ├── lib.rs    ← re-exports
@@ -349,7 +349,7 @@ pub enum Key {
 ## How the Two Crates Connect
 
 ```
-tezzera-platform                     tezzera-render
+rosace-platform                     rosace-render
 ─────────────────                    ─────────────────────
 PlatformWindow::run(paint_fn)
   │
@@ -357,11 +357,11 @@ PlatformWindow::run(paint_fn)
   │    paint_fn(&mut SkiaCanvas, &[InputEvent])
   │                 ↑
   └─────────────────┘ SkiaCanvas lives in AppState
-                       tezzera-platform imports tezzera-render
+                       rosace-platform imports rosace-render
 ```
 
 Right now the connection is direct: platform holds a `SkiaCanvas` and passes a mutable
-reference to the paint closure. The `RenderPipeline` in `tezzera-render` is never used.
+reference to the paint closure. The `RenderPipeline` in `rosace-render` is never used.
 
 **What the plan changes:**
 ```
@@ -385,7 +385,7 @@ PlatformWindow::run(paint_fn)
 |----------|-------|-------|
 | Frame budget (60 fps) | 16.667 ms | `render_pipeline.rs` |
 | Layer count | 6 | `layer.rs::layer_index::COUNT` |
-| Default font size | 16 px | `tezzera/src/lib.rs` (walk_element Text) |
+| Default font size | 16 px | `rosace/src/lib.rs` (walk_element Text) |
 | Default window size | 800 × 600 | `platform/app.rs` |
 
 ---
@@ -394,8 +394,8 @@ PlatformWindow::run(paint_fn)
 
 Once the `Canvas` trait is in place, the swap is:
 
-1. Add a new dependency on `skia-safe` in `tezzera-render/Cargo.toml`
-2. Create `tezzera-render/src/skia_safe_canvas.rs`:
+1. Add a new dependency on `skia-safe` in `rosace-render/Cargo.toml`
+2. Create `rosace-render/src/skia_safe_canvas.rs`:
    ```rust
    pub struct SkiaSafeCanvas { surface: skia_safe::Surface }
    impl Canvas for SkiaSafeCanvas { ... }

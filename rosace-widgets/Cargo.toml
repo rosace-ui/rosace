@@ -1,0 +1,22 @@
+[package]
+name = "rosace-widgets"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+web-time       = "1"
+rosace-a11y   = { path = "../rosace-a11y" }
+rosace-trace  = { path = "../rosace-trace" }
+rosace-core   = { path = "../rosace-core" }
+rosace-state  = { path = "../rosace-state" }
+rosace-layout = { path = "../rosace-layout" }
+rosace-nav    = { path = "../rosace-nav" }
+rosace-render = { path = "../rosace-render" }
+rosace-scroll = { path = "../rosace-scroll" }
+rosace-animate = { path = "../rosace-animate" }
+rosace-text   = { path = "../rosace-text" }
+rosace-theme  = { path = "../rosace-theme" }
+tiny-skia      = "0.11"

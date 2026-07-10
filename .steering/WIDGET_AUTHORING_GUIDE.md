@@ -1,8 +1,8 @@
-# TEZZERA — WRITING A WIDGET
+# ROSACE — WRITING A WIDGET
 > Phase 21 Step 6. The practical companion to `WIDGET_PROTOCOL.md` (the
 > planning spec, D098–D100) — this document describes the API as it actually
 > shipped, verified against the current code, not the aspirational one.
-> Compiling proof: `tezzera-examples/src/bin/widget_authoring_demo.rs`.
+> Compiling proof: `rosace-examples/src/bin/widget_authoring_demo.rs`.
 
 ---
 
@@ -95,7 +95,7 @@ all — just declare what's true this frame.
 ## 4. Three worked examples — one per taxonomy row
 
 All three compile and run today — see
-`tezzera-examples/src/bin/widget_authoring_demo.rs` (`cargo run --bin
+`rosace-examples/src/bin/widget_authoring_demo.rs` (`cargo run --bin
 widget_authoring_demo`).
 
 ### Leaf: `Dot`
@@ -201,5 +201,5 @@ escape hatch that bypasses this; that was an explicit non-goal (D100).
   `semantics()` as trait methods), this document is correct — the plan was
   descoped in the ways noted above.
 - `DECISIONS.md` D098–D100 — the locked decisions.
-- `tezzera-examples/src/bin/widget_authoring_demo.rs` — the compiling,
+- `rosace-examples/src/bin/widget_authoring_demo.rs` — the compiling,
   running proof of the three examples above.

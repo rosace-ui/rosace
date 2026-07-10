@@ -17,7 +17,7 @@ wgpu so that:
   tiny-skia for unchanged layers)
 - 120 fps is possible because GPU blit is ~0.1 ms vs a large memcpy in software
 
-The swap is isolated to `tezzera-compositor` + `tezzera-platform`. Everything
+The swap is isolated to `rosace-compositor` + `rosace-platform`. Everything
 above (widget tree, state, layout, paint) is unchanged.
 
 ---
@@ -33,10 +33,10 @@ above (widget tree, state, layout, paint) is unchanged.
   produces RGBA8 (or BGRA8 on some platforms). The wgpu texture format is
   `Bgra8UnormSrgb` on most backends; we detect and adapt in the compositor.
 
-- **D074** — Compositor architecture: `tezzera-compositor` is a standalone
-  crate. `tezzera-platform` gains an optional `GpuPresenter` (struct that wraps
+- **D074** — Compositor architecture: `rosace-compositor` is a standalone
+  crate. `rosace-platform` gains an optional `GpuPresenter` (struct that wraps
   the wgpu device/queue/surface/pipeline). Platform falls back to softbuffer if
-  wgpu init fails. Feature flag `"gpu"` on `tezzera-platform` activates it.
+  wgpu init fails. Feature flag `"gpu"` on `rosace-platform` activates it.
 
 - **D075** — Shader: a minimal WGSL fullscreen-quad shader. No vertex buffer;
   vertex shader generates the quad from `vertex_index`. Fragment shader samples
@@ -47,12 +47,12 @@ above (widget tree, state, layout, paint) is unchanged.
 
 ## Steps
 
-### Step 1 — tezzera-compositor crate
+### Step 1 — rosace-compositor crate
 
 **Cargo.toml**:
 ```toml
 [package]
-name = "tezzera-compositor"
+name = "rosace-compositor"
 version = "0.1.0"
 
 [dependencies]
@@ -116,9 +116,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 ```
 
-### Step 2 — tezzera-platform integration
+### Step 2 — rosace-platform integration
 
-Add `tezzera-compositor` as an optional dep behind `features = ["gpu"]`.
+Add `rosace-compositor` as an optional dep behind `features = ["gpu"]`.
 
 In `AppState`:
 - Add `presenter: Option<GpuPresenter>`
@@ -155,8 +155,8 @@ Print to stderr: "wgpu: Metal backend, adapter = Apple M-series GPU".
 ---
 
 ## Approved dependencies (new)
-- `wgpu = "24"` in tezzera-compositor
-- `pollster = "0.3"` in tezzera-compositor
+- `wgpu = "24"` in rosace-compositor
+- `pollster = "0.3"` in rosace-compositor
 - `raw-window-handle = "0.6"` (already used by winit/softbuffer transitively)
 
 ## DO NOT

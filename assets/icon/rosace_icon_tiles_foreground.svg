@@ -1,0 +1,19 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>Tezzera (foreground)</title>
+  <desc>Tezzera app icon foreground layer: the diamond cluster with no background, for Android adaptive icons</desc>
+  <g stroke="#071019" stroke-width="4" stroke-linejoin="round">
+    <polygon points="256,128 296,168 256,208 216,168" fill="#00CFFF" opacity="0.35"/>
+    <polygon points="168,128 208,168 168,208 128,168" fill="#00CFFF" opacity="0.35"/>
+    <polygon points="344,128 384,168 344,208 304,168" fill="#00CFFF" opacity="0.35"/>
+    <polygon points="212,172 252,212 212,252 172,212" fill="#00CFFF" opacity="0.75"/>
+    <polygon points="300,172 340,212 300,252 260,212" fill="#00CFFF" opacity="0.75"/>
+    <polygon points="168,216 208,256 168,296 128,256" fill="#00CFFF" opacity="0.35"/>
+    <polygon points="344,216 384,256 344,296 304,256" fill="#00CFFF" opacity="0.35"/>
+    <polygon points="256,216 296,256 256,296 216,256" fill="#00EEFF" opacity="1"/>
+    <polygon points="212,260 252,300 212,340 172,300" fill="#00CFFF" opacity="0.75"/>
+    <polygon points="300,260 340,300 300,340 260,300" fill="#00CFFF" opacity="0.75"/>
+    <polygon points="168,304 208,344 168,384 128,344" fill="#00CFFF" opacity="0.35"/>
+    <polygon points="344,304 384,344 344,384 304,344" fill="#00CFFF" opacity="0.35"/>
+    <polygon points="256,304 296,344 256,384 216,344" fill="#00CFFF" opacity="0.35"/>
+  </g>
+</svg>

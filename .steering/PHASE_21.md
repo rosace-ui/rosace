@@ -23,7 +23,7 @@
 >   descoped per Steps 2/3 above). Three worked examples, one per taxonomy
 >   row (Dot=leaf, Highlight=single-child wrapper, EvenColumn=multi-child
 >   container), proven via a real compiling+running bin
->   (tezzera-examples/src/bin/widget_authoring_demo.rs) rather than
+>   (rosace-examples/src/bin/widget_authoring_demo.rs) rather than
 >   untested prose — visually verified all three render correctly. README
 >   gained a "Writing Custom Widgets" section linking the guide.
 > Decisions: D098 (two-concept model, taxonomy by defaults),
@@ -65,7 +65,7 @@ Exit: wrappers implement only the methods they change.
 `PaintCx::paint_child(i)`. Migrate Column/Row/Stack/Scaffold: their
 measure logic moves into `layout()` once; `paint()` stops re-measuring;
 delete every `Mutex<Option<(Constraints, Vec<Size>)>>` cache.
-Exit: `grep measure_cache tezzera-widgets` → nothing; layout runs once
+Exit: `grep measure_cache rosace-widgets` → nothing; layout runs once
 per dirty node per frame (verify via LayoutStart traces).
 
 ### Step 3 — Default hit protocol
@@ -78,7 +78,7 @@ Exit: Slider knob / circular targets expressible without full-rect hacks.
 `SemanticsCx` writing role/label/value/actions to the render-tree node;
 derived semantics tree collector; defaults for Text/Image; declarations on
 Button, Checkbox, Switch, Slider, TextInput, Dialog (Role::Dialog), Menu.
-Trace: emit node count under TEZZERA_TRACE=perf.
+Trace: emit node count under ROSACE_TRACE=perf.
 Exit: app_demo produces a non-empty semantics tree with correct roles.
 
 ### Step 5 — CustomPaint (D100)

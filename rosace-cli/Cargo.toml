@@ -1,0 +1,17 @@
+[package]
+name = "rosace-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rsc"
+path = "src/main.rs"
+
+[dependencies]
+rosace-trace      = { path = "../rosace-trace" }
+rosace-core       = { path = "../rosace-core" }
+rosace-hot-reload = { path = "../rosace-hot-reload" }
+resvg = { version = "0.47.0", default-features = false }

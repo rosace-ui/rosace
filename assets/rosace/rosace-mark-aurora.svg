@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="-115 -115 230 230">
+  <defs>
+    <linearGradient id="a0" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#00EEFF"/><stop offset="1" stop-color="#0077cc"/></linearGradient>
+    <linearGradient id="a1" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#33B4FF"/><stop offset="1" stop-color="#1a5fc4"/></linearGradient>
+    <linearGradient id="a2" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#7A7BFF"/><stop offset="1" stop-color="#3d3dbb"/></linearGradient>
+    <linearGradient id="a3" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#B865FF"/><stop offset="1" stop-color="#6b2fb0"/></linearGradient>
+    <linearGradient id="a4" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#E85CE0"/><stop offset="1" stop-color="#9426a0"/></linearGradient>
+    <filter id="glowm" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="0" stdDeviation="2.4" flood-color="#ffffff" flood-opacity="0.18"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#7878ff" flood-opacity="0.25"/>
+    </filter>
+    <filter id="glowv" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="0" stdDeviation="2" flood-color="#B865FF" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- outer ring: cyan → magenta, mirrored -->
+  <g filter="url(#glowm)">
+    <polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a0)"/>
+    <polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a1)" transform="rotate(45)"/>
+    <polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a2)" transform="rotate(90)"/>
+    <polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a3)" transform="rotate(135)"/>
+    <polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a4)" transform="rotate(180)"/>
+    <polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a3)" transform="rotate(225)"/>
+    <polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a2)" transform="rotate(270)"/>
+    <polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a1)" transform="rotate(315)"/>
+  </g>
+
+  <!-- inner ring: 1/φ scale, offset 22.5° -->
+  <g opacity="0.8">
+    <polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#33B4FF" opacity="0.5" transform="rotate(22.5)"/>
+    <polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#7A7BFF" opacity="0.5" transform="rotate(67.5)"/>
+    <polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#B865FF" opacity="0.5" transform="rotate(112.5)"/>
+    <polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#E85CE0" opacity="0.5" transform="rotate(157.5)"/>
+    <polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#E85CE0" opacity="0.5" transform="rotate(202.5)"/>
+    <polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#B865FF" opacity="0.5" transform="rotate(247.5)"/>
+    <polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#7A7BFF" opacity="0.5" transform="rotate(292.5)"/>
+    <polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#33B4FF" opacity="0.5" transform="rotate(337.5)"/>
+  </g>
+
+  <!-- core -->
+  <circle r="13" fill="#04070c" stroke="#B865FF" stroke-width="1.8" filter="url(#glowv)"/>
+  <circle r="5" fill="#E8D5FF"/>
+</svg>

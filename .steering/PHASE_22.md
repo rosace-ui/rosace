@@ -21,9 +21,9 @@
 >   authoring guide isn't a crate-contracts refresh) — actually landed
 >   2026-07-08 as a full rewrite (commit 369fe1f): the old doc covered 16
 >   of 34 crates and named crates/widgets that don't exist. Found real,
->   previously-unknown issues in the process (tezzera-anim is dead code;
->   tezzera-gesture and tezzera-test-utils both depend on tezzera-platform,
->   an undocumented Layer-5 cross-service dependency; tezzera-style is
+>   previously-unknown issues in the process (rosace-anim is dead code;
+>   rosace-gesture and rosace-test-utils both depend on rosace-platform,
+>   an undocumented Layer-5 cross-service dependency; rosace-style is
 >   unintegrated) — recorded in CRATE_CONTRACTS.md's new "Known Issues"
 >   section, not yet fixed.
 > Decisions: D093 (constructor law), D094 (vocabulary), D095 (consolidation),
@@ -39,7 +39,7 @@ The widget API audit (2026-07-02) found:
   `Padding::new(insets, child)` vs `SizedBox::new()` vs `Tooltip::new(label, child)`
 - Six widgets doing one job: ColoredBox, SizedBox, Padding, Center,
   Container, Expanded::empty
-- A full parallel element-based widget set still exported from tezzera-layout
+- A full parallel element-based widget set still exported from rosace-layout
 - Two navigation systems, and ScrollView's default constructor silently
   doesn't scroll
 
@@ -52,7 +52,7 @@ every phase.
 - Demos and tests stay green after every step; each step is one commit.
 - Removal means REMOVAL — no deprecated aliases left behind (no users yet).
 - Every step updates all call sites (widgets, demos, tests, doc comments,
-  tzr new templates in tezzera-cli).
+  rsc new templates in rosace-cli).
 
 ## Steps
 
@@ -78,15 +78,15 @@ Exit: API_DESIGN §1 table holds for every exported widget.
   already has. Then delete ColoredBox, SizedBox, Padding, Center.
 - `Spacer::flex()` replaces `Expanded::empty()`.
 - Audit ListView: if non-virtualizing Column wrapper → delete.
-- Migrate all demos + `tzr new` templates.
+- Migrate all demos + `rsc new` templates.
 Exit: deleted files gone from tree/mod.rs, prelude, facade; demos green.
 
-### Step 4 — tezzera-layout slimming (D095)
+### Step 4 — rosace-layout slimming (D095)
 Remove element-based widget structs (Column, Row, Stack, SizedBox, Spacer,
 Flex, Expanded, Grid, Wrap, AspectRatio); keep Constraints, alignments,
 layout_column/row/flex math, LayoutResult. Grid/Wrap/AspectRatio math stays
 as free functions for future tree widgets.
-Exit: tezzera-layout exports no `impl From<_> for Element` widgets.
+Exit: rosace-layout exports no `impl From<_> for Element` widgets.
 
 ### Step 5 — Scroll API (D097)
 `ScrollView::fixed(child, offset)` for snapshot mode; `ScrollView::new(child,
@@ -101,7 +101,7 @@ Exit: prelude exposes exactly one navigation type.
 
 ### Step 7 — Docs
 Update NAMING.md with a pointer to API_DESIGN.md §3; refresh CRATE_CONTRACTS
-for the slimmed tezzera-layout; refresh README examples.
+for the slimmed rosace-layout; refresh README examples.
 
 ## DO NOT
 

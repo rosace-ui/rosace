@@ -1,7 +1,7 @@
-# TEZZERA — Steering Files
+# ROSACE — Steering Files
 > Fast by nature. Beautiful by design.
 
-These files are the single source of truth for the TEZZERA project.
+These files are the single source of truth for the ROSACE project.
 Every decision, every step, every verification checkpoint lives here.
 Nothing gets built without a corresponding steering file.
 Nothing gets merged without passing its checklist.

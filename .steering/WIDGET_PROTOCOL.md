@@ -1,4 +1,4 @@
-# TEZZERA — WIDGET PROTOCOL
+# ROSACE — WIDGET PROTOCOL
 > The authoring contract for custom widgets. Decisions D098–D100.
 > This is what Phase 21 builds; the API-consistency sweep (Phase 22)
 > then migrates built-ins onto it.
@@ -8,7 +8,7 @@
 ## 1. The two-concept model (D098)
 
 Flutter makes authors learn three trees (Widget → Element → RenderObject)
-and three subclass families. TEZZERA exposes exactly **two concepts**:
+and three subclass families. ROSACE exposes exactly **two concepts**:
 
 | Concept | Question it answers | Author implements | Rebuild cadence |
 |---|---|---|---|

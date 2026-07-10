@@ -73,7 +73,7 @@ passes, each writing to the same surface target. Pass 1 draws the base texture
 
 ### Step 3 — Render loop update
 
-`tezzera/src/lib.rs`:
+`rosace/src/lib.rs`:
 - Maintain `overlay_canvas: SkiaCanvas` alongside `canvas`
 - Before overlay pass: `overlay_canvas.clear_transparent()`
 - Play overlay Pictures into `overlay_canvas` instead of main `canvas`

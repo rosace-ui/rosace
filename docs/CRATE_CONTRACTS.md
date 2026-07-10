@@ -1,4 +1,4 @@
-# TEZZERA — CRATE CONTRACTS
+# ROSACE — CRATE CONTRACTS
 > Each crate has one job. It does that job and nothing else.
 > Dependencies only flow downward.
 > A crate never reaches into another crate's internals.
@@ -8,22 +8,22 @@
 ## DEPENDENCY HIERARCHY
 
 ```
-tezzera-macros          (no tezzera deps)
-tezzera-trace           (no tezzera deps)
-tezzera-core            (← trace, macros)
-tezzera-state           (← core, trace)
-tezzera-layout          (← core, state, trace)
-tezzera-render          (← core, layout, trace)
-tezzera-animate         (← core, state, render, trace)
-tezzera-scroll          (← core, state, layout, render, trace)
-tezzera-nav             (← core, state, render, animate, trace)
-tezzera-platform        (← core, state, trace)
-tezzera-ffi             (← core, trace)
-tezzera-theme           (← core, state, layout, trace)
-tezzera-widgets         (← all above)
-tezzera-test            (← all above)
-tezzera-devtools        (← trace, core, state)
-tezzera-cli             (← all above)
+rosace-macros          (no rosace deps)
+rosace-trace           (no rosace deps)
+rosace-core            (← trace, macros)
+rosace-state           (← core, trace)
+rosace-layout          (← core, state, trace)
+rosace-render          (← core, layout, trace)
+rosace-animate         (← core, state, render, trace)
+rosace-scroll          (← core, state, layout, render, trace)
+rosace-nav             (← core, state, render, animate, trace)
+rosace-platform        (← core, state, trace)
+rosace-ffi             (← core, trace)
+rosace-theme           (← core, state, layout, trace)
+rosace-widgets         (← all above)
+rosace-test            (← all above)
+rosace-devtools        (← trace, core, state)
+rosace-cli             (← all above)
 ```
 
 **Rule**: If crate A is above crate B in this hierarchy,
@@ -35,7 +35,7 @@ A cannot depend on B. Ever.
 
 ---
 
-### tezzera-macros
+### rosace-macros
 **Job**: Provide all proc macros. Nothing else.
 **Exports**:
 - #[component] — define a component
@@ -48,24 +48,24 @@ A cannot depend on B. Ever.
 - #[routes] — route enum
 - #[route("...")] — route attribute
 - #[lazy] / #[eager] — loading strategy
-- #[tezzera_ffi(...)] — FFI bridge
-- #[tezzera_test] — test macro
-- #[tezzera_snapshot] — snapshot test
+- #[rosace_ffi(...)] — FFI bridge
+- #[rosace_test] — test macro
+- #[rosace_snapshot] — snapshot test
 - atom!() — atom constructor macro
 - trace!() — trace emission macro
 - batch!() — batch macro
 
 **Must NOT**:
 - Contain any runtime logic
-- Import any tezzera-* crate
+- Import any rosace-* crate
 - Contain UI logic of any kind
 
 ---
 
-### tezzera-trace
-**Job**: Define TezzeraTrace event type, TracingBus, and all subscribers.
+### rosace-trace
+**Job**: Define RosaceTrace event type, TracingBus, and all subscribers.
 **Exports**:
-- TezzeraTrace enum
+- RosaceTrace enum
 - TracingBus struct
 - TraceSubscriber trait
 - RingBufferSubscriber
@@ -77,7 +77,7 @@ A cannot depend on B. Ever.
 
 **Must NOT**:
 - Contain any UI logic
-- Import any tezzera-* crate (except macros)
+- Import any rosace-* crate (except macros)
 - Do any rendering or layout
 
 **Rule**: Every other crate depends on this.
@@ -85,21 +85,21 @@ It must be lean, fast, and stable.
 
 ---
 
-### tezzera-core
+### rosace-core
 **Job**: Define the component model, element tree, and lifecycle.
 **Exports**:
-- TezzeraComponent trait
+- RosaceComponent trait
 - Element type
 - RenderObject trait
 - SemanticNode type
 - Context struct
 - ChildContainer trait
 - ErrorBoundary widget
-- TezzeraResult, TezzeraError
+- RosaceResult, RosaceError
 - Lifecycle hooks: on_mount, on_update, on_unmount
 - Key type
 - ComponentId, AtomId types
-- TezzeraApp builder
+- RosaceApp builder
 
 **Must NOT**:
 - Know about specific widgets (Button, Text etc.)
@@ -109,7 +109,7 @@ It must be lean, fast, and stable.
 
 ---
 
-### tezzera-state
+### rosace-state
 **Job**: Implement the atom system, reactivity, and refresh engine.
 **Exports**:
 - Atom<T> struct
@@ -126,12 +126,12 @@ It must be lean, fast, and stable.
 
 **Must NOT**:
 - Know about layout or rendering
-- Import tezzera-layout or tezzera-render
+- Import rosace-layout or rosace-render
 - Contain any widget implementations
 
 ---
 
-### tezzera-layout
+### rosace-layout
 **Job**: Implement the Flexure constraint layout engine and text layout.
 **Exports**:
 - Constraints struct
@@ -152,11 +152,11 @@ It must be lean, fast, and stable.
 - Call Skia directly
 - Know about navigation
 - Know about animation
-- Import tezzera-render
+- Import rosace-render
 
 ---
 
-### tezzera-render
+### rosace-render
 **Job**: Bridge between layout engine and Skia. Manage GPU layers, dirty regions, frame rendering.
 **Exports**:
 - SkiaCanvas wrapper
@@ -168,7 +168,7 @@ It must be lean, fast, and stable.
 - ImageCache (memory + disk)
 - SemanticTree builder
 - Platform accessibility bridges
-- TezzeraRenderer trait (custom pipelines)
+- RosaceRenderer trait (custom pipelines)
 
 **Must NOT**:
 - Implement layout algorithms
@@ -177,7 +177,7 @@ It must be lean, fast, and stable.
 
 ---
 
-### tezzera-animate
+### rosace-animate
 **Job**: Implement all animation systems.
 **Exports**:
 - Animation (timeline)
@@ -190,13 +190,13 @@ It must be lean, fast, and stable.
 - SharedElement transition
 
 **Must NOT**:
-- Touch Skia directly (use tezzera-render)
+- Touch Skia directly (use rosace-render)
 - Know about navigation routes
 - Implement layout
 
 ---
 
-### tezzera-scroll
+### rosace-scroll
 **Job**: Implement scrolling, virtualization, and gesture arbitration.
 **Exports**:
 - ScrollView widget
@@ -216,7 +216,7 @@ It must be lean, fast, and stable.
 
 ---
 
-### tezzera-nav
+### rosace-nav
 **Job**: Implement routing, navigation, and transitions.
 **Exports**:
 - Navigator
@@ -235,13 +235,13 @@ It must be lean, fast, and stable.
 - Web URL sync
 
 **Must NOT**:
-- Implement animations from scratch (use tezzera-animate)
+- Implement animations from scratch (use rosace-animate)
 - Know about specific screen content
 - Implement scroll behavior
 
 ---
 
-### tezzera-platform
+### rosace-platform
 **Job**: Provide platform-specific APIs in a unified interface.
 **Exports**:
 - Platform struct
@@ -266,7 +266,7 @@ It must be lean, fast, and stable.
 
 ---
 
-### tezzera-ffi
+### rosace-ffi
 **Job**: Provide all FFI bridges and synchronous platform bridge.
 **Exports**:
 - C FFI macros and safe wrappers
@@ -281,15 +281,15 @@ It must be lean, fast, and stable.
 
 **Must NOT**:
 - Contain UI logic
-- Import tezzera-widgets
-- Implement platform APIs (use tezzera-platform)
+- Import rosace-widgets
+- Implement platform APIs (use rosace-platform)
 
 ---
 
-### tezzera-theme
+### rosace-theme
 **Job**: Implement the theme system, design tokens, and localization files.
 **Exports**:
-- TezzeraTheme derive macro support
+- RosaceTheme derive macro support
 - ThemeData struct
 - TextStyle struct
 - SpacingScale
@@ -306,7 +306,7 @@ It must be lean, fast, and stable.
 
 ---
 
-### tezzera-widgets
+### rosace-widgets
 **Job**: Implement the official widget library.
 **Exports**: All built-in widgets:
 - Text, RichText, SelectableText, TextInput
@@ -330,11 +330,11 @@ It must be lean, fast, and stable.
 **Must NOT**:
 - Implement any framework internals
 - Bypass the RenderObject system
-- Import tezzera-core internals directly
+- Import rosace-core internals directly
 
 ---
 
-### tezzera-test
+### rosace-test
 **Job**: Provide testing utilities and snapshot testing.
 **Exports**:
 - render!() macro
@@ -352,7 +352,7 @@ It must be lean, fast, and stable.
 
 ---
 
-### tezzera-devtools
+### rosace-devtools
 **Job**: Implement the dev tools server and hot reload system.
 **Exports**:
 - DevToolsServer
@@ -368,15 +368,15 @@ It must be lean, fast, and stable.
 
 ---
 
-### tezzera-cli (tzr)
-**Job**: Implement the tzr command-line tool.
+### rosace-cli (rsc)
+**Job**: Implement the rsc command-line tool.
 **Commands**:
-- tzr dev [--trace=...] [--profile] [--time-travel]
-- tzr build --target [web|desktop|ios|android|all]
-- tzr build --web-routing=[hash|history]
-- tzr test [--update-goldens] [--platform=...]
-- tzr analyze
-- tzr snapshot --update
+- rsc dev [--trace=...] [--profile] [--time-travel]
+- rsc build --target [web|desktop|ios|android|all]
+- rsc build --web-routing=[hash|history]
+- rsc test [--update-goldens] [--platform=...]
+- rsc analyze
+- rsc snapshot --update
 
 **Must NOT**:
 - Contain framework logic

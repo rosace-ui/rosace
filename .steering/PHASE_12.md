@@ -34,7 +34,7 @@ world-class by addressing four structural gaps:
 
 ## Steps
 
-### Step 1 — Frame scheduler in `tezzera-state` ✅ (D054)
+### Step 1 — Frame scheduler in `rosace-state` ✅ (D054)
 - Add `src/frame_scheduler.rs`:
   - `static FRAME_REQUESTED: AtomicBool` — set by Atom::set(), cleared by platform
   - `static WAKEUP_FN: OnceLock<Box<dyn Fn() + Send + Sync>>` — platform registers
@@ -43,10 +43,10 @@ world-class by addressing four structural gaps:
   - `pub fn take_frame_requested() -> bool` — AcqRel swap, clears flag
 - `Atom::set()` and `Atom::update()` call `request_frame()` after write
 - `batch::flush()` calls `request_frame()` once after all dirty atoms are flushed
-- Export from `tezzera_state::frame_scheduler::{request_frame, take_frame_requested, register_wakeup}`
+- Export from `rosace_state::frame_scheduler::{request_frame, take_frame_requested, register_wakeup}`
 
-### Step 2 — VSync event loop in `tezzera-platform` ✅ (D054)
-- Introduce `pub struct FrameRequest;` in `tezzera-platform/src/app.rs`
+### Step 2 — VSync event loop in `rosace-platform` ✅ (D054)
+- Introduce `pub struct FrameRequest;` in `rosace-platform/src/app.rs`
 - Change `EventLoop::new()` → `EventLoop::<FrameRequest>::with_user_event().build()`
 - Change `ControlFlow::Poll` → `ControlFlow::Wait`
 - `ApplicationHandler<FrameRequest>` impl gains:
@@ -56,7 +56,7 @@ world-class by addressing four structural gaps:
 - Result: app idles at 0% CPU; exactly one frame renders per atom change
 
 ### Step 3 — `LayoutCtx` + accurate text measurement (D056)
-- Add `pub struct LayoutCtx<'a>` to `tezzera-widgets/src/tree/mod.rs`:
+- Add `pub struct LayoutCtx<'a>` to `rosace-widgets/src/tree/mod.rs`:
   ```rust
   pub struct LayoutCtx<'a> {
       pub constraints: Constraints,
@@ -77,7 +77,7 @@ world-class by addressing four structural gaps:
 Ticking is fully automatic — the platform injects `dt` before every render pass,
 exactly as it already paints widgets. User never calls `tick(dt)`.
 
-**`tezzera-animate/src/clock.rs`** — new file:
+**`rosace-animate/src/clock.rs`** — new file:
 ```rust
 static FRAME_DT: AtomicU32 = AtomicU32::new(/* 1/60 as bits */ 0x3C888889);
 
@@ -91,16 +91,16 @@ pub fn frame_dt() -> f32 {
 }
 ```
 - Default `1/60` so animations work even if platform never calls `set_frame_dt`
-- Export from `tezzera_animate` root
+- Export from `rosace_animate` root
 
-**`tezzera-animate/src/lib.rs`**:
+**`rosace-animate/src/lib.rs`**:
 - Add `pub mod clock;`
 - `pub use clock::{set_frame_dt, frame_dt};`
 
-**`tezzera-animate/src/spring_hook.rs`**:
+**`rosace-animate/src/spring_hook.rs`**:
 - Replace `s.step(1.0 / 60.0)` → `s.step(crate::frame_dt())`
 
-**`tezzera-animate/src/animation_hook.rs`** — new file:
+**`rosace-animate/src/animation_hook.rs`** — new file:
 ```rust
 pub struct Progress { value: Atom<f32> }
 impl Progress { pub fn get(&self) -> f32 { self.value.get() } }
@@ -130,12 +130,12 @@ pub fn use_animation(ctx: &mut Context, duration: Duration) -> (Progress, AnimCt
     (Progress { value: value.clone() }, AnimCtrl { state, value })
 }
 ```
-- Export `use_animation`, `Progress`, `AnimCtrl` from `tezzera_animate`
+- Export `use_animation`, `Progress`, `AnimCtrl` from `rosace_animate`
 
-**`tezzera-platform/Cargo.toml`**:
-- Add `tezzera-animate = { path = "../tezzera-animate" }`
+**`rosace-platform/Cargo.toml`**:
+- Add `rosace-animate = { path = "../rosace-animate" }`
 
-**`tezzera-platform/src/app.rs`**:
+**`rosace-platform/src/app.rs`**:
 - Add `last_frame_time: Option<Instant>` to the app handler struct
 - In `WindowEvent::RedrawRequested`:
   ```rust
@@ -144,7 +144,7 @@ pub fn use_animation(ctx: &mut Context, duration: Duration) -> (Progress, AnimCt
       .map(|t| t.elapsed().as_secs_f32())
       .unwrap_or(1.0 / 60.0)
       .clamp(0.001, 0.1);
-  tezzera_animate::set_frame_dt(dt);
+  rosace_animate::set_frame_dt(dt);
   self.last_frame_time = Some(now);
   // → existing render logic follows
   ```
@@ -168,7 +168,7 @@ pub fn use_animation(ctx: &mut Context, duration: Duration) -> (Progress, AnimCt
 - Column/Row read child size from `WidgetBox::cached_size()` in `paint()` — zero re-measure
 
 ### Step 6 — Key mechanism (D055) ✅
-- `pub struct Key(pub u64)` in `tezzera-core/src/element.rs`
+- `pub struct Key(pub u64)` in `rosace-core/src/element.rs`
 - `Element::key: Option<Key>` field
 - `Widget::into_element(self) -> Element` default impl
 - `.with_key(key: impl Into<Key>)` builder method on all widgets via blanket impl
@@ -176,18 +176,18 @@ pub fn use_animation(ctx: &mut Context, duration: Duration) -> (Progress, AnimCt
 - Reconciler stub: when same-type children are keyed, match by key not position
 
 ### Step 7 — RectReader widget (D057) ✅
-- `pub struct RectReader` in `tezzera-widgets/src/tree/rect_reader.rs`
+- `pub struct RectReader` in `rosace-widgets/src/tree/rect_reader.rs`
 - Fields: `pub atom: Atom<Option<Rect>>`, `pub child: BoxedWidget`
 - `layout()` — delegates to child, returns child size unchanged
 - `paint()` — fires `self.atom.set(Some(ctx.rect))` then delegates to child
 - `RectReader::new(atom, child)` constructor
-- Export from `tezzera-widgets` prelude
+- Export from `rosace-widgets` prelude
 - Composable over any widget — no widget modification required
 - Test: RectReader fires atom with the correct rect on paint
 
 ### Step 8 — Overlay layer (D058) ✅
 - `pub struct OverlayEntry { pub position: Point, pub widget: BoxedWidget }`
-  in `tezzera-widgets/src/tree/overlay.rs`
+  in `rosace-widgets/src/tree/overlay.rs`
 - Thread-local `OVERLAY_ENTRIES: RefCell<Vec<OverlayEntry>>` — global registry
 - `pub fn push_overlay(entry: OverlayEntry)` — called during main paint pass
 - `pub fn drain_overlays() -> Vec<OverlayEntry>` — called by platform after main pass
@@ -197,11 +197,11 @@ pub fn use_animation(ctx: &mut Context, duration: Duration) -> (Progress, AnimCt
   3. Drain overlays → paint each into `recorder_overlay` at declared position
   4. Canvas plays `picture_main` then `picture_overlay` — overlays always on top
 - `OverlayEntry::new(position: Point, widget: impl Widget + 'static)` constructor
-- Export `OverlayEntry`, `push_overlay` from `tezzera-widgets` prelude
+- Export `OverlayEntry`, `push_overlay` from `rosace-widgets` prelude
 - Test: overlay entry paints after main content (appears on top in draw order)
 
 ### Step 9 — Phase 12 showcase (updated) ✅
-- Update `tezzera-examples/src/bin/phase12_demo.rs` with two additional panels:
+- Update `rosace-examples/src/bin/phase12_demo.rs` with two additional panels:
   4. **Animation VSync Panel** — `use_spring` and `use_animation` side by side.
      A progress bar animated via `use_animation` at real wall-clock speed.
      A counter that springs to a new value when a button is pressed.
@@ -215,7 +215,7 @@ pub fn use_animation(ctx: &mut Context, duration: Duration) -> (Progress, AnimCt
 **Goal**: Overlay entries declared on the trigger widget, not in a global push
 call. The framework wires correct input/focus/scrim defaults per API type.
 
-**`tezzera-widgets/src/tree/overlay_api.rs`** — new file:
+**`rosace-widgets/src/tree/overlay_api.rs`** — new file:
 ```rust
 // Builder trait added to all widgets via blanket impl:
 pub trait OverlayApi: Sized {
@@ -244,7 +244,7 @@ widget's `ctx.rect.bottom_left()` for anchored types (dropdown, tooltip).
 **Goal**: Replace flat `tab_index: Option<i32>` with node-to-node focus wiring.
 Linear tab order remains the default (no API change needed for simple cases).
 
-**`tezzera-a11y/src/focus_node.rs`** — new file:
+**`rosace-a11y/src/focus_node.rs`** — new file:
 ```rust
 pub struct FocusNode(Arc<FocusNodeInner>);
 struct FocusNodeInner {

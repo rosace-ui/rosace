@@ -1,4 +1,4 @@
-# TEZZERA — GLOSSARY
+# ROSACE — GLOSSARY
 > Every term defined precisely.
 > When in doubt, check here first.
 
@@ -7,7 +7,7 @@
 ## A
 
 **Atom**
-TEZZERA's core state primitive. A reactive value of type T.
+ROSACE's core state primitive. A reactive value of type T.
 When changed via .set() or .update(), all subscriber components
 are scheduled for rebuild. The smallest unit of state.
 
@@ -21,7 +21,7 @@ Multiple providers can exist for the same atom — each is isolated.
 
 **AsyncState<T>**
 The five states of an async atom:
-Idle, Loading, Success(T), Error(TezzeraError), Refreshing(T).
+Idle, Loading, Success(T), Error(RosaceError), Refreshing(T).
 
 **AxisBound**
 Describes the constraint on one axis: Bounded(f32) for exact max,
@@ -57,13 +57,13 @@ The layout instruction passed from parent to child:
 min_width, max_width (AxisBound), min_height, max_height (AxisBound).
 
 **Context**
-The build context passed to TezzeraComponent::build().
+The build context passed to RosaceComponent::build().
 Provides access to local state, lifecycle hooks, and services.
 
 **cosmic-text**
-The Rust text layout library used by TEZZERA.
+The Rust text layout library used by ROSACE.
 Handles BiDi, font fallback, and line breaking.
-Used in tezzera-layout.
+Used in rosace-layout.
 
 ---
 
@@ -88,11 +88,11 @@ tree index for O(1) ancestor lookup.
 
 **Element**
 A lightweight, immutable description of what a component wants
-to render. Created by TezzeraComponent::build(). Cheap to create.
+to render. Created by RosaceComponent::build(). Cheap to create.
 The virtual representation before layout and paint.
 
 **ErrorBoundary**
-A widget that catches panics and TezzeraErrors from its subtree
+A widget that catches panics and RosaceErrors from its subtree
 and shows a fallback UI instead of crashing.
 
 ---
@@ -100,7 +100,7 @@ and shows a fallback UI instead of crashing.
 ## F
 
 **Flexure**
-The name of TEZZERA's constraint-based layout engine.
+The name of ROSACE's constraint-based layout engine.
 Implements three-pass layout: Measure, Place, Paint.
 
 **ForeignBox**
@@ -145,7 +145,7 @@ sizing themselves. Explicit opt-in — zero cost when not used.
 ## J
 
 **JIT (dev mode)**
-TEZZERA approximates JIT in dev mode via WASM hot-swap.
+ROSACE approximates JIT in dev mode via WASM hot-swap.
 Component code changes → WASM module swapped → UI updates instantly.
 Not true JIT — fast incremental recompile + hot-swap.
 
@@ -155,7 +155,7 @@ Not true JIT — fast incremental recompile + hot-swap.
 
 **Key**
 An optional identifier attached to a component with .key(value).
-Tells TEZZERA to track this component by key rather than position.
+Tells ROSACE to track this component by key rather than position.
 Required for dynamic lists where order can change.
 
 **KeepAlive**
@@ -230,12 +230,12 @@ The layer below Element. Handles layout (sizing), painting (Skia),
 and hit testing. Created from Element during reconciliation.
 
 **RingBufferSubscriber**
-A TraceSubscriber that keeps the last N TezzeraTrace events in memory.
+A TraceSubscriber that keeps the last N RosaceTrace events in memory.
 Enables time travel debugging. Default capacity: 1000 events.
 
 **RTL**
 Right-to-left text direction. Used by Arabic, Hebrew, Persian.
-TEZZERA handles RTL automatically when locale is set.
+ROSACE handles RTL automatically when locale is set.
 
 ---
 
@@ -246,11 +246,11 @@ The accessibility tree node. Created from RenderObject.
 Bridges to platform accessibility APIs (UIAccessibility, ARIA etc.).
 
 **SharedMemory**
-A memory region shared between TEZZERA and native FFI code.
+A memory region shared between ROSACE and native FFI code.
 Used for the synchronous platform bridge hot path.
 
 **Skia**
-The 2D graphics library used by TEZZERA for rendering.
+The 2D graphics library used by ROSACE for rendering.
 Same engine used by Flutter and Chrome. Provides pixel-perfect,
 identical output across all platforms.
 
@@ -258,43 +258,43 @@ identical output across all platforms.
 
 ## T
 
-**TezzeraApp**
-The root builder for a TEZZERA application.
+**RosaceApp**
+The root builder for a ROSACE application.
 Configures theme, plugins, locale, and starts the event loop.
 
-**TezzeraComponent**
+**RosaceComponent**
 The core trait. Implement this to create a component.
 Must implement build() → Element.
 
-**TezzeraError**
-The standard error type used throughout TEZZERA.
+**RosaceError**
+The standard error type used throughout ROSACE.
 
-**TezzeraRenderer**
+**RosaceRenderer**
 A trait for custom render pipelines (Level 5 customization).
 Allows bypassing Skia for game engines, 3D, WebGL etc.
 
-**TezzeraResult<T>**
-Result<T, TezzeraError>. Used for expected failures in components.
+**RosaceResult<T>**
+Result<T, RosaceError>. Used for expected failures in components.
 
-**TezzeraTheme**
+**RosaceTheme**
 A derive macro for defining exhaustive theme token sets.
 Partial theme (missing any token) = compile error.
 
-**TezzeraTrace**
-The unified event enum emitted by all TEZZERA systems.
+**RosaceTrace**
+The unified event enum emitted by all ROSACE systems.
 Zero cost in production via #[cfg(debug_assertions)].
 
 **TracingBus**
-The central hub that receives TezzeraTrace events and dispatches
+The central hub that receives RosaceTrace events and dispatches
 to all registered TraceSubscribers. Global singleton.
 
 **TraceSubscriber**
-A trait for receiving TezzeraTrace events.
+A trait for receiving RosaceTrace events.
 Implementations: RingBuffer, Console, File, DevTools, IDE.
 
-**tzr**
-The TEZZERA CLI binary. Short for TEZZERA.
-Commands: tzr dev, tzr build, tzr test, tzr analyze, tzr snapshot.
+**rsc**
+The ROSACE CLI binary. Short for ROSACE.
+Commands: rsc dev, rsc build, rsc test, rsc analyze, rsc snapshot.
 
 ---
 

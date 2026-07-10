@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=demo_app
+Exec={exec}
+Icon={icon}
+Categories=Utility;
+Terminal=false

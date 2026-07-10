@@ -1,0 +1,11 @@
+[package]
+name = "rosace-style"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rosace-theme  = { path = "../rosace-theme" }
+rosace-core   = { path = "../rosace-core" }

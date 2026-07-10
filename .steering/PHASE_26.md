@@ -6,7 +6,7 @@
 > after this phase).
 > Started: 2026-07-09
 > Completed: —
-> Decision: **D108** — extend TEZZERA's existing theme-global, zero-per-app
+> Decision: **D108** — extend ROSACE's existing theme-global, zero-per-app
 > animation model (`PaintCtx::animate_to`, governed by `ThemeData.animation`)
 > from the four widgets that use it today to press feedback, real momentum
 > scroll, default-on nav transitions, and image load-in fades. The
@@ -25,17 +25,17 @@ the note) rather than designing from scratch.
 the "new infrastructure" the vision implies already exists in the codebase,
 just unwired from the paths real apps actually use:
 
-- `tezzera-scroll` already has a real momentum/friction physics engine
+- `rosace-scroll` already has a real momentum/friction physics engine
   (`physics.rs::MomentumState`, `ScrollPhysics::Momentum`) — but the actual
-  `ScrollView` widget apps use (`tezzera-widgets/src/tree/scroll_view.rs`)
+  `ScrollView` widget apps use (`rosace-widgets/src/tree/scroll_view.rs`)
   talks to a *different*, instant-offset `ScrollController` instead. The
   momentum engine is orphaned — referenced only by its own crate's doctest.
-- `tezzera-nav-anim` already has `NavigatorAnimated`/`ScreenTransition`
+- `rosace-nav-anim` already has `NavigatorAnimated`/`ScreenTransition`
   (slide/fade transitions, spring-backed) — but the real navigation path
-  (`tezzera-nav::Navigator`/`ScreenNav`) never references the crate at all.
+  (`rosace-nav::Navigator`/`ScreenNav`) never references the crate at all.
   Also orphaned.
 - The theme-global animation primitive apps actually use today,
-  `PaintCtx::animate_to` (`tezzera-widgets/src/tree/mod.rs:615`), already
+  `PaintCtx::animate_to` (`rosace-widgets/src/tree/mod.rs:615`), already
   respects `ThemeData.animation.enabled`/`duration_ms` correctly and is the
   right foundation to extend, not replace. `Switch`/`Checkbox`/`Radio`/
   `SegmentedControl` already animate through it.
@@ -66,14 +66,14 @@ would have been.
 ## Platform never hardcodes behavior (added 2026-07-09, governs Steps 2/3/5)
 
 Stated explicitly by the user and already the project's own D105 principle
-(`tezzera-core/src/platform.rs:1-7`): widgets/engines never hard-branch on
+(`rosace-core/src/platform.rs:1-7`): widgets/engines never hard-branch on
 platform (`if platform == Ios { ... }`). Platform only ever selects a
 DEFAULT preset through the existing theme-resolution mechanism
 (`Themes::platform(Platform::Ios, cupertino())`), and every default must
 be explicitly overridable by app code regardless of the detected platform
 — an Android app that wants iOS-style bounce scroll just sets it. Steps
 2 and 3 resolve their platform defaults through `ThemeData`'s existing
-type-keyed `ext` map (`tezzera-theme/src/theme.rs:83-86`, D105 Phase 23
+type-keyed `ext` map (`rosace-theme/src/theme.rs:83-86`, D105 Phase 23
 Step 4 — built exactly for this: "lets a custom widget stash and read its
 own theme-style struct without editing this type"), the same shape
 `AppBarStyle` already proved out — not a new mechanism.
@@ -95,7 +95,7 @@ interaction, and snaps instantly when `set_animations(false)`.
 
 **Landed.** New dispatcher-owned `TreeNode::pressed: bool`
 (`render_tree.rs`, mirrors `hovered` exactly) + `RenderTree::set_pressed`
-+ `PaintCtx::pressed()`. Wired into `tezzera/src/engine.rs`'s real
++ `PaintCtx::pressed()`. Wired into `rosace/src/engine.rs`'s real
 MouseDown/MouseUp handlers — MouseDown resolves the target via the same
 `hover_test` the existing hover-tracking MouseMove handler already uses
 (deliberately reused, not a new hit-resolution path — lower risk than
@@ -113,17 +113,17 @@ lands on. Giving `Pressable`-wrapped widgets press feedback is a real,
 separate architectural question (does `Pressable` need to expose its own
 node's interaction state down to the child?) — flagged, not solved here.
 
-**Verified for real**: two new integration tests in `tezzera/src/
+**Verified for real**: two new integration tests in `rosace/src/
 engine.rs` drive an actual headless `FrameEngine` (the same struct the
 real desktop/web/iOS/Android paths all use) with synthetic
-`InputEvent::MouseDown`/`MouseUp`, exactly like `tezzera-web-seo`/Phase 25
+`InputEvent::MouseDown`/`MouseUp`, exactly like `rosace-web-seo`/Phase 25
 used a headless `FrameEngine` for build-time SEO extraction — not a
 render-tree-only unit test. One confirms `MouseDown` sets `pressed` on a
 real node and `MouseUp` clears it; the other confirms the eased scalar
 actually advances toward the 1.0 press target over successive frames (with
 a synthetic `frame_dt` for determinism, not real wall-clock time — avoids
 a flaky test whose convergence speed depends on machine speed) and
-converges to 1.0. Also scaffolded a fresh `tzr new`-generated desktop app
+converges to 1.0. Also scaffolded a fresh `rsc new`-generated desktop app
 and ran it for real (screenshot confirms correct rendering, no visual
 regression). **Honest gap**: this environment has no native-desktop GUI
 automation tool (no `cliclick`/Quartz installed, no computer-use tool for
@@ -140,7 +140,7 @@ clean (zero failures) after this step.
 
 ### Step 2 — Wire real momentum + bounce scroll (expanded 2026-07-09)
 `ScrollView` currently writes scroll offset instantly via
-`ScrollController::scroll_by`. Wires `tezzera-scroll`'s existing
+`ScrollController::scroll_by`. Wires `rosace-scroll`'s existing
 `MomentumState`/`ScrollPhysics::Momentum` in: on drag release with
 residual velocity, decay the offset via friction each frame until it
 settles or a new drag interrupts it. Respects `theme.animation.enabled`
@@ -168,17 +168,17 @@ turned a mouse/touch drag into a scroll offset change. User confirmed:
 build drag-to-pan first (with velocity tracked from the REAL drag speed,
 not an assumed constant), then momentum/bounce on top — this step ended up
 delivering both, not just wiring existing physics onto an existing
-gesture. Also found a real layer-rule conflict: `tezzera-theme` (Layer 4)
-can't depend on `tezzera-scroll` (Layer 5), so `cupertino()`/`material()`
+gesture. Also found a real layer-rule conflict: `rosace-theme` (Layer 4)
+can't depend on `rosace-scroll` (Layer 5), so `cupertino()`/`material()`
 can't construct a `ScrollStyle` ext value directly. Resolved by keeping the
-platform-default computation as ONE pure function inside `tezzera-scroll`
-itself (`ScrollStyle::default_for_platform`, reads `tezzera-core::Platform`
+platform-default computation as ONE pure function inside `rosace-scroll`
+itself (`ScrollStyle::default_for_platform`, reads `rosace-core::Platform`
 which IS a lower layer) — an app's theme `ext` override and an explicit
 per-`ScrollView` `.physics(...)` both still take priority over it, so the
 "platform is a default-picker only, never hardcoded" rule holds exactly as
 designed, just resolved in a different crate than first planned.
 
-New `ScrollController` methods (`tezzera-scroll/src/controller.rs`):
+New `ScrollController` methods (`rosace-scroll/src/controller.rs`):
 `drag_delta`/`end_drag` (streamed absolute drag position → per-move delta),
 `track_velocity`/`velocity()` (real px/s from the actual offset delta each
 frame — not assumed), `apply_momentum` (rubber-band-aware offset step,
@@ -224,27 +224,27 @@ tests alone):
 **A third, unrelated pre-existing bug found along the way**: running the
 new tests alongside the existing suite intermittently failed with
 `disabling_animations_stops_coasting_immediately_on_release` racing
-`drag_pans_content_and_momentum_coasts_after_release` — `tezzera_theme`'s
+`drag_pans_content_and_momentum_coasts_after_release` — `rosace_theme`'s
 theme is a process-wide `GlobalAtom`, and `cargo test` runs test functions
 on parallel threads by default, so one test's `set_animations(false)`
 could flip the flag mid-coast for the other. Fixed with a `static ...
-Mutex` guard around both tests (`tezzera/src/engine.rs`) — confirmed
+Mutex` guard around both tests (`rosace/src/engine.rs`) — confirmed
 stable across repeated runs afterward. **While chasing this down, found
 the SAME class of bug already existing, unrelated to this phase's own
-code**: `tezzera-state/src/frame_scheduler.rs`'s
+code**: `rosace-state/src/frame_scheduler.rs`'s
 `request_frame_sets_flag`/`take_clears_flag`/`multiple_requests_collapse_to_one`
 tests race each other the same way and are flaky under
 `cargo test --workspace`'s full parallel load (always pass in isolation).
 Logged in `CRATE_CONTRACTS.md`'s Known Issues (#8) rather than fixed here
 — pre-existing, outside this step's scope, not introduced by this work.
 
-**Verified for real**: the two new `tezzera/src/engine.rs` integration
+**Verified for real**: the two new `rosace/src/engine.rs` integration
 tests (real `FrameEngine`, synthetic but real input events) cover drag
 panning content in real time, momentum continuing after release
 proportional to actual drag speed, and animations-disabled producing an
 immediate hard stop with zero coast. Full `cargo build --workspace` /
 `cargo test --workspace --no-fail-fast` clean throughout (the one
-exception, `tezzera-state`'s pre-existing parallel-test flake, is
+exception, `rosace-state`'s pre-existing parallel-test flake, is
 unrelated and logged separately — `CRATE_CONTRACTS.md` Known Issue #8).
 
 **Status: PAUSED with a known unresolved issue, not claimed as fully
@@ -254,13 +254,13 @@ rounds against a real running macOS app: drag-to-pan direction, a
 dt-unit-mismatch bug, frame-rate-dependent friction decay, unbounded
 overscroll, a stale scrollbar read, a per-frame-flag wheel-gating bug, an
 overscroll-recovery timing bug, and a velocity clamp — each confirmed and
-fixed with a regression test (44 tests in `tezzera-scroll` total). The
+fixed with a regression test (44 tests in `rosace-scroll` total). The
 LAST round used a real screen recording (frame-extracted with a one-off
 Swift/AVFoundation script) to root-cause a genuine oscillation to a real
 platform quirk: macOS delivers trackpad momentum as the OS's own event
 stream after the user's fingers lift, and winit 0.30.13 collapses that
 into the same event phase as real finger movement (confirmed by reading
-winit's own macOS backend source), so TEZZERA's own momentum system was
+winit's own macOS backend source), so ROSACE's own momentum system was
 fighting the OS's. The fix (wheel input no longer injects synthetic
 velocity, applies directly instead) changed the failure mode but did not
 fully resolve it in the reporter's live testing. Per explicit user
@@ -275,7 +275,7 @@ example built for D108 Steps 1-5's showcase): drag tracking itself lags
 behind the cursor when the drag is moderately fast** — "if we move the
 mouse a bit fast, not too fast, it slowly follows" — not the settle-time
 bounce jitter above, and not yet root-caused. `MouseMove` dispatch (
-`tezzera/src/engine.rs`'s `active_drag` handling) forwards every event in
+`rosace/src/engine.rs`'s `active_drag` handling) forwards every event in
 the frame's batch to the drag callback with no visible throttling in the
 dispatch code itself, so the likely-but-UNVERIFIED suspects are:
 winit/OS-level `CursorMoved` coalescing under fast movement, or the
@@ -289,8 +289,8 @@ this phase has repeatedly had to walk back. See `CRATE_CONTRACTS.md`
 Known Issue #10.
 
 ### Step 3 — Wire real nav transitions (expanded 2026-07-09)
-`tezzera-nav`'s `Navigator`/`ScreenNav` has zero references to
-`tezzera-nav-anim` today — pushes/pops are instant. Wires
+`rosace-nav`'s `Navigator`/`ScreenNav` has zero references to
+`rosace-nav-anim` today — pushes/pops are instant. Wires
 `NavigatorAnimated`/`ScreenTransition` into the real push/pop path,
 default-on, respecting `theme.animation.enabled`.
 
@@ -300,26 +300,26 @@ The default transition STYLE resolves per-platform via a new
 transition(...)` call regardless of detected platform.
 
 Exit: pushing/popping a screen in a real running app shows the
-platform-default transition with zero app-level wiring (`tzr new`'s
+platform-default transition with zero app-level wiring (`rsc new`'s
 generated Home→Counter navigation is the concrete test case), an explicit
 override to a different style works regardless of platform, off entirely
 when animations are globally disabled.
 
 **Landed, with a real architecture correction found before writing any
 code.** A fresh audit found `ScreenNav<R>` (what real apps actually use —
-`tzr new`'s generated `app.rs` calls it, built through the real
+`rsc new`'s generated `app.rs` calls it, built through the real
 component-hook system) and `Navigator`/`NavigatorAnimated` (what had the
 transition math) are two COMPLETELY SEPARATE, non-overlapping
 implementations — `NavigatorAnimated` wraps `Navigator`, not `ScreenNav`,
-and has zero consumers outside its own tests. Worse, `tezzera-nav-anim`
-already depends on `tezzera-nav`, so `tezzera-nav` could not depend back on
-`tezzera-nav-anim` for the transition math without a circular crate
+and has zero consumers outside its own tests. Worse, `rosace-nav-anim`
+already depends on `rosace-nav`, so `rosace-nav` could not depend back on
+`rosace-nav-anim` for the transition math without a circular crate
 dependency — confirmed by reading both `Cargo.toml`s directly, not
 assumed. Resolved by MOVING (not duplicating) `SlideDirection`/
 `TransitionStyle`/`ScreenTransition` (14 existing tests, carried over
-unchanged) from `tezzera-nav-anim` down into `tezzera-nav` itself;
-`tezzera-nav-anim/src/transition.rs` is now a one-line `pub use
-tezzera_nav::transition::*;` so `NavigatorAnimated` (left otherwise
+unchanged) from `rosace-nav-anim` down into `rosace-nav` itself;
+`rosace-nav-anim/src/transition.rs` is now a one-line `pub use
+rosace_nav::transition::*;` so `NavigatorAnimated` (left otherwise
 untouched — still not wired to anything real, same as Step 2's precedent
 of extending the actually-used type rather than the orphaned parallel
 one) keeps compiling against the same public names.
@@ -335,7 +335,7 @@ enters from the right, matching real iOS/Android drill-in — confirmed by
 reading `SlideDirection::Left.enter_from() == (1.0, 0.0)` directly, not
 assumed); `pop` triggers the reverse, `Slide(Right)`; `replace` fades.
 
-New widget `ScreenTransitionView` (`tezzera-widgets/src/tree/
+New widget `ScreenTransitionView` (`rosace-widgets/src/tree/
 screen_transition_view.rs`) is NOT generic over the app's route enum —
 takes only two already-built widgets plus the transition handle, the same
 "widget doesn't need to know the app's types" shape `ScrollController`
@@ -345,7 +345,7 @@ same primitive `ScrollView`/`Positioned` already use — no new paint
 plumbing invented), clipped to viewport; steady-state, paints only the
 incoming screen at zero offset, byte-for-byte what handing the widget
 straight to `Scaffold::new(...)` produced before this step.
-`tzr new`'s `app_rs` codegen template now builds the outgoing screen with
+`rsc new`'s `app_rs` codegen template now builds the outgoing screen with
 the SAME match arms as the incoming one and wraps both in
 `ScreenTransitionView`, in place of handing the current screen straight to
 `Scaffold::new(...)`.
@@ -365,7 +365,7 @@ labels appear simultaneously mid-transition, which failed cleanly and
 pointed straight at the real bug. Fixed by persisting `transition` through
 `ctx.state(...)` too.
 
-**Verified for real**: two new `tezzera/src/engine.rs` integration tests
+**Verified for real**: two new `rosace/src/engine.rs` integration tests
 drive an actual headless `FrameEngine` through a real `MouseDown`/`MouseUp`
 click on a "push" button — one confirms BOTH the outgoing and incoming
 screens' `Semantics` labels are present in the SAME frame's collected
@@ -373,12 +373,12 @@ semantic tree mid-transition (real proof the dual-paint wiring works, not
 just that the nav stack changed), settling to only the incoming screen's
 label after enough frames; the other confirms animations-disabled means
 an immediate switch with no second screen ever painted. Also scaffolded a
-fresh `tzr new` desktop app, confirmed it compiles and runs with no visual
+fresh `rsc new` desktop app, confirmed it compiles and runs with no visual
 regression on the steady-state screens, and the user manually tested the
 live app and confirmed the slide transition itself is visually working.
 Full `cargo build --workspace` / `cargo test --workspace --no-fail-fast`
 clean throughout, including a full clean run with zero failures (even the
-`tezzera-state` pre-existing flake didn't trigger that run).
+`rosace-state` pre-existing flake didn't trigger that run).
 
 ### Step 5 — Hero / shared-element transitions (new 2026-07-09)
 Confirmed genuinely greenfield (grepped "hero"/"shared_element"/"morph" —
@@ -386,7 +386,7 @@ zero real hits). Depends on Step 3 landing first (needs its transition
 progress signal to interpolate against).
 
 Revives the existing-but-completely-dead `Key`/`Element::with_key`
-identity primitive (`tezzera-core/src/{types,element}.rs` — no widget has
+identity primitive (`rosace-core/src/{types,element}.rs` — no widget has
 a `.key(...)` builder today, and the reconciler never reads it; today's
 real identity, confirmed in `walk_element`/`RenderTree`, is purely
 positional and resets every navigation) as a widget-facing `.hero_tag(id)`
@@ -402,21 +402,21 @@ image shows it visually morphing between their rects during a push
 transition, verified via a real screenshot sequence across frames.
 
 **Landed.** Confirmed via a fresh audit before writing code that `Key`/
-`Element::with_key` (`tezzera-core/src/{types,element}.rs`) is real but
+`Element::with_key` (`rosace-core/src/{types,element}.rs`) is real but
 completely dead — no widget builder ever sets it, and `walk_element`
-(`tezzera/src/lib.rs`) never reads `NativeElement.key`/`ComponentElement.key`
+(`rosace/src/lib.rs`) never reads `NativeElement.key`/`ComponentElement.key`
 at all; today's real node identity is purely positional (`RenderTree::slot`'s
-per-parent cursor, `tezzera-widgets/src/tree/render_tree.rs`). Reviving it
+per-parent cursor, `rosace-widgets/src/tree/render_tree.rs`). Reviving it
 for Hero identity would have meant teaching the walker and the render-tree
 arena to key off it — a much bigger, riskier change than this step needed.
 Instead: Hero identity is a NEW, separate, purely out-of-band mechanism
-(a tag-keyed thread-local registry, `tezzera-widgets/src/tree/hero.rs`) that
+(a tag-keyed thread-local registry, `rosace-widgets/src/tree/hero.rs`) that
 never touches node identity or the reconciler at all — `Key` stays exactly
 as dead as it was found; not revived, not extended, correctly left alone
 per this phase's "verify, don't assume" discipline.
 
 **How it works**: a new `.hero_tag("id")` widget wrapper (`Hero`/`HeroApi`,
-`tezzera-widgets/src/tree/hero_tag.rs`) is a total pass-through outside a
+`rosace-widgets/src/tree/hero_tag.rs`) is a total pass-through outside a
 transition — zero behavior/cost change, matching the phase's "no new
 widget opts in to anything by default" migration rule. `ScreenTransitionView`
 (Step 3's widget, which already paints BOTH the outgoing and incoming
@@ -440,7 +440,7 @@ computed this value; it was previously unused).
 Step 3/D088's mechanism) — a Hero morph needs to change SIZE too (a
 thumbnail growing into a full image), not just position. Added
 `DrawCommand::morph(src_origin, dst_origin, sx, sy)` (and
-`PaintCtx::replay_morphed`, `tezzera-widgets/src/tree/mod.rs`) covering
+`PaintCtx::replay_morphed`, `rosace-widgets/src/tree/mod.rs`) covering
 all 12 `DrawCommand` variants — rects/points scale exactly; radius/stroke-
 width/font-size/blur (no independent x/y scale of their own) scale
 uniformly by the average of `sx`/`sy`, a documented approximation, not a
@@ -467,20 +467,20 @@ gap discovered later.
   for the common case (an image in a list row / detail header) where nothing
   else depends on that space, not addressed generally.
 
-**Verified for real**: 3 new `tezzera-render` unit tests for `DrawCommand::
+**Verified for real**: 3 new `rosace-render` unit tests for `DrawCommand::
 morph` (rect-to-different-size-and-position mapping, nested-geometry
-proportional scaling, identity no-op) plus 2 new `tezzera/src/engine.rs`
+proportional scaling, identity no-op) plus 2 new `rosace/src/engine.rs`
 headless `FrameEngine` integration tests driving a real two-screen
 `ScreenNav`/`ScreenTransitionView` push through real `MouseDown`/`MouseUp`
 — one confirms a `Hero`-tagged 20x20 widget on the source screen and an
 80x80 one with the same tag on the destination screen produce a real
 INTERMEDIATE size (sampled via actual rendered pixel counts on a real
 `SkiaCanvas`, not render-tree-level assertions — same rigor as
-`tezzera-render`'s own `blit_rgba` pixel tests) at some frame during the
+`rosace-render`'s own `blit_rgba` pixel tests) at some frame during the
 flight, not an instant jump, and settle to exactly the destination's
 natural size; the other confirms a `Hero`-tagged widget outside any
 transition renders identically to its untagged inner widget. Both stable
-across 5 repeated runs. Also scaffolded a fresh `tzr new` app, added a
+across 5 repeated runs. Also scaffolded a fresh `rsc new` app, added a
 real photo `Image::file(...).hero_tag("photo")` at two sizes on two
 screens, built and ran it — the Home screen's steady-state (pre-transition)
 render confirmed correct with no regression from wiring `Hero`/`HeroApi`
@@ -493,9 +493,9 @@ test is the primary proof of the morph's correctness end-to-end through
 the real paint pipeline, with the live app screenshot serving as a
 steady-state visual-regression check only.
 Full `cargo build --workspace` / `cargo test --workspace --no-fail-fast`
-clean throughout (the one exception, `tezzera-state`'s pre-existing
+clean throughout (the one exception, `rosace-state`'s pre-existing
 parallel-test flake — Known Issue #8 — reconfirmed unrelated in isolation;
-this step never touched `tezzera-state`).
+this step never touched `rosace-state`).
 
 ### Step 4 — Image load-in fade
 `Image`/`ImageWidgetImpl` swaps placeholder→loaded instantly. Adds an
@@ -507,14 +507,14 @@ the theme's animation duration, verified via a screenshot sequence across
 frames, not just code reading.
 
 **Landed, with a real scope finding: image decoding in this crate is
-fully synchronous.** `Image::paint()` (`tezzera-widgets/src/tree/
+fully synchronous.** `Image::paint()` (`rosace-widgets/src/tree/
 image.rs`) does `std::fs::read` + `tiny_skia::Pixmap::decode_png` INLINE
 on every single paint call, with no caching — confirmed by reading the
 whole file, not assumed. The `ImageCache` type
-(`tezzera-widgets/src/image.rs`) that would make a real async loading gap
+(`rosace-widgets/src/image.rs`) that would make a real async loading gap
 possible exists but is completely orphaned, referenced by nothing in the
 real paint path — the same "duplicate/orphaned parallel implementation"
-pattern already flagged for `tezzera_scroll::ScrollView` (Step 2) and
+pattern already flagged for `rosace_scroll::ScrollView` (Step 2) and
 `Navigator`/`NavigatorAnimated` (Step 3). So there is no genuine
 placeholder→loaded async gap to cross-fade across today. What this step
 fades instead is the honest thing actually available: the first frame a
@@ -522,7 +522,7 @@ given render-tree node has real decoded pixel content, opacity starts at
 0 and eases to 1 — not a true crossfade from a placeholder, since no
 "was a placeholder" state is tracked per node.
 
-New primitive `PaintCtx::seed_anim_if_unset(value)` (`tezzera-widgets/
+New primitive `PaintCtx::seed_anim_if_unset(value)` (`rosace-widgets/
 src/tree/mod.rs`) was needed because `animate_to`'s own documented
 behavior is "first observation snaps straight to target, no
 appear-animation" — exactly wrong for a fade-in. `seed_anim_if_unset`
@@ -539,15 +539,15 @@ via repo-wide grep this was the only real `blit_rgba`/`BlitRgba` call
 site (`custom_paint.rs` only has a stale doc-comment reference), so
 making `opacity` a required (not optional/defaulted) field was safe.
 
-**Verified for real**: 3 new `tezzera-render` unit tests confirm
+**Verified for real**: 3 new `rosace-render` unit tests confirm
 `blit_rgba` at opacity 1.0/0.0/0.5 fully-replaces/leaves-untouched/blends
-the background correctly. 2 new `tezzera/src/engine.rs` headless
+the background correctly. 2 new `rosace/src/engine.rs` headless
 `FrameEngine` integration tests (same technique as every prior step) —
 one decodes a real PNG through the real `Image` widget and confirms the
 very first frame with content is observably mid-fade (not popped in at
 full opacity) and later frames ease upward to settle at 1.0; the other
 confirms `set_animations(false)` shows full opacity immediately on the
-first frame, no fade. Also scaffolded a fresh `tzr new` app, added a real
+first frame, no fade. Also scaffolded a fresh `rsc new` app, added a real
 photo via `Image::file(...)`, ran it live, and screenshotted the
 steady-state render — correct, no corruption, confirming the new
 `opacity` parameter threading through `BlitRgba` didn't regress normal
@@ -561,10 +561,10 @@ directly observes the eased scalar's value across frames, stable across
 repeated runs), with the live screenshot serving as a steady-state
 visual-regression check, not a mid-fade capture.
 Full `cargo build --workspace` / `cargo test --workspace --no-fail-fast`
-clean throughout (the one exception, `tezzera-state`'s pre-existing
+clean throughout (the one exception, `rosace-state`'s pre-existing
 parallel-test flake — Known Issue #8 — reconfirmed unrelated by running
-`cargo test -p tezzera-state` in isolation, passed 2/3 runs, matching its
-documented flake pattern; Step 4 never touched `tezzera-state`).
+`cargo test -p rosace-state` in isolation, passed 2/3 runs, matching its
+documented flake pattern; Step 4 never touched `rosace-state`).
 
 ## Sequencing
 

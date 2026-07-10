@@ -1,4 +1,4 @@
-# TEZZERA — PHASE 1 REAL STATUS
+# ROSACE — PHASE 1 REAL STATUS
 > Updated: 2026-06-29
 > This file tracks what is ACTUALLY DONE (wired, tested, running) vs what just compiles.
 
@@ -7,11 +7,11 @@
 ## EXIT CRITERIA — HONEST STATUS
 
 ```
-✅ tezzera-trace: TezzeraTrace, bus, ring buffer, console subscriber — 4 tests pass
-✅ tezzera-state: Atom<T>, GlobalAtom, RefreshEngine, batch — 9 tests pass
-✅ tezzera-layout: Constraints, Column, Row, Stack, SizedBox, Flex, Grid, Wrap — 9 tests pass
-✅ tezzera-render: SkiaCanvas, dirty region, layer compositor — 8 tests pass
-✅ tezzera-core: Component trait, Element, Context, ctx.state() persistent — 8 tests pass
+✅ rosace-trace: RosaceTrace, bus, ring buffer, console subscriber — 4 tests pass
+✅ rosace-state: Atom<T>, GlobalAtom, RefreshEngine, batch — 9 tests pass
+✅ rosace-layout: Constraints, Column, Row, Stack, SizedBox, Flex, Grid, Wrap — 9 tests pass
+✅ rosace-render: SkiaCanvas, dirty region, layer compositor — 8 tests pass
+✅ rosace-core: Component trait, Element, Context, ctx.state() persistent — 8 tests pass
 
 ⚠️  Counter app renders on desktop at 60fps
     → App::launch(Counter) builds and runs
@@ -50,31 +50,31 @@
     → On panic: renders Element::text("⚠ component error") fallback
     → ErrorBoundary struct API unchanged — user-facing surface stable
 
-✅  TezzeraTrace events appear in terminal
+✅  RosaceTrace events appear in terminal
     → ConsoleSubscriber registered in TRACING_BUS at App::launch start
     → Only in debug builds (#[cfg(debug_assertions)])
     → ComponentMount, FrameStart, FrameEnd traces fire correctly
 
 ✅  Time travel ring buffer captures last 1000 events
 
-⚠️  tzr dev command starts the app
+⚠️  rsc dev command starts the app
     → CLI parses dev command
     → Runs cargo run — functional
     → File watching: NOT IMPLEMENTED (Phase 2)
 
-✅  tzr build --target desktop produces a binary
+✅  rsc build --target desktop produces a binary
 
-✅  All tezzera-core tests pass    (8 tests)
-✅  All tezzera-state tests pass   (9 tests)
-✅  All tezzera-layout tests pass  (9 tests)
-✅  All tezzera-render tests pass  (8 tests)
-✅  All tezzera-trace tests pass   (4 tests)
+✅  All rosace-core tests pass    (8 tests)
+✅  All rosace-state tests pass   (9 tests)
+✅  All rosace-layout tests pass  (9 tests)
+✅  All rosace-render tests pass  (8 tests)
+✅  All rosace-trace tests pass   (4 tests)
 
 ✅  No warnings in release build
     → cargo check --release: 0 warnings
 
 ⚠️  No warnings in debug build (dev)
-    → 1 warning in tezzera-net (inject_failed — pre-existing, unrelated)
+    → 1 warning in rosace-net (inject_failed — pre-existing, unrelated)
 
 ✅  No unsafe code without SAFETY comments
     → No unsafe blocks in Phase 1 crates
@@ -94,7 +94,7 @@
 In strict order:
 
 1. **Manual verification**: run counter app, click buttons, confirm increment works
-   - `cargo run -p tezzera-examples --bin counter`
+   - `cargo run -p rosace-examples --bin counter`
 
 2. **on_update lifecycle**: call Component::on_update when props change
    - Requires storing previous element tree across frames
@@ -105,7 +105,7 @@ In strict order:
 
 4. **DECISIONS.md audit**: verify no OPEN items for Phase 1 scope
 
-5. **File watching in tzr dev** (Phase 2 feature, tracked separately)
+5. **File watching in rsc dev** (Phase 2 feature, tracked separately)
 
 ---
 

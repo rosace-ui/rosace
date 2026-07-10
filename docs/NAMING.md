@@ -1,4 +1,4 @@
-# TEZZERA — NAMING CONVENTIONS
+# ROSACE — NAMING CONVENTIONS
 > Names are decided once. Never changed after Phase 1 ships.
 > Renaming is expensive. Get it right now.
 
@@ -7,14 +7,14 @@
 ## FRAMEWORK IDENTITY
 
 ```
-Framework name:   TEZZERA (all caps in prose, TitleCase in code)
+Framework name:   ROSACE (all caps in prose, TitleCase in code)
 Pronounced:       TEZ-er-a
-CLI binary:       tzr
-Crate prefix:     tezzera-
-Rust namespace:   tezzera::
+CLI binary:       rsc
+Crate prefix:     rosace-
+Rust namespace:   rosace::
 Error prefix:     T (T001, T002...)
-Docs domain:      tezzera.dev
-Error docs:       tezzera.dev/errors/T{number}
+Docs domain:      rosace.dev
+Error docs:       rosace.dev/errors/T{number}
 ```
 
 ---
@@ -23,13 +23,13 @@ Error docs:       tezzera.dev/errors/T{number}
 
 ### Types (PascalCase)
 ```rust
-TezzeraComponent
-TezzeraResult
-TezzeraError
-TezzeraTrace
-TezzeraTheme
-TezzeraRenderer
-TezzeraApp
+RosaceComponent
+RosaceResult
+RosaceError
+RosaceTrace
+RosaceTheme
+RosaceRenderer
+RosaceApp
 AsyncState
 AxisBound
 RenderObject
@@ -39,9 +39,9 @@ ChildContainer
 
 ### Traits (PascalCase)
 ```rust
-TezzeraComponent   // implement this to make a component
+RosaceComponent   // implement this to make a component
 RenderObject       // implement this for custom render
-TezzeraRenderer    // implement this for custom pipeline
+RosaceRenderer    // implement this for custom pipeline
 WidgetOverride     // implement this to override a widget
 TraceSubscriber    // implement this for custom tracing
 ```
@@ -97,7 +97,7 @@ enum AsyncState<T> {
     Idle,
     Loading,
     Success(T),
-    Error(TezzeraError),
+    Error(RosaceError),
     Refreshing(T),
 }
 
@@ -298,7 +298,7 @@ atom_provider.rs
 refresh_engine.rs
 async_atom.rs
 tracing_bus.rs
-tezzera_trace.rs
+rosace_trace.rs
 flexure.rs
 constraints.rs
 text_layout.rs
@@ -348,13 +348,13 @@ tests/goldens/web/button_default.png
 #[routes]              // route enum
 #[route("/path")]      // route attribute
 #[query_param("q", field = "query")]
-#[tezzera_ffi(c)]      // FFI bridge
-#[tezzera_ffi(swift)]
-#[tezzera_ffi(kotlin)]
-#[tezzera_ffi(js)]
-#[tezzera_export(js)]  // export to JS
-#[tezzera_test]        // test function
-#[tezzera_snapshot]    // snapshot test
+#[rosace_ffi(c)]      // FFI bridge
+#[rosace_ffi(swift)]
+#[rosace_ffi(kotlin)]
+#[rosace_ffi(js)]
+#[rosace_export(js)]  // export to JS
+#[rosace_test]        // test function
+#[rosace_snapshot]    // snapshot test
 #[rebuild_budget(max_per_second = 60)]
 ```
 
@@ -386,7 +386,7 @@ error[T001]: Missing required handler
    |
    = Button requires .on_press() when interactive
    hint: add .on_press(|| { ... }) or use .disabled(true)
-   docs: tezzera.dev/errors/T001
+   docs: rosace.dev/errors/T001
 ```
 
 ---
@@ -395,11 +395,11 @@ error[T001]: Missing required handler
 
 Once Phase 1 ships, these names are frozen:
 ```
-tzr (CLI binary)
-tezzera (namespace)
+rsc (CLI binary)
+rosace (namespace)
 Atom<T>
-TezzeraComponent
-TezzeraTrace
+RosaceComponent
+RosaceTrace
 on_mount / on_update / on_unmount
 use_atom
 use_async

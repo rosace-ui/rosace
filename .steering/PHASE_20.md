@@ -5,7 +5,7 @@
 > Completed: 2026-07-08
 >
 > Progress: Steps 2–4 landed together as the RenderTree arena (see
-> `tezzera-widgets/src/tree/render_tree.rs`): hit/scroll regions, focus
+> `rosace-widgets/src/tree/render_tree.rs`): hit/scroll regions, focus
 > nodes, overlay entries, and transform layers all live on persistent
 > nodes; dispatch is a structural tree walk; the strip/insert-at-0
 > workarounds and all three bolt-on caches are deleted. Node identity is
@@ -29,12 +29,12 @@
 > gained placed layers (CompositorLayer::placed — dest rect + texture
 > src_offset; shader positions the quad in NDC + maps a UV window). The
 > frame loop renders each TransformLayer entry ONCE into its own content
-> canvas and publishes it (tezzera-platform::scroll_layer thread-local);
+> canvas and publishes it (rosace-platform::scroll_layer thread-local);
 > the platform composites base + scroll layers + overlay, retaining the
 > scroll set across clean frames. Verified via app_demo "GPU Scroll Layer"
 > route (viewport clip + scroll offset correct on GPU).
 > Step 6 D090 ZERO-REPAINT SCROLL LANDED (commit c0baffc): a placed
-> layer's offset lives in a non-reactive channel (tezzera_state::
+> layer's offset lives in a non-reactive channel (rosace_state::
 > scroll_offset, keyed by node id); updating it requests a present-only
 > frame that dirties NO component. TransformLayer registers a wheel scroll
 > target feeding the channel; the platform reads it at present as the
@@ -54,7 +54,7 @@
 > (a) fixed the positional-drag (hits_at) coordinate-mapping bug through a
 > transform — hit_test_node found hits inside a GPU-composited scroll view's
 > content correctly (via child_coords), but returned the callback unmapped;
-> every subsequent drag-continuation call (tezzera/src/lib.rs's active_drag,
+> every subsequent drag-continuation call (rosace/src/lib.rs's active_drag,
 > which invokes the stored callback directly with raw screen coords on every
 > MouseMove without re-hit-testing) bypassed the transform. Fixed by wrapping
 > the callback, at the transform-hosting node, to re-apply the remap on every
@@ -146,7 +146,7 @@ No step may add a new per-frame side channel.
 ### Step 1 — Real tree shape
 `RenderNode.children` becomes the actual walk structure. `walk_element`'s
 inline tag matching is replaced by the existing keyed reconciler
-(`tezzera/src/reconcile.rs` — currently dead code with passing tests).
+(`rosace/src/reconcile.rs` — currently dead code with passing tests).
 Native children get their own nodes (today only top-level natives do, so
 cache granularity ≈ the whole app).
 
@@ -192,7 +192,7 @@ Exit: scroll produces no CPU paint, only uniform updates.
 
 ## Trace Requirements
 
-Each step emits/extends `TezzeraTrace` events behind `#[cfg(debug_assertions)]`:
+Each step emits/extends `RosaceTrace` events behind `#[cfg(debug_assertions)]`:
 Step 1 reuses ComponentMount/Unmount; Step 2 adds GestureReceived routing
 context; Step 5 uses PaintRegion for damage verification.
 

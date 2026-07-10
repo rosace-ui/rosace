@@ -1,0 +1,77 @@
+[package]
+name = "rosace"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ROSACE UI framework — single-crate SDK entry point"
+
+# ── Dependency layer rules ────────────────────────────────────────────────────
+#
+# This crate sits at Layer 7 (top of the DAG). It re-exports everything but
+# NOTHING in the framework may depend on this crate — only app code does.
+#
+# Layer 0  rosace-trace      zero deps
+# Layer 1  rosace-state      → trace
+# Layer 2  rosace-core       → trace, state
+# Layer 3  rosace-layout     → core
+# Layer 4  rosace-render     → core, layout
+#          rosace-theme      → core, state, trace
+# Layer 5  (services)         → layers 0-4 only
+# Layer 6  rosace-widgets    → layers 0-5
+# Layer 7  rosace (this)     → everything
+#
+# Rule: a crate at layer N may only depend on crates at layers < N.
+# Enforced by keeping this list here and never adding rosace as a dep
+# inside any sub-crate.
+
+[dependencies]
+# Core layers
+rosace-trace   = { path = "../rosace-trace" }
+rosace-state   = { path = "../rosace-state" }
+rosace-core    = { path = "../rosace-core" }
+rosace-layout  = { path = "../rosace-layout" }
+rosace-render  = { path = "../rosace-render" }
+rosace-theme   = { path = "../rosace-theme" }
+
+# Widget layer
+rosace-widgets = { path = "../rosace-widgets" }
+
+# Service layer
+rosace-animate  = { path = "../rosace-animate" }
+rosace-anim     = { path = "../rosace-anim" }
+rosace-scroll   = { path = "../rosace-scroll" }
+rosace-nav      = { path = "../rosace-nav" }
+rosace-nav-anim = { path = "../rosace-nav-anim" }
+rosace-forms    = { path = "../rosace-forms" }
+rosace-gesture  = { path = "../rosace-gesture" }
+rosace-a11y     = { path = "../rosace-a11y" }
+rosace-text     = { path = "../rosace-text" }
+rosace-shaping  = { path = "../rosace-shaping" }
+rosace-style    = { path = "../rosace-style" }
+rosace-i18n     = { path = "../rosace-i18n" }
+rosace-net      = { path = "../rosace-net" }
+rosace-ws       = { path = "../rosace-ws" }
+rosace-clipboard = { path = "../rosace-clipboard" }
+rosace-platform  = { path = "../rosace-platform" }
+rosace-bidi      = { path = "../rosace-bidi" }
+rosace-ime       = { path = "../rosace-ime" }
+rosace-media     = { path = "../rosace-media" }
+rosace-macros    = { path = "../rosace-macros" }
+rosace-hot-reload = { path = "../rosace-hot-reload" }
+rosace-devtools   = { path = "../rosace-devtools" }
+rosace-test-utils = { path = "../rosace-test-utils" }
+
+# Web-only (D107/Phase 25 Step 4) — the runtime shadow-DOM fallback that
+# syncs SemanticNode -> live DOM after hydration. This is the FIRST
+# target-gated dependency in this crate; every other one above is
+# unconditional (a known gap — see [[project-cli-platforms]] memory /
+# CRATE_CONTRACTS.md). Gated to wasm32 specifically so this never compiles
+# into iOS/Android/macOS/Windows/Linux builds — not "probably stripped by
+# the linker," genuinely never part of that target's dependency graph at
+# all. rsc-cli (Step 3's build-time consumer) depends on rosace-web-seo
+# directly in its own Cargo.toml instead — it's a dev-machine tool, never
+# shipped inside any app binary regardless of the app's target platform.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rosace-web-seo = { path = "../rosace-web-seo" }

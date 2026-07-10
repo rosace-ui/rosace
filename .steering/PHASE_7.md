@@ -5,7 +5,7 @@
 
 ## Steps
 
-### Step 1 — Real glyph metrics in tezzera-text
+### Step 1 — Real glyph metrics in rosace-text
 - Replace `char_count * font_size * 0.55` heuristic with fontdue `metrics()` per glyph
 - Add `GlyphMetrics { advance_width, height, bearing_x, bearing_y }` wrapper
 - `measure_text(text, font_size, font: &FontCache) -> f32` — accurate pixel width
@@ -21,19 +21,19 @@
 - `word_wrap_rtl` — wraps right-to-left, reversing word order per line
 - `PainterContext::draw_text_rtl` stub
 
-### Step 3 — Text selection + OS clipboard (`tezzera-clipboard`)
-- New crate `tezzera-clipboard`
+### Step 3 — Text selection + OS clipboard (`rosace-clipboard`)
+- New crate `rosace-clipboard`
 - `ClipboardProvider` trait: `read() -> Option<String>`, `write(s: &str)`
 - `SystemClipboard` — platform impl:
   - macOS: `pbcopy` / `pbpaste` via `std::process::Command`
   - Linux: `xclip` / `xsel` fallback
   - WASM: `web-sys` `navigator.clipboard` stub
-- `TextSelection { anchor: TextCursor, focus: TextCursor }` in `tezzera-text`
+- `TextSelection { anchor: TextCursor, focus: TextCursor }` in `rosace-text`
 - `Selection::text(lines: &[String]) -> String` — extract selected substring
-- Integration: `TextInput` widget in `tezzera-widgets` gains `selection: Option<TextSelection>` and `on_copy` / `on_paste` callbacks
+- Integration: `TextInput` widget in `rosace-widgets` gains `selection: Option<TextSelection>` and `on_copy` / `on_paste` callbacks
 
-### Step 4 — WebSocket client (`tezzera-ws`)
-- New crate `tezzera-ws`
+### Step 4 — WebSocket client (`rosace-ws`)
+- New crate `rosace-ws`
 - `WsMessage` enum: `Text(String)`, `Binary(Vec<u8>)`, `Ping`, `Pong`, `Close`
 - `WsClient` — wraps `std::net::TcpStream` with a minimal WS handshake (RFC 6455)
   - `connect(url: &str) -> Result<WsClient, WsError>`
@@ -44,8 +44,8 @@
 - WASM stub: `WsClient::connect` returns `Err(WsError::Connect("use web-sys WebSocket on WASM".into()))`
 - `WsStream<T>` — wraps `WsClient` + `LoadState<T>`, calls `poll()` each frame
 
-### Step 5 — Pinch gesture on WASM (`tezzera-gesture` extension)
-- Add `PinchRecognizer` to `tezzera-gesture`
+### Step 5 — Pinch gesture on WASM (`rosace-gesture` extension)
+- Add `PinchRecognizer` to `rosace-gesture`
 - Desktop: maps scroll-wheel delta to `GestureEvent::Pinch { scale, center_x, center_y }`
   - `InputEvent::Scroll { delta_y }` maps to scale = `1.0 + delta_y * 0.01`
 - WASM: `TouchEvent` with 2 fingers → distance ratio between frames
@@ -53,7 +53,7 @@
 - `GestureEvent::Pinch` added (was deferred from Phase 6)
 
 ### Step 6 — Phase 7 showcase
-- `tezzera-examples/src/bin/phase7_demo.rs`
+- `rosace-examples/src/bin/phase7_demo.rs`
 - 1400×900 PNG, 4 panels:
   1. Glyph metrics — side-by-side old vs new width estimates for sample text
   2. RTL text — "Hello World" vs "مرحبا بالعالم" layout direction visualization

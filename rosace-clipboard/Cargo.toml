@@ -1,0 +1,10 @@
+[package]
+name = "rosace-clipboard"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rosace-trace = { path = "../rosace-trace" }

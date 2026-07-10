@@ -1,0 +1,13 @@
+[package]
+name = "rosace-compositor"
+description = "wgpu GPU compositor for ROSACE — uploads CPU pixel buffer as texture, blits via fullscreen quad shader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wgpu     = "24"
+pollster = "0.3"
+log      = "0.4"

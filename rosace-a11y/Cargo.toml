@@ -1,0 +1,11 @@
+[package]
+name = "rosace-a11y"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rosace-core  = { path = "../rosace-core" }
+rosace-state = { path = "../rosace-state" }

@@ -31,16 +31,16 @@ The companion change is **O(depth) hit testing**: the existing flat
 
 ## Steps
 
-### Step 1 — Make `Picture` cloneable (tezzera-render) ✅
-- Add `#[derive(Clone)]` to `Picture` in `tezzera-render/src/picture.rs`
+### Step 1 — Make `Picture` cloneable (rosace-render) ✅
+- Add `#[derive(Clone)]` to `Picture` in `rosace-render/src/picture.rs`
 - This allows caching pictures in `RenderNode`
 
-### Step 2 — `RenderNode` struct (tezzera/src/render_node.rs)
+### Step 2 — `RenderNode` struct (rosace/src/render_node.rs)
 ```rust
 use std::sync::Arc;
-use tezzera_core::types::{Key, Rect, Size};
-use tezzera_layout::Constraints;
-use tezzera_render::Picture;
+use rosace_core::types::{Key, Rect, Size};
+use rosace_layout::Constraints;
+use rosace_render::Picture;
 
 pub struct RenderNode {
     pub tag:   &'static str,
@@ -65,9 +65,9 @@ pub struct RenderNode {
 
 - `RenderNode::new(tag, key)` — creates a dirty node with all caches empty
 - `RenderNode::invalidate()` — sets `paint_dirty = true`, clears picture cache
-- Export from `tezzera` crate (internal use only, not public API)
+- Export from `rosace` crate (internal use only, not public API)
 
-### Step 3 — Reconciler (tezzera/src/reconcile.rs)
+### Step 3 — Reconciler (rosace/src/reconcile.rs)
 ```rust
 pub fn reconcile(old: &mut Vec<RenderNode>, new_elements: &[Element]) { ... }
 ```
@@ -94,8 +94,8 @@ For `Element::Text` and `Element::Empty`:
   - Match keyed by key first; match unkeyed by position within unkeyed sublist
   - Unmatched old keyed nodes → dropped
 
-### Step 4 — Dirty-flag layout + paint walk (tezzera/src/render_walk.rs)
-Replace `walk_element()` in `tezzera/src/lib.rs` with two separate passes:
+### Step 4 — Dirty-flag layout + paint walk (rosace/src/render_walk.rs)
+Replace `walk_element()` in `rosace/src/lib.rs` with two separate passes:
 
 **Layout pass** — `layout_tree(node, element, ctx)`:
 ```
@@ -123,7 +123,7 @@ else:
     node.paint_dirty = false
 ```
 
-### Step 5 — O(depth) hit testing (tezzera/src/hit_test.rs)
+### Step 5 — O(depth) hit testing (rosace/src/hit_test.rs)
 ```rust
 pub fn hit_test(node: &RenderNode, x: f32, y: f32) -> bool {
     // Test children first (depth-first, deepest wins)
@@ -146,14 +146,14 @@ pub fn hit_test(node: &RenderNode, x: f32, y: f32) -> bool {
 
 Overlay entries still tested first in insertion order, before main tree.
 
-### Step 6 — Wire into App::launch (tezzera/src/lib.rs)
+### Step 6 — Wire into App::launch (rosace/src/lib.rs)
 - Add `render_tree: Vec<RenderNode>` to the closure captured by `PlatformWindow::run()`
 - Before each paint: call `reconcile(&mut render_tree, &element_children)`
 - Run layout pass → paint pass from render_tree
 - On mouse click: call `hit_test` on render_tree (deepest child first)
 - Remove the old `Vec<HitTarget>` from `PaintCtx` (now tracked in RenderNodes)
 
-### Step 7 — Phase 13 demo (tezzera-examples/src/bin/phase13_demo.rs)
+### Step 7 — Phase 13 demo (rosace-examples/src/bin/phase13_demo.rs)
 A demo that makes the dirty-flag behavior visible:
 1. **Frame counter panel** — shows `frame_counter` (increments each render). A separate label shows a high-frequency clock. Proves that the clock updates without re-rendering static panels.
 2. **1000-item list panel** — renders 1000 text items. A counter shows how many items re-painted last frame. Updating one item should show count=1, not count=1000.

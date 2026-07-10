@@ -1,4 +1,4 @@
-# TEZZERA — PHASE 1
+# ROSACE — PHASE 1
 > Foundation: Working desktop app in pure Rust
 > Timeline: 3–6 months
 > Target: 60fps desktop app, state works, layout works, tracing works
@@ -23,15 +23,15 @@ Everything observable via terminal tracing.
 □ Text renders correctly with basic fonts
 □ on_mount / on_update / on_unmount fire correctly
 □ ErrorBoundary catches panics and shows fallback
-□ TezzeraTrace events appear in terminal
+□ RosaceTrace events appear in terminal
 □ Time travel ring buffer captures last 1000 events
-□ tzr dev command starts the app
-□ tzr build --target desktop produces a binary
-□ All tezzera-core tests pass
-□ All tezzera-state tests pass
-□ All tezzera-layout tests pass
-□ All tezzera-render tests pass
-□ All tezzera-trace tests pass
+□ rsc dev command starts the app
+□ rsc build --target desktop produces a binary
+□ All rosace-core tests pass
+□ All rosace-state tests pass
+□ All rosace-layout tests pass
+□ All rosace-render tests pass
+□ All rosace-trace tests pass
 □ No warnings in release build
 □ No unsafe code without SAFETY comments
 □ Every public API has doc comments
@@ -46,8 +46,8 @@ Everything observable via terminal tracing.
 **Do this first. Verify before moving on.**
 
 ```bash
-mkdir tezzera
-cd tezzera
+mkdir rosace
+cd rosace
 git init
 ```
 
@@ -55,23 +55,23 @@ Create workspace Cargo.toml:
 ```toml
 [workspace]
 members = [
-    "tezzera-macros",
-    "tezzera-trace",
-    "tezzera-core",
-    "tezzera-state",
-    "tezzera-layout",
-    "tezzera-render",
-    "tezzera-widgets",
-    "tezzera-cli",
+    "rosace-macros",
+    "rosace-trace",
+    "rosace-core",
+    "rosace-state",
+    "rosace-layout",
+    "rosace-render",
+    "rosace-widgets",
+    "rosace-cli",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["TEZZERA Contributors"]
+authors = ["ROSACE Contributors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/tezzera-ui/tezzera"
+repository = "https://github.com/rosace-ui/rosace"
 ```
 
 **Verify:**
@@ -82,16 +82,16 @@ cargo check  # must pass
 **Commit:**
 ```bash
 git add .
-git commit -m "chore: initialize TEZZERA workspace"
+git commit -m "chore: initialize ROSACE workspace"
 ```
 
 ---
 
-### STEP 2 — tezzera-trace (build first)
+### STEP 2 — rosace-trace (build first)
 **Everything depends on this. Must be right.**
 
 What to build:
-- TezzeraTrace enum (all variants as per DECISIONS.md D039)
+- RosaceTrace enum (all variants as per DECISIONS.md D039)
 - TracingBus struct
 - TraceSubscriber trait
 - RingBufferSubscriber (1000 events default)
@@ -107,7 +107,7 @@ What to build:
 fn trace_emits_in_debug() {
     let sub = TestSubscriber::new();
     TRACING_BUS.add_subscriber(sub.clone());
-    trace!(TezzeraTrace::ComponentMount {
+    trace!(RosaceTrace::ComponentMount {
         id: ComponentId(1),
         name: "TestComponent",
         location: location!(),
@@ -124,12 +124,12 @@ fn trace_zero_cost_in_release() {
 
 **Commit:**
 ```bash
-git commit -m "feat(trace): implement TezzeraTrace bus and subscribers"
+git commit -m "feat(trace): implement RosaceTrace bus and subscribers"
 ```
 
 ---
 
-### STEP 3 — tezzera-core: Types and Traits
+### STEP 3 — rosace-core: Types and Traits
 **The foundation. Get this right.**
 
 What to build (in order):
@@ -161,9 +161,9 @@ pub struct ComponentElement {
 }
 ```
 
-**3c — TezzeraComponent trait**
+**3c — RosaceComponent trait**
 ```rust
-pub trait TezzeraComponent: 'static {
+pub trait RosaceComponent: 'static {
     fn build(&self, ctx: &mut Context) -> Element;
 
     // Lifecycle — default implementations (do nothing)
@@ -207,7 +207,7 @@ pub trait ChildContainer: Sized {
 **3g — ErrorBoundary**
 ```rust
 pub struct ErrorBoundary {
-    fallback: Box<dyn Fn(&TezzeraError) -> Element>,
+    fallback: Box<dyn Fn(&RosaceError) -> Element>,
     child: Element,
 }
 ```
@@ -233,7 +233,7 @@ fn child_container_order_preserved() { }
 
 ---
 
-### STEP 4 — tezzera-state: Atom System
+### STEP 4 — rosace-state: Atom System
 **The reactive heart. Must be correct before layout.**
 
 What to build (in order):
@@ -310,7 +310,7 @@ fn bench_1000_atom_updates() { }
 
 ---
 
-### STEP 5 — tezzera-layout: Flexure Engine
+### STEP 5 — rosace-layout: Flexure Engine
 **Most complex part of Phase 1. Take your time.**
 
 What to build (in order):
@@ -416,7 +416,7 @@ fn baseline_alignment_aligns_text() { }
 
 ---
 
-### STEP 6 — tezzera-render: Skia Pipeline
+### STEP 6 — rosace-render: Skia Pipeline
 **First pixels on screen.**
 
 What to build:
@@ -475,11 +475,11 @@ fn frame_time_under_budget() {
 
 Build the counter app:
 ```rust
-use tezzera::prelude::*;
+use rosace::prelude::*;
 
 struct Counter;
 
-impl TezzeraComponent for Counter {
+impl RosaceComponent for Counter {
     fn build(&self, ctx: &mut Context) -> Element {
         let count = ctx.state(0i32);
 
@@ -494,7 +494,7 @@ impl TezzeraComponent for Counter {
 }
 
 fn main() {
-    TezzeraApp::new()
+    RosaceApp::new()
         .child(Counter)
         .run();
 }
@@ -508,7 +508,7 @@ fn main() {
 □ Count increments on click
 □ Re-render is correct
 □ No flicker
-□ Terminal shows TezzeraTrace events
+□ Terminal shows RosaceTrace events
 □ 60fps maintained
 ```
 
@@ -519,10 +519,10 @@ git commit -m "feat: Phase 1 complete — counter app works"
 
 ---
 
-### STEP 8 — tezzera-cli: tzr dev + tzr build
+### STEP 8 — rosace-cli: rsc dev + rsc build
 **Make the development experience work.**
 
-**8a — tzr dev**
+**8a — rsc dev**
 ```
 - Start winit event loop
 - Watch for file changes
@@ -531,7 +531,7 @@ git commit -m "feat: Phase 1 complete — counter app works"
 - --trace=... filter flags
 ```
 
-**8b — tzr build --target desktop**
+**8b — rsc build --target desktop**
 ```
 - Release build
 - Strip debug info
@@ -551,15 +551,15 @@ git commit -m "feat: Phase 1 complete — counter app works"
 □ Text renders correctly with basic fonts
 □ on_mount / on_update / on_unmount fire correctly
 □ ErrorBoundary catches panics and shows fallback
-□ TezzeraTrace events appear in terminal
+□ RosaceTrace events appear in terminal
 □ Time travel ring buffer captures last 1000 events
-□ tzr dev command starts the app
-□ tzr build --target desktop produces a binary
-□ All tezzera-core tests pass
-□ All tezzera-state tests pass
-□ All tezzera-layout tests pass
-□ All tezzera-render tests pass
-□ All tezzera-trace tests pass
+□ rsc dev command starts the app
+□ rsc build --target desktop produces a binary
+□ All rosace-core tests pass
+□ All rosace-state tests pass
+□ All rosace-layout tests pass
+□ All rosace-render tests pass
+□ All rosace-trace tests pass
 □ No warnings in release build
 □ No unsafe code without SAFETY comments
 □ Every public API has doc comments

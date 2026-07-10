@@ -6,15 +6,15 @@
 ## Steps
 
 ### Step 1 — Renderer abstraction layer (D032 prep)
-- New crate `tezzera-renderer` (trait crate, not the impl)
+- New crate `rosace-renderer` (trait crate, not the impl)
 - `Renderer` trait: `clear(color)`, `fill_rect`, `stroke_rect`, `fill_circle`, `draw_text`, `encode_png() -> Vec<u8>`, `width() -> u32`, `height() -> u32`
 - `RendererBackend` enum: `TinySkia`, `SkiaSafe` (for future swap)
-- `SkiaRenderer` — wraps existing `SkiaCanvas` from `tezzera-render`, implements `Renderer`
+- `SkiaRenderer` — wraps existing `SkiaCanvas` from `rosace-render`, implements `Renderer`
 - This isolates all canvas calls so swapping to skia-safe in v1.0 only touches `SkiaRenderer`
-- Re-export `Renderer`, `SkiaRenderer` from `tezzera-renderer`
+- Re-export `Renderer`, `SkiaRenderer` from `rosace-renderer`
 
-### Step 2 — IME input stub (`tezzera-ime`)
-- New crate `tezzera-ime`
+### Step 2 — IME input stub (`rosace-ime`)
+- New crate `rosace-ime`
 - `ImeEvent` enum: `Preedit { text: String, cursor_range: Option<(usize, usize)> }`, `Commit(String)`, `Disabled`, `Enabled`
 - `ImeComposition` — tracks preedit state: `text: String`, `cursor: usize`, `active: bool`
 - `ImeHandler` trait: `on_ime_event(&mut self, event: &ImeEvent)`
@@ -22,8 +22,8 @@
 - `ImeState` — state machine: Idle → Composing → Committed → Idle
 - Platform note: real OS integration deferred to v1.0; this crate provides the data model
 
-### Step 3 — Unicode bidi levels (`tezzera-bidi`)
-- New crate `tezzera-bidi`
+### Step 3 — Unicode bidi levels (`rosace-bidi`)
+- New crate `rosace-bidi`
 - Implements a subset of Unicode TR#9 Bidirectional Algorithm (not full ICU)
 - `BidiClass` enum: `L`, `R`, `AL`, `EN`, `AN`, `WS`, `ON`, `B`, `S`, `NSM` (10 most common classes)
 - `bidi_class(ch: char) -> BidiClass` — classify a Unicode char into its bidi class
@@ -33,8 +33,8 @@
 - `BidiParagraph { text: String, levels: Vec<u8>, base_level: u8 }`
 - `BidiParagraph::new(text)` — full pipeline: classify → resolve → reorder
 
-### Step 4 — Media stubs (`tezzera-media`)
-- New crate `tezzera-media`
+### Step 4 — Media stubs (`rosace-media`)
+- New crate `rosace-media`
 - `AudioFormat` enum: `Wav`, `Mp3`, `Ogg`, `Aac`
 - `VideoFormat` enum: `Mp4`, `Webm`, `Gif`
 - `MediaError` enum: `Unsupported`, `NotFound(String)`, `DecodeFailed(String)`, `PlatformUnavailable`
@@ -46,7 +46,7 @@
 - WASM: same stubs, same errors
 
 ### Step 5 — Phase 8 showcase
-- `tezzera-examples/src/bin/phase8_demo.rs`
+- `rosace-examples/src/bin/phase8_demo.rs`
 - 1400×900 PNG, 4 panels:
   1. Renderer abstraction — Renderer trait diagram, SkiaRenderer wrapping SkiaCanvas
   2. IME input — composition state machine, preedit/commit flow

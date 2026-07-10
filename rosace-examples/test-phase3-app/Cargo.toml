@@ -1,0 +1,18 @@
+[package]
+name = "test-phase3-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "test-phase3-app"
+path = "src/main.rs"
+
+[dependencies]
+rosace-core     = { git = "https://github.com/rosace-ui/rosace" }
+rosace-layout   = { git = "https://github.com/rosace-ui/rosace" }
+rosace-render   = { git = "https://github.com/rosace-ui/rosace" }
+rosace-state    = { git = "https://github.com/rosace-ui/rosace" }
+rosace-platform = { git = "https://github.com/rosace-ui/rosace" }
+rosace-theme    = { git = "https://github.com/rosace-ui/rosace" }
+rosace-widgets  = { git = "https://github.com/rosace-ui/rosace" }
+rosace-animate  = { git = "https://github.com/rosace-ui/rosace" }

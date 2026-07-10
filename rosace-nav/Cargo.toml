@@ -1,0 +1,14 @@
+[package]
+name = "rosace-nav"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rosace-animate = { path = "../rosace-animate" }
+rosace-core    = { path = "../rosace-core" }
+rosace-state   = { path = "../rosace-state" }
+rosace-theme   = { path = "../rosace-theme" }
+rosace-trace   = { path = "../rosace-trace" }

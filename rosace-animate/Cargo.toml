@@ -1,0 +1,13 @@
+[package]
+name = "rosace-animate"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+web-time = "1"
+rosace-core  = { path = "../rosace-core" }
+rosace-state = { path = "../rosace-state" }
+rosace-trace = { path = "../rosace-trace" }

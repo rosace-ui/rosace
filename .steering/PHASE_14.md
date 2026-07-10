@@ -30,9 +30,9 @@ picture cache. Phase 14 completes three missing wires:
 
 ## Steps
 
-### Step 1 — Focus wiring (tezzera-a11y + tezzera + tezzera-widgets)
+### Step 1 — Focus wiring (rosace-a11y + rosace + rosace-widgets)
 
-**FocusManager (tezzera-a11y/src/focus_manager.rs)**:
+**FocusManager (rosace-a11y/src/focus_manager.rs)**:
 ```rust
 pub struct FocusManager {
     pub focused_id: Option<u64>,    // currently focused node id
@@ -48,7 +48,7 @@ impl FocusManager {
 }
 ```
 
-**PaintCtx extension** (tezzera-widgets/tree):
+**PaintCtx extension** (rosace-widgets/tree):
 - Add `focused_id: Option<u64>` to `PaintCtx`
 - Pass it from `App::launch` frame state
 
@@ -65,9 +65,9 @@ impl FocusManager {
 - Draws a focus ring (2px border, accent color)
 - `Button`, `TextInput`, `Checkbox`, `Slider` update to check
 
-### Step 2 — Navigator (tezzera-nav)
+### Step 2 — Navigator (rosace-nav)
 
-**Fill in tezzera-nav/src/stack.rs**:
+**Fill in rosace-nav/src/stack.rs**:
 ```rust
 pub struct RouteEntry {
     pub id:        RouteId,
@@ -102,9 +102,9 @@ impl Component for Navigator {
 - `push()` → atom.set adds new entry to vec
 - `pop()` → atom.set removes last entry; fires `on_unmount` for the popped component
 
-### Step 3 — RepaintBoundary (tezzera-widgets + tezzera)
+### Step 3 — RepaintBoundary (rosace-widgets + rosace)
 
-**Widget** (tezzera-widgets/src/tree/repaint_boundary.rs):
+**Widget** (rosace-widgets/src/tree/repaint_boundary.rs):
 ```rust
 pub struct RepaintBoundary<W: Widget> {
     pub child: W,
@@ -126,7 +126,7 @@ impl Widget for RepaintBoundary<W> {
 
 Implementation shortcut: RepaintBoundary records its ENTIRE child subtree into a single sub-Picture on first paint, then replays it as one unit.
 
-### Step 4 — Phase 14 demo (tezzera-examples/src/bin/phase14_demo.rs)
+### Step 4 — Phase 14 demo (rosace-examples/src/bin/phase14_demo.rs)
 
 Three panels:
 1. **Focus demo** — Tab through 4 buttons/inputs, active focus shows ring

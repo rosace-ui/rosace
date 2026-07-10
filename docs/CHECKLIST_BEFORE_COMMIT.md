@@ -1,4 +1,4 @@
-# TEZZERA — CHECKLIST BEFORE COMMIT
+# ROSACE — CHECKLIST BEFORE COMMIT
 > Run this before every git commit.
 > Every item must pass. No exceptions.
 
@@ -61,7 +61,7 @@
 
 ### 8. Does it emit traces?
 ```
-□ New systems emit TezzeraTrace events
+□ New systems emit RosaceTrace events
 □ Trace calls are behind #[cfg(debug_assertions)]
 □ No trace overhead in release binary
 ```
@@ -76,7 +76,7 @@
    feat(state): implement atom batching
    fix(layout): correct expanded in column constraint
    test(core): add error boundary panic tests
-   docs(trace): document TezzeraTrace variants
+   docs(trace): document RosaceTrace variants
    perf(state): optimize refresh engine root finding
 ```
 
@@ -105,9 +105,9 @@ Good:
 feat(state): implement atom three-scope system
 fix(layout): expanded widget respects bounded constraints
 test(core): add lifecycle hook ordering tests
-docs(trace): add TezzeraTrace enum documentation
+docs(trace): add RosaceTrace enum documentation
 perf(render): reduce dirty region recalculation
-chore(workspace): add tezzera-scroll crate skeleton
+chore(workspace): add rosace-scroll crate skeleton
 refactor(core): extract child ordering into ChildContainer
 
 Bad:

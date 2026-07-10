@@ -1,0 +1,12 @@
+[package]
+name = "rosace-test-utils"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rosace-render   = { path = "../rosace-render" }
+rosace-platform = { path = "../rosace-platform" }
+rosace-core     = { path = "../rosace-core" }

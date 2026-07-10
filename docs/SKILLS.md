@@ -1,4 +1,4 @@
-# TEZZERA — SKILLS
+# ROSACE — SKILLS
 > How to work effectively with Claude on this project.
 > Follow these patterns to get the best results.
 > Mistakes here cost real development time.
@@ -24,13 +24,13 @@ When asking Claude to implement something:
 
 **Good prompt:**
 ```
-I am implementing the Atom<T> struct for tezzera-state.
+I am implementing the Atom<T> struct for rosace-state.
 
 Relevant decisions:
 [paste D006, D007 from DECISIONS.md]
 
 Crate contract:
-[paste tezzera-state section from CRATE_CONTRACTS.md]
+[paste rosace-state section from CRATE_CONTRACTS.md]
 
 Current phase: Phase 1
 Current step: Step 4a (basic Atom<T>)
@@ -40,7 +40,7 @@ Please implement Atom<T> with:
 - set() method  
 - update() method
 - subscriber notification on change
-- TezzeraTrace emission on read and write
+- RosaceTrace emission on read and write
 
 Show me the implementation with tests.
 ```
@@ -79,7 +79,7 @@ When something is not working:
 
 **Good prompt:**
 ```
-I am in tezzera-state, Step 4d (RefreshEngine).
+I am in rosace-state, Step 4d (RefreshEngine).
 The refresh engine is rebuilding child components
 even when their parent is already in the dirty set.
 
@@ -110,7 +110,7 @@ When facing a design choice not yet decided:
 **Good prompt:**
 ```
 I am designing the glyph cache for text rendering
-(tezzera-layout, Step 5h).
+(rosace-layout, Step 5h).
 
 The relevant decision is D019 (Text Layout):
 [paste D019]
@@ -224,7 +224,7 @@ Which best follows our conventions and is clearest?
 
 ## WHAT CLAUDE WILL ALWAYS DO
 
-When working on TEZZERA, Claude will:
+When working on ROSACE, Claude will:
 - Check decisions before suggesting implementations
 - Flag if a suggestion contradicts DECISIONS.md
 - Suggest adding a decision before writing code
@@ -252,7 +252,7 @@ If Claude suggests something that contradicts a decision:
 Copy this at the start of every working session:
 
 ```
-I am working on TEZZERA, a Rust UI framework.
+I am working on ROSACE, a Rust UI framework.
 Fast by nature. Beautiful by design.
 
 Current phase: Phase 1 — Foundation
@@ -272,6 +272,6 @@ Please help me implement this while:
 - Following all decisions in DECISIONS.md
 - Staying within the crate contract
 - Using names from NAMING.md
-- Including TezzeraTrace emissions
+- Including RosaceTrace emissions
 - Writing tests
 ```

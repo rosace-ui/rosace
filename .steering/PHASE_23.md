@@ -7,12 +7,12 @@
 >
 > Progress:
 > - Step 1 ✅ Platform enum + detect() + use_platform()/set_platform()
->   (commit 30f7e28) — tezzera-core/src/platform.rs, mirrors the safe_area
+>   (commit 30f7e28) — rosace-core/src/platform.rs, mirrors the safe_area
 >   GlobalAtom pattern exactly. Flat enum (MacOs/Windows/Linux/Ios/Android/
 >   Web), no separate Desktop catch-all — the AppBar proof needed macOS told
 >   apart from other desktop OSes.
 > - Step 2 ✅ Themes bundle + App::themes(..)/.platform(..) (commit 30f7e28)
->   — tezzera-theme/src/themes.rs. Falls back to the existing single-theme
+>   — rosace-theme/src/themes.rs. Falls back to the existing single-theme
 >   path when no bundle given; existing apps unaffected.
 > - Step 3 ✅ AppBarStyle in ThemeData; AppBar converted (commit 30f7e28) —
 >   height/show_traffic_lights become Option<T> (None = follow theme);
@@ -27,8 +27,8 @@
 >   driven border present/absent at the correct row, and the material bar's
 >   border sits exactly 24 physical px (12pt logical * 2x retina) below the
 >   default's — matching the 56pt vs 44pt height difference precisely. See
->   tezzera-examples/src/bin/theming_demo.rs.
-> - Step 4 ✅ ThemeExtension type-map — tezzera-theme/src/theme.rs.
+>   rosace-examples/src/bin/theming_demo.rs.
+> - Step 4 ✅ ThemeExtension type-map — rosace-theme/src/theme.rs.
 >   `ThemeData.ext: HashMap<TypeId, Arc<dyn Any + Send + Sync>>` +
 >   `with_ext<T>(T) -> Self` / `ext<T>() -> Option<&T>`. `ThemeData` no
 >   longer derives `Debug` (dyn Any isn't Debug) — manual impl prints an
@@ -36,15 +36,15 @@
 >   (Arc is Clone regardless of the trait object's contents). Verified with
 >   unit tests: round-trip get/set, absent-when-unset, and type-distinguishing
 >   (two different ext structs don't collide) — a hypothetical `BadgeStyle`
->   proves a widget outside `tezzera-theme` can theme itself with zero edits
+>   proves a widget outside `rosace-theme` can theme itself with zero edits
 >   to `ThemeData`'s fields.
-> - Step 5 ✅ Finished material()/cupertino() + tzr new wiring —
->   tezzera-theme/src/built_in.rs, tezzera-cli/src/commands/new.rs.
+> - Step 5 ✅ Finished material()/cupertino() + rsc new wiring —
+>   rosace-theme/src/built_in.rs, rosace-cli/src/commands/new.rs.
 >   `cupertino()` now sets iOS system-blue (`#007AFF`) primary colors
 >   instead of reusing `light_theme()`'s MD3 purple verbatim (colors, not
 >   just AppBar structure, were still Android-branded before this) —
 >   `material()` keeps the MD3 purple, which was already Material-
->   appropriate. `tzr new` now generates a `themes()` fn in the scaffolded
+>   appropriate. `rsc new` now generates a `themes()` fn in the scaffolded
 >   `src/theme.rs` (a `Themes` bundle: iOS → cupertino(), Android →
 >   material(), fallback → light()) and wires `.themes(theme::themes())`
 >   into `App::new()` in `src/lib.rs`, but ONLY when iOS and/or Android is
@@ -55,7 +55,7 @@
 >
 > Phase 23 (D105) is now COMPLETE: one widget set, theme is the sole
 > platform authority, AppBar is the proof-of-concept, ThemeExtension lets
-> new widgets theme themselves, and `tzr new` scaffolds native-appropriate
+> new widgets theme themselves, and `rsc new` scaffolds native-appropriate
 > themes with no hand-editing. Follow-up widget conversions (ButtonStyle,
 > SwitchStyle, …) are out of scope here — Step 3's note about doing them
 > "one widget at a time" still applies whenever those widgets get their own
@@ -67,7 +67,7 @@ Desktop, iOS, and Android chrome differ in real, structural ways — not just
 color: macOS traffic-light inset; iOS centered title + edge-back gesture;
 Android left-aligned title + elevation; Cupertino pill switch vs Material
 track; scroll physics (rubber-band vs edge-glow); touch density (44pt / 48dp /
-tight desktop). Today TEZZERA has **one** widget set with ad-hoc props
+tight desktop). Today ROSACE has **one** widget set with ad-hoc props
 (`AppBar.show_traffic_lights`) and **zero platform awareness** — `ThemeData`
 carries only global tokens (colors/typography/spacing/radius/animation).
 
@@ -96,7 +96,7 @@ difference into the theme (data)** so widget code stays platform-agnostic.
 
 ### Step 1 — Platform detection + active-platform on the theme
 Add `enum Platform { Desktop, Ios, Android, Web, Windows, Linux, Macos }` (in
-`tezzera-core` or `tezzera-theme`) and a startup detector: `cfg(target_os)` on
+`rosace-core` or `rosace-theme`) and a startup detector: `cfg(target_os)` on
 native, `navigator.platform`/user-agent on web. Store the resolved platform so
 widgets/theme can read it (`ctx.theme.platform` or a global). No widget branches
 on it directly — it drives theme resolution (Step 2) and is available for the
@@ -138,15 +138,15 @@ platform branch in `AppBar`, only theme reads. Follow-ups: `ButtonStyle`,
 in the theme, and reads it — no core `ThemeData` edit required.
 
 Exit: a demo custom widget themes itself purely via an extension struct; adding
-it required no change to `tezzera-theme`.
+it required no change to `rosace-theme`.
 
-### Step 5 — Built-in `material()` / `cupertino()` + `tzr new` integration
+### Step 5 — Built-in `material()` / `cupertino()` + `rsc new` integration
 Ship `built_in::material()` and `built_in::cupertino()` (structural, not just
-color). Update `tzr new` (D104) so a project that selects iOS+Android is
+color). Update `rsc new` (D104) so a project that selects iOS+Android is
 scaffolded with a `Themes` bundle wiring `cupertino()` for iOS and `material()`
 for Android + a fallback, in the generated `theme.rs`.
 
-Exit: `tzr new app --platforms desktop,ios,android` produces an app that looks
+Exit: `rsc new app --platforms desktop,ios,android` produces an app that looks
 native-appropriate on each target with no hand-editing.
 
 ## Migration Rule

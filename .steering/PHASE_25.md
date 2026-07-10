@@ -9,10 +9,10 @@
 > JS-driven fallback for post-hydration state changes.
 >
 > Progress:
-> - Step 1 ✅ Extended `tezzera_core::Role` with `Link`/`Heading`/`List`/
+> - Step 1 ✅ Extended `rosace_core::Role` with `Link`/`Heading`/`List`/
 >   `ListItem`/`Tab`/`TabPanel`; added `heading_level: Option<u8>` and
 >   `href: Option<String>` to `SemanticNode` and `Semantics`. Deliberately
->   did NOT unify with `tezzera_a11y::role::Role` (confirmed via research:
+>   did NOT unify with `rosace_a11y::role::Role` (confirmed via research:
 >   zero external users outside its own crate — it drives a11y's separate
 >   internal focus-management tree, unrelated to this phase). Also fixed a
 >   real adjacent bug: `collect_semantics_node` was silently dropping
@@ -54,46 +54,46 @@
 >   Step 3's `curl`-the-built-HTML exit bar is the honest place to prove
 >   this for real, per this project's verify-don't-assume standard.
 > - Step 3 ✅ `SemanticNode → HTML` mapping function, platform-isolation
->   architecture, AND `tzr build --target web` integration all landed.
+>   architecture, AND `rsc build --target web` integration all landed.
 >   **A real architecture question came up mid-session and got resolved
 >   before writing the mapping code, not after**: does web-only code like
 >   this actually stay off iOS/Android/desktop binaries, or does it
->   silently ship there as unreferenced dead weight? Checked: `tezzera`'s
+>   silently ship there as unreferenced dead weight? Checked: `rosace`'s
 >   Cargo.toml had ZERO target-gated dependencies before this — all ~30
 >   sub-crates are unconditional (a real, separately-known gap — see
 >   `[[project-cli-platforms]]` memory). Relying on the linker to strip an
 >   unreferenced function isn't a real guarantee (doesn't happen in debug
 >   builds; not enforced against future accidental references) — so the
->   mapping function lives in a NEW crate, `tezzera-web-seo` (Layer 5,
->   alongside `tezzera-a11y`), which `tezzera/Cargo.toml` pulls in via
+>   mapping function lives in a NEW crate, `rosace-web-seo` (Layer 5,
+>   alongside `rosace-a11y`), which `rosace/Cargo.toml` pulls in via
 >   `[target.'cfg(target_arch = "wasm32")'.dependencies]` — the same
 >   mechanism already used correctly elsewhere in this codebase for
 >   `jni`/`ndk-sys` (Android-only) and `wasm-bindgen`/`web-sys`
->   (wasm32-only). `tzr-cli` (Step 3's other, build-time consumer) depends
+>   (wasm32-only). `rsc-cli` (Step 3's other, build-time consumer) depends
 >   on it directly and unconditionally in its own `Cargo.toml` — safe
->   regardless of the app's target platform, since `tzr` itself never
+>   regardless of the app's target platform, since `rsc` itself never
 >   ships inside any app binary for any platform.
->   **Verified concretely, not asserted**: `cargo tree -p tezzera` (host/
->   macOS target) and `cargo tree -p tezzera --target
+>   **Verified concretely, not asserted**: `cargo tree -p rosace` (host/
+>   macOS target) and `cargo tree -p rosace --target
 >   aarch64-apple-ios-sim`/`aarch64-linux-android` all show ZERO occurrences
->   of `tezzera-web-seo` in the dependency graph — not stripped, never
->   part of that target's build at all. `cargo tree -p tezzera --target
+>   of `rosace-web-seo` in the dependency graph — not stripped, never
+>   part of that target's build at all. `cargo tree -p rosace --target
 >   wasm32-unknown-unknown` shows it present. This is the actual guarantee,
 >   compiler-enforced, not "probably fine after optimization."
->   `tezzera-web-seo/src/lib.rs`: `render_html`/`render_shadow_dom_template`
+>   `rosace-web-seo/src/lib.rs`: `render_html`/`render_shadow_dom_template`
 >   (the `<template shadowrootmode="open">` wrapper)/`render_text` (the
 >   `llms.txt` source), covering every `Role` variant with proper HTML/
 >   attribute escaping (a real XSS concern — `label`/`value`/`href` are
 >   arbitrary app data, not trusted HTML; tested directly). 11 tests, all
 >   passing, including one mirroring the real `AppBar`+`ListTile` shape
 >   from Step 2.
->   **Build integration**: `tzr new` (Web selected) generates
+>   **Build integration**: `rsc new` (Web selected) generates
 >   `examples/seo_extract.rs` — a NATIVE (host-arch, never wasm32) example
 >   binary that does one headless `FrameEngine` build+paint pass (new
 >   `FrameEngine::semantics()` accessor; a `SkiaCanvas` is just an
 >   in-memory CPU pixmap, no real window/GPU needed) purely to populate the
 >   render tree, then prints the shadow-DOM HTML + llms.txt text to stdout.
->   `tezzera-web-seo` is a `[dev-dependencies]` entry (not a plain one) in
+>   `rosace-web-seo` is a `[dev-dependencies]` entry (not a plain one) in
 >   the generated app's own `Cargo.toml` — dev-dependencies are excluded
 >   from `cargo build --bin <app>` (the real, shipped binary, on every
 >   platform including the wasm32 web build itself), only pulled in for
@@ -102,14 +102,14 @@
 >   a build-time tool rather than a runtime dependency. `lib_rs` widens
 >   `app`/`theme` to `pub mod` (web-only) since a Cargo example is its own
 >   crate root and needs to reach them from outside.
->   `build_web()` (`tezzera-cli/src/commands/build.rs`) runs this example
+>   `build_web()` (`rosace-cli/src/commands/build.rs`) runs this example
 >   after the wasm build, splices the shadow DOM into `dist/index.html`
 >   (replacing a `<!--TZR_SEO_SHADOW_DOM-->` marker `generate_index_html`
 >   now emits) and writes `dist/llms.txt`. Non-fatal on failure (an older
 >   project without `examples/seo_extract.rs` just skips this — Migration
 >   Rule — and a failed extraction is a warning, not a build failure).
 >   **Verified for real, matching the exit bar exactly**: scaffolded a
->   fresh web app, ran the actual `tzr build --target web` command,
+>   fresh web app, ran the actual `rsc build --target web` command,
 >   inspected `dist/index.html` — the real `<template shadowrootmode=
 >   "open">` block contains genuine app content (`<h1>seo_test</h1>`,
 >   the Counter list tile's title+subtitle). Then served `dist/` with a
@@ -127,42 +127,42 @@
 >   — more scope than this session covers; flag as follow-up, not claim
 >   as done. The phase's OWN exit-bar text is written assuming a
 >   single-screen counter app where the default view already has
->   everything (true for `tzr new`'s literal generated app, since its
+>   everything (true for `rsc new`'s literal generated app, since its
 >   default HOME screen doesn't happen to include "Increment" — that's on
 >   the Counter screen, reached via navigation — so even THAT exact
 >   example only partially matches without per-route support).
 > - Step 4 ✅ Runtime shadow-DOM fallback. `FrameEngine::paint()`
->   (`tezzera/src/engine.rs`) now returns `bool` (`content_changed`, derived
+>   (`rosace/src/engine.rs`) now returns `bool` (`content_changed`, derived
 >   from the existing D091 dirty-tracking: `global_dirty ||
 >   !dirty_ids.is_empty()`) instead of `()` — kept entirely internal to
->   `App::launch()`'s own closure in `tezzera/src/lib.rs` rather than
->   threading it through `tezzera-platform`'s public `PlatformWindow::
+>   `App::launch()`'s own closure in `rosace/src/lib.rs` rather than
+>   threading it through `rosace-platform`'s public `PlatformWindow::
 >   run_layered` closure signature, to avoid rippling a breaking change
 >   through every platform caller (desktop/iOS-FFI/Android-FFI binaries)
 >   for a value only the web target needs. New `FrameEngine::semantics()`
->   accessor. New `tezzera-platform/src/web_seo_sync.rs` (wasm32-only):
->   `sync(&SemanticNode)` renders via `tezzera-web-seo::render_html`, diffs
+>   accessor. New `rosace-platform/src/web_seo_sync.rs` (wasm32-only):
+>   `sync(&SemanticNode)` renders via `rosace-web-seo::render_html`, diffs
 >   against the previous frame's HTML (cheap string compare — a second,
 >   finer gate beyond the caller's `content_changed` check, since a
 >   re-render can legitimately produce identical output), and on a real
->   change calls `set_inner_html` on the `#tzr-seo` shadow root — reusing
+>   change calls `set_inner_html` on the `#rsc-seo` shadow root — reusing
 >   Step 3's build-time Declarative Shadow DOM root via `element.
 >   shadow_root()` if the browser already attached one, or attaching a
->   fresh one via `attach_shadow()` otherwise (covers `tzr dev`, which
+>   fresh one via `attach_shadow()` otherwise (covers `rsc dev`, which
 >   skips the build-time export). Wired into `App::launch()`'s paint
 >   closure, wasm32-gated.
 >   **Two real, previously-unknown bugs found via actual browser
 >   verification (not code review) and fixed along the way**:
->   1. `#tzr-seo` had no CSS at all — Step 3's build-time shadow DOM HTML
+>   1. `#rsc-seo` had no CSS at all — Step 3's build-time shadow DOM HTML
 >      was genuinely VISIBLE on screen to sighted users (confirmed via
 >      screenshot). Fixed with a visually-hidden pattern (`position:
 >      absolute; clip: rect(0,0,0,0); ...` — deliberately NOT
 >      `display:none`, which also hides from screen readers) in both
->      `tzr new`'s `web_index_html()` and `tzr build`'s
+>      `rsc new`'s `web_index_html()` and `rsc build`'s
 >      `generate_index_html()`.
 >   2. `generate_index_html()` had ALWAYS hardcoded `import('./app.js')`/
 >      `fetch('app.wasm')` regardless of the real crate name — meaning
->      `tzr build --target web`'s output silently never actually loaded
+>      `rsc build --target web`'s output silently never actually loaded
 >      the wasm app for any project not literally named "app", for this
 >      function's entire prior history. Pre-existing, unrelated to this
 >      phase's other work, but directly blocking Step 4's browser
@@ -174,7 +174,7 @@
 >   **Verified for real, matching the exit bar exactly**: scaffolded a
 >   fresh web app, built it, served `dist/` over real HTTP, drove it in an
 >   actual Chrome tab (`claude-in-chrome`) — navigated Home → Counter,
->   read `document.getElementById('tzr-seo').shadowRoot.innerHTML` BEFORE
+>   read `document.getElementById('rsc-seo').shadowRoot.innerHTML` BEFORE
 >   clicking Increment (`<p>0</p>`), clicked the real Increment button,
 >   read it again AFTER (`<p>1</p>`) — the shadow DOM tracked the live
 >   state change from a real user interaction, not a simulated one. No
@@ -197,7 +197,7 @@
 >   `<ul>` ancestor. Per HTML-AAM, an `<li>` outside a `<ul>`/`<ol>`/`<menu>`
 >   loses its implicit `listitem` accessibility role — confirmed
 >   concretely: Chrome's accessibility tree exposed the sibling `<h1>` but
->   silently dropped the `<li>` entirely. Fixed in `tezzera-web-seo/src/
+>   silently dropped the `<li>` entirely. Fixed in `rosace-web-seo/src/
 >   lib.rs`: `render_children` now auto-wraps any run of consecutive
 >   `Role::ListItem` siblings in a synthetic `<ul>` (an explicit
 >   `Role::List` still renders its own `<ul>` directly, unaffected — no
@@ -215,8 +215,8 @@
 >   keyboard.
 >   Full workspace `cargo build --workspace` and `cargo test --workspace
 >   --no-fail-fast` both clean (zero failures) after all Step 4/5 changes;
->   `cargo check -p tezzera-web-seo --target wasm32-unknown-unknown` and
->   `-p tezzera-platform --target wasm32-unknown-unknown` both clean.
+>   `cargo check -p rosace-web-seo --target wasm32-unknown-unknown` and
+>   `-p rosace-platform --target wasm32-unknown-unknown` both clean.
 
 ## Why This Phase
 
@@ -230,8 +230,8 @@ CanvasKit) and has been deprecating it for that reason. D105 already rejected
 this shape of cost for platform theming (one API, two implementations); this
 phase avoids repeating it for rendering.
 
-TEZZERA already has the right ingredient: `RenderTree::collect_semantics()`
-(`tezzera-widgets/src/tree/render_tree.rs:420`, built for D099 accessibility)
+ROSACE already has the right ingredient: `RenderTree::collect_semantics()`
+(`rosace-widgets/src/tree/render_tree.rs:420`, built for D099 accessibility)
 derives a nested `SemanticNode { role, label, children }` tree from widgets'
 declared `Semantics` entries, in paint order, matching render-tree structure.
 A search crawler and a screen reader want the same thing — real text and
@@ -242,7 +242,7 @@ HTML shadow at runtime (in-browser, after wasm loads), prefer generating it
 at **build time** using **Declarative Shadow DOM** (`<template
 shadowrootmode="open">`) — a real, now widely-shipped web-platform feature
 that creates a shadow root straight from HTML, with no JavaScript required.
-For any route whose content is knowable when `tzr build --target web` runs,
+For any route whose content is knowable when `rsc build --target web` runs,
 this bakes real, crawlable content into the literal HTML response — reaching
 crawlers that skip JS execution, and improving first-paint (content is
 visible before wasm even downloads). The runtime JS-driven shadow (the
@@ -253,7 +253,7 @@ original plan) becomes the fallback for state that changes after hydration.
 - Canvas remains the ONLY visual renderer, everywhere. No parallel DOM
   render backend for widgets.
 - The SAME `SemanticNode`→HTML mapping is used two ways:
-  1. **Build-time (preferred)**: `tzr build --target web` runs the mapping
+  1. **Build-time (preferred)**: `rsc build --target web` runs the mapping
      offline for statically-knowable routes/content and emits Declarative
      Shadow DOM directly in the generated HTML.
   2. **Runtime (fallback)**: after hydration, as app state changes in ways
@@ -271,14 +271,14 @@ original plan) becomes the fallback for state that changes after hydration.
 ## Steps
 
 ### Step 1 — Unify/extend the Role enum for real HTML semantics
-Today there are two `Role` enums: `tezzera_core::semantic_node::Role` (the
+Today there are two `Role` enums: `rosace_core::semantic_node::Role` (the
 one actually wired into `collect_semantics()` — Button/Text/Image/Slider/
 Alert/Dialog/Checkbox/Switch/TextInput/MenuItem/ProgressBar/Unknown) and
-`tezzera_a11y::role::Role` (richer — adds Link/Heading/List/ListItem/Tab/
+`rosace_a11y::role::Role` (richer — adds Link/Heading/List/ListItem/Tab/
 TabPanel, has `is_interactive()`). Real HTML/SEO needs heading LEVELS
 (`<h1>`–`<h6>`, not just "Heading") and real anchors (`<a href>`) — decide
-whether to extend `tezzera_core::Role` with these or make `collect_semantics`
-emit `tezzera_a11y::Role` instead, and add whatever `Semantics` needs (e.g.
+whether to extend `rosace_core::Role` with these or make `collect_semantics`
+emit `rosace_a11y::Role` instead, and add whatever `Semantics` needs (e.g.
 `heading_level: Option<u8>`, `href: Option<String>`) to carry that data.
 
 Exit: one Role source of truth, with enough data for a faithful HTML mapping
@@ -291,11 +291,11 @@ user-facing text or interactive behavior needs to push a `Semantics` entry:
 `Text` → labelled text node, `Button`/`ListTile`/interactive widgets →
 appropriate role + label, `Image` → alt text, etc.
 
-Exit: `collect_semantics()` on a real app screen (e.g. the `tzr new` counter
+Exit: `collect_semantics()` on a real app screen (e.g. the `rsc new` counter
 app) produces a complete, non-sparse tree matching what's visually on
 screen.
 
-### Step 3 — Build-time semantic HTML export (`tzr build --target web`)
+### Step 3 — Build-time semantic HTML export (`rsc build --target web`)
 The `SemanticNode`→HTML mapping (Step 1) runs offline against a rendered
 route's semantic tree and emits: (a) a Declarative Shadow DOM `<template
 shadowrootmode="open">` block embedded in that route's HTML output, (b) a
@@ -308,7 +308,7 @@ content ("Counter", "A simple counter with + / −", "Increment") in the raw
 response.
 
 ### Step 4 — Runtime shadow-DOM fallback (web-only, post-hydration)
-A small module (likely in `tezzera-platform`'s wasm path) that walks
+A small module (likely in `rosace-platform`'s wasm path) that walks
 `SemanticNode` → creates/updates matching `web_sys` DOM elements for state
 that changes AFTER hydration (the build step in Step 3 had no way to know
 about it). Diffs against the previous frame's shadow tree — mirror the

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="logos/tezzera-josefin.svg" alt="Tezzera" width="420"/>
+  <img src="assets/rosace/rosace-logo-spectrum.svg" alt="Rosace" width="420"/>
 
   <br/><br/>
 
@@ -17,27 +17,27 @@
 
 ---
 
-> **Work in Progress** — Tezzera is under active development. APIs are unstable, and large parts are still being built. Not ready for production use — but what's here already runs fast.
+> **Work in Progress** — Rosace is under active development. APIs are unstable, and large parts are still being built. Not ready for production use — but what's here already runs fast.
 
 ---
 
-## What is Tezzera?
+## What is Rosace?
 
-Tezzera is a declarative, reactive UI framework built in pure Rust — from the ground up, without compromise.
+Rosace is a declarative, reactive UI framework built in pure Rust — from the ground up, without compromise.
 
 The name comes from *tessera* — the individual tiles that form a mosaic. Every component is a tile: self-contained, composable, and pixel-precise. Assembled together they form the complete picture of your application.
 
 Write your UI once in Rust. Target desktop, web (WASM), iOS, and Android — with 120fps as the baseline, not the goal.
 
-Tezzera does not patch over existing solutions. It is a clean-room implementation: a purpose-built layout engine, a reactive state model, a software render pipeline — each crate designed to compose perfectly with the others. No hidden overhead. No runtime surprises. No undefined behaviour.
+Rosace does not patch over existing solutions. It is a clean-room implementation: a purpose-built layout engine, a reactive state model, a software render pipeline — each crate designed to compose perfectly with the others. No hidden overhead. No runtime surprises. No undefined behaviour.
 
-Rust's type system isn't a restriction here — it's a design partner. Null pointer exceptions don't exist in Tezzera. Layout panics don't exist. If it compiles, it runs.
+Rust's type system isn't a restriction here — it's a design partner. Null pointer exceptions don't exist in Rosace. Layout panics don't exist. If it compiles, it runs.
 
 ---
 
-## Why Tezzera?
+## Why Rosace?
 
-Most UI frameworks in the Rust ecosystem are ports, wrappers, or direct translations of ideas from other languages. Tezzera is none of those things.
+Most UI frameworks in the Rust ecosystem are ports, wrappers, or direct translations of ideas from other languages. Rosace is none of those things.
 
 It was designed to answer a single question: *what would a UI framework look like if it were built by someone who already knew all the mistakes?*
 
@@ -46,7 +46,7 @@ The answer is a framework that:
 - **Never sacrifices performance for convenience** — the render pipeline targets dirty-region compositing at 120fps by default
 - **Never hides cost** — every allocation, every draw call, every state update is explicit and traceable
 - **Never lies about safety** — `#[component]` guarantees lifecycle correctness at compile time
-- **Never forgets developer experience** — the `tzr` CLI, hot reload, and the built-in `TezzeraTrace` event bus exist because debugging UI should not be miserable
+- **Never forgets developer experience** — the `rsc` CLI, hot reload, and the built-in `RosaceTrace` event bus exist because debugging UI should not be miserable
 - **Composes all the way down** — from the layout engine to state atoms to the render layer, every abstraction is composable, not opaque
 
 This isn't a prototype. It's a foundation — and it's being built to last.
@@ -57,17 +57,17 @@ This isn't a prototype. It's a foundation — and it's being built to last.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                  tezzera-examples                   │  Example apps
+│                  rosace-examples                   │  Example apps
 ├─────────────────────────────────────────────────────┤
-│   tezzera-widgets   │   tezzera-cli (tzr)           │  Widgets + CLI
+│   rosace-widgets   │   rosace-cli (rsc)           │  Widgets + CLI
 ├─────────────────────────────────────────────────────┤
-│   tezzera-platform  │   tezzera-layout              │  Windowing + Flexure
+│   rosace-platform  │   rosace-layout              │  Windowing + Flexure
 ├─────────────────────────────────────────────────────┤
-│   tezzera-render    │   tezzera-state               │  Pipeline + Atoms
+│   rosace-render    │   rosace-state               │  Pipeline + Atoms
 ├─────────────────────────────────────────────────────┤
-│   tezzera-core      │   tezzera-trace               │  Components + Bus
+│   rosace-core      │   rosace-trace               │  Components + Bus
 ├─────────────────────────────────────────────────────┤
-│                  tezzera-macros                     │  Proc-macros
+│                  rosace-macros                     │  Proc-macros
 └─────────────────────────────────────────────────────┘
         tiny-skia · fontdue · winit · softbuffer
 ```
@@ -86,24 +86,24 @@ A full architecture document is coming. The codebase speaks for itself in the me
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-org/tezzera.git
-cd tezzera
+git clone https://github.com/your-org/rosace.git
+cd rosace
 
 # Build the workspace
 cargo build
 ```
 
-### tzr CLI
+### rsc CLI
 
 ```bash
 # Install the developer CLI
-cargo install --path tezzera-cli
+cargo install --path rosace-cli
 
-tzr new my-app              # scaffold a new Tezzera project
-tzr dev                     # start dev server with hot reload
-tzr build --target desktop  # produce a desktop binary
-tzr analyze                 # static analysis of your component tree
-tzr snapshot                # snapshot test your UI
+rsc new my-app              # scaffold a new Rosace project
+rsc dev                     # start dev server with hot reload
+rsc build --target desktop  # produce a desktop binary
+rsc analyze                 # static analysis of your component tree
+rsc snapshot                # snapshot test your UI
 ```
 
 ### Writing Custom Widgets
@@ -114,7 +114,7 @@ building a genuinely new visual primitive, see
 [`.steering/WIDGET_AUTHORING_GUIDE.md`](.steering/WIDGET_AUTHORING_GUIDE.md)
 for the `Widget` trait, the leaf/single-child/multi-child decision table, and
 three worked, compiling examples
-(`tezzera-examples/src/bin/widget_authoring_demo.rs`).
+(`rosace-examples/src/bin/widget_authoring_demo.rs`).
 
 ---
 
@@ -122,16 +122,16 @@ three worked, compiling examples
 
 | Crate | Description |
 |---|---|
-| `tezzera-macros` | Proc-macros: `#[component]`, `#[state]`, `view!{}` |
-| `tezzera-trace` | `TezzeraTrace` event bus, ring buffer, subscribers |
-| `tezzera-core` | Component model, element tree, lifecycle hooks |
-| `tezzera-state` | `Atom<T>`, `use_atom()`, `GlobalAtom`, batched updates |
-| `tezzera-layout` | Flexure engine: Column, Row, Stack, Flex, Grid, Wrap, SizedBox, AspectRatio |
-| `tezzera-render` | tiny-skia render pipeline, dirty regions, layer compositor, `FontCache` |
-| `tezzera-widgets` | Built-in widget library |
-| `tezzera-platform` | Windowing abstraction (winit + softbuffer) |
-| `tezzera-cli` | `tzr` command-line tool |
-| `tezzera-examples` | Example applications |
+| `rosace-macros` | Proc-macros: `#[component]`, `#[state]`, `view!{}` |
+| `rosace-trace` | `RosaceTrace` event bus, ring buffer, subscribers |
+| `rosace-core` | Component model, element tree, lifecycle hooks |
+| `rosace-state` | `Atom<T>`, `use_atom()`, `GlobalAtom`, batched updates |
+| `rosace-layout` | Flexure engine: Column, Row, Stack, Flex, Grid, Wrap, SizedBox, AspectRatio |
+| `rosace-render` | tiny-skia render pipeline, dirty regions, layer compositor, `FontCache` |
+| `rosace-widgets` | Built-in widget library |
+| `rosace-platform` | Windowing abstraction (winit + softbuffer) |
+| `rosace-cli` | `rsc` command-line tool |
+| `rosace-examples` | Example applications |
 
 ---
 
@@ -145,12 +145,12 @@ Goal: a working desktop app at 60fps with state, layout, render, tracing, animat
 - [x] Font rendering — fontdue `FontCache` + `draw_text()` with correct glyph placement
 - [x] Lifecycle hooks — `on_mount`, `on_update`, `on_unmount`
 - [x] `ErrorBoundary` with panic catching
-- [x] `TezzeraTrace` event bus with ring buffer
+- [x] `RosaceTrace` event bus with ring buffer
 - [x] Animation — `Tween`, `AnimationController`, `Timeline`, easing curves
 - [x] Accessibility — semantic tree, roles, focus management
 - [x] Test harness — component-level snapshot and interaction testing
 - [x] Proc-macros — `#[component]`, `#[state]`
-- [x] `tzr` CLI — `new`, `dev`, `build`, `analyze`, `snapshot`
+- [x] `rsc` CLI — `new`, `dev`, `build`, `analyze`, `snapshot`
 - [ ] Phase 2 — web/WASM target
 - [ ] Phase 3 — mobile (iOS / Android)
 
@@ -160,7 +160,7 @@ Goal: a working desktop app at 60fps with state, layout, render, tracing, animat
 
 > *Coded with AI. Architected by Human.*
 
-Tezzera is built with the assistance of AI — and I say that openly, without apology.
+Rosace is built with the assistance of AI — and I say that openly, without apology.
 
 Every line of code in this framework was generated with AI assistance. And every single line was read, understood, validated, and approved by me before it landed. The architecture decisions, the crate boundaries, the API shapes, the performance constraints, the trade-offs — those are mine. The AI is a tool. A fast one. A capable one. But the judgement behind this codebase is human.
 
@@ -170,7 +170,7 @@ This is not a framework vomited out of a prompt. It is a framework designed with
 
 ## Contributing
 
-Tezzera is not yet open for general contributions while the foundation is being laid. That said:
+Rosace is not yet open for general contributions while the foundation is being laid. That said:
 
 - **Bug reports** — open an issue with steps to reproduce
 - **Feature requests & ideas** — open a discussion issue before building anything
@@ -186,7 +186,7 @@ Copyright (c) 2026 Godwin Joseph.
 
 This source code is provided for viewing and personal exploration only. You may **not** use, copy, modify, merge, publish, distribute, sublicense, or sell copies of this software, or any derivative works, without explicit written permission from the author.
 
-> **Note:** This license is a placeholder. Tezzera will transition to an open-source license (MIT and/or Apache 2.0) prior to its first public release.
+> **Note:** This license is a placeholder. Rosace will transition to an open-source license (MIT and/or Apache 2.0) prior to its first public release.
 
 ---
 

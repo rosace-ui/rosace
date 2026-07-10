@@ -1,4 +1,4 @@
-# TEZZERA — WIDGET API DESIGN
+# ROSACE — WIDGET API DESIGN
 > The constitution for every public widget API. New widgets MUST follow this.
 > Existing violations are migrated in Phase 21. Decisions: D093–D097.
 
@@ -41,7 +41,7 @@ Every UI toolkit in Rust (iced, egui) converged here.
 
 B's one advantage — reusable styles — is recovered additively later:
 `.style(TextStyle)` as ONE builder method that applies a shareable struct,
-which also becomes the bridge to `tezzera-style`'s ComputedStyle. Deferred
+which also becomes the bridge to `rosace-style`'s ComputedStyle. Deferred
 until the style-system integration phase; not required for consistency.
 
 ## 3. The Property Vocabulary (D094)
@@ -87,7 +87,7 @@ Every single-child container lays out identically:
 | `Padding` | `Container::new().padding(insets).child(x)` |
 | `Center` | `Container::new().align(Alignment::Center).child(x)` |
 | `Expanded::empty()` | `Spacer::flex()` (or plain `Spacer`) |
-| `tezzera-layout` widget structs (element-based `Column`, `Row`, `Stack`, `SizedBox`, `Spacer`, `Flex`, `Expanded`) | tree widgets are canonical; the layout crate keeps ONLY the math (`layout_column/row`, `Constraints`, alignments). `Grid`, `Wrap`, `AspectRatio` math is ported to tree widgets when first needed. |
+| `rosace-layout` widget structs (element-based `Column`, `Row`, `Stack`, `SizedBox`, `Spacer`, `Flex`, `Expanded`) | tree widgets are canonical; the layout crate keeps ONLY the math (`layout_column/row`, `Constraints`, alignments). `Grid`, `Wrap`, `AspectRatio` math is ported to tree widgets when first needed. |
 | `ListView` (if it is just a Column) | audit in Phase 21; keep only if it virtualizes |
 
 **Survivors and their jobs (no overlap):**
@@ -126,7 +126,7 @@ named constructor or a theme preset, not a widget.**
 
 - **`ScreenNav<R>` is the canonical routing API.** Enum of screens +
   `push/pop/replace/current/can_pop`.
-- `tezzera-nav`'s `Navigator`/`Route`/`history` and `tezzera-nav-anim`'s
+- `rosace-nav`'s `Navigator`/`Route`/`history` and `rosace-nav-anim`'s
   `Navigator` are internal machinery or future transition layers — not
   exported from the prelude. One way to navigate.
 - `AppBar::back_button(&nav)` — the `can_pop → leading("← Back")` boilerplate

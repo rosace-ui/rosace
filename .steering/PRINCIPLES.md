@@ -1,4 +1,4 @@
-# TEZZERA — PRINCIPLES
+# ROSACE — PRINCIPLES
 > These are non-negotiable. They never change.
 > If a decision conflicts with a principle, the decision is wrong.
 
@@ -28,7 +28,7 @@ Performance is measured, not assumed.
 ---
 
 ## P3 — TRACING IS ARCHITECTURE
-Every system emits TezzeraTrace events.
+Every system emits RosaceTrace events.
 No system merges without its trace emissions.
 Zero cost in production — #[cfg(debug_assertions)] everywhere.
 
@@ -39,7 +39,7 @@ Zero cost in production — #[cfg(debug_assertions)] everywhere.
 ---
 
 ## P4 — ONE WAY TO DO THINGS
-For every problem, TEZZERA has one right way.
+For every problem, ROSACE has one right way.
 No debates, no multiple patterns for the same thing.
 The right way is documented in DECISIONS.md.
 
@@ -65,8 +65,8 @@ A crate never reaches into another crate's internals.
 Dependencies only go downward in the stack.
 
 **Violation example:**
-- tezzera-nav depending on tezzera-render internals → WRONG
-- tezzera-core importing from tezzera-widgets → WRONG
+- rosace-nav depending on rosace-render internals → WRONG
+- rosace-core importing from rosace-widgets → WRONG
 
 ---
 
