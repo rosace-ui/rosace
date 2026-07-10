@@ -15,6 +15,8 @@
 //! queue into the compositor eagerly at startup / next frame boundary,
 //! never lazily on first paint (the Impeller lesson, see PHASE_27.md).
 
+pub mod builtin;
+
 use std::sync::Mutex;
 
 /// Stable identity of a registered shader pipeline.

@@ -356,6 +356,32 @@ Steps:
       drops on softbuffer/web/overlay paths, `PaintCtx::shader_fill`.
 - [ ] Step 3 — built-in shapes on GPU (incl. `FillCircle`), pixel parity
       + animation CPU measurement
+      - [x] 3a (landed 2026-07-10): `rosace-shader::builtin` — 5 SDF
+            pipelines covering all 8 shape variants (fill-rrect serves
+            rect/rrect/circle; stroke-rrect serves both strokes; gradient;
+            arc with round caps; Gaussian-approx shadow), one shared
+            80-byte uniform layout, shape→(quad, uniforms) conversion fns
+            that are scale-agnostic (uniforms carry the quad's recorded
+            size; the shader derives px_scale, so logical-px recordings
+            stay HiDPI-correct). Parity verified in a real running A/B app
+            (`builtin_shapes_ab`, CPU column vs GPU column): rect/circle/
+            stroke/arc visually identical; gradient BYTE-IDENTICAL at
+            top/mid/bottom samples after switching the shader to
+            tiny-skia's sRGB-space stop interpolation (linear-space mixing
+            measured +16/255 red at midpoint — real find); shadow falloff
+            profiles match within ~3/255 with σ = blur/2. sRGB→linear
+            color conversion round-trip unit-tested against the known
+            gamma-bug color (#2B2D30).
+      - [ ] 3b: `play_picture` GPU-shapes mode — divert the 8 shape
+            variants through the C1 segment executor (CPU runs → placed
+            bbox sub-buffers, GPU runs → builtin quads, ordered
+            `FrameItem`s); platform enables it per-canvas (base only;
+            scroll/overlay canvases stay CPU until C2); engine disables
+            damage-culling on GPU-mode frames (full re-record is the
+            model). Existing widget tests must pass unchanged.
+      - [ ] 3c: C2 scroll-layer render-to-texture; C4 frame-skip
+            re-verification; representative-screen pixel compare;
+            sustained-animation CPU before/after measurement.
 - [ ] Step 4 — GPU glyph atlas on `FontCache`, text-heavy scroll
       measurement
 - [ ] Step 5 — `ShaderPaint` widget + real novel-effect demo
