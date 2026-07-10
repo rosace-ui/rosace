@@ -47,6 +47,11 @@ pub mod web_app {
         let mut tez_canvas = SkiaCanvas::new(width, height);
         paint_fn(&mut tez_canvas, &[]);
 
+        // Web has no GPU path yet (Phase 27's explicit out-of-scope): drain
+        // ShaderFill quads so they can't accumulate across frames. They do
+        // not render here.
+        let _ = tez_canvas.take_shader_quads();
+
         let pixels = tez_canvas.pixels();
         // `pixels()` returns pre-multiplied BGRA from tiny-skia; we need RGBA.
         // Swap R and B channels in-place before handing to the browser.

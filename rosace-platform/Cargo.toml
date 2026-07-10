@@ -11,6 +11,7 @@ rosace-animate    = { path = "../rosace-animate" }
 rosace-compositor = { path = "../rosace-compositor" }
 rosace-core       = { path = "../rosace-core" }
 rosace-render     = { path = "../rosace-render" }
+rosace-shader     = { path = "../rosace-shader" }
 rosace-state      = { path = "../rosace-state" }
 rosace-trace      = { path = "../rosace-trace" }
 log                = "0.4"

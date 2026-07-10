@@ -15,6 +15,7 @@ rosace-state  = { path = "../rosace-state" }
 rosace-layout = { path = "../rosace-layout" }
 rosace-nav    = { path = "../rosace-nav" }
 rosace-render = { path = "../rosace-render" }
+rosace-shader = { path = "../rosace-shader" }
 rosace-scroll = { path = "../rosace-scroll" }
 rosace-animate = { path = "../rosace-animate" }
 rosace-text   = { path = "../rosace-text" }

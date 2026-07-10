@@ -59,6 +59,27 @@ pub struct SkiaCanvas {
     /// Blurred shadow masks keyed by (width, height, blur, corner radius) in
     /// physical pixels. Blurred once per unique geometry, replayed as a blit.
     shadow_cache: HashMap<(u32, u32, u32, u32), ShadowMask>,
+    /// GPU shader quads collected during `play_picture` (D109/Phase 27).
+    /// `DrawCommand::ShaderFill` has no CPU rasterization path by design —
+    /// each occurrence is recorded here (physical px, with the WIDGET clip
+    /// active at that point in the picture, never the damage clip: a GPU
+    /// quad redraws in full every present, so scoping it to this frame's
+    /// damage region would wrongly crop it) and drained by the platform via
+    /// [`take_shader_quads`] for the compositor to execute.
+    pending_shader_quads: Vec<ShaderQuadCmd>,
+}
+
+/// One collected `DrawCommand::ShaderFill`, in PHYSICAL pixels, ready for
+/// the compositor. `clip` is the widget clip stack's intersection at record
+/// time (physical px, x/y/w/h), independent of any damage clip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShaderQuadCmd {
+    pub pipeline_id: u64,
+    /// (x, y, w, h) in physical pixels.
+    pub rect: (f32, f32, f32, f32),
+    pub uniforms: Vec<u8>,
+    /// (x, y, w, h) in physical pixels; `None` = unclipped.
+    pub clip: Option<(f32, f32, f32, f32)>,
 }
 
 /// A pre-blurred shadow coverage mask (single channel).
@@ -287,7 +308,16 @@ impl SkiaCanvas {
             clip: None,
             clip_masks: HashMap::new(),
             shadow_cache: HashMap::new(),
+            pending_shader_quads: Vec::new(),
         }
+    }
+
+    /// Drain the GPU shader quads collected by [`play_picture`] since the
+    /// last call (D109). The platform calls this once per painted frame and
+    /// retains the result across skipped (clean) frames, mirroring how
+    /// scroll layers persist through frame-skip.
+    pub fn take_shader_quads(&mut self) -> Vec<ShaderQuadCmd> {
+        std::mem::take(&mut self.pending_shader_quads)
     }
 
     /// Physical pixel width of the underlying framebuffer.
@@ -755,6 +785,14 @@ impl SkiaCanvas {
         // Save and restore the outer clip (normally None at the top level).
         let outer_clip = self.clip;
 
+        // Widget clip tracked SEPARATELY from `self.clip` (D109): `self.clip`
+        // includes the damage clip on partial-repaint frames, which must
+        // bound CPU pixel writes but must NOT crop GPU shader quads — a quad
+        // redraws in full at every present. This stack holds only the
+        // picture's own PushClip rects, in physical px (x, y, w, h).
+        let mut widget_clip: Option<(f32, f32, f32, f32)> = None;
+        let mut widget_clip_stack: Vec<Option<(f32, f32, f32, f32)>> = Vec::new();
+
         for cmd in &picture.commands {
             match cmd {
                 DrawCommand::PushClip { rect } => {
@@ -775,11 +813,30 @@ impl SkiaCanvas {
                     };
                     clip_stack.push(self.clip);
                     self.clip = new_clip;
+
+                    widget_clip_stack.push(widget_clip);
+                    widget_clip = match widget_clip {
+                        Some((wx, wy, ww, wh)) => {
+                            let ix0 = r.origin.x.max(wx);
+                            let iy0 = r.origin.y.max(wy);
+                            let ix1 = (r.origin.x + r.size.width).min(wx + ww);
+                            let iy1 = (r.origin.y + r.size.height).min(wy + wh);
+                            if ix1 > ix0 && iy1 > iy0 {
+                                Some((ix0, iy0, ix1 - ix0, iy1 - iy0))
+                            } else {
+                                // Empty intersection — degenerate zero-area
+                                // clip so quads inside it draw nothing.
+                                Some((ix0, iy0, 0.0, 0.0))
+                            }
+                        }
+                        None => Some((r.origin.x, r.origin.y, r.size.width, r.size.height)),
+                    };
                 }
 
                 DrawCommand::PopClip => {
                     // pop() returns Option<Option<...>>; unwrap_or restores None on underflow.
                     self.clip = clip_stack.pop().unwrap_or(None);
+                    widget_clip = widget_clip_stack.pop().unwrap_or(None);
                 }
 
                 DrawCommand::FillRect { rect, color } => self.fill_rect(sr(*rect), *color),
@@ -799,6 +856,18 @@ impl SkiaCanvas {
                 }
                 DrawCommand::BlitRgba { pixels, src_width, src_height, dest_rect, opacity } => {
                     self.blit_rgba(pixels, *src_width, *src_height, sr(*dest_rect), *opacity);
+                }
+                DrawCommand::ShaderFill { pipeline_id, rect, uniforms } => {
+                    // No CPU rasterization by design — collect for the GPU
+                    // compositor. Always collected, even on a damage-clipped
+                    // replay: quads re-render in full every present.
+                    let r = sr(*rect);
+                    self.pending_shader_quads.push(ShaderQuadCmd {
+                        pipeline_id: *pipeline_id,
+                        rect: (r.origin.x, r.origin.y, r.size.width, r.size.height),
+                        uniforms: uniforms.clone(),
+                        clip: widget_clip,
+                    });
                 }
             }
         }

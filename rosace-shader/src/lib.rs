@@ -15,10 +15,6 @@
 //! queue into the compositor eagerly at startup / next frame boundary,
 //! never lazily on first paint (the Impeller lesson, see PHASE_27.md).
 
-// Lets the derive macro refer to this crate as `::rosace_shader` even from
-// this crate's own tests (the same trick serde uses).
-extern crate self as rosace_shader;
-
 use std::sync::Mutex;
 
 /// Stable identity of a registered shader pipeline.

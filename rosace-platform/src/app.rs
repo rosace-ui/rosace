@@ -116,6 +116,8 @@ impl PlatformWindow {
             mouse_down: false,
             last_frame_time: None,
             scroll_layers: Vec::new(),
+            shader_quads: Vec::new(),
+            shader_fallback_warned: false,
         };
         // Native blocks on the OS event loop; web cannot block, so it hands the
         // app to the browser's requestAnimationFrame loop and returns.
@@ -157,6 +159,31 @@ struct AppState<F> {
     // Retained scroll layers (D090) — refreshed when the frame loop publishes,
     // reused across clean frames so they persist without a re-upload.
     scroll_layers: Vec<crate::scroll_layer::ScrollLayer>,
+    // Retained GPU shader quads (D109) — refreshed on painted frames (the
+    // canvas re-collects them on every `play_picture`), reused across clean
+    // frames so quads persist through frame-skip like scroll layers do.
+    shader_quads: Vec<rosace_render::ShaderQuadCmd>,
+    // Warn-once flag: shader registrations/quads on the softbuffer fallback
+    // path (no GPU) are dropped — loud the first time, silent after.
+    shader_fallback_warned: bool,
+}
+
+/// Drain queued `rosace-shader` registrations into the presenter's registry
+/// (D109) — eager compilation at the frame boundary, converting the typed
+/// `ShaderSpec` to the compositor's primitives-only API (its Layer-0
+/// zero-rosace-deps contract means it cannot see `rosace-shader` types).
+fn drain_shader_registrations(presenter: &mut rosace_compositor::GpuPresenter) {
+    for (id, spec) in rosace_shader::take_pending_shaders() {
+        let blend = match spec.blend {
+            rosace_shader::BlendMode::Alpha    => rosace_compositor::ShaderBlend::Alpha,
+            rosace_shader::BlendMode::Opaque   => rosace_compositor::ShaderBlend::Opaque,
+            rosace_shader::BlendMode::Additive => rosace_compositor::ShaderBlend::Additive,
+        };
+        // Failure is already logged loudly by register_shader; nothing to
+        // add here — the pipeline simply isn't registered and any quad
+        // referencing it warns once at present time.
+        let _ = presenter.register_shader(id.raw(), &spec.wgsl_source, blend);
+    }
 }
 
 impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandler<FrameRequest> for AppState<F> {
@@ -235,6 +262,18 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         if presenter.is_some() {
             log::info!("rosace-platform: using GPU compositor (wgpu)");
         } else {
+            // No GPU: nothing will ever compile shader pipelines for this
+            // window. Registrations queued before startup are dropped now,
+            // loudly, instead of accumulating forever.
+            let dropped = rosace_shader::take_pending_shaders();
+            if !dropped.is_empty() {
+                log::warn!(
+                    "rosace-platform: GPU unavailable — {} shader pipeline registration(s) \
+                     dropped; DrawCommand::ShaderFill content will not render on the \
+                     softbuffer fallback path",
+                    dropped.len(),
+                );
+            }
             log::info!("rosace-platform: GPU compositor unavailable, using softbuffer");
             let context = softbuffer::Context::new(window.clone()).unwrap();
             let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
@@ -242,6 +281,12 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             self.surface = Some(surface);
         }
         self.presenter = presenter;
+        // Eager pipeline compilation (D109, the Impeller lesson): shaders
+        // registered before `App::run` compile right here at startup, before
+        // any frame could reference them — never lazily on first paint.
+        if let Some(p) = self.presenter.as_mut() {
+            drain_shader_registrations(p);
+        }
         self.window = Some(window);
     }
 
@@ -331,6 +376,12 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 // Present the frame — GPU multi-layer compositor (D076, D079),
                 // with softbuffer fallback that CPU-composites overlay on top.
                 if let Some(presenter) = &mut self.presenter {
+                    // Runtime shader registrations (D109) — anything queued
+                    // since startup compiles NOW, before this frame's present
+                    // could reference it. Startup registrations already
+                    // compiled in `resumed`.
+                    drain_shader_registrations(presenter);
+
                     // Per-frame dirtiness drives the compositor's texture cache
                     // (D089): a clean base layer reuses its persistent GPU
                     // texture, and a frame where nothing changed skips the
@@ -338,6 +389,28 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     // so the flag resets; the base only repaints (and re-marks)
                     // when the frame loop actually redraws it.
                     let base_dirty = self.canvas.take_frame_dirty();
+
+                    // Refresh the retained shader quads only on painted frames
+                    // (`play_picture` re-collects the full set each paint —
+                    // including painting to an empty set when shader content
+                    // disappeared). Clean frames keep the retained quads, same
+                    // pattern as scroll layers below (D109).
+                    if base_dirty {
+                        self.shader_quads = self.canvas.take_shader_quads();
+                    }
+                    // Overlay shader content is not supported yet (the overlay
+                    // is replayed every frame; quads there would need their own
+                    // altitude in the item order) — drain so they can't
+                    // accumulate, loud once if anything shows up.
+                    let overlay_quads = self.overlay_canvas.take_shader_quads();
+                    if !overlay_quads.is_empty() && !self.shader_fallback_warned {
+                        self.shader_fallback_warned = true;
+                        log::warn!(
+                            "rosace-platform: {} ShaderFill command(s) recorded in the \
+                             OVERLAY pass are not supported yet and were dropped",
+                            overlay_quads.len(),
+                        );
+                    }
 
                     // Refresh the retained scroll layers only when the frame
                     // loop published (it repainted). `None` = clean frame →
@@ -348,28 +421,44 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                         self.scroll_layers = layers;
                     }
 
-                    // Composite bottom-to-top: base, scroll layers (each placed
-                    // at its viewport), then the overlay on top (D090). Scroll
-                    // layers re-upload only on a publish frame (scroll_dirty);
+                    // Composite bottom-to-top: base, shader quads (base-content
+                    // altitude, D109 Step 2 — full per-command interleaving is
+                    // Phase 27 C1), scroll layers (each placed at its
+                    // viewport), then the overlay on top (D090). Scroll layers
+                    // re-upload only on a publish frame (scroll_dirty);
                     // otherwise D089 reuses their persistent textures.
-                    let mut layers = vec![
-                        rosace_compositor::CompositorLayer::tracked(
-                            self.canvas.pixels(), phys_w, phys_h, base_dirty,
+                    let mut items = vec![
+                        rosace_compositor::FrameItem::Pixels(
+                            rosace_compositor::CompositorLayer::tracked(
+                                self.canvas.pixels(), phys_w, phys_h, base_dirty,
+                            ),
                         ),
                     ];
+                    for q in &self.shader_quads {
+                        items.push(rosace_compositor::FrameItem::Shader(
+                            rosace_compositor::ShaderQuad {
+                                pipeline: q.pipeline_id,
+                                rect:     q.rect,
+                                uniforms: &q.uniforms,
+                                clip:     q.clip,
+                            },
+                        ));
+                    }
                     for sl in &self.scroll_layers {
                         // Live scroll offset from the non-reactive channel
                         // (physical px). A wheel tick updates this without a
                         // repaint, so a scroll-only frame is a uniform write
                         // over the reused content texture (D090).
                         let off = rosace_state::scroll_offset(sl.id);
-                        layers.push(rosace_compositor::CompositorLayer::placed(
-                            &sl.pixels, sl.width, sl.height,
-                            rosace_compositor::LayerRect {
-                                x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
-                            },
-                            (off[0] * scale, off[1] * scale),
-                            scroll_dirty,
+                        items.push(rosace_compositor::FrameItem::Pixels(
+                            rosace_compositor::CompositorLayer::placed(
+                                &sl.pixels, sl.width, sl.height,
+                                rosace_compositor::LayerRect {
+                                    x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
+                                },
+                                (off[0] * scale, off[1] * scale),
+                                scroll_dirty,
+                            ),
                         ));
                     }
                     // Skip the overlay layer entirely when nothing drew into it
@@ -377,12 +466,27 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     // overlay is cleared and replayed every frame, so its pixels
                     // may differ even when the base is clean.
                     if self.overlay_canvas.has_drawn() {
-                        layers.push(rosace_compositor::CompositorLayer::tracked(
-                            self.overlay_canvas.pixels(), phys_w, phys_h, true,
+                        items.push(rosace_compositor::FrameItem::Pixels(
+                            rosace_compositor::CompositorLayer::tracked(
+                                self.overlay_canvas.pixels(), phys_w, phys_h, true,
+                            ),
                         ));
                     }
-                    presenter.present_layers(&layers);
+                    presenter.present_frame(&items);
                 } else if let Some(surface) = &mut self.surface {
+                    // Softbuffer fallback: no GPU, so ShaderFill content can't
+                    // render. Drain quads so they don't accumulate; warn once.
+                    let dropped = self.canvas.take_shader_quads();
+                    let dropped_overlay = self.overlay_canvas.take_shader_quads();
+                    if (!dropped.is_empty() || !dropped_overlay.is_empty())
+                        && !self.shader_fallback_warned
+                    {
+                        self.shader_fallback_warned = true;
+                        log::warn!(
+                            "rosace-platform: DrawCommand::ShaderFill content dropped — \
+                             GPU compositor unavailable (softbuffer fallback)",
+                        );
+                    }
                     let base_pixels = self.canvas.pixels();
                     let mut buffer = surface.buffer_mut().unwrap();
 

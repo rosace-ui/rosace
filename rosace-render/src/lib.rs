@@ -10,7 +10,7 @@ pub mod font;
 pub mod image;
 pub mod picture;
 
-pub use canvas::{Color, SkiaCanvas};
+pub use canvas::{Color, ShaderQuadCmd, SkiaCanvas};
 pub use draw_command::DrawCommand;
 pub use font::{FontCache, FontWeight};
 pub use image::{CachePolicy, ImageFit, ImageHandle};
@@ -82,6 +82,78 @@ mod tests {
         assert_eq!(px[0], 255, "R channel");
         assert!((100..156).contains(&px[1]), "G channel should be roughly halved, got {}", px[1]);
         assert!((100..156).contains(&px[2]), "B channel should be roughly halved, got {}", px[2]);
+    }
+
+    // ── ShaderFill collection (D109/Phase 27 Step 2) ─────────────────────
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect { origin: Point { x, y }, size: Size { width: w, height: h } }
+    }
+
+    #[test]
+    fn shader_fill_is_collected_scaled_to_physical_px_not_rasterized() {
+        use crate::draw_command::DrawCommand;
+        use crate::font::FontCache;
+        use crate::picture::PictureRecorder;
+
+        // HiDPI canvas: logical coords must scale ×2 into the quad.
+        let mut canvas = SkiaCanvas::new_hidpi(200, 200, 2.0);
+        canvas.clear(Color::WHITE);
+        let before = canvas.pixels().to_vec();
+
+        let mut rec = PictureRecorder::new();
+        rec.push(DrawCommand::ShaderFill {
+            pipeline_id: 0x200,
+            rect: rect(10.0, 20.0, 30.0, 40.0),
+            uniforms: vec![1, 2, 3, 4],
+        });
+        canvas.play_picture(&rec.finish(), &FontCache::embedded());
+
+        let quads = canvas.take_shader_quads();
+        assert_eq!(quads.len(), 1);
+        assert_eq!(quads[0].pipeline_id, 0x200);
+        assert_eq!(quads[0].rect, (20.0, 40.0, 60.0, 80.0), "must be physical px (×2)");
+        assert_eq!(quads[0].uniforms, vec![1, 2, 3, 4]);
+        assert_eq!(quads[0].clip, None);
+        // No CPU pixel was touched — ShaderFill has no raster path.
+        assert_eq!(canvas.pixels(), &before[..], "ShaderFill must not rasterize");
+        assert!(canvas.take_shader_quads().is_empty(), "take must drain");
+    }
+
+    #[test]
+    fn shader_fill_captures_widget_clip_but_not_damage_clip() {
+        use crate::draw_command::DrawCommand;
+        use crate::font::FontCache;
+        use crate::picture::PictureRecorder;
+
+        let mut canvas = SkiaCanvas::new(100, 100);
+        // Damage clip active (partial repaint) — must NOT leak into quads.
+        canvas.set_logical_clip(Some(rect(0.0, 0.0, 5.0, 5.0)));
+
+        let mut rec = PictureRecorder::new();
+        rec.push(DrawCommand::PushClip { rect: rect(10.0, 10.0, 50.0, 50.0) });
+        rec.push(DrawCommand::PushClip { rect: rect(30.0, 30.0, 50.0, 50.0) });
+        rec.push(DrawCommand::ShaderFill {
+            pipeline_id: 0x300,
+            rect: rect(0.0, 0.0, 100.0, 100.0),
+            uniforms: vec![],
+        });
+        rec.push(DrawCommand::PopClip);
+        rec.push(DrawCommand::PopClip);
+        rec.push(DrawCommand::ShaderFill {
+            pipeline_id: 0x301,
+            rect: rect(0.0, 0.0, 10.0, 10.0),
+            uniforms: vec![],
+        });
+        canvas.play_picture(&rec.finish(), &FontCache::embedded());
+        canvas.set_logical_clip(None);
+
+        let quads = canvas.take_shader_quads();
+        assert_eq!(quads.len(), 2);
+        // Nested clips intersect: (10..60) ∩ (30..80) = (30, 30, 30, 30).
+        assert_eq!(quads[0].clip, Some((30.0, 30.0, 30.0, 30.0)));
+        // Outside all PushClips: no widget clip, damage clip ignored.
+        assert_eq!(quads[1].clip, None);
     }
 
     #[test]

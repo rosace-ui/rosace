@@ -183,8 +183,14 @@ pub fn expand(input: DeriveInput) -> TokenStream {
         writes.push(quote! { buf.extend_from_slice(&[0u8; #tail_pad]); });
     }
 
+    // Unqualified trait path ON PURPOSE: the trait must be in scope at the
+    // derive site (`use rosace::shader::ShaderUniforms;` for apps,
+    // `use rosace_shader::ShaderUniforms;` inside the framework). A
+    // hard-coded `::rosace_shader::` path would break for app code, which
+    // depends only on the `rosace` umbrella crate — and callers need the
+    // trait imported anyway to call `.to_bytes()`.
     quote! {
-        impl ::rosace_shader::ShaderUniforms for #name {
+        impl ShaderUniforms for #name {
             fn to_bytes(&self) -> ::std::vec::Vec<u8> {
                 let mut buf = ::std::vec::Vec::with_capacity(#total);
                 #(#writes)*

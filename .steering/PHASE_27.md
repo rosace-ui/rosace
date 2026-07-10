@@ -118,6 +118,37 @@ never lazily on first paint. No step in this phase ships a
   CPU/GPU) MUST be preserved and re-verified, since it's a landed,
   documented win (`RENDER_ENGINE.md`).
 
+## C1 Resolution — segment interleaving design (written during Step 2, as required)
+
+Step 3's executor partitions each Picture's command stream **in order** into
+segments:
+
+- A run of GPU-able commands (the 8 built-in shape variants) becomes
+  consecutive `FrameItem::Shader` quads (built-in pipelines).
+- A run of CPU commands (`DrawText`/`BlitRgba` until Steps 4/later land)
+  rasterizes into its own transparent sub-buffer sized to the run's
+  bounding box — reusing today's tiny-skia code paths untouched — and is
+  presented as a `FrameItem::Pixels` with `dest` = that bbox. The D090
+  placed-layer mechanism already supports exactly this; no new compositor
+  feature is needed.
+- The `FrameItem` list IS the z-order: `present_frame` (landed in Step 2)
+  draws items strictly in slice order, so a GPU shape between two CPU
+  segments composites exactly where the command stream put it — the Stack
+  case (text under a card under more text) is correct by construction,
+  because every CPU segment owns its own texture.
+- Cost bound: segment count = number of CPU↔GPU transitions in the stream,
+  not full-screen buffers; contiguous text runs coalesce. The compositor's
+  existing per-slot caches (D089) mean an unchanged text segment re-uploads
+  nothing on frames where only a shape animated. Step 4 (glyph atlas) then
+  removes most CPU segments entirely, collapsing frames to pure quads.
+- C2 sketch (detail at Step 3): scroll-layer content gets the same
+  treatment at publish time, rendered into an offscreen texture
+  (render-to-texture) and sampled with the live offset per frame.
+- C3 DECIDED during Step 2: GPU-shapes mode is a runtime switch the
+  platform enables only when a `GpuPresenter` exists — softbuffer and web
+  automatically keep the full tiny-skia path. (Today, ShaderFill-only
+  content is dropped with a loud one-time warning on those paths.)
+
 ## Out of Scope (deliberately, not silently dropped)
 
 - **Web/wasm GPU rendering.** Confirmed: web presents CPU pixels via
@@ -290,11 +321,14 @@ Scoping-review fixes (2026-07-10 code review of this doc — all applied):
 Design constraints (each must have a written resolution before the step
 it blocks):
 
-- [ ] C1 — command-granularity CPU/GPU z-order interleaving design
-      (write during Step 2, before Step 3)
+- [x] C1 — command-granularity CPU/GPU z-order interleaving design
+      (written 2026-07-10, see "C1 Resolution" section above; the ordered
+      `FrameItem` executor it needs landed with Step 2)
 - [ ] C2 — D090 scroll-layer content under GPU shapes (before Step 3
       exit)
-- [ ] C3 — softbuffer fallback decision (before Step 3)
+- [x] C3 — softbuffer fallback decision (2026-07-10: GPU-shapes mode is a
+      runtime switch enabled only when a `GpuPresenter` exists; softbuffer
+      + web keep the full tiny-skia path — see C1 Resolution)
 - [ ] C4 — damage-rect/frame-skip preservation re-verified on the GPU
       path (before Step 3 exit)
 
@@ -307,8 +341,19 @@ Steps:
       time; `ShaderRegister` trace variant added. Layering note:
       `DrawCommand::ShaderFill` will carry the raw `u64` — render is
       Layer 4, cannot import Layer 5's `PipelineId`.)
-- [ ] Step 2 — registry + `DrawCommand::ShaderFill` + eager compilation
-      (+ C1 design written)
+- [x] Step 2 — registry + `DrawCommand::ShaderFill` + eager compilation
+      (+ C1 design written) — landed 2026-07-10, exit bar met for real: a
+      running app registered a two-color split shader (uniforms via the
+      derive) and rendered it through a raw `ShaderFill` recorded in
+      `CustomPaint`; window pixel-scanned: left half green, right half
+      blue (0,0,245), at the recorded rect. Landed pieces: compositor
+      `register_shader` (primitives-only, eager, error-scoped),
+      `present_frame(&[FrameItem])` ordered executor with per-slot quad
+      caches + skip-present extended to quads (C4-compatible: animated
+      shaders must take time as a uniform), `SkiaCanvas` quad collection
+      with widget-clip (not damage-clip) capture, platform drain at
+      startup + per frame, retained quads across skipped frames, warn-once
+      drops on softbuffer/web/overlay paths, `PaintCtx::shader_fill`.
 - [ ] Step 3 — built-in shapes on GPU (incl. `FillCircle`), pixel parity
       + animation CPU measurement
 - [ ] Step 4 — GPU glyph atlas on `FontCache`, text-heavy scroll

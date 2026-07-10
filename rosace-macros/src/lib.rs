@@ -226,7 +226,7 @@ mod tests {
             struct Foo { a: f32, b: [f32; 4] }
         }))
         .to_string();
-        assert!(out.contains("impl :: rosace_shader :: ShaderUniforms for Foo"), "{out}");
+        assert!(out.contains("impl ShaderUniforms for Foo"), "{out}");
         assert!(out.contains("to_bytes"), "{out}");
         // a@0..4 then 12 bytes of padding before the vec4 at 16.
         assert!(out.contains("[0u8 ; 12usize]"), "expected 12-byte pad: {out}");

@@ -63,6 +63,44 @@ pub struct LayerRect {
     pub h: f32,
 }
 
+/// How a registered shader pipeline blends over the frame (D109).
+///
+/// Compositor-owned mirror of `rosace-shader`'s `BlendMode` — this crate is
+/// Layer 0 with a zero-rosace-deps contract, so `rosace-platform` converts
+/// at the boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShaderBlend {
+    /// Premultiplied source-over (the default).
+    Alpha,
+    /// Replace destination — no blending.
+    Opaque,
+    /// Source added to destination.
+    Additive,
+}
+
+/// One GPU shader draw in a presented frame (D109): fill `rect` by running
+/// the registered pipeline `pipeline`. All coordinates in physical pixels.
+#[derive(Clone, Copy)]
+pub struct ShaderQuad<'a> {
+    /// Raw pipeline id (a `rosace-shader` `PipelineId::raw()` upstream).
+    pub pipeline: u64,
+    /// Fill rect: (x, y, w, h).
+    pub rect: (f32, f32, f32, f32),
+    /// WGSL-uniform-layout bytes for `@group(0) @binding(1)`. Empty is
+    /// allowed (a zeroed 16-byte buffer is bound).
+    pub uniforms: &'a [u8],
+    /// Optional scissor: (x, y, w, h). `None` = unclipped.
+    pub clip: Option<(f32, f32, f32, f32)>,
+}
+
+/// One item of a presented frame, drawn strictly in slice order —
+/// bottom-to-top z. Pixel layers keep their D089 persistent-texture cache;
+/// shader quads execute their registered pipeline directly on the surface.
+pub enum FrameItem<'a> {
+    Pixels(CompositorLayer<'a>),
+    Shader(ShaderQuad<'a>),
+}
+
 impl<'a> CompositorLayer<'a> {
     /// Convenience: full-surface opaque layer, always re-uploaded.
     pub fn opaque(pixels: &'a [u8], width: u32, height: u32) -> Self {
@@ -125,6 +163,55 @@ struct CachedLayer {
     uniform:     [f32; 8],
 }
 
+/// A registered shader pipeline (D109) — compiled eagerly at
+/// `register_shader` time, never lazily on first paint (the Impeller
+/// lesson, PHASE_27.md).
+struct ShaderPipelineEntry {
+    pipeline: wgpu::RenderPipeline,
+}
+
+/// Persistent GPU resources for one shader quad slot, reused across frames
+/// (same D089 discipline as pixel layers): buffers rewritten only when the
+/// quad's rect/uniforms change, bind group rebuilt only on uniform-size
+/// change.
+struct CachedShaderQuad {
+    pipeline:    u64,
+    rect:        (f32, f32, f32, f32),
+    uniforms:    Vec<u8>,
+    clip:        Option<(f32, f32, f32, f32)>,
+    quad_buf:    wgpu::Buffer,
+    user_buf:    wgpu::Buffer,
+    user_len:    usize,
+    bind_group:  wgpu::BindGroup,
+}
+
+/// Compute the quad placement uniform (dest NDC + size in px) for a shader
+/// quad. Pure function — unit-testable without a GPU.
+fn shader_quad_uniform(rect: (f32, f32, f32, f32), surface_w: u32, surface_h: u32) -> [f32; 8] {
+    let (sw, sh) = (surface_w.max(1) as f32, surface_h.max(1) as f32);
+    let (x, y, w, h) = rect;
+    [
+        2.0 * x / sw - 1.0,           // dest_min.x (left, NDC)
+        1.0 - 2.0 * (y + h) / sh,     // dest_min.y (bottom, NDC)
+        2.0 * (x + w) / sw - 1.0,     // dest_max.x (right, NDC)
+        1.0 - 2.0 * y / sh,           // dest_max.y (top, NDC)
+        w, h,                          // size_px
+        0.0, 0.0,                      // pad
+    ]
+}
+
+/// Clamp a physical-px clip rect to the surface and convert to a wgpu
+/// scissor `(x, y, w, h)`. `None` when the intersection is empty (the quad
+/// draws nothing). Pure function — unit-testable without a GPU.
+fn scissor_for(clip: (f32, f32, f32, f32), surface_w: u32, surface_h: u32) -> Option<(u32, u32, u32, u32)> {
+    let (x, y, w, h) = clip;
+    let x0 = x.max(0.0).floor() as u32;
+    let y0 = y.max(0.0).floor() as u32;
+    let x1 = ((x + w).min(surface_w as f32).ceil() as u32).min(surface_w);
+    let y1 = ((y + h).min(surface_h as f32).ceil() as u32).min(surface_h);
+    if x1 > x0 && y1 > y0 { Some((x0, y0, x1 - x0, y1 - y0)) } else { None }
+}
+
 /// GPU compositor state. One instance per window.
 ///
 /// Created via [`GpuPresenter::new`]. Returns `None` if wgpu fails to find a
@@ -144,6 +231,19 @@ pub struct GpuPresenter {
     height:                u32,
     /// Persistent per-slot textures reused across frames (D089).
     cached_layers:         Vec<CachedLayer>,
+    /// Registered shader pipelines keyed by raw pipeline id (D109) —
+    /// compiled once at registration, stable resources per D091 discipline.
+    shader_pipelines:      std::collections::HashMap<u64, ShaderPipelineEntry>,
+    /// Bind group layout shared by every shader pipeline: binding 0 = quad
+    /// placement uniform (vertex+fragment), binding 1 = user uniforms
+    /// (fragment).
+    shader_bgl:            wgpu::BindGroupLayout,
+    shader_pipeline_layout: wgpu::PipelineLayout,
+    /// Persistent per-slot quad resources (D089 discipline for quads).
+    cached_quads:          Vec<CachedShaderQuad>,
+    /// Pipeline ids already warned about as unregistered — warn once, not
+    /// per frame.
+    missing_pipeline_warned: std::collections::HashSet<u64>,
 }
 
 impl GpuPresenter {
@@ -327,6 +427,40 @@ impl GpuPresenter {
             ..Default::default()
         });
 
+        // Shared layout for registered shader pipelines (D109): quad
+        // placement uniform + user uniform bytes. `min_binding_size: None`
+        // because user uniform structs vary per pipeline.
+        let shader_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label:   Some("shader-quad-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding:    0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                 wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:   None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                 wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:   None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let shader_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:                Some("shader-quad-pl"),
+            bind_group_layouts:   &[&shader_bgl],
+            push_constant_ranges: &[],
+        });
+
         Some(Self {
             surface,
             device,
@@ -339,7 +473,99 @@ impl GpuPresenter {
             width,
             height,
             cached_layers: Vec::new(),
+            shader_pipelines: std::collections::HashMap::new(),
+            shader_bgl,
+            shader_pipeline_layout,
+            cached_quads: Vec::new(),
+            missing_pipeline_warned: std::collections::HashSet::new(),
         })
+    }
+
+    /// Register (or replace) a shader pipeline (D109). Compiles EAGERLY —
+    /// right here, never lazily on first paint (the Impeller lesson,
+    /// PHASE_27.md). `wgsl_fragment` is the fragment-stage source; the
+    /// framework prepends the quad vertex stage and placement uniform (see
+    /// `shader_quad_header.wgsl` for the authoring contract).
+    ///
+    /// Returns `false` (and registers nothing) when the WGSL fails
+    /// validation — the error is logged with the pipeline id. Failing loudly
+    /// at registration is the whole point of eager compilation.
+    ///
+    /// Takes primitives only (`u64`/`&str`/[`ShaderBlend`]) — this crate is
+    /// Layer 0 and cannot import `rosace-shader`'s typed `ShaderSpec`;
+    /// `rosace-platform` converts.
+    pub fn register_shader(&mut self, pipeline: u64, wgsl_fragment: &str, blend: ShaderBlend) -> bool {
+        let source = format!(
+            "{}\n{}",
+            include_str!("shader_quad_header.wgsl"),
+            wgsl_fragment,
+        );
+
+        // Scope validation errors so a bad shader is a logged failure, not
+        // a process-level panic from wgpu's uncaptured-error handler.
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label:  Some("registered-shader"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+
+        let blend_state = match blend {
+            ShaderBlend::Alpha    => Some(wgpu::BlendState::ALPHA_BLENDING),
+            ShaderBlend::Opaque   => Some(wgpu::BlendState::REPLACE),
+            ShaderBlend::Additive => Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation:  wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation:  wgpu::BlendOperation::Add,
+                },
+            }),
+        };
+
+        let compiled = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label:  Some("registered-shader-pipeline"),
+            layout: Some(&self.shader_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module:              &module,
+                entry_point:         Some("vs_main"),
+                buffers:             &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module:      &module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format:     self.config.format,
+                    blend:      blend_state,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive:     wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample:   wgpu::MultisampleState::default(),
+            multiview:     None,
+            cache:         None,
+        });
+
+        if let Some(err) = pollster::block_on(self.device.pop_error_scope()) {
+            log::error!("shader pipeline {pipeline} failed to compile: {err}");
+            return false;
+        }
+
+        // Replacement invalidates any cached quad bound to the old pipeline
+        // object — drop quad caches so the next present rebuilds them.
+        if self.shader_pipelines.insert(pipeline, ShaderPipelineEntry { pipeline: compiled }).is_some() {
+            self.cached_quads.clear();
+        }
+        self.missing_pipeline_warned.remove(&pipeline);
+        log::info!("shader pipeline {pipeline} registered ({} bytes of WGSL)", wgsl_fragment.len());
+        true
     }
 
     /// Resize the wgpu surface.
@@ -357,41 +583,85 @@ impl GpuPresenter {
         self.present_layers(&[CompositorLayer::opaque(pixels, pixel_width, pixel_height)]);
     }
 
-    /// Composite and present one or more layers (D076, D077, D079).
+    /// Composite and present one or more pixel layers (D076, D077, D079).
     ///
-    /// Layers are blended bottom-to-top:
-    /// - Layer 0: REPLACE blend (base, fully overwrites surface)
-    /// - Layer 1+: ALPHA_BLENDING (Porter-Duff over on top of previous)
-    ///
-    /// Each layer's `opacity` scales its alpha channel before blending.
-    /// Pass an empty slice to skip presentation for this frame.
+    /// Backward-compatible wrapper over [`Self::present_frame`] for callers
+    /// with no shader quads.
     pub fn present_layers(&mut self, layers: &[CompositorLayer<'_>]) {
-        if layers.is_empty() { return; }
+        let items: Vec<FrameItem<'_>> = layers
+            .iter()
+            .map(|l| FrameItem::Pixels(CompositorLayer {
+                pixels:     l.pixels,
+                width:      l.width,
+                height:     l.height,
+                dest:       l.dest,
+                src_offset: l.src_offset,
+                dirty:      l.dirty,
+            }))
+            .collect();
+        self.present_frame(&items);
+    }
+
+    /// Composite and present a frame of ordered items (D076-D079, D089,
+    /// D109): pixel layers and shader quads, drawn strictly in slice order,
+    /// bottom-to-top.
+    ///
+    /// - Pixel layers keep the D089 persistent-texture cache: clean layers
+    ///   upload nothing; the first item clears/overwrites the surface.
+    /// - Shader quads run their registered pipeline directly on the surface
+    ///   (uniform buffers persisted per slot, rewritten only on change).
+    /// - When EVERY item is unchanged from the previous frame, the present
+    ///   is skipped entirely — no upload, no encoder, no surface acquire
+    ///   (frame-skip preservation, Phase 27 constraint C4). A time-animated
+    ///   shader must therefore take its clock as a uniform: uniforms are
+    ///   what dirtiness is measured by.
+    ///
+    /// Pass an empty slice to skip presentation for this frame.
+    pub fn present_frame(&mut self, items: &[FrameItem<'_>]) {
+        if items.is_empty() { return; }
+        let (sw, sh) = (self.width, self.height);
+
+        let pixel_layers: Vec<&CompositorLayer<'_>> = items.iter()
+            .filter_map(|i| match i { FrameItem::Pixels(l) => Some(l), _ => None })
+            .collect();
+        let quads: Vec<&ShaderQuad<'_>> = items.iter()
+            .filter_map(|i| match i { FrameItem::Shader(q) => Some(q), _ => None })
+            .collect();
+        if pixel_layers.is_empty() && quads.is_empty() { return; }
 
         // ── Skip-present fast path (D089) ──────────────────────────────────
-        // If the layer set is structurally identical to last frame — same
-        // count, same dimensions, no dirty pixels, no moved offsets — then the
-        // composited image is byte-for-byte what the swapchain already shows.
-        // Do nothing: no upload, no encoder, no surface acquire. This is the
-        // common case for hover/idle frames the frame-skip already made
-        // raster-free upstream.
-        let (sw, sh) = (self.width, self.height);
-        let unchanged = self.cached_layers.len() == layers.len()
-            && layers.iter().enumerate().all(|(i, l)| {
+        // If the frame is structurally identical to the last one — same
+        // items, no dirty pixels, no moved offsets, identical quad uniforms —
+        // the composited image is byte-for-byte what the swapchain already
+        // shows. Do nothing.
+        let layers_unchanged = self.cached_layers.len() == pixel_layers.len()
+            && pixel_layers.iter().enumerate().all(|(i, l)| {
                 let c = &self.cached_layers[i];
                 !l.dirty
                     && c.width == l.width
                     && c.height == l.height
                     && c.uniform == l.uniform(sw, sh)
             });
-        if unchanged {
-            log::debug!("compositor: skip present ({} layers unchanged)", layers.len());
+        let quads_unchanged = self.cached_quads.len() == quads.len()
+            && quads.iter().enumerate().all(|(i, q)| {
+                let c = &self.cached_quads[i];
+                c.pipeline == q.pipeline
+                    && c.rect == q.rect
+                    && c.uniforms == q.uniforms
+                    && c.clip == q.clip
+            });
+        if layers_unchanged && quads_unchanged {
+            log::debug!(
+                "compositor: skip present ({} layers + {} quads unchanged)",
+                pixel_layers.len(), quads.len(),
+            );
             return;
         }
         log::debug!(
-            "compositor: present {} layers ({} dirty)",
-            layers.len(),
-            layers.iter().filter(|l| l.dirty).count(),
+            "compositor: present {} layers ({} dirty) + {} shader quads",
+            pixel_layers.len(),
+            pixel_layers.iter().filter(|l| l.dirty).count(),
+            quads.len(),
         );
 
         // ── Sync the persistent texture cache to this frame's layers ───────
@@ -399,8 +669,8 @@ impl GpuPresenter {
         // `write_texture` (no realloc); clean slots are left untouched. Offset
         // changes are a cheap uniform-buffer write — clean pixels, moved layer
         // (e.g. scroll) uploads nothing.
-        self.cached_layers.truncate(layers.len());
-        for (idx, layer) in layers.iter().enumerate() {
+        self.cached_layers.truncate(pixel_layers.len());
+        for (idx, layer) in pixel_layers.iter().enumerate() {
             if layer.width == 0 || layer.height == 0 { continue; }
 
             let dims_match = self.cached_layers.get(idx)
@@ -445,7 +715,10 @@ impl GpuPresenter {
             }
         }
 
-        // ── Composite the cached layers onto the surface ───────────────────
+        // ── Sync the persistent quad resources (same D089 discipline) ──────
+        self.sync_cached_quads(&quads, sw, sh);
+
+        // ── Composite the items onto the surface, in order ─────────────────
         let Ok(output) = self.surface.get_current_texture() else { return; };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -453,42 +726,173 @@ impl GpuPresenter {
             label: Some("compositor-enc"),
         });
 
-        for (idx, layer) in layers.iter().enumerate() {
-            if layer.width == 0 || layer.height == 0 { continue; }
-            let Some(cached) = self.cached_layers.get(idx) else { continue; };
+        // The first executed pass clears the surface; every later pass loads
+        // the already-rendered content.
+        let mut cleared = false;
+        let mut pixel_idx = 0usize;
+        let mut quad_idx = 0usize;
 
-            let pipeline = if idx == 0 {
-                &self.pipeline_base
-            } else {
-                &self.pipeline_overlay
-            };
+        for item in items {
+            match item {
+                FrameItem::Pixels(layer) => {
+                    let idx = pixel_idx;
+                    pixel_idx += 1;
+                    if layer.width == 0 || layer.height == 0 { continue; }
+                    let Some(cached) = self.cached_layers.get(idx) else { continue; };
 
-            // load: Clear only on the first pass; subsequent passes load the
-            // already-rendered content so previous layers are preserved.
-            let load = if idx == 0 {
-                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
-            } else {
-                wgpu::LoadOp::Load
-            };
+                    // REPLACE-blend base pipeline only for the very first
+                    // pass of the frame (full overwrite); everything later
+                    // alpha-blends over it.
+                    let pipeline = if !cleared { &self.pipeline_base } else { &self.pipeline_overlay };
+                    let load = if !cleared {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    };
+                    cleared = true;
 
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("compositor-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view:           &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes:         None,
-                occlusion_query_set:      None,
-            });
-            rpass.set_pipeline(pipeline);
-            rpass.set_bind_group(0, &cached.bind_group, &[]);
-            rpass.draw(0..6, 0..1);
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("compositor-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    rpass.set_pipeline(pipeline);
+                    rpass.set_bind_group(0, &cached.bind_group, &[]);
+                    rpass.draw(0..6, 0..1);
+                }
+                FrameItem::Shader(quad) => {
+                    let idx = quad_idx;
+                    quad_idx += 1;
+                    if quad.rect.2 <= 0.0 || quad.rect.3 <= 0.0 { continue; }
+
+                    let Some(entry) = self.shader_pipelines.get(&quad.pipeline) else {
+                        // Unregistered id: loud once, silent after — a
+                        // per-frame error would flood at 120fps.
+                        if self.missing_pipeline_warned.insert(quad.pipeline) {
+                            log::error!(
+                                "shader quad references unregistered pipeline {} — \
+                                 was register_shader called before the first frame?",
+                                quad.pipeline,
+                            );
+                        }
+                        continue;
+                    };
+                    let Some(cached) = self.cached_quads.get(idx) else { continue; };
+
+                    // Widget clip → hardware scissor. Empty intersection ⇒
+                    // nothing to draw.
+                    let scissor = match quad.clip {
+                        Some(c) => match scissor_for(c, sw, sh) {
+                            Some(s) => Some(s),
+                            None => continue,
+                        },
+                        None => None,
+                    };
+
+                    let load = if !cleared {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    };
+                    cleared = true;
+
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("shader-quad-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    if let Some((x, y, w, h)) = scissor {
+                        rpass.set_scissor_rect(x, y, w, h);
+                    }
+                    rpass.set_pipeline(&entry.pipeline);
+                    rpass.set_bind_group(0, &cached.bind_group, &[]);
+                    rpass.draw(0..6, 0..1);
+                }
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+    }
+
+    /// Sync `cached_quads` to this frame's quads: reuse buffers when the
+    /// uniform size matches (rewriting only changed bytes), rebuild the slot
+    /// otherwise. Mirrors the pixel-layer texture cache's D089 discipline.
+    fn sync_cached_quads(&mut self, quads: &[&ShaderQuad<'_>], sw: u32, sh: u32) {
+        /// Uniform bindings cannot be zero-sized — a shader with no uniforms
+        /// binds 16 zero bytes.
+        const EMPTY_UNIFORMS: [u8; 16] = [0u8; 16];
+
+        self.cached_quads.truncate(quads.len());
+        for (idx, quad) in quads.iter().enumerate() {
+            let user_bytes: &[u8] =
+                if quad.uniforms.is_empty() { &EMPTY_UNIFORMS } else { quad.uniforms };
+            let quad_uniform = shader_quad_uniform(quad.rect, sw, sh);
+
+            let reusable = self.cached_quads.get(idx)
+                .map(|c| c.user_len == user_bytes.len())
+                .unwrap_or(false);
+
+            if reusable {
+                let cached = &mut self.cached_quads[idx];
+                if cached.rect != quad.rect {
+                    self.queue.write_buffer(&cached.quad_buf, 0, bytemuck_f32x8(&quad_uniform));
+                }
+                if cached.uniforms != quad.uniforms {
+                    self.queue.write_buffer(&cached.user_buf, 0, user_bytes);
+                }
+                cached.pipeline = quad.pipeline;
+                cached.rect     = quad.rect;
+                cached.uniforms = quad.uniforms.to_vec();
+                cached.clip     = quad.clip;
+            } else {
+                let quad_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label:    Some("shader-quad-uniform"),
+                    contents: bytemuck_f32x8(&quad_uniform),
+                    usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+                let user_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label:    Some("shader-user-uniform"),
+                    contents: user_bytes,
+                    usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label:   Some("shader-quad-bg"),
+                    layout:  &self.shader_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: quad_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: user_buf.as_entire_binding() },
+                    ],
+                });
+                let cached = CachedShaderQuad {
+                    pipeline:   quad.pipeline,
+                    rect:       quad.rect,
+                    uniforms:   quad.uniforms.to_vec(),
+                    clip:       quad.clip,
+                    quad_buf,
+                    user_buf,
+                    user_len:   user_bytes.len(),
+                    bind_group,
+                };
+                if idx < self.cached_quads.len() {
+                    self.cached_quads[idx] = cached;
+                } else {
+                    self.cached_quads.push(cached);
+                }
+            }
+        }
     }
 
     /// Create a persistent texture + bind group for a fresh layer slot and
@@ -570,4 +974,38 @@ impl GpuPresenter {
 
     /// Physical size of the configured surface.
     pub fn surface_size(&self) -> (u32, u32) { (self.width, self.height) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shader_quad_uniform_maps_full_surface_to_full_ndc() {
+        let u = shader_quad_uniform((0.0, 0.0, 800.0, 600.0), 800, 600);
+        assert_eq!(&u[0..4], &[-1.0, -1.0, 1.0, 1.0], "full-surface rect must span the whole clip space");
+        assert_eq!(&u[4..6], &[800.0, 600.0], "size_px must be the rect size");
+    }
+
+    #[test]
+    fn shader_quad_uniform_maps_a_centered_rect_symmetrically() {
+        // A 400x300 rect centered on an 800x600 surface: NDC ±0.5.
+        let u = shader_quad_uniform((200.0, 150.0, 400.0, 300.0), 800, 600);
+        assert!((u[0] + 0.5).abs() < 1e-6, "left: {}", u[0]);
+        assert!((u[1] + 0.5).abs() < 1e-6, "bottom: {}", u[1]);
+        assert!((u[2] - 0.5).abs() < 1e-6, "right: {}", u[2]);
+        assert!((u[3] - 0.5).abs() < 1e-6, "top: {}", u[3]);
+    }
+
+    #[test]
+    fn scissor_clamps_to_surface_and_rejects_empty() {
+        // Clip hanging off the top-left is clamped.
+        assert_eq!(scissor_for((-10.0, -10.0, 50.0, 50.0), 100, 100), Some((0, 0, 40, 40)));
+        // Clip hanging off the bottom-right is clamped.
+        assert_eq!(scissor_for((80.0, 90.0, 50.0, 50.0), 100, 100), Some((80, 90, 20, 10)));
+        // Fully outside → None (draw nothing).
+        assert_eq!(scissor_for((200.0, 200.0, 50.0, 50.0), 100, 100), None);
+        // Zero-area (the canvas's degenerate empty-intersection clip) → None.
+        assert_eq!(scissor_for((30.0, 30.0, 0.0, 0.0), 100, 100), None);
+    }
 }

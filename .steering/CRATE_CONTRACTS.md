@@ -325,13 +325,23 @@ Contain runtime logic — everything here is macro expansion only.
 
 ### rosace-compositor  (Layer 0)
 **Job**: GPU compositor — uploads CPU RGBA pixel buffers (from `SkiaCanvas`)
-as wgpu textures and blits them onto the window surface via a fullscreen-quad
-shader, with per-layer dirty-tracking to skip redundant uploads/presents.
+as wgpu textures and composites them onto the window surface, with per-layer
+dirty-tracking to skip redundant uploads/presents. Since Phase 27 Step 2
+(D109) it is also the shader-pipeline registry/executor: `register_shader`
+compiles WGSL fragment sources EAGERLY (error-scoped, loud failure) into
+`wgpu::RenderPipeline`s keyed by raw `u64` id, and `present_frame` draws an
+ordered `FrameItem` list (pixel layers + shader quads, strict slice-order
+z), with per-slot quad uniform-buffer caches and the skip-present fast path
+extended to quads.
 **Exports**: `GpuPresenter` (`new`/`resize`/`present`/`present_layers`/
-`surface_size`), `CompositorLayer` (+ `opaque`/`tracked`/`placed`
-constructors), `LayerRect`.
+`present_frame`/`register_shader`/`surface_size`), `CompositorLayer`
+(+ `opaque`/`tracked`/`placed` constructors), `LayerRect`, `FrameItem`,
+`ShaderQuad`, `ShaderBlend`.
 **Must NOT**: Depend on any `rosace-*` crate (verified: it doesn't — only
-external `wgpu`/`pollster`/`log`). Know about widgets, layout, or components.
+external `wgpu`/`pollster`/`log`; `register_shader` deliberately takes
+primitives (`u64`/`&str`/own `ShaderBlend`) so `rosace-shader`'s typed
+`ShaderSpec` never crosses into this crate — `rosace-platform` converts).
+Know about widgets, layout, or components.
 **Note**: a model example of correct layering — sophisticated and
 framework-specific, yet zero internal deps. `rosace-platform` is its only
 consumer.

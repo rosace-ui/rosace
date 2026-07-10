@@ -41,6 +41,15 @@ pub enum DrawCommand {
     PushClip   { rect: Rect },
     /// Restore the clip rect that was active before the matching [`DrawCommand::PushClip`].
     PopClip,
+    /// Fill `rect` with a registered GPU shader pipeline (D109/Phase 27).
+    ///
+    /// `pipeline_id` is the raw value of a `rosace-shader` `PipelineId`
+    /// (this Layer-4 crate cannot import the Layer-5 typed id). `uniforms`
+    /// are WGSL-uniform-layout bytes produced by `#[derive(ShaderUniforms)]`
+    /// — opaque here. This command has NO CPU rasterization path by design:
+    /// `SkiaCanvas::play_picture` collects it (see `take_shader_quads`) for
+    /// the compositor to execute on the GPU at present time.
+    ShaderFill { pipeline_id: u64, rect: Rect, uniforms: Vec<u8> },
 }
 
 impl DrawCommand {
@@ -66,6 +75,8 @@ impl DrawCommand {
                 Self::BlitRgba { pixels, src_width, src_height, dest_rect: shift(dest_rect, dx, dy), opacity },
             Self::PushClip   { rect }                  => Self::PushClip   { rect: shift(rect, dx, dy) },
             Self::PopClip                              => Self::PopClip,
+            Self::ShaderFill { pipeline_id, rect, uniforms } =>
+                Self::ShaderFill { pipeline_id, rect: shift(rect, dx, dy), uniforms },
         }
     }
 
@@ -103,6 +114,12 @@ impl DrawCommand {
                 Self::BlitRgba { pixels, src_width, src_height, dest_rect: rc(dest_rect, src_origin, dst_origin, sx, sy), opacity },
             Self::PushClip   { rect }                  => Self::PushClip   { rect: rc(rect, src_origin, dst_origin, sx, sy) },
             Self::PopClip                              => Self::PopClip,
+            // Uniform bytes are pipeline-private and cannot be remapped
+            // generically — only the fill rect morphs. A shader whose
+            // uniforms encode absolute positions won't track a Hero morph;
+            // that's the shader author's contract, documented on ShaderFill.
+            Self::ShaderFill { pipeline_id, rect, uniforms } =>
+                Self::ShaderFill { pipeline_id, rect: rc(rect, src_origin, dst_origin, sx, sy), uniforms },
         }
     }
 }

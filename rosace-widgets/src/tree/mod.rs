@@ -573,6 +573,23 @@ impl<'a> PaintCtx<'a> {
         self.recorder.push(DrawCommand::FillCircle { center, radius, color });
     }
 
+    /// Fill `rect` with a registered GPU shader pipeline (D109/Phase 27).
+    ///
+    /// `uniforms` come from a `#[derive(ShaderUniforms)]` struct's
+    /// `to_bytes()`. The pipeline must have been registered via
+    /// `rosace_shader::register_shader` (compiled eagerly at the next frame
+    /// boundary). Executes on the GPU at present time — this records a
+    /// command, like every other helper here, and never touches pixels.
+    /// Renders on GPU-composited targets only (desktop/mobile); web and the
+    /// softbuffer fallback drop it (Phase 27's documented scope).
+    pub fn shader_fill(&mut self, rect: Rect, pipeline: rosace_shader::PipelineId, uniforms: Vec<u8>) {
+        self.recorder.push(DrawCommand::ShaderFill {
+            pipeline_id: pipeline.raw(),
+            rect,
+            uniforms,
+        });
+    }
+
     /// Draw text at an absolute position (not relative to `self.rect`).
     pub fn draw_text_at(&mut self, text: &str, origin: Point, color: Color, px: f32) {
         self.recorder.push(DrawCommand::DrawText {
