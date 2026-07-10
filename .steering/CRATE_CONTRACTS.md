@@ -242,6 +242,42 @@ silently baked into the contracts below, per the project's violation policy
     blind fix here would be exactly the unverified workaround this phase
     has repeatedly had to walk back.
 
+11. **`ListView` rows have no stable identity across scroll frames** —
+    found 2026-07-10 while root-causing why `Image`'s (now-reverted, see
+    D111) default load-in fade looked broken specifically inside a
+    scrolled list. `RenderTree::slot()` (`render_tree.rs:167`) allocates a
+    child node **positionally** — the *n*-th `child()` call under a parent
+    this frame gets child-slot *n* — with no awareness of which data index
+    that call represents. `ListView::paint` (`list_view.rs`) calls
+    `ctx.child(row_rect)` once per visible row in ascending index order
+    each frame; as the visible window scrolls, a fixed slot gets
+    reassigned to a *different* row's data across frames, while any D091
+    per-node retained state on that slot (its `RenderNode`) carries over
+    to whatever row now occupies it. D111 only removed the one animation
+    that exposed this (image fade-in); the underlying bug is unfixed and
+    would affect ANY future per-row retained state (hover, focus, a future
+    per-row animation, scroll-linked per-row effects) the same way. Real
+    fix needs `ListView` children keyed by data index (e.g. a stable
+    `HashMap<usize, NodeId>` per list, or extending `RenderTree` itself
+    with a keyed-slot allocator) rather than call-order position — a real,
+    separate change to core render-tree allocation, scoped as its own
+    future decision/phase, not bundled into D111's narrower correction.
+
+12. **`rosace-shaping` is not in the real text render path** — found
+    2026-07-10 while reviewing Phase 27's scoping, which had assumed the
+    opposite. `DrawText` renders through `rosace-render`'s own
+    `FontCache` (`font.rs`: fontdue rasterization, per-glyph CPU cache,
+    kerning, weight/fallback routing) — `rosace-shaping`'s
+    `ShapingEngine`/`FallbackShaper` has ZERO call sites anywhere in the
+    workspace outside the umbrella crate's `pub use` re-export
+    (`rosace/src/lib.rs`). Same built-but-never-wired pattern as
+    `rosace-forms` (D112), `RichText`/`TextSpan` (D115), and
+    `ScrollView`/`Navigator`/`ImageCache` before them. Phase 27 Step 4's
+    glyph atlas builds on `FontCache` (the real path); whether
+    `rosace-shaping` gets wired in (as the future HarfBuzz seam D014
+    intended) or folded into `rosace-render` is its own undecided
+    question — its contract entry below describes intent, not reality.
+
 **Fixed 2026-07-09, unrelated to #9/#10 above**: `rosace-animate::Spring::
 update` used a single semi-implicit-Euler step per call, unconditionally
 stable only below a step-size threshold — a real wall-clock `dt` near

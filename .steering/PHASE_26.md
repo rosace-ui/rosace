@@ -498,6 +498,14 @@ parallel-test flake — Known Issue #8 — reconfirmed unrelated in isolation;
 this step never touched `rosace-state`).
 
 ### Step 4 — Image load-in fade
+> **REVERTED 2026-07-10 — see D111.** `ListView`'s render-tree nodes are
+> allocated positionally (`RenderTree::slot()`), not keyed by data index,
+> so this animation's state got reassigned across different images as a
+> list scrolled — a real visible glitch, not a preference call. `Image`
+> now always renders at `opacity: 1.0` immediately; no default fade. Kept
+> below for history; do not re-land this without first fixing the
+> `ListView` identity bug (Known Issue #11, `CRATE_CONTRACTS.md`).
+
 `Image`/`ImageWidgetImpl` swaps placeholder→loaded instantly. Adds an
 `animate_to`-driven opacity ramp (0→1) starting the frame an image's
 pixel data becomes available.

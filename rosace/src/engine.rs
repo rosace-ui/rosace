@@ -1009,50 +1009,32 @@ mod tests {
         (engine, SkiaCanvas::new(100, 100), SkiaCanvas::new(100, 100))
     }
 
-    fn image_node_opacity(engine: &FrameEngine) -> Option<f32> {
-        engine.render_tree.borrow().nodes_iter().find_map(|n| n.anim)
-    }
-
+    // D111 corrects D108/Phase 26 Step 4's default image load-in fade: an
+    // `animate_to`-driven per-node fade was bound to a `ListView` row's
+    // positional slot, not the image's own identity (slots are reassigned
+    // to different data as the visible window scrolls — see D111), so a
+    // scrolled list showed the wrong image mid-fade or no fade at all.
+    // `Image` now always renders at full opacity immediately; these tests
+    // confirm that's true both with and without the global animation
+    // toggle, i.e. this widget has no animation-dependent behavior at all.
     #[test]
-    fn real_decoded_image_fades_in_from_zero_instead_of_popping_in_at_full_opacity() {
+    fn real_decoded_image_always_renders_at_full_opacity_immediately() {
         let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        rosace_animate::set_frame_dt(0.05);
         let (mut engine, mut canvas, mut overlay) = headless_image_engine();
-
-        // First paint: the image decodes successfully for the first time
-        // this frame. `seed_anim_if_unset(0.0)` runs immediately before
-        // `animate_to(1.0, ...)` in the SAME call, so by the time this
-        // frame's value is observable it has already eased one step past
-        // the literal 0 start (0 -> ~0.27 at this dt) — NOT the 1.0 it
-        // would be without the seed (`animate_to`'s own documented "first
-        // observation snaps straight to target" behavior). The real
-        // assertion is "clearly less than fully opaque," not "exactly 0."
         engine.paint(&mut canvas, &mut overlay, &[]);
-        let first = image_node_opacity(&engine).unwrap();
         assert!(
-            first > 0.0 && first < 0.9,
-            "the very first frame with real content must be mid-fade, not popped in at full opacity: got {first}"
+            engine.render_tree.borrow().nodes_iter().all(|n| n.anim.is_none()),
+            "Image must not drive any per-node animated scalar — no default fade"
         );
-
-        // Subsequent frames: opacity eases upward, same self-sustaining
-        // `request_animation` loop every other animated widget in this
-        // phase uses.
-        for _ in 0..30 {
-            engine.paint(&mut canvas, &mut overlay, &[]);
-        }
-        let settled = image_node_opacity(&engine).unwrap();
-        assert!(settled > first, "opacity must have kept easing upward: {first} -> {settled}");
-        assert!((settled - 1.0).abs() < 0.01, "must settle at full opacity (1.0), got {settled}");
     }
 
     #[test]
-    fn image_fade_is_instant_when_animations_are_disabled() {
+    fn real_decoded_image_full_opacity_is_unaffected_by_the_animation_toggle() {
         let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         rosace_theme::provider::set_animations(false);
         let (mut engine, mut canvas, mut overlay) = headless_image_engine();
         engine.paint(&mut canvas, &mut overlay, &[]);
-        let opacity = image_node_opacity(&engine);
-        assert_eq!(opacity, Some(1.0), "disabled animations must show the image at full opacity on the very first frame, got {opacity:?}");
+        assert!(engine.render_tree.borrow().nodes_iter().all(|n| n.anim.is_none()));
         rosace_theme::provider::set_animations(true); // don't leak into other tests
     }
 
