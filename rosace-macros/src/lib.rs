@@ -1,6 +1,7 @@
 extern crate proc_macro;
 
 mod component;
+mod shader_uniforms;
 mod state;
 mod view;
 
@@ -70,6 +71,32 @@ pub fn state(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn view(input: TokenStream) -> TokenStream {
     view::expand(input.into()).into()
+}
+
+/// Generates a WGSL-uniform-layout-correct `to_bytes()` for a shader
+/// uniform struct (D109/Phase 27) — alignment padding and field-order
+/// packing computed at compile time, never hand-rolled at paint time.
+///
+/// Supported field types: `f32`, `u32`, `i32`, `[f32; 2]` (vec2),
+/// `[f32; 3]` (vec3), `[f32; 4]` (vec4), `[[f32; 4]; 4]` (mat4x4).
+/// Anything else is a compile error naming the offending field.
+///
+/// # Example
+/// ```rust,ignore
+/// #[derive(ShaderUniforms)]
+/// struct RippleUniforms {
+///     center: [f32; 2],
+///     radius: f32,
+///     color: [f32; 4],
+/// }
+/// // .to_bytes() → center@0..8, radius@8..12, pad@12..16, color@16..32
+/// ```
+#[proc_macro_derive(ShaderUniforms)]
+pub fn shader_uniforms(item: TokenStream) -> TokenStream {
+    match syn::parse::<syn::DeriveInput>(item) {
+        Ok(input) => shader_uniforms::expand(input).into(),
+        Err(err) => err.to_compile_error().into(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +212,49 @@ mod tests {
         let out = crate::state::expand(attr, item).to_string();
         assert!(out.contains("Atom"), "{out}");
         assert!(out.contains("false"), "{out}");
+    }
+
+    // -- #[derive(ShaderUniforms)] --------------------------------------------
+
+    fn parse_derive(ts: TokenStream) -> syn::DeriveInput {
+        syn::parse2(ts).expect("test input must parse as a derive input")
+    }
+
+    #[test]
+    fn shader_uniforms_generates_impl_with_padding() {
+        let out = crate::shader_uniforms::expand(parse_derive(quote! {
+            struct Foo { a: f32, b: [f32; 4] }
+        }))
+        .to_string();
+        assert!(out.contains("impl :: rosace_shader :: ShaderUniforms for Foo"), "{out}");
+        assert!(out.contains("to_bytes"), "{out}");
+        // a@0..4 then 12 bytes of padding before the vec4 at 16.
+        assert!(out.contains("[0u8 ; 12usize]"), "expected 12-byte pad: {out}");
+    }
+
+    #[test]
+    fn shader_uniforms_rejects_unsupported_field_type() {
+        let out = crate::shader_uniforms::expand(parse_derive(quote! {
+            struct Bad { name: String }
+        }))
+        .to_string();
+        assert!(out.contains("compile_error"), "expected compile_error: {out}");
+        assert!(out.contains("name"), "error must name the field: {out}");
+    }
+
+    #[test]
+    fn shader_uniforms_rejects_empty_and_tuple_structs() {
+        let empty = crate::shader_uniforms::expand(parse_derive(quote! {
+            struct Empty {}
+        }))
+        .to_string();
+        assert!(empty.contains("compile_error"), "{empty}");
+
+        let tuple = crate::shader_uniforms::expand(parse_derive(quote! {
+            struct Tup(f32);
+        }))
+        .to_string();
+        assert!(tuple.contains("compile_error"), "{tuple}");
     }
 
     // -- view! ---------------------------------------------------------------

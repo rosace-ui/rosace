@@ -1,0 +1,15 @@
+[package]
+name = "rosace-shader"
+description = "Shader pipeline types + registration queue for ROSACE's GPU-native rendering (D109) — zero wgpu dependency; wgpu types stay inside rosace-compositor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rosace-core  = { path = "../rosace-core" }
+rosace-trace = { path = "../rosace-trace" }
+
+[dev-dependencies]
+rosace-macros = { path = "../rosace-macros" }

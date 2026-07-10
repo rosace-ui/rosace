@@ -1898,6 +1898,7 @@ dependencies = [
  "rosace-platform",
  "rosace-render",
  "rosace-scroll",
+ "rosace-shader",
  "rosace-shaping",
  "rosace-state",
  "rosace-style",
@@ -2142,6 +2143,15 @@ dependencies = [
  "rosace-layout",
  "rosace-render",
  "rosace-state",
+ "rosace-trace",
+]
+
+[[package]]
+name = "rosace-shader"
+version = "0.1.0"
+dependencies = [
+ "rosace-core",
+ "rosace-macros",
  "rosace-trace",
 ]
 

@@ -25,6 +25,7 @@ members = [
     "rosace-gesture",
     "rosace-net",
     "rosace-text",
+    "rosace-shader",
     "rosace-shaping",
     "rosace-bidi",
     "rosace-i18n",

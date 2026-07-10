@@ -190,6 +190,9 @@ impl ConsoleSubscriber {
             RosaceTrace::GestureReceived { kind, handler } => {
                 format!("[GESTURE] {:?}  handler:{}", kind, handler.0)
             }
+            RosaceTrace::ShaderRegister { pipeline, wgsl_len } => {
+                format!("[SHADER]  register pipeline:{}  wgsl:{}b", pipeline, wgsl_len)
+            }
         }
     }
 }

@@ -48,6 +48,7 @@ rosace-forms    = { path = "../rosace-forms" }
 rosace-gesture  = { path = "../rosace-gesture" }
 rosace-a11y     = { path = "../rosace-a11y" }
 rosace-text     = { path = "../rosace-text" }
+rosace-shader   = { path = "../rosace-shader" }
 rosace-shaping  = { path = "../rosace-shaping" }
 rosace-style    = { path = "../rosace-style" }
 rosace-i18n     = { path = "../rosace-i18n" }

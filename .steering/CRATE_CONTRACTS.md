@@ -669,6 +669,28 @@ selection, basic direction detection.
 
 ---
 
+### rosace-shader  (Layer 5 — service; NEW in Phase 27 Step 1, D109)
+**Job**: Typed face of the GPU pipeline registry — `PipelineId` (newtype,
+reserved built-in range 0..0x100, `user()` asserts against collisions),
+`ShaderSpec` (WGSL source + `BlendMode`), the `ShaderUniforms` trait
+(bytes produced by `#[derive(ShaderUniforms)]` in `rosace-macros`, WGSL
+uniform-address-space layout computed at macro time), and the
+registration queue (`register_shader` → `take_pending_shaders`, drained
+by `rosace-platform` into the compositor for eager compilation).
+**Exports**: `PipelineId`, `ShaderSpec`, `BlendMode`, `ShaderUniforms`,
+`register_shader`, `take_pending_shaders`.
+**Depends on**: `core`, `trace`. **Zero wgpu dependency** — wgpu types
+stay inside `rosace-compositor`, whose primitives-only registration API
+(`u64`/`&str`/own blend enum) keeps its Layer-0 zero-rosace-deps
+contract intact; `rosace-platform` converts at the boundary.
+**Must NOT**: Depend on wgpu or any Layer ≥ 4 crate; compile anything
+(compilation is the compositor's job, at drain time, eagerly).
+**Note**: `DrawCommand::ShaderFill` carries the raw `u64`
+(`PipelineId::raw()`), not `PipelineId` itself — `rosace-render` is
+Layer 4 and cannot import this Layer 5 crate.
+
+---
+
 ### rosace-shaping  (Layer 5 — service)
 **Job**: Text shaping abstraction — `ShapingEngine` trait with a
 `FallbackShaper` (fontdue-backed, one-glyph-per-char). A real HarfBuzz

@@ -203,4 +203,11 @@ pub enum RosaceTrace {
         kind: GestureKind,
         handler: ComponentId,
     },
+    /// A shader pipeline was registered (D109). Emitted at `register_shader`
+    /// time — before compilation, which happens when the platform drains the
+    /// queue into the compositor (eager, never lazy-on-first-paint).
+    ShaderRegister {
+        pipeline: u64,
+        wgsl_len: usize,
+    },
 }

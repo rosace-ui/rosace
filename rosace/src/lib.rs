@@ -535,6 +535,7 @@ pub mod forms     { pub use rosace_forms::*; }
 pub mod gesture   { pub use rosace_gesture::*; }
 pub mod a11y      { pub use rosace_a11y::*; }
 pub mod text      { pub use rosace_text::*; }
+pub mod shader    { pub use rosace_shader::*; }
 pub mod shaping   { pub use rosace_shaping::*; }
 pub mod style     { pub use rosace_style::*; }
 pub mod i18n      { pub use rosace_i18n::*; }

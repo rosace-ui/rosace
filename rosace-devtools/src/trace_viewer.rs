@@ -156,6 +156,9 @@ fn format_event(ev: &RosaceTrace) -> String {
         RosaceTrace::GestureReceived { kind, handler } => {
             format!("GestureReceived  kind={:?} handler={}", kind, handler.0)
         }
+        RosaceTrace::ShaderRegister { pipeline, wgsl_len } => {
+            format!("ShaderRegister  pipeline={} wgsl_len={}", pipeline, wgsl_len)
+        }
     }
 }
 

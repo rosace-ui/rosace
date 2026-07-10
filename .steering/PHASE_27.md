@@ -300,7 +300,13 @@ it blocks):
 
 Steps:
 
-- [ ] Step 1 — `rosace-shader` crate + `#[derive(ShaderUniforms)]`
+- [x] Step 1 — `rosace-shader` crate + `#[derive(ShaderUniforms)]`
+      (landed 2026-07-10: 7 layout/queue unit tests asserting exact WGSL
+      uniform byte layouts incl. the vec3-tail and vec2-padding edge
+      cases; derive rejects unsupported/tuple/empty structs at compile
+      time; `ShaderRegister` trace variant added. Layering note:
+      `DrawCommand::ShaderFill` will carry the raw `u64` — render is
+      Layer 4, cannot import Layer 5's `PipelineId`.)
 - [ ] Step 2 — registry + `DrawCommand::ShaderFill` + eager compilation
       (+ C1 design written)
 - [ ] Step 3 — built-in shapes on GPU (incl. `FillCircle`), pixel parity
