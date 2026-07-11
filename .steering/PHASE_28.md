@@ -107,27 +107,168 @@ glyph layout already uses — scoped as a real follow-up, not bundled in
 here. Mouse-drag text selection is also not implemented (the exit bar
 only requires Shift+arrow selection, which is real and tested).
 
-### Step 2 — `TextArea` (multi-line)
-New widget, same editing primitives as Step 1 plus line-wrapping (reuse `rosace_text::word_wrap`, the one real consumer already wired into `Text`) and vertical cursor movement (up/down crossing wrapped lines).
+> **Steps 2+ REWRITTEN 2026-07-12 per D116** (the text-editing
+> architecture decision — read it first; it holds the "why" for every
+> seam below). The original Step 2/3/4 scopes survive as Steps 4/6/8.
+> The user's standing framing applies in full force here: this is not
+> an MVP — no delivery-date pressure, the exit bars are the schedule.
 
-Exit: a real running app's multi-line field wraps text correctly and up/down arrow keys move the cursor across wrapped lines, verified live.
+### Step 2 — Edit core: transactions, multi-range selection, commands, undo (D116 layers 2+4)
+Behavior-preserving upgrade of `tree::text_edit` — Step 1's tests keep
+passing throughout:
+- `Transaction` (`Vec<(range, replacement)>`, applied atomically,
+  invertible) becomes the ONLY way text changes; Step 1's pure ops
+  become transaction builders.
+- `Selection` becomes `Vec<SelectionRange { anchor, head, affinity }>`
+  (single caret = one element; multi-cursor is a data-model citizen NOW
+  so a future code-editor phase is UI work, not a rewrite).
+- **Undo/redo**: per-field stack of inverse transactions, persistent on
+  the node (D091), with edit coalescing (consecutive typing = one undo
+  unit, standard everywhere) and Cmd/Ctrl+Z / Shift+Cmd/Ctrl+Z commands.
+- `Command` enum + default keymap between key events and the core;
+  engine dispatch translates `Key`→`Command`→transaction. Adds word-wise
+  ops: Alt/Ctrl+arrows, Alt/Ctrl+Backspace (word boundaries via
+  `unicode-segmentation`, approved in D116).
+- Cursor movement/deletion boundaries tighten from chars to **grapheme
+  clusters** (é, 🇮🇳, family emoji move/delete as one unit).
+- **`EditController`** (D101 `ScrollController` precedent):
+  `.controller()` on both widgets — `replace_range`/`insert_at_cursor`/
+  `set_selection`/`select_all`/`undo`/`redo` for programmatic editing
+  (the markdown-toolbar-Bold-button API).
 
-### Step 3 — Real OS IME
-Desktop: winit's `WindowEvent::Ime` (`Enabled`/`Preedit`/`Commit`/`Disabled`) wired into `rosace-platform`, replacing `NoopIme` with a real `ImeHandler` impl that updates `ImeComposition`'s preedit state and renders an underlined composition string at the cursor (standard IME UX). Mobile: `UITextInput` (iOS) / `InputConnection` (Android) reachable only through the D106 FFI bridge — new capability, same three-piece shape (`capability.rs`'s camera pattern) as Phase 29's lifecycle/push work.
+Exit: all Step 1 integration tests still green untouched; new headless
+tests prove undo/redo round-trips (incl. coalescing), word-wise ops,
+grapheme-safe movement over emoji/accents, and an `EditController`
+wrapping a selection in `**` like a real toolbar would.
 
-Exit: typing CJK text (e.g. via a Pinyin IME on macOS) into a real running app shows correct preedit composition and commits the right characters — verified live on a real OS IME, not simulated.
+### Step 3 — `TextLayoutSnapshot`: click-to-glyph, drag selection (D116 layer 3)
+The keystone seam. During paint, the widget stores plain-data geometry
+(line boxes, per-boundary caret x positions) on its node; engine
+dispatch queries it with no `FontCache` access — dissolving Step 1's
+documented `!Sync` wall and its caret-to-end simplification.
+- Click places the caret at the clicked grapheme boundary (nearest-half
+  rule, the universal convention).
+- **Mouse drag selects**; double-click selects word; triple-click
+  selects line. Selection rendering already exists from Step 1.
+- `TextInput` horizontally scrolls its content to keep the caret
+  visible in overflow (snapshot supplies position→x).
 
-### Step 4 — Wire `rosace-forms`
-`TextInput`/`TextArea` gain an optional `.field(Field)` binding to `rosace-forms`'s existing `Field`/`Validator` types (reused as-is — no rewrite unless a real integration blocker surfaces). Validation errors render inline (reuse existing `Semantics`/error-styling conventions). `Form::submit()` becomes reachable from a real button press.
+Exit: headless engine tests — synthetic MouseDown at a mid-string x
+places the caret at the correct index (assert exact index for a known
+string/font); down+move+up produces the exact expected selection;
+double/triple-click select word/line. Live demo screenshot shows a
+mid-string caret and a drag selection.
 
-Exit: a real running app's form shows a validation error inline when a required field is empty, clears it when corrected, and a submit button is disabled/enabled based on `Form`'s validity state — verified live.
+### Step 4 — `TextArea` (multi-line, virtualized) (original Step 2 + D116)
+New widget on the Step 2/3 core: line wrapping (reuse
+`rosace_text::word_wrap`), Enter inserts newline, up/down movement
+across wrapped lines with **goal-column memory** (vertical moves through
+short lines remember the departed x) and wrap-boundary **affinity**;
+paints only viewport-visible lines (the existing scroll machinery;
+line-index makes this cheap) so a large document doesn't tank paint.
+Known Issue #11 note carries: a LIST of TextAreas must not rely on
+ListView positional slots.
+
+Exit (original bar kept + additions): wrapping correct and up/down
+crosses wrapped lines with goal-column behavior, verified live; a
+several-thousand-line value scrolls with only visible lines painted
+(assert via paint-command counts headlessly).
+
+### Step 5 — Spans + cursor customization: the styling seams (D116 layer 5)
+- **`SpanSource` hook**: `.spans(fn(&str, changed_range) -> Vec<Span>)`
+  on `TextInput`/`TextArea` — the widget paints value text as styled
+  runs (color/weight per span), re-tokenizing incrementally from
+  transaction ranges. THE markdown/syntax-highlighting seam: the app
+  brings the tokenizer; the core never learns what markdown is.
+- **Decorations**: range-keyed background layers (selection highlight
+  generalized; search-match highlights; Step 6 reuses this for the IME
+  preedit underline).
+- **`CursorStyle`**: we already paint the caret ourselves, so expose it —
+  width, color, corner radius, blink rate, shape (`Bar`/`Block`/
+  `Underline`) and `Custom` (app-supplied painter — any `DrawCommand`s,
+  an icon, even a Phase 27 shader). Theme-level default + per-field
+  override. (Direct answer to the user's cursor question: yes — planned
+  exactly here.)
+
+Exit: a demo `TextArea` with a toy `**bold**`-highlighting `SpanSource`
+shows live styled spans while editing (screenshot); a block-cursor and a
+custom-painter cursor render (screenshot); incremental invalidation
+proven headlessly (tokenizer called with the changed range, not the
+whole string, on a small edit).
+
+### Step 6 — Real OS IME (original Step 3, now on D116 seams)
+Desktop: winit `WindowEvent::Ime` (`Enabled`/`Preedit`/`Commit`/
+`Disabled`) into `rosace-platform`; preedit = a **provisional
+transaction** + underline **decoration** (Step 5) at the caret; commit
+finalizes it through the same pipeline as typing. Report the IME
+candidate-window rect from the **snapshot** (Step 3) via
+`set_ime_cursor_area`. Replace `NoopIme` as the original scope said.
+Mobile: `UITextInput` (iOS) / `InputConnection` (Android) via the D106
+FFI bridge (camera-capability three-piece shape); fix **Known Issue #15**
+(missing `TZR_KEY_DELETE/_HOME/_END`) here; add **keyboard-type hints**
+(email/numeric/URL — OS keyboard hints via winit + an FFI field, not
+distinct widget types).
+
+Exit (original bar kept): real CJK preedit + commit via a real macOS
+Pinyin IME, verified live. Mobile IME exercised in the next real
+`rsc run` mobile session alongside Phase 27's pending mobile sanity.
+
+### Step 7 — Device-adaptive selection UX: context menu, touch handles
+- **Context menu** (right-click desktop / long-press touch) with Cut/
+  Copy/Paste/Select All — built on the existing overlay system, driving
+  the same `Command`s as the keyboard shortcuts.
+- **Touch selection**: tap positions caret (Step 3 snapshot), long-press
+  selects word + shows **selection handles** (draggable via the existing
+  positional-hit drag machinery) and a magnifier loupe (a Phase 27
+  offscreen/shader job — the machinery exists).
+- Right-click needs `MouseButton::Right` routing in engine dispatch
+  (currently only Left is handled) — small, named here so it isn't a
+  surprise.
+
+Exit: desktop context menu verified live (screenshot: menu open over a
+field, Paste inserts real clipboard content). Touch handles verified in
+the mobile session with Step 6 (they share the FFI work); headless tests
+for handle-drag → selection updates land with this step regardless.
+
+### Step 8 — Wire `rosace-forms` (original Step 4, scope unchanged)
+`.field(Field)` binding on both widgets; inline validation errors
+(existing `Semantics`/error conventions); `Form::submit()` from a real
+button. Plus **input filters** (`.filters()` — max length, character
+classes) landing here since validation and filtering are one UX story.
+
+Exit (original bar kept): required-field error appears/clears live;
+submit button enables/disables on `Form` validity — verified live.
 
 ## Sequencing
 
-Steps 1→2 are sequential (TextArea reuses Step 1's editing primitives). Step 3 (IME) can start once Step 1 lands — independent of Step 2. Step 4 (Forms) needs Step 1 at minimum (a `Field` needs a real editable input to bind to).
+2 → 3 → 4 strictly (core, then geometry, then multi-line consumes both).
+5 needs 2 (transaction ranges drive invalidation) and benefits from 4.
+6 needs 2 (provisional transactions) + 3 (cursor rect) + 5 (underline
+decoration). 7 needs 3 (all pointer positioning) + 6 for the mobile
+half. 8 needs only Step 1 and can interleave anytime after — it's the
+natural "breather" step between the heavier ones.
 
-**Explicit note carried from Known Issue #11 (D111)**: if any step needs a *list* of `TextInput`s (e.g. a dynamic form), do NOT build it on `ListView`'s positional-slot allocation without first confirming per-row identity is stable — that's the exact bug class that broke the image fade. Flag this explicitly if it comes up rather than rediscovering it live.
+**Explicit note carried from Known Issue #11 (D111)**: if any step needs
+a *list* of editable fields (e.g. a dynamic form), do NOT build it on
+`ListView`'s positional-slot allocation without first confirming
+per-row identity is stable — that's the exact bug class that broke the
+image fade. Flag it explicitly rather than rediscovering it live.
 
 ## Migration Rule
 
-`TextInput`'s existing builder API (`.value()`, `.placeholder()`, `.focused()`, `.obscure()`, `.width()`, `.height()`) is unchanged — apps using it today keep working, they just gain real editing for free once Step 1 lands. `TextArea` and `.field()` are additive.
+`TextInput`'s existing builder API (`.value()`, `.placeholder()`,
+`.focused()`, `.obscure()`, `.width()`, `.height()`, `.on_change()`) is
+unchanged through EVERY step above — Step 2's internal transaction
+rewrite must not disturb it (its tests are the regression bar).
+`TextArea`, `.controller()`, `.spans()`, `.cursor_style()`, `.filters()`,
+`.field()` are all additive. `rosace-ime`'s public types are reused
+where they fit (Step 6), per the original scope.
+
+## What this phase still deliberately does NOT build (per D116)
+
+Editable rich text/WYSIWYG; a code-editor-class widget (gutters,
+folding, multi-cursor UI, huge-file virtualization — future phase ON
+these seams; the data model for it lands in Step 2); BiDi caret
+movement (v1.0 with D014); rope storage (behind the transaction seam;
+trigger: real >~1MB documents); spellcheck; autocomplete; drag-and-drop
+text. Each has a named home — none is silently dropped.
