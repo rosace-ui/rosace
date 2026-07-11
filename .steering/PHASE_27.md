@@ -269,6 +269,32 @@ against the existing `project_text_rendering` conventions, since this
 step touches the same code paths those fixes landed in. CPU-usage
 comparison during a scroll of a long text list, before/after.
 
+### Step 4 concrete design (written 2026-07-11, before implementation)
+
+- **Shared glyph layout**: extract `draw_text_weighted`'s placement math
+  (baseline = `origin.y.round() + ascender`; per glyph: kern → cached
+  glyph → `gx = cursor_x.round() + xmin`, `gy = base_y - ymin - height`)
+  into one iterator used by BOTH the CPU blit path and the GPU collect
+  path — they must agree glyph-for-glyph or parity dies.
+- **Coverage gamma**: the CPU path applies `text_gamma()` per pixel; the
+  atlas applies it ONCE at upload so the shader is pure sample×color.
+- **Canvas emission** (GPU mode): `DrawText` → `CanvasFrameItem::Glyphs
+  { glyphs, clip }`, each glyph `{ key: u64 (px_bits<<32 | char<<1 |
+  bold — face routing is deterministic per (char, bold)), bitmap:
+  CachedGlyph (Arc, only read at first upload), x, y, w, h (physical),
+  color }`. Consecutive DrawText commands coalesce into one item.
+- **Compositor**: 2048² `R8Unorm` atlas texture + shelf packer +
+  `HashMap<u64, slot>`; first sight of a key uploads its (gamma'd)
+  bitmap. Instanced glyph pipeline: per-instance dest-px rect + uv rect
+  + color, vertex stage converts px→NDC via a surface-size uniform;
+  drawn as `FrameItem::Glyphs` in z-order with everything else.
+  Atlas-full ⇒ loud log once + those glyphs skipped (eviction/growth is
+  named follow-up work, not silently assumed). Entry kind enum reserves
+  `ColorBitmap` from day one (emoji/COLR, D115/Phase 32) — a second
+  RGBA page later, designed in but not built.
+- **Exit** unchanged from above + `bench_paint` text-heavy comparison
+  (the ~0.75ms/frame of text raster + segment copies should collapse).
+
 ### Step 5 — `ShaderPaint` widget (the original custom-effect use case)
 Now that the registry is proven by Steps 2-4's real, built-in consumers,
 add the app-facing `ShaderPaint` widget (own `Widget` impl, own
