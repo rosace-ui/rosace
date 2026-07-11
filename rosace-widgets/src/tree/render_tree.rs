@@ -224,6 +224,15 @@ impl RenderTree {
         self.nodes.iter()
     }
 
+    /// Same as [`Self::nodes_iter`], paired with each node's [`NodeId`] —
+    /// needed by callers that must look the node back up for a second,
+    /// mutable pass (D116's `EditController` draining: the engine collects
+    /// `(NodeId, controller, ops)` immutably first, since it can't mutate
+    /// the tree while iterating it).
+    pub fn nodes_indexed(&self) -> impl Iterator<Item = (NodeId, &TreeNode)> {
+        self.nodes.iter().enumerate()
+    }
+
     // ── Derivations (D091/D092) ───────────────────────────────────────────
 
     /// Hit-test walk: children before own regions, later siblings first —

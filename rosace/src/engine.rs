@@ -20,6 +20,33 @@ use rosace_clipboard::ClipboardProvider as _;
 
 use crate::{inflate_rect, rect_contains, theme_color, walk_element, OverlayRoute};
 
+/// Translate a physical key + modifiers into a [`text_edit::Command`]
+/// (D116 layer 4 — the abstract vocabulary a keymap produces). `word_mod`
+/// is Alt (macOS's Option convention) OR Ctrl (Linux/Windows) — not
+/// OS-branched, same spirit as the Cmd/Ctrl clipboard shortcuts. Lives
+/// here rather than in `rosace-widgets::text_edit` because it needs
+/// `rosace_platform::Key`, a lower layer that crate doesn't depend on;
+/// the Command vocabulary itself stays platform-agnostic so a future
+/// widget could construct/dispatch commands without touching `Key` at
+/// all. Returns `None` for any key with no editing meaning.
+fn command_for_key(key: rosace_platform::Key, shift: bool, word_mod: bool) -> Option<text_edit::Command> {
+    use rosace_platform::Key;
+    use text_edit::Command::*;
+    Some(match key {
+        Key::ArrowLeft if word_mod => if shift { ExtendWordLeft } else { MoveWordLeft },
+        Key::ArrowLeft => if shift { ExtendLeft } else { MoveLeft },
+        Key::ArrowRight if word_mod => if shift { ExtendWordRight } else { MoveWordRight },
+        Key::ArrowRight => if shift { ExtendRight } else { MoveRight },
+        Key::Home => if shift { ExtendHome } else { MoveHome },
+        Key::End => if shift { ExtendEnd } else { MoveEnd },
+        Key::Backspace if word_mod => DeleteWordBack,
+        Key::Backspace => Backspace,
+        Key::Delete if word_mod => DeleteWordForward,
+        Key::Delete => DeleteForward,
+        _ => return None,
+    })
+}
+
 /// Owns everything that must persist across frames: the root component,
 /// reconciler caches, focus state, drag/long-press state, and the persistent
 /// render tree (D091). One [`FrameEngine`] per running app instance.
@@ -42,6 +69,11 @@ pub struct FrameEngine {
     /// on target OS.
     ctrl_held: bool,
     meta_held: bool,
+    /// Word-navigation modifier (Alt/Ctrl+Arrow, D116 Step 2) — mirrors
+    /// `shift_held`. `ctrl_held` alone already triggers word movement too
+    /// (see `command_for_key`'s `word_mod`); this exists so macOS's
+    /// Option-key convention works without requiring Ctrl.
+    alt_held: bool,
     /// Active drag grab: a POSITIONAL hit (on_press_at) captured on
     /// MouseDown receives streamed MouseMove positions until MouseUp —
     /// slider thumbs, pickers. Plain hits never drag.
@@ -69,6 +101,7 @@ impl FrameEngine {
             shift_held: false,
             ctrl_held: false,
             meta_held: false,
+            alt_held: false,
             active_drag: None,
             forced_repaint: false,
             lp_cancel: None,
@@ -116,26 +149,95 @@ impl FrameEngine {
     /// caret/selection to the render tree, reports the value upward via
     /// `on_change` ONLY when it actually changed (a pure cursor move must
     /// not fire `on_change` — it would spuriously re-notify the app with
-    /// an unchanged string every arrow-key press), and forces a repaint —
-    /// required even for a value-less move, to show the caret land.
+    /// an unchanged string every arrow-key press), publishes the node's
+    /// `EditController` snapshot if it has one (D116 — so a toolbar
+    /// reading `controller.value()`/`.selection()` sees the LATEST real
+    /// state regardless of whether the edit came from the keyboard or a
+    /// prior controller call; this is the ONLY path every edit source
+    /// funnels through, so it's the one place that can guarantee that),
+    /// and forces a repaint — required even for a value-less move, to
+    /// show the caret land.
     fn commit_text_edit(
         &mut self, node_id: NodeId, old_value: &str,
         new_value: String, new_state: text_edit::TextEditState,
     ) {
-        let on_change = {
+        let selection = new_state.selection.clone();
+        let (on_change, controller) = {
             let mut tree = self.render_tree.borrow_mut();
             tree.node_mut(node_id).text_edit = new_state;
-            if new_value != old_value {
-                tree.node(node_id).editable.as_ref().map(|e| e.on_change.clone())
+            let editable = tree.node(node_id).editable.as_ref();
+            let on_change = if new_value != old_value {
+                editable.map(|e| e.on_change.clone())
             } else {
                 None
-            }
+            };
+            let controller = editable.and_then(|e| e.controller.clone());
+            (on_change, controller)
         };
+        if let Some(c) = &controller {
+            c.update_snapshot(new_value.clone(), selection);
+        }
         if let Some(cb) = on_change {
             cb(new_value);
         }
         self.forced_repaint = true;
         rosace_state::request_frame();
+    }
+
+    /// Drain every editable node's [`text_edit::EditController`] pending
+    /// ops (D116) and apply them — independent of `focus_manager`, since a
+    /// controller is reachable from OUTSIDE the widget tree entirely (a
+    /// toolbar button has no render-tree node of its own to route
+    /// through). Collects `(NodeId, controller, ops)` in one immutable
+    /// pass first — can't mutate the tree while iterating it.
+    fn drain_controllers(&mut self) {
+        let pending: Vec<(NodeId, Vec<text_edit::ControllerOp>)> = {
+            let tree = self.render_tree.borrow();
+            tree.nodes_indexed()
+                .filter_map(|(id, n)| {
+                    let c = n.editable.as_ref()?.controller.as_ref()?;
+                    let ops = c.take_ops();
+                    if ops.is_empty() { None } else { Some((id, ops)) }
+                })
+                .collect()
+        };
+        for (node_id, ops) in pending {
+            for op in ops {
+                self.apply_controller_op(node_id, op);
+            }
+        }
+    }
+
+    /// Apply one [`text_edit::ControllerOp`] to `node_id` via the exact
+    /// same commit path keyboard dispatch uses, which also publishes the
+    /// node's controller snapshot (so `.value()`/`.selection()` read
+    /// back correctly on the app's very next call, not one frame late).
+    fn apply_controller_op(&mut self, node_id: NodeId, op: text_edit::ControllerOp) {
+        let (value, state) = {
+            let tree = self.render_tree.borrow();
+            let n = tree.node(node_id);
+            let Some(e) = &n.editable else { return; };
+            (e.value.clone(), n.text_edit.clone())
+        };
+        let now = rosace_widgets::tree::anim_clock();
+        let result = match op {
+            text_edit::ControllerOp::ReplaceRange(s, e, text) =>
+                Some(text_edit::replace_range(&value, &state, s, e, &text, now)),
+            text_edit::ControllerOp::InsertAtCursor(text) =>
+                Some(text_edit::insert_str(&value, &state, &text, now)),
+            text_edit::ControllerOp::SetSelection(sel) =>
+                Some((value.clone(), state.with_selection(sel, now))),
+            text_edit::ControllerOp::SelectAll =>
+                Some((value.clone(), text_edit::select_all(&value, &state, now))),
+            text_edit::ControllerOp::Undo => text_edit::undo(&value, &state, now),
+            text_edit::ControllerOp::Redo => text_edit::redo(&value, &state, now),
+        };
+        // `commit_text_edit` already publishes the node's controller
+        // snapshot (looked up from `editable.controller` itself) — no
+        // separate update needed here.
+        if let Some((new_value, new_state)) = result {
+            self.commit_text_edit(node_id, &value, new_value, new_state);
+        }
     }
 
     /// Runs one frame: build (if dirty), layout, paint into `canvas` and
@@ -489,6 +591,13 @@ impl FrameEngine {
         // cache-hit frames where no widget repainted.
         self.focus_manager.sync_from_nodes(self.render_tree.borrow().collect_focus());
 
+        // ── Drain EditController ops (D116) ──────────────────────────────
+        // Runs every frame, independent of focus/events — a toolbar
+        // button's `on_press` enqueues onto the controller from OUTSIDE
+        // the widget tree entirely (see `EditController`'s doc comment),
+        // so this is the only place those ops actually apply.
+        self.drain_controllers();
+
         // ── Route events — structural z-order (D092) ────────────────────
         // Overlay routes first (topmost entry first): the entry's own
         // regions win; its surface absorbs; outside taps fire the scrim
@@ -564,16 +673,16 @@ impl FrameEngine {
                             let now = rosace_widgets::tree::anim_clock();
                             let mut tree = self.render_tree.borrow_mut();
                             let node = tree.node_mut(node_id);
-                            // Step 1 scoping: place the caret at the end
-                            // on click, not at the clicked glyph — precise
-                            // click->position needs font metrics, and
-                            // `FontCache` can't cross into this dispatch
-                            // path (its internal `RefCell` caches are
-                            // `!Sync`). Real click-to-glyph placement is a
-                            // named follow-up, not a silent gap.
+                            // Step 1 scoping (still true post-D116; Step 3
+                            // is the named follow-up): place the caret at
+                            // the end on click, not at the clicked glyph
+                            // — precise click->position needs font
+                            // metrics, and `FontCache` can't cross into
+                            // this dispatch path (its internal `RefCell`
+                            // caches are `!Sync`).
                             if let Some(editable) = &node.editable {
-                                node.text_edit.cursor = text_edit::char_count(&editable.value);
-                                node.text_edit.selection_anchor = None;
+                                let end = text_edit::char_count(&editable.value);
+                                node.text_edit.selection = text_edit::Selection::single(end);
                             }
                             node.text_edit.last_edit_at = now;
                             drop(tree);
@@ -711,8 +820,14 @@ impl FrameEngine {
                 rosace_platform::InputEvent::KeyUp {
                     key: rosace_platform::Key::Meta
                 } => { self.meta_held = false; }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::Alt
+                } => { self.alt_held = true; }
+                rosace_platform::InputEvent::KeyUp {
+                    key: rosace_platform::Key::Alt
+                } => { self.alt_held = false; }
 
-                // ── Text editing (D112/Phase 28 Step 1) ─────────────────
+                // ── Text editing (D112/Phase 28, Command layer D116) ────
                 // Literal character insertion goes through `Text`, NOT
                 // `KeyDown{Char}` — `Text` is winit's already-composed,
                 // layout/shift-aware source (a `KeyDown{Char('a')}` fires
@@ -731,73 +846,25 @@ impl FrameEngine {
                     }
                 }
                 rosace_platform::InputEvent::KeyDown {
-                    key: rosace_platform::Key::Backspace
-                } => {
-                    if let Some((node_id, value, state, _)) = self.focused_editable() {
-                        let now = rosace_widgets::tree::anim_clock();
-                        let (nv, ns) = text_edit::backspace(&value, &state, now);
-                        self.commit_text_edit(node_id, &value, nv, ns);
-                    }
-                }
-                rosace_platform::InputEvent::KeyDown {
-                    key: rosace_platform::Key::Delete
-                } => {
-                    if let Some((node_id, value, state, _)) = self.focused_editable() {
-                        let now = rosace_widgets::tree::anim_clock();
-                        let (nv, ns) = text_edit::delete_forward(&value, &state, now);
-                        self.commit_text_edit(node_id, &value, nv, ns);
-                    }
-                }
-                rosace_platform::InputEvent::KeyDown {
-                    key: rosace_platform::Key::ArrowLeft
-                } => {
-                    if let Some((node_id, value, state, _)) = self.focused_editable() {
-                        let now = rosace_widgets::tree::anim_clock();
-                        let ns = text_edit::move_left(&state, self.shift_held, now);
-                        self.commit_text_edit(node_id, &value, value.clone(), ns);
-                    }
-                }
-                rosace_platform::InputEvent::KeyDown {
-                    key: rosace_platform::Key::ArrowRight
-                } => {
-                    if let Some((node_id, value, state, _)) = self.focused_editable() {
-                        let now = rosace_widgets::tree::anim_clock();
-                        let ns = text_edit::move_right(&value, &state, self.shift_held, now);
-                        self.commit_text_edit(node_id, &value, value.clone(), ns);
-                    }
-                }
-                rosace_platform::InputEvent::KeyDown {
-                    key: rosace_platform::Key::Home
-                } => {
-                    if let Some((node_id, value, state, _)) = self.focused_editable() {
-                        let now = rosace_widgets::tree::anim_clock();
-                        let ns = text_edit::move_home(&state, self.shift_held, now);
-                        self.commit_text_edit(node_id, &value, value.clone(), ns);
-                    }
-                }
-                rosace_platform::InputEvent::KeyDown {
-                    key: rosace_platform::Key::End
-                } => {
-                    if let Some((node_id, value, state, _)) = self.focused_editable() {
-                        let now = rosace_widgets::tree::anim_clock();
-                        let ns = text_edit::move_end(&value, &state, self.shift_held, now);
-                        self.commit_text_edit(node_id, &value, value.clone(), ns);
-                    }
-                }
-                rosace_platform::InputEvent::KeyDown {
                     key: rosace_platform::Key::Char(c)
                 } => {
                     // Shortcut letters ONLY — plain typing is Text's job
                     // (see the comment above). Cmd (macOS) or Ctrl
                     // (Linux/Windows) triggers either way, deliberately
-                    // not OS-branched.
+                    // not OS-branched. Must be matched BEFORE the generic
+                    // `KeyDown { key }` arm below (Rust picks the first
+                    // matching arm; that one is unconstrained and would
+                    // otherwise swallow every `Char` too).
                     if self.ctrl_held || self.meta_held {
                         if let Some((node_id, value, state, multiline)) = self.focused_editable() {
                             let now = rosace_widgets::tree::anim_clock();
                             match c.to_ascii_lowercase() {
                                 'a' => {
-                                    let ns = text_edit::select_all(&value, now);
-                                    self.commit_text_edit(node_id, &value, value.clone(), ns);
+                                    if let Some((nv, ns)) = text_edit::apply_command(
+                                        &value, &state, text_edit::Command::SelectAll, now,
+                                    ) {
+                                        self.commit_text_edit(node_id, &value, nv, ns);
+                                    }
                                 }
                                 'c' => {
                                     if let Some(sel) = text_edit::selected_text(&value, &state) {
@@ -824,7 +891,44 @@ impl FrameEngine {
                                         }
                                     }
                                 }
+                                // Undo/Redo (D116 Step 2): Cmd/Ctrl+Z undoes;
+                                // Shift+Cmd/Ctrl+Z OR Cmd/Ctrl+Y redoes —
+                                // covering both common conventions rather
+                                // than picking one, same "not OS-branched"
+                                // spirit as the rest of this arm.
+                                'z' if self.shift_held => {
+                                    if let Some((nv, ns)) = text_edit::redo(&value, &state, now) {
+                                        self.commit_text_edit(node_id, &value, nv, ns);
+                                    }
+                                }
+                                'z' => {
+                                    if let Some((nv, ns)) = text_edit::undo(&value, &state, now) {
+                                        self.commit_text_edit(node_id, &value, nv, ns);
+                                    }
+                                }
+                                'y' => {
+                                    if let Some((nv, ns)) = text_edit::redo(&value, &state, now) {
+                                        self.commit_text_edit(node_id, &value, nv, ns);
+                                    }
+                                }
                                 _ => {}
+                            }
+                        }
+                    }
+                }
+                // Movement/deletion — one generic arm through the
+                // Key->Command keymap (`command_for_key`, D116 layer 4)
+                // instead of one match arm per key. Escape/Tab/Shift/
+                // Control/Meta/Alt/Char already claimed their own events
+                // above, so `key` here is only ever Backspace/Delete/an
+                // arrow/Home/End/something unbound.
+                rosace_platform::InputEvent::KeyDown { key } => {
+                    let word_mod = self.alt_held || self.ctrl_held;
+                    if let Some(cmd) = command_for_key(*key, self.shift_held, word_mod) {
+                        if let Some((node_id, value, state, _)) = self.focused_editable() {
+                            let now = rosace_widgets::tree::anim_clock();
+                            if let Some((nv, ns)) = text_edit::apply_command(&value, &state, cmd, now) {
+                                self.commit_text_edit(node_id, &value, nv, ns);
                             }
                         }
                     }
@@ -1691,5 +1795,200 @@ mod tests {
             Some(text) => { let _ = cb.write(&text); }
             None => cb.clear(),
         }
+    }
+
+    // ── D116 Step 2: undo/redo, word ops, EditController ─────────────────
+
+    #[test]
+    fn cmd_z_undoes_typing_through_real_dispatch() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi");
+        assert_eq!(atom.get().unwrap().get(), "hi");
+
+        // Typed within the coalesce window (real, but fast, wall-clock
+        // gap between these calls) — one Cmd+Z removes the whole group.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('z'))]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Meta)]);
+        assert_eq!(atom.get().unwrap().get(), "", "Cmd+Z must undo the coalesced typing group");
+    }
+
+    #[test]
+    fn shift_cmd_z_and_cmd_y_both_redo() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi");
+
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('z'))]);
+        assert_eq!(atom.get().unwrap().get(), "");
+
+        // Shift+Cmd+Z redoes.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Shift)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('z'))]);
+        assert_eq!(atom.get().unwrap().get(), "hi", "Shift+Cmd+Z must redo");
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Shift)]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Meta)]);
+
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('z'))]);
+        assert_eq!(atom.get().unwrap().get(), "", "undo again");
+
+        // Cmd+Y also redoes (the Windows-convention alternative).
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('y'))]);
+        assert_eq!(atom.get().unwrap().get(), "hi", "Cmd+Y must redo too");
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Meta)]);
+    }
+
+    #[test]
+    fn ctrl_backspace_deletes_the_preceding_word_through_real_dispatch() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Control)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Backspace)]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Control)]);
+        assert_eq!(atom.get().unwrap().get(), "hello ", "Ctrl+Backspace must delete the whole preceding word");
+    }
+
+    #[test]
+    fn alt_arrow_moves_by_word_then_insert_lands_at_the_word_boundary() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Home)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Alt)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowRight)]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Alt)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "!");
+        assert_eq!(atom.get().unwrap().get(), "hello! world", "Alt+Right must land right after \"hello\"");
+    }
+
+    /// Two real, independently atom-bound fields wired to their own
+    /// `EditController`s — proves `drain_controllers` finds the RIGHT
+    /// node when more than one exists, mirroring `tab_moves_focus_from_
+    /// the_first_input_to_the_second`'s precedent for keyboard dispatch.
+    struct TwoControlledTextInputs {
+        first: Arc<OnceLock<rosace_state::Atom<String>>>,
+        second: Arc<OnceLock<rosace_state::Atom<String>>>,
+        first_ctrl: text_edit::EditController,
+        second_ctrl: text_edit::EditController,
+    }
+    impl Component for TwoControlledTextInputs {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let a: rosace_state::Atom<String> = ctx.state(String::new());
+            let b: rosace_state::Atom<String> = ctx.state(String::new());
+            let _ = self.first.set(a.clone());
+            let _ = self.second.set(b.clone());
+            Column::new()
+                .child(TextInput::new().height(30.0).value(a.get()).controller(self.first_ctrl.clone()).on_change({
+                    let a = a.clone(); move |v| a.set(v)
+                }))
+                .child(TextInput::new().height(30.0).value(b.get()).controller(self.second_ctrl.clone()).on_change({
+                    let b = b.clone(); move |v| b.set(v)
+                }))
+                .into_element()
+        }
+    }
+
+    #[test]
+    fn edit_controller_targets_the_correct_field_among_several() {
+        let first = Arc::new(OnceLock::new());
+        let second = Arc::new(OnceLock::new());
+        let first_ctrl = text_edit::EditController::new();
+        let second_ctrl = text_edit::EditController::new();
+        let root = TwoControlledTextInputs {
+            first: first.clone(), second: second.clone(),
+            first_ctrl: first_ctrl.clone(), second_ctrl: second_ctrl.clone(),
+        };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(200, 100);
+        let mut overlay = SkiaCanvas::new(200, 100);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        // No focus/click at all — purely programmatic, proving the
+        // controller path is independent of FocusManager entirely.
+        second_ctrl.insert_at_cursor("only the second field");
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        assert_eq!(first.get().unwrap().get(), "", "the FIRST field must be untouched");
+        assert_eq!(second.get().unwrap().get(), "only the second field");
+        assert_eq!(second_ctrl.value(), "only the second field");
+    }
+
+    /// The exact scenario D116/PHASE_28.md's Step 2 exit bar names: a
+    /// markdown toolbar's Bold button reads the field's live selection
+    /// through its `EditController` and wraps it — entirely through real
+    /// keyboard-driven selection (Shift+arrows) THEN a controller call
+    /// simulating a button's `on_press`, with no direct render-tree
+    /// access at any point (a real toolbar button couldn't have any).
+    struct OneControlledTextInput {
+        captured: Arc<OnceLock<rosace_state::Atom<String>>>,
+        controller: text_edit::EditController,
+    }
+    impl Component for OneControlledTextInput {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let name: rosace_state::Atom<String> = ctx.state(String::new());
+            let _ = self.captured.set(name.clone());
+            TextInput::new()
+                .value(name.get())
+                .controller(self.controller.clone())
+                .on_change({ let name = name.clone(); move |v| name.set(v) })
+                .into_element()
+        }
+    }
+
+    #[test]
+    fn edit_controller_wraps_a_live_keyboard_selection_like_a_real_toolbar_bold_button() {
+        let captured = Arc::new(OnceLock::new());
+        let controller = text_edit::EditController::new();
+        let root = OneControlledTextInput { captured: captured.clone(), controller: controller.clone() };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(200, 60);
+        let mut overlay = SkiaCanvas::new(200, 60);
+
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+        assert_eq!(captured.get().unwrap().get(), "hello world");
+        // The controller must already reflect keyboard-driven typing —
+        // not just controller-originated edits (the bug this test guards
+        // against: a stale snapshot would read "" here).
+        assert_eq!(controller.value(), "hello world");
+
+        // Select "world" (chars 6..11) via Shift+Right, same as a real
+        // user dragging or double-clicking would leave behind.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Home)]);
+        for _ in 0..6 {
+            engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowRight)]);
+        }
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Shift)]);
+        for _ in 0..5 {
+            engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowRight)]);
+        }
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Shift)]);
+
+        // The toolbar Bold button's `on_press`: reads the CONTROLLER's
+        // live value/selection (all it has access to) and wraps it.
+        let value = controller.value();
+        let (start, end) = controller.selection().primary_range();
+        assert_eq!((start, end), (6, 11), "controller.selection() must reflect the real keyboard selection");
+        let word = &value[start..end];
+        controller.replace_range(start, end, format!("**{word}**"));
+
+        // Ops apply on the engine's next frame (documented on
+        // EditController::value()) — matches how a real app's next paint
+        // picks up a controller call made from a button callback.
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        assert_eq!(captured.get().unwrap().get(), "hello **world**", "the wrap must reach the real app atom via on_change");
+        assert_eq!(controller.value(), "hello **world**");
     }
 }

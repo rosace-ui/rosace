@@ -8,6 +8,9 @@ repository.workspace = true
 
 [dependencies]
 web-time       = "1"
+# D116/Phase 28 Step 2 — UAX #29 grapheme/word segmentation for the
+# text-editing core (see PHASE_28.md's "Approved dependencies").
+unicode-segmentation = "1"
 rosace-a11y   = { path = "../rosace-a11y" }
 rosace-trace  = { path = "../rosace-trace" }
 rosace-core   = { path = "../rosace-core" }

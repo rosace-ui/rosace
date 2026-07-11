@@ -1347,7 +1347,7 @@ Also export a per-route `llms.txt`/plain-text summary from the same semantic tre
 ---
 
 ### D116 — The text-editing architecture: one layered core under every editable surface (raised + scoped 2026-07-12, expands D112/Phase 28)
-**Status**: SCOPED — Phase 28's step list is rewritten around this (see `.steering/PHASE_28.md`). Step 1 (landed before this decision) is compatible: its pure ops become transaction builders in Step 2.
+**Status**: Layers 1/2/4 (document, edit core, behavior) LANDED 2026-07-12 as Phase 28 Step 2 — `Transaction`/`Selection`/`Command`/`EditController` all real and tested. Layer 3 (`TextLayoutSnapshot`, Step 3) and the render seams (layer 5, Step 5) not started. See `.steering/PHASE_28.md` for full detail.
 **Decision**: ROSACE gets ONE text-editing core with hard seams between five layers, such that a login field, a search box, a chat composer, a markdown editor with live highlighting, and (someday) a code-editor-class widget are all CONSUMERS of the same core — never parallel reimplementations. The user's explicit framing: this is not about making `TextArea` a code editor; it's about making the foundation capable enough that anything text-shaped can be built on top without touching the core again.
 
 **The five layers and their seams**:

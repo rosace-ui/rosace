@@ -4,7 +4,7 @@ use rosace_core::types::{Point, Rect, Size};
 use rosace_render::Color;
 use super::{Widget, LayoutCtx, PaintCtx};
 use super::container::draw_rounded_rect_pub;
-use super::text_edit::{char_byte_offset, EditableDecl};
+use super::text_edit::{char_byte_offset, EditController, EditableDecl};
 
 /// A single-line text input field.
 ///
@@ -29,6 +29,7 @@ pub struct TextInput {
     pub font_size: f32,
     pub radius: f32,
     on_change: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    controller: Option<EditController>,
 }
 
 impl TextInput {
@@ -43,6 +44,7 @@ impl TextInput {
             font_size: 11.0,
             radius: 6.0,
             on_change: None,
+            controller: None,
         }
     }
     pub fn value(mut self, v: impl Into<String>) -> Self { self.value = v.into(); self }
@@ -64,6 +66,15 @@ impl TextInput {
     /// `Slider`/`Switch` today.
     pub fn on_change(mut self, f: impl Fn(String) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Arc::new(f));
+        self
+    }
+    /// Attach a programmatic [`EditController`] (D116) — app-constructed
+    /// and passed in (the `FocusNode` precedent), reachable from OUTSIDE
+    /// the widget tree entirely (a toolbar button's `on_press` has no
+    /// access to this field's render-tree node otherwise). Optional: most
+    /// fields never need one.
+    pub fn controller(mut self, c: EditController) -> Self {
+        self.controller = Some(c);
         self
     }
 }
@@ -98,6 +109,7 @@ impl Widget for TextInput {
             multiline: false,
             obscure: self.obscure,
             on_change: self.on_change.clone().unwrap_or_else(|| Arc::new(|_| {})),
+            controller: self.controller.clone(),
         });
 
         let bg = Color::rgb(15, 16, 28);
@@ -157,7 +169,7 @@ impl Widget for TextInput {
                 let t = super::anim_clock() - state.last_edit_at;
                 let blink_on = t < 0.5 || (((t - 0.5) / 0.53) as i64 % 2 == 0);
                 if blink_on {
-                    let cb = char_byte_offset(&display, state.cursor);
+                    let cb = char_byte_offset(&display, state.cursor());
                     let cursor_x = ctx.font.measure_text(&display[..cb], self.font_size);
                     ctx.fill_rect(Rect {
                         origin: Point { x: r.origin.x + 10.0 + cursor_x, y: r.origin.y + ty + 1.0 },

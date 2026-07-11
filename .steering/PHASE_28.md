@@ -1,6 +1,6 @@
 # Phase 28 — Real TextInput, Real IME, Forms Wiring (D112)
 
-> Status: Step 1 landed. Steps 2-4 not started.
+> Status: Steps 1-2 landed. Steps 3-8 not started.
 > Started: 2026-07-12
 > Completed: —
 > Decision: **D112** — `TextInput` gains real keyboard editing, a new
@@ -19,6 +19,16 @@ The user's original priority was "TextInput/**Forms**" (not just editing) — th
 - **Rich text editing** (mixed styles within one input). `TextArea`/`TextInput` here are plain-text only; `rosace-text`'s `RichText`/`TextSpan` wiring is Phase 32's job, for the read-only `Text` widget, not editable inputs.
 - **Autocomplete/suggestion UI.** A real feature in its own right, needs its own overlay/positioning design — not bundled into basic editing.
 - **Spellcheck.** Platform-native spellcheck hookup (`NSSpellChecker`/Android equivalent) is a capability-bridge candidate for a future phase, not this one.
+
+## Approved dependencies (new)
+
+- **`unicode-segmentation`** (`rosace-widgets`) — UAX #29 grapheme-cluster
+  and word-boundary segmentation for Step 2's edit core. Approved in
+  D116 by the same reasoning as D113's `ureq`/`rustls`: this is a solved,
+  correctness-critical spec (combining marks, ZWJ emoji sequences,
+  regional-indicator flag pairs) — hand-rolling it is the hand-rolled-TLS
+  mistake wearing a different hat. No `tokio`/async pull-in; pure,
+  `no_std`-friendly segmentation logic only.
 
 ## Steps
 
@@ -140,6 +150,65 @@ Exit: all Step 1 integration tests still green untouched; new headless
 tests prove undo/redo round-trips (incl. coalescing), word-wise ops,
 grapheme-safe movement over emoji/accents, and an `EditController`
 wrapping a selection in `**` like a real toolbar would.
+
+**Landed 2026-07-12.** `tree::text_edit` grew: `Transaction`/`Edit`
+(apply + self-computed inverse — this IS undo, no separate diff engine),
+`Selection`/`SelectionRange`/`Affinity` (private-`Vec` invariant: never
+empty), grapheme/word boundary functions on `unicode-segmentation`,
+`TextEditState` (now holds `Selection` + private undo/redo stacks +
+coalesce-group tracking behind `.cursor()`/`.selection_range()` compat
+accessors so `text_input.rs`'s paint code needed a 1-line change),
+`Command` enum + `apply_command` (non-clipboard commands only — Copy/
+Cut/Paste stay engine-side, real clipboard I/O has no business in a pure
+core), and `EditController` (`Arc`-backed, app-constructed like
+`FocusNode`, `Send+Sync` op queue + snapshot — reachable from a toolbar
+button with zero render-tree access). `rosace/src/engine.rs` gained
+`command_for_key` (one keymap function replacing 6 near-identical match
+arms), `alt_held` tracking, Cmd/Ctrl+Z (undo) / Shift+Cmd/Ctrl+Z **and**
+Cmd/Ctrl+Y (redo, covering both conventions), and `drain_controllers`
+(runs every frame, independent of focus — a controller op can target an
+unfocused field).
+
+**Two real bugs found by the test suite, not by inspection:**
+(1) `next_word_boundary`'s original algorithm skipped the run containing
+the cursor entirely, so Ctrl+Right from a word's START jumped straight
+to the END OF THE NEXT word instead of the current one — caught by
+`move_word_right_lands_at_the_end_of_the_next_word` on the first run,
+fixed by checking "am I already inside a word run" before advancing.
+(2) `EditController.value()`/`.selection()` only updated as a side effect
+of applying a controller-originated op — reading them after ordinary
+KEYBOARD typing returned stale defaults, which would have silently
+broken the toolbar-button use case this whole feature exists for (a
+button reading "what's selected right now" after the user typed and
+selected by hand). Fixed by moving the snapshot publish into
+`commit_text_edit` itself — the one path every edit source (keyboard,
+clipboard, controller) already funnels through — rather than
+special-casing it per call site.
+
+**Verification**: 12 new tests in `rosace/src/engine.rs` (29 total,
+all passing) drive the real `FrameEngine`: Cmd+Z/Shift+Cmd+Z/Cmd+Y
+through real dispatch, Ctrl+Backspace word deletion, Alt+Right word
+movement, an `EditController` reaching the correct node among several
+with ZERO focus/click involvement (proving the controller path is
+independent of `FocusManager`), and the exact toolbar-Bold-button
+scenario named in this doc's exit bar — including asserting
+`controller.value()`/`.selection()` reflect real prior KEYBOARD typing
+and selection, not just controller-originated state (this is the
+regression test for bug #2 above). Plus 24 new pure unit tests in
+`text_edit.rs` (45 total) covering transaction invert round-trips,
+undo/redo, three distinct coalescing-boundary cases (pause, cursor
+move, selection-replace — each must NOT coalesce with prior typing),
+grapheme-cluster correctness against a ZWJ family emoji, a combining
+accent, and a flag-emoji regional-indicator pair (not just precomposed
+é, which plain char-indexing already handled and wouldn't have proven
+anything), and word boundaries. Full `cargo build --workspace
+--all-targets` and `cargo test --workspace` clean (the one
+`rosace-state` parallel-run failure is the pre-existing documented
+Known Issue #8 flake, confirmed 15/15 in isolation). Live screenshot
+confirms zero visual regression in `text_input_demo` (OS-level
+synthetic click/keyboard verification remains blocked by the sandbox's
+Accessibility-permission gap, same as Step 1 — headless dispatch tests
+are the load-bearing verification here, as they were for Step 1).
 
 ### Step 3 — `TextLayoutSnapshot`: click-to-glyph, drag selection (D116 layer 3)
 The keystone seam. During paint, the widget stores plain-data geometry
