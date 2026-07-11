@@ -395,17 +395,28 @@ impl FrameEngine {
                 let cw = (((entry.child_size.width  * scale).ceil() as u32)).clamp(1, MAX_TL_DIM);
                 let ch = (((entry.child_size.height * scale).ceil() as u32)).clamp(1, MAX_TL_DIM);
                 let mut content = rosace_render::SkiaCanvas::new_hidpi(cw, ch, scale);
+                // GPU-shapes mode propagates to scroll content (D109 C2):
+                // shapes become quads, text becomes segments, and the
+                // compositor renders them into the offscreen scroll
+                // texture — no full content-buffer CPU raster or copy.
+                content.set_gpu_shapes(canvas.gpu_shapes());
                 content.play_picture(&entry.picture, font);
 
+                let (pixels, items) = if canvas.gpu_shapes() {
+                    (Vec::new(), content.take_frame_items())
+                } else {
+                    (content.pixels().to_vec(), Vec::new())
+                };
                 scroll_layers.push(rosace_platform::ScrollLayer {
                     id: n as u64,
-                    pixels: content.pixels().to_vec(),
+                    pixels,
                     width:  cw,
                     height: ch,
                     dest: (
                         vp.origin.x * scale, vp.origin.y * scale,
                         vp.size.width * scale, vp.size.height * scale,
                     ),
+                    items,
                 });
             }
             drop(tree_ref);

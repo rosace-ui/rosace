@@ -173,6 +173,36 @@ struct AppState<F> {
     shader_fallback_warned: bool,
 }
 
+/// One canvas frame item (D109 C1) as a compositor item: quads pass
+/// through; CPU segments become placed pixel layers at their bbox.
+fn canvas_item_to_frame<'a>(
+    it: &'a rosace_render::canvas::CanvasFrameItem,
+    dirty: bool,
+) -> rosace_compositor::FrameItem<'a> {
+    match it {
+        rosace_render::canvas::CanvasFrameItem::Shader(q) => {
+            rosace_compositor::FrameItem::Shader(rosace_compositor::ShaderQuad {
+                pipeline: q.pipeline_id,
+                rect:     q.rect,
+                uniforms: &q.uniforms,
+                clip:     q.clip,
+            })
+        }
+        rosace_render::canvas::CanvasFrameItem::Segment { x, y, w, h, pixels } => {
+            rosace_compositor::FrameItem::Pixels(
+                rosace_compositor::CompositorLayer::placed(
+                    pixels, *w, *h,
+                    rosace_compositor::LayerRect {
+                        x: *x as f32, y: *y as f32, w: *w as f32, h: *h as f32,
+                    },
+                    (0.0, 0.0),
+                    dirty,
+                ),
+            )
+        }
+    }
+}
+
 /// Drain queued `rosace-shader` registrations into the presenter's registry
 /// (D109) — eager compilation at the frame boundary, converting the typed
 /// `ShaderSpec` to the compositor's primitives-only API (its Layer-0
@@ -460,31 +490,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                         // their bboxes, in command order. No full-frame
                         // base buffer exists.
                         for it in &self.frame_items {
-                            match it {
-                                rosace_render::canvas::CanvasFrameItem::Shader(q) => {
-                                    items.push(rosace_compositor::FrameItem::Shader(
-                                        rosace_compositor::ShaderQuad {
-                                            pipeline: q.pipeline_id,
-                                            rect:     q.rect,
-                                            uniforms: &q.uniforms,
-                                            clip:     q.clip,
-                                        },
-                                    ));
-                                }
-                                rosace_render::canvas::CanvasFrameItem::Segment { x, y, w, h, pixels } => {
-                                    items.push(rosace_compositor::FrameItem::Pixels(
-                                        rosace_compositor::CompositorLayer::placed(
-                                            pixels, *w, *h,
-                                            rosace_compositor::LayerRect {
-                                                x: *x as f32, y: *y as f32,
-                                                w: *w as f32, h: *h as f32,
-                                            },
-                                            (0.0, 0.0),
-                                            base_dirty,
-                                        ),
-                                    ));
-                                }
-                            }
+                            items.push(canvas_item_to_frame(it, base_dirty));
                         }
                     } else {
                         items.push(rosace_compositor::FrameItem::Pixels(
@@ -509,16 +515,40 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                         // repaint, so a scroll-only frame is a uniform write
                         // over the reused content texture (D090).
                         let off = rosace_state::scroll_offset(sl.id);
-                        items.push(rosace_compositor::FrameItem::Pixels(
-                            rosace_compositor::CompositorLayer::placed(
-                                &sl.pixels, sl.width, sl.height,
-                                rosace_compositor::LayerRect {
-                                    x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
+                        if !sl.items.is_empty() {
+                            // GPU-shapes scroll content (D109 C2): render
+                            // the items into the offscreen target on
+                            // publish frames, sample it at the live offset
+                            // every frame.
+                            if scroll_dirty {
+                                let sub: Vec<rosace_compositor::FrameItem<'_>> = sl.items
+                                    .iter()
+                                    .map(|it| canvas_item_to_frame(it, true))
+                                    .collect();
+                                presenter.render_offscreen(sl.id, sl.width, sl.height, &sub);
+                            }
+                            items.push(rosace_compositor::FrameItem::Offscreen(
+                                rosace_compositor::OffscreenRef {
+                                    key: sl.id,
+                                    dest: rosace_compositor::LayerRect {
+                                        x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
+                                    },
+                                    src_offset: (off[0] * scale, off[1] * scale),
+                                    dirty: scroll_dirty,
                                 },
-                                (off[0] * scale, off[1] * scale),
-                                scroll_dirty,
-                            ),
-                        ));
+                            ));
+                        } else {
+                            items.push(rosace_compositor::FrameItem::Pixels(
+                                rosace_compositor::CompositorLayer::placed(
+                                    &sl.pixels, sl.width, sl.height,
+                                    rosace_compositor::LayerRect {
+                                        x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
+                                    },
+                                    (off[0] * scale, off[1] * scale),
+                                    scroll_dirty,
+                                ),
+                            ));
+                        }
                     }
                     // Skip the overlay layer entirely when nothing drew into it
                     // this frame. When it did draw, treat it as dirty — the

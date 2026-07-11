@@ -93,12 +93,30 @@ pub struct ShaderQuad<'a> {
     pub clip: Option<(f32, f32, f32, f32)>,
 }
 
+/// A reference to an offscreen texture previously rendered via
+/// [`GpuPresenter::render_offscreen`] (D109 C2 — GPU scroll layers):
+/// sampled at `src_offset` and placed at `dest`, exactly like a placed
+/// pixel layer but with content that lives entirely on the GPU.
+#[derive(Clone, Copy)]
+pub struct OffscreenRef {
+    /// The key passed to `render_offscreen` (the scroll layer's node id).
+    pub key: u64,
+    /// Viewport placement on screen, physical px.
+    pub dest: LayerRect,
+    /// Texture sample origin in physical px — the live scroll offset.
+    pub src_offset: (f32, f32),
+    /// True on publish frames (content re-rendered this frame).
+    pub dirty: bool,
+}
+
 /// One item of a presented frame, drawn strictly in slice order —
 /// bottom-to-top z. Pixel layers keep their D089 persistent-texture cache;
-/// shader quads execute their registered pipeline directly on the surface.
+/// shader quads execute their registered pipeline directly on the surface;
+/// offscreen refs sample a texture rendered via `render_offscreen`.
 pub enum FrameItem<'a> {
     Pixels(CompositorLayer<'a>),
     Shader(ShaderQuad<'a>),
+    Offscreen(OffscreenRef),
 }
 
 impl<'a> CompositorLayer<'a> {
@@ -124,30 +142,51 @@ impl<'a> CompositorLayer<'a> {
     /// Compute the 8-float uniform (dest NDC + UV window) for this layer given
     /// the current surface size in physical pixels.
     fn uniform(&self, surface_w: u32, surface_h: u32) -> [f32; 8] {
-        let (sw, sh) = (surface_w.max(1) as f32, surface_h.max(1) as f32);
-        let (tw, th) = (self.width.max(1) as f32, self.height.max(1) as f32);
-
-        // Screen placement → NDC. Full surface when dest is None.
-        let d = self.dest.unwrap_or(LayerRect { x: 0.0, y: 0.0, w: sw, h: sh });
-        let ndc_left   = 2.0 * d.x / sw - 1.0;
-        let ndc_right  = 2.0 * (d.x + d.w) / sw - 1.0;
-        let ndc_top    = 1.0 - 2.0 * d.y / sh;
-        let ndc_bottom = 1.0 - 2.0 * (d.y + d.h) / sh;
-
-        // UV window: sample a d.w × d.h region of the texture starting at the
-        // scroll offset (1:1 physical px → texel, no scaling).
-        let uv_min_x  = self.src_offset.0 / tw;
-        let uv_min_y  = self.src_offset.1 / th;
-        let uv_span_x = d.w / tw;
-        let uv_span_y = d.h / th;
-
-        [
-            ndc_left, ndc_bottom,   // dest_min
-            ndc_right, ndc_top,     // dest_max
-            uv_min_x, uv_min_y,     // uv_min
-            uv_span_x, uv_span_y,   // uv_span
-        ]
+        placed_uniform(self.dest, self.width, self.height, self.src_offset, surface_w, surface_h)
     }
+}
+
+/// Dest NDC + UV window for a placed texture — shared by pixel layers and
+/// offscreen refs (D109 C2). Pure function.
+fn placed_uniform(
+    dest: Option<LayerRect>, tex_w: u32, tex_h: u32,
+    src_offset: (f32, f32), surface_w: u32, surface_h: u32,
+) -> [f32; 8] {
+    let (sw, sh) = (surface_w.max(1) as f32, surface_h.max(1) as f32);
+    let (tw, th) = (tex_w.max(1) as f32, tex_h.max(1) as f32);
+
+    // Screen placement → NDC. Full surface when dest is None.
+    let d = dest.unwrap_or(LayerRect { x: 0.0, y: 0.0, w: sw, h: sh });
+    let ndc_left   = 2.0 * d.x / sw - 1.0;
+    let ndc_right  = 2.0 * (d.x + d.w) / sw - 1.0;
+    let ndc_top    = 1.0 - 2.0 * d.y / sh;
+    let ndc_bottom = 1.0 - 2.0 * (d.y + d.h) / sh;
+
+    // UV window: sample a d.w × d.h region of the texture starting at the
+    // scroll offset (1:1 physical px → texel, no scaling).
+    let uv_min_x  = src_offset.0 / tw;
+    let uv_min_y  = src_offset.1 / th;
+    let uv_span_x = d.w / tw;
+    let uv_span_y = d.h / th;
+
+    [
+        ndc_left, ndc_bottom,   // dest_min
+        ndc_right, ndc_top,     // dest_max
+        uv_min_x, uv_min_y,     // uv_min
+        uv_span_x, uv_span_y,   // uv_span
+    ]
+}
+
+/// An offscreen render target (D109 C2): scroll-layer content rendered
+/// once per publish, sampled with a live UV offset every frame after.
+struct OffscreenLayer {
+    texture:     wgpu::Texture,
+    bind_group:  wgpu::BindGroup,
+    uniform_buf: wgpu::Buffer,
+    width:       u32,
+    height:      u32,
+    /// Last placed uniform written — compared to skip writes/presents.
+    uniform:     [f32; 8],
 }
 
 /// One persistent GPU texture + bind group for a layer slot, reused across
@@ -241,6 +280,9 @@ pub struct GpuPresenter {
     shader_pipeline_layout: wgpu::PipelineLayout,
     /// Persistent per-slot quad resources (D089 discipline for quads).
     cached_quads:          Vec<CachedShaderQuad>,
+    /// Offscreen render targets keyed by caller key (D109 C2 — GPU scroll
+    /// layers). Unreferenced keys are evicted after each full present.
+    offscreen:             std::collections::HashMap<u64, OffscreenLayer>,
     /// Pipeline ids already warned about as unregistered — warn once, not
     /// per frame.
     missing_pipeline_warned: std::collections::HashSet<u64>,
@@ -477,8 +519,207 @@ impl GpuPresenter {
             shader_bgl,
             shader_pipeline_layout,
             cached_quads: Vec::new(),
+            offscreen: std::collections::HashMap::new(),
             missing_pipeline_warned: std::collections::HashSet::new(),
         })
+    }
+
+    /// Render `items` into the offscreen texture for `key` (D109 C2 — GPU
+    /// scroll-layer content). Called on publish frames only; every frame
+    /// after samples the texture at the live scroll offset via
+    /// [`FrameItem::Offscreen`]. The target is cleared to transparent
+    /// first — uncovered areas reveal whatever is beneath the layer.
+    ///
+    /// Resources here are transient by design: publishes happen on repaint
+    /// frames (rare relative to scrolled frames), so per-publish buffer
+    /// creation is the right cost/complexity trade until measured otherwise.
+    pub fn render_offscreen(&mut self, key: u64, width: u32, height: u32, items: &[FrameItem<'_>]) {
+        let (width, height) = (width.max(1), height.max(1));
+
+        // Reuse the target texture when dimensions match; else recreate
+        // (and its sampling bind group + uniform buffer).
+        let dims_match = self.offscreen.get(&key)
+            .map(|o| o.width == width && o.height == height)
+            .unwrap_or(false);
+        if !dims_match {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label:           Some("offscreen-scroll"),
+                size:            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count:    1,
+                dimension:       wgpu::TextureDimension::D2,
+                // MUST be the surface's format: every registered pipeline
+                // and the layer pipelines compile against config.format,
+                // and a render pass validates attachment formats against
+                // the pipeline (this was a real launch abort with
+                // Rgba8UnormSrgb vs the macOS Bgra8UnormSrgb surface).
+                // Sampling doesn't care about component order.
+                format:          self.config.format,
+                usage:           wgpu::TextureUsages::RENDER_ATTACHMENT
+                               | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats:    &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let uniform = [0.0f32; 8]; // real value written at present time
+            let uniform_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label:    Some("offscreen-uniforms"),
+                contents: bytemuck_f32x8(&uniform),
+                usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label:   Some("offscreen-bg"),
+                layout:  &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 2, resource: uniform_buf.as_entire_binding() },
+                ],
+            });
+            self.offscreen.insert(key, OffscreenLayer {
+                texture, bind_group, uniform_buf, width, height, uniform,
+            });
+        }
+
+        let target_view = self.offscreen[&key].texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("offscreen-enc"),
+        });
+
+        // Transient per-item resources, dropped after submit (see doc note).
+        let mut transient_layers: Vec<CachedLayer> = Vec::new();
+        let mut transient_quads:  Vec<(u64, wgpu::BindGroup, Option<(u32, u32, u32, u32)>)> = Vec::new();
+        for item in items {
+            match item {
+                FrameItem::Pixels(layer) => {
+                    if layer.width == 0 || layer.height == 0 { continue; }
+                    transient_layers.push(self.build_cached_layer(layer, width, height));
+                }
+                FrameItem::Shader(quad) => {
+                    let scissor = match quad.clip {
+                        Some(c) => match scissor_for(c, width, height) {
+                            Some(s) => Some(s),
+                            None => continue,
+                        },
+                        None => None,
+                    };
+                    const EMPTY_UNIFORMS: [u8; 16] = [0u8; 16];
+                    let user_bytes: &[u8] =
+                        if quad.uniforms.is_empty() { &EMPTY_UNIFORMS } else { quad.uniforms };
+                    let quad_uniform = shader_quad_uniform(quad.rect, width, height);
+                    let quad_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label:    Some("offscreen-quad-uniform"),
+                        contents: bytemuck_f32x8(&quad_uniform),
+                        usage:    wgpu::BufferUsages::UNIFORM,
+                    });
+                    let user_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label:    Some("offscreen-user-uniform"),
+                        contents: user_bytes,
+                        usage:    wgpu::BufferUsages::UNIFORM,
+                    });
+                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label:   Some("offscreen-quad-bg"),
+                        layout:  &self.shader_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: quad_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: user_buf.as_entire_binding() },
+                        ],
+                    });
+                    transient_quads.push((quad.pipeline, bind_group, scissor));
+                }
+                FrameItem::Offscreen(_) => {
+                    debug_assert!(false, "nested offscreen items are not supported");
+                    continue;
+                }
+            }
+        }
+
+        // Draw in item order. `layer_idx`/`quad_idx` walk the transient
+        // vecs in the same order they were filled above.
+        let mut cleared = false;
+        let mut layer_idx = 0usize;
+        let mut quad_idx = 0usize;
+        for item in items {
+            let load = if !cleared {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Load
+            };
+            match item {
+                FrameItem::Pixels(layer) => {
+                    if layer.width == 0 || layer.height == 0 { continue; }
+                    let cached = &transient_layers[layer_idx];
+                    layer_idx += 1;
+                    cleared = true;
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("offscreen-pixel-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &target_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    rpass.set_pipeline(&self.pipeline_overlay);
+                    rpass.set_bind_group(0, &cached.bind_group, &[]);
+                    rpass.draw(0..6, 0..1);
+                }
+                FrameItem::Shader(quad) => {
+                    if quad.clip.is_some() && scissor_for(quad.clip.unwrap(), width, height).is_none() {
+                        continue;
+                    }
+                    let (pipeline_id, bind_group, scissor) = &transient_quads[quad_idx];
+                    quad_idx += 1;
+                    let Some(entry) = self.shader_pipelines.get(pipeline_id) else {
+                        if self.missing_pipeline_warned.insert(*pipeline_id) {
+                            log::error!("offscreen quad references unregistered pipeline {pipeline_id}");
+                        }
+                        continue;
+                    };
+                    cleared = true;
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("offscreen-quad-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &target_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    if let Some((x, y, w, h)) = scissor {
+                        rpass.set_scissor_rect(*x, *y, *w, *h);
+                    }
+                    rpass.set_pipeline(&entry.pipeline);
+                    rpass.set_bind_group(0, bind_group, &[]);
+                    rpass.draw(0..6, 0..1);
+                }
+                FrameItem::Offscreen(_) => continue,
+            }
+        }
+        // An all-empty item list still needs the clear (content removed).
+        if !cleared {
+            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("offscreen-clear-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view:           &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes:         None,
+                occlusion_query_set:      None,
+            });
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
     }
 
     /// Register (or replace) a shader pipeline (D109). Compiles EAGERLY —
@@ -627,7 +868,10 @@ impl GpuPresenter {
         let quads: Vec<&ShaderQuad<'_>> = items.iter()
             .filter_map(|i| match i { FrameItem::Shader(q) => Some(q), _ => None })
             .collect();
-        if pixel_layers.is_empty() && quads.is_empty() { return; }
+        let offs: Vec<&OffscreenRef> = items.iter()
+            .filter_map(|i| match i { FrameItem::Offscreen(o) => Some(o), _ => None })
+            .collect();
+        if pixel_layers.is_empty() && quads.is_empty() && offs.is_empty() { return; }
 
         // ── Skip-present fast path (D089) ──────────────────────────────────
         // If the frame is structurally identical to the last one — same
@@ -650,10 +894,18 @@ impl GpuPresenter {
                     && c.uniforms == q.uniforms
                     && c.clip == q.clip
             });
-        if layers_unchanged && quads_unchanged {
+        let offscreen_unchanged = offs.iter().all(|o| {
+            !o.dirty
+                && self.offscreen.get(&o.key)
+                    .map(|e| e.uniform == placed_uniform(
+                        Some(o.dest), e.width, e.height, o.src_offset, sw, sh,
+                    ))
+                    .unwrap_or(false)
+        });
+        if layers_unchanged && quads_unchanged && offscreen_unchanged {
             log::debug!(
-                "compositor: skip present ({} layers + {} quads unchanged)",
-                pixel_layers.len(), quads.len(),
+                "compositor: skip present ({} layers + {} quads + {} offscreen unchanged)",
+                pixel_layers.len(), quads.len(), offs.len(),
             );
             return;
         }
@@ -820,11 +1072,64 @@ impl GpuPresenter {
                     rpass.set_bind_group(0, &cached.bind_group, &[]);
                     rpass.draw(0..6, 0..1);
                 }
+                FrameItem::Offscreen(o) => {
+                    // Update the placed uniform (the scroll offset lives
+                    // here) BEFORE the pass borrows the bind group.
+                    let uniform_changed = {
+                        let Some(entry) = self.offscreen.get_mut(&o.key) else {
+                            log::debug!("offscreen {} referenced before render_offscreen", o.key);
+                            continue;
+                        };
+                        let uniform = placed_uniform(
+                            Some(o.dest), entry.width, entry.height, o.src_offset, sw, sh,
+                        );
+                        if entry.uniform != uniform {
+                            entry.uniform = uniform;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    let entry = &self.offscreen[&o.key];
+                    if uniform_changed {
+                        self.queue.write_buffer(&entry.uniform_buf, 0, bytemuck_f32x8(&entry.uniform));
+                    }
+
+                    let load = if !cleared {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    };
+                    cleared = true;
+
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("offscreen-sample-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    rpass.set_pipeline(&self.pipeline_overlay);
+                    rpass.set_bind_group(0, &entry.bind_group, &[]);
+                    rpass.draw(0..6, 0..1);
+                }
             }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+
+        // Evict offscreen targets no longer referenced by any frame item —
+        // a removed scroll view must not pin its content texture forever.
+        if !self.offscreen.is_empty() {
+            let referenced: std::collections::HashSet<u64> =
+                offs.iter().map(|o| o.key).collect();
+            self.offscreen.retain(|k, _| referenced.contains(k));
+        }
     }
 
     /// Sync `cached_quads` to this frame's quads: reuse buffers when the

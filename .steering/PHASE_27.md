@@ -398,10 +398,29 @@ Steps:
             text raster + segment copies — exactly Step 4's target.
             Idle evidence for C4: occluded GPU-mode app measured 0.00s
             CPU over 10s (frame-skip + skip-present engaged).
-      - [ ] 3c-remaining: C2 scroll-layer render-to-texture (scroll
-            interiors still CPU); C4 focused-idle frame-skip
-            re-verification with skip-present logs; on-device mobile
-            sanity check (same code path as desktop, unverified there).
+      - [x] 3c-C2 (landed 2026-07-11): scroll-layer render-to-texture —
+            engine propagates GPU mode to content canvases (items instead
+            of a pixel-buffer copy), `GpuPresenter::render_offscreen`
+            renders them into a per-key offscreen texture on publish
+            frames (transient resources by design — publishes are rare vs
+            scrolled frames), `FrameItem::Offscreen` samples it at the
+            live scroll offset per frame; skip-present covers offscreen
+            refs; unreferenced targets evicted after each present. Real
+            bug caught during verification: the offscreen target MUST use
+            the surface's format (macOS is Bgra8UnormSrgb; Rgba8 aborted
+            at pipeline/attachment validation). Verified on app_demo's
+            GPU Scroll Layer screen: CPU-vs-GPU settled diff 0.66% within
+            8/255, ZERO pixels >60 (an earlier 4.34% reading was the
+            scroll settle animation caught at different times — offset is
+            live by design); row pitch byte-identical (111px both modes).
+      - [x] 3c-C4 (2026-07-11): frame-skip verified on the GPU path with
+            logs — idle app emits repeating
+            "skip present (1 layers + 7 quads + 1 offscreen unchanged)"
+            and 0.00s process CPU over 10s; dirty tracking upstream
+            (needs_paint) unchanged.
+      - [ ] 3c-remaining: on-device mobile sanity check (same code path
+            as desktop, unverified there — do alongside the next `rsc
+            run` mobile session rather than as its own boot cycle).
 - [ ] Step 4 — GPU glyph atlas on `FontCache`, text-heavy scroll
       measurement
 - [ ] Step 5 — `ShaderPaint` widget + real novel-effect demo

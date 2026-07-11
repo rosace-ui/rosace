@@ -22,11 +22,18 @@ pub struct ScrollLayer {
     /// without a repaint.
     pub id:     u64,
     /// Content texture, RGBA8, `width * height * 4` bytes (physical pixels).
+    /// Empty when `items` is used instead (GPU-shapes mode, D109 C2).
     pub pixels: Vec<u8>,
     pub width:  u32,
     pub height: u32,
     /// Viewport placement on screen in physical pixels: `(x, y, w, h)`.
     pub dest:   (f32, f32, f32, f32),
+    /// GPU-shapes mode (D109 C2): the content as ordered frame items
+    /// (shape quads + CPU segments) instead of a pre-rasterized pixel
+    /// buffer — the compositor renders them into an offscreen texture on
+    /// publish and samples it at the live scroll offset every frame.
+    /// Empty ⇒ use `pixels` (CPU path).
+    pub items:  Vec<rosace_render::canvas::CanvasFrameItem>,
 }
 
 thread_local! {
