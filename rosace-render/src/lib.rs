@@ -182,23 +182,51 @@ mod tests {
         canvas.play_picture(&rec.finish(), &FontCache::embedded());
 
         let items = canvas.take_frame_items();
-        assert_eq!(items.len(), 4, "bg quad + rect quad + text segment + circle quad: {items:?}");
+        assert_eq!(items.len(), 4, "bg quad + rect quad + glyph batch + circle quad: {items:?}");
         assert!(matches!(&items[0], CanvasFrameItem::Shader(q) if q.pipeline_id == crate::gpu_shapes::FILL_RRECT_ID),
             "item 0 must be the background quad");
         assert!(matches!(&items[1], CanvasFrameItem::Shader(q) if q.pipeline_id == crate::gpu_shapes::FILL_RRECT_ID));
-        let CanvasFrameItem::Segment { x, y, w, h, pixels } = &items[2] else {
-            panic!("item 2 must be the text segment, got {:?}", items[2]);
+        // Text is an atlas glyph batch BETWEEN the two shape quads (Step 4)
+        // — same z-order guarantee the segment path had.
+        let CanvasFrameItem::Glyphs { glyphs, clip } = &items[2] else {
+            panic!("item 2 must be the glyph batch, got {:?}", items[2]);
         };
-        // The segment must cover the text origin and contain real pixels.
-        assert!(*x <= 20 && *y <= 30 && x + w >= 20 && y + h >= 30, "bbox must cover the text");
-        assert!(pixels.iter().any(|&b| b != 0), "segment must contain rasterized glyph pixels");
+        assert_eq!(glyphs.len(), 2, "'hi' = two placed glyphs");
+        assert_eq!(*clip, None);
+        assert!(glyphs[0].x >= 18.0 && glyphs[0].y >= 30.0 && glyphs[0].y <= 46.0,
+            "first glyph must sit near the text origin (baseline convention): {:?}", glyphs[0]);
+        assert!(glyphs[1].x > glyphs[0].x, "second glyph advances rightward");
+        assert!(glyphs.iter().all(|g| g.w > 0 && g.h > 0 && !g.bitmap.1.is_empty()));
         assert!(matches!(&items[3], CanvasFrameItem::Shader(q) if q.pipeline_id == crate::gpu_shapes::FILL_RRECT_ID),
             "circle renders via the fill-rrect pipeline");
 
-        // After extraction the scratch pixmap must be fully transparent —
-        // segments are cut out, never double-presented (and the shapes
-        // never touched the CPU buffer at all).
-        assert!(canvas.pixels().iter().all(|&b| b == 0), "scratch pixmap must be empty after take");
+        // Nothing touched the CPU buffer: shapes are quads, text is atlas
+        // glyphs — the scratch pixmap only ever holds Blit segments now.
+        assert!(canvas.pixels().iter().all(|&b| b == 0), "scratch pixmap must stay empty");
+    }
+
+    #[test]
+    fn gpu_mode_consecutive_text_coalesces_into_one_glyph_batch() {
+        use crate::canvas::CanvasFrameItem;
+        use crate::draw_command::DrawCommand;
+        use crate::font::FontCache;
+        use crate::picture::PictureRecorder;
+
+        let mut canvas = SkiaCanvas::new(200, 200);
+        canvas.set_gpu_shapes(true);
+        canvas.clear(Color::rgb(0, 0, 0));
+        let mut rec = PictureRecorder::new();
+        for (i, s) in ["ab", "cd"].iter().enumerate() {
+            rec.push(DrawCommand::DrawText {
+                text: (*s).into(), origin: Point { x: 10.0, y: 20.0 + i as f32 * 20.0 },
+                color: Color::WHITE, px: 12.0, weight: crate::FontWeight::Regular,
+            });
+        }
+        canvas.play_picture(&rec.finish(), &FontCache::embedded());
+        let items = canvas.take_frame_items();
+        assert_eq!(items.len(), 2, "bg + ONE coalesced glyph batch: {items:?}");
+        let CanvasFrameItem::Glyphs { glyphs, .. } = &items[1] else { panic!() };
+        assert_eq!(glyphs.len(), 4, "both runs batch together");
     }
 
     #[test]

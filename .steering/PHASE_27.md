@@ -447,8 +447,21 @@ Steps:
       - [ ] 3c-remaining: on-device mobile sanity check (same code path
             as desktop, unverified there — do alongside the next `rsc
             run` mobile session rather than as its own boot cycle).
-- [ ] Step 4 — GPU glyph atlas on `FontCache`, text-heavy scroll
-      measurement
+- [x] Step 4 — GPU glyph atlas (landed 2026-07-11): `layout_glyphs`
+      extracted as the ONE placement walk shared by the CPU blit path and
+      the atlas path (kerning/baseline agree by construction);
+      `text_gamma_lut()` shared via `set_glyph_gamma` (gamma applied once
+      at upload); `CanvasFrameItem::Glyphs` batches coalesce consecutive
+      DrawText under one clip; compositor: 2048² R8 atlas + shelf packer
+      (1px gutters; full ⇒ loud-once + skip; growth/eviction named
+      follow-up; key bit 63 reserved for color/emoji glyphs, D115),
+      instanced glyph pipeline (12 f32/instance), skip-present covers
+      glyph batches, offscreen scroll content gets target-sized globals.
+      Verified: text-heavy home screen CPU-vs-GPU 0.23% within 8/255,
+      ZERO >60 (kerning/baseline/HiDPI faithful); offscreen scroll text
+      renders; unit tests for partition/coalescing; full workspace tests
+      green. bench_paint: 7.57 → **0.324 ms/frame — 23.4× lower** CPU
+      per animated frame (was 10.2× with segment text).
 - [ ] Step 5 — `ShaderPaint` widget + real novel-effect demo
 - [ ] Final cleanup (desktop/mobile tiny-skia removal) — BLOCKED on web
       GPU phase, do not attempt inside this phase

@@ -320,3 +320,56 @@ impl FontCache {
             .unwrap_or(px * 1.2)
     }
 }
+
+/// One glyph placed by [`layout_glyphs`]: the cached rasterization plus its
+/// top-left pixel position and a stable atlas key (D109/Phase 27 Step 4).
+pub struct PlacedGlyph {
+    pub glyph: CachedGlyph,
+    /// Top-left of the glyph bitmap, physical px.
+    pub x: i32,
+    pub y: i32,
+    /// Stable across frames: `px_bits << 32 | char << 1 | wants_bold`.
+    /// Face routing is deterministic per `(char, bold)`, so this fully
+    /// identifies the rasterization without exposing `FaceKey`.
+    pub key: u64,
+}
+
+/// The one glyph-placement walk (kerning, baseline, bearing) shared by the
+/// CPU blit path (`SkiaCanvas::draw_text_weighted`) and the GPU atlas
+/// collect path — they MUST agree glyph-for-glyph, so the math lives once.
+///
+/// `origin` is the line box's top-left in physical px (the baseline is
+/// derived via [`FontCache::ascender`]); zero-size glyphs (spaces) advance
+/// the cursor but emit nothing.
+pub fn layout_glyphs(
+    font: &FontCache,
+    text: &str,
+    origin_x: f32,
+    origin_y: f32,
+    px: f32,
+    weight: FontWeight,
+) -> Vec<PlacedGlyph> {
+    let base_y = origin_y.round() as i32 + font.ascender(px);
+    let mut cursor_x = origin_x;
+    let mut prev: Option<char> = None;
+    let mut out = Vec::with_capacity(text.len());
+    let bold = weight.wants_bold() as u64;
+
+    for ch in text.chars() {
+        if let Some(p) = prev {
+            cursor_x += font.kern_weighted(p, ch, px, weight);
+        }
+        prev = Some(ch);
+
+        let glyph = font.glyph_weighted(ch, px, weight);
+        let advance = glyph.0.advance_width;
+        if glyph.0.width != 0 && glyph.0.height != 0 {
+            let gx = cursor_x.round() as i32 + glyph.0.xmin;
+            let gy = base_y - glyph.0.ymin - glyph.0.height as i32;
+            let key = ((px.to_bits() as u64) << 32) | ((ch as u64) << 1) | bold;
+            out.push(PlacedGlyph { glyph, x: gx, y: gy, key });
+        }
+        cursor_x += advance;
+    }
+    out
+}

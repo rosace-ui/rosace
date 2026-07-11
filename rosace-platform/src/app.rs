@@ -200,6 +200,21 @@ fn canvas_item_to_frame<'a>(
                 ),
             )
         }
+        rosace_render::canvas::CanvasFrameItem::Glyphs { glyphs, clip } => {
+            // Text color converts sRGB->linear here (same convention as
+            // shape quads — the shader outputs linear, the surface
+            // re-encodes). Bitmaps are read by the compositor only on the
+            // atlas's first sight of each key.
+            rosace_compositor::FrameItem::Glyphs {
+                glyphs: glyphs.iter().map(|g| rosace_compositor::AtlasGlyph {
+                    key:    g.key,
+                    bitmap: &g.bitmap.1,
+                    x: g.x, y: g.y, w: g.w, h: g.h,
+                    color: rosace_render::gpu_shapes::linear_rgba(g.color),
+                }).collect(),
+                clip: *clip,
+            }
+        }
     }
 }
 
@@ -324,6 +339,8 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             // measurement lever): full tiny-skia path, as before Step 3.
             if std::env::var_os("ROSACE_CPU_SHAPES").is_none() {
                 rosace_shader::builtin::register_builtins();
+                // One gamma curve for both text paths (D109 Step 4).
+                p.set_glyph_gamma(rosace_render::canvas::text_gamma_lut());
                 self.canvas.set_gpu_shapes(true);
                 log::info!("rosace-platform: GPU shapes enabled (ROSACE_CPU_SHAPES=1 to disable)");
             }

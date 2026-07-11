@@ -11,16 +11,7 @@ const KAPPA: f32 = 0.552_285;
 /// gamma boost on the coverage ramp keeps edges smooth while restoring
 /// stem weight. One-time 256-entry table.
 fn text_gamma(cov: u32) -> u32 {
-    use std::sync::OnceLock;
-    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
-    let lut = LUT.get_or_init(|| {
-        let mut t = [0u8; 256];
-        for (i, v) in t.iter_mut().enumerate() {
-            *v = ((i as f32 / 255.0).powf(1.0 / 1.22) * 255.0).round() as u8;
-        }
-        t
-    });
-    lut[cov as usize] as u32
+    text_gamma_lut()[cov as usize] as u32
 }
 
 /// Exact-rounding division by 255 without an integer divide.
@@ -83,13 +74,66 @@ pub struct SkiaCanvas {
     seg_bbox: Option<(f32, f32, f32, f32)>,
 }
 
-/// One item of a GPU-mode frame, in z-order (D109 C1): either a GPU quad
-/// or a CPU-rasterized segment (a bbox-sized premultiplied-RGBA buffer cut
-/// out of the scratch pixmap, placed at `(x, y)` physical px).
+/// One glyph headed for the compositor's atlas (D109 Step 4): position and
+/// color per frame; `bitmap` is the shared cached rasterization, read only
+/// on the atlas's first sight of `key`.
+#[derive(Clone)]
+pub struct GlyphQuad {
+    /// Stable atlas key (see `font::layout_glyphs`).
+    pub key: u64,
+    /// Coverage bitmap (`w*h` bytes) — pre-gamma; the atlas upload applies
+    /// the text gamma curve once (see [`text_gamma_lut`]).
+    pub bitmap: crate::font::CachedGlyph,
+    /// Top-left, physical px.
+    pub x: f32,
+    pub y: f32,
+    pub w: u32,
+    pub h: u32,
+    /// sRGB straight-alpha text color.
+    pub color: [u8; 4],
+}
+
+// Equality/Debug skip the bitmap: `key` fully identifies it, and frame
+// diffing (skip-present) must not walk glyph bytes.
+impl PartialEq for GlyphQuad {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.x == other.x && self.y == other.y
+            && self.w == other.w && self.h == other.h
+            && self.color == other.color
+    }
+}
+impl std::fmt::Debug for GlyphQuad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GlyphQuad(key={:#x} at {},{} {}x{})", self.key, self.x, self.y, self.w, self.h)
+    }
+}
+
+/// The text-AA gamma curve as a 256-entry LUT (D109 Step 4): the CPU blit
+/// path applies it per pixel at blend time; the GPU atlas applies it ONCE
+/// at upload so the glyph shader is a pure sample×color. Exposed so the
+/// platform hands the compositor gamma'd bytes without the Layer-0
+/// compositor needing this crate.
+pub fn text_gamma_lut() -> &'static [u8; 256] {
+    use std::sync::OnceLock;
+    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut t = [0u8; 256];
+        for (i, v) in t.iter_mut().enumerate() {
+            *v = ((i as f32 / 255.0).powf(1.0 / 1.22) * 255.0).round() as u8;
+        }
+        t
+    })
+}
+
+/// One item of a GPU-mode frame, in z-order (D109 C1): a GPU shape quad, a
+/// CPU-rasterized segment (bbox-sized premultiplied-RGBA buffer cut out of
+/// the scratch pixmap), or a batch of atlas glyphs (Step 4).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanvasFrameItem {
     Shader(ShaderQuadCmd),
     Segment { x: u32, y: u32, w: u32, h: u32, pixels: Vec<u8> },
+    Glyphs { glyphs: Vec<GlyphQuad>, clip: Option<(f32, f32, f32, f32)> },
 }
 
 /// One collected `DrawCommand::ShaderFill`, in PHYSICAL pixels, ready for
@@ -647,32 +691,21 @@ impl SkiaCanvas {
         };
         if clip_x1 <= clip_x0 || clip_y1 <= clip_y0 { return; }
 
-        let base_y = origin.y.round() as i32 + ascender;
-        let mut cursor_x = origin.x;
-        let mut prev: Option<char> = None;
+        let _ = ascender; // baseline math lives in layout_glyphs (Step 4)
         let color_a = color.a as u32;
+
+        // The one shared placement walk (D109 Step 4): the GPU atlas path
+        // consumes the same `layout_glyphs`, so both agree glyph-for-glyph.
+        let placed = crate::font::layout_glyphs(font, text, origin.x, origin.y, px, weight);
 
         // Obtain a mutable slice of the pixel buffer. Because `font` is a
         // separate argument (not a field of SkiaCanvas), holding `dst` and
         // calling `font.glyph` in the loop has no borrow conflict.
         let dst = self.pixmap.data_mut();
 
-        for ch in text.chars() {
-            if let Some(p) = prev {
-                cursor_x += font.kern_weighted(p, ch, px, weight);
-            }
-            prev = Some(ch);
-
-            let glyph = font.glyph_weighted(ch, px, weight);
-            let (metrics, bitmap) = (&glyph.0, &glyph.1);
-
-            if metrics.width == 0 || metrics.height == 0 {
-                cursor_x += metrics.advance_width;
-                continue;
-            }
-
-            let gx = cursor_x.round() as i32 + metrics.xmin;
-            let gy = base_y - metrics.ymin - metrics.height as i32;
+        for pg in &placed {
+            let (metrics, bitmap) = (&pg.glyph.0, &pg.glyph.1);
+            let (gx, gy) = (pg.x, pg.y);
 
             for row in 0..metrics.height {
                 let py = gy + row as i32;
@@ -705,8 +738,6 @@ impl SkiaCanvas {
                     }
                 }
             }
-
-            cursor_x += metrics.advance_width;
         }
         self.has_drawn = true;
     }
@@ -1073,18 +1104,43 @@ impl SkiaCanvas {
                     let o = sp(*origin);
                     let pxp = *px * s;
                     if self.gpu_shapes {
-                        // CPU segment content (until Step 4's glyph atlas).
-                        // Conservative bbox: 1em horizontal slack + 1em/char
-                        // width, ±1.6em vertical — over-covers any
-                        // baseline/ascent convention; correctness over
-                        // tightness (an undersized bbox clips glyphs).
-                        let n = text.chars().count() as f32;
-                        self.grow_segment(
-                            o.x - pxp, o.y - 1.6 * pxp,
-                            o.x + (n + 1.0) * pxp, o.y + 1.6 * pxp,
+                        // Step 4: text renders as atlas glyph quads — the
+                        // SAME layout walk as the CPU path, so placement is
+                        // identical by construction. Cut any open CPU
+                        // segment first (z-order), then coalesce with an
+                        // immediately-preceding Glyphs item under the same
+                        // clip (batching without reordering).
+                        if color.a == 0 || text.is_empty() { continue; }
+                        let placed = crate::font::layout_glyphs(
+                            font, text, o.x, o.y, pxp, *weight,
                         );
+                        let rgba = color.rgba_bytes();
+                        let quads = placed.into_iter().map(|pg| GlyphQuad {
+                            key: pg.key,
+                            x: pg.x as f32,
+                            y: pg.y as f32,
+                            w: pg.glyph.0.width as u32,
+                            h: pg.glyph.0.height as u32,
+                            bitmap: pg.glyph,
+                            color: rgba,
+                        });
+                        self.cut_segment();
+                        match self.pending_frame_items.last_mut() {
+                            Some(CanvasFrameItem::Glyphs { glyphs, clip })
+                                if *clip == widget_clip =>
+                            {
+                                glyphs.extend(quads);
+                            }
+                            _ => {
+                                self.pending_frame_items.push(CanvasFrameItem::Glyphs {
+                                    glyphs: quads.collect(),
+                                    clip: widget_clip,
+                                });
+                            }
+                        }
+                    } else {
+                        self.draw_text_weighted(text, o, *color, font, pxp, *weight);
                     }
-                    self.draw_text_weighted(text, o, *color, font, pxp, *weight);
                 }
                 DrawCommand::BlitRgba { pixels, src_width, src_height, dest_rect, opacity } => {
                     let d = sr(*dest_rect);

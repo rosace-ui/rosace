@@ -29,6 +29,66 @@ fn bytemuck_f32x8(data: &[f32; 8]) -> &[u8] {
     }
 }
 
+/// Reinterpret an `&[f32]` as raw bytes for GPU upload (glyph instances).
+/// SAFETY: f32s are 4 contiguous bytes each; every bit pattern is a valid u8.
+fn f32s_as_bytes(data: &[f32]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
+    }
+}
+
+/// The glyph-atlas pipeline's WGSL (D109 Step 4): instanced quads, one per
+/// glyph — position/size/uv/color per instance, coverage sampled from the
+/// R8 atlas, output premultiplied linear.
+const GLYPH_WGSL: &str = r#"
+struct GlyphGlobals {
+    surface_px: vec2<f32>,
+    _pad:       vec2<f32>,
+};
+@group(0) @binding(0) var<uniform> g: GlyphGlobals;
+@group(0) @binding(1) var t_atlas: texture_2d<f32>;
+@group(0) @binding(2) var s_atlas: sampler;
+
+struct GlyphIn {
+    @location(0) pos_px:  vec2<f32>,
+    @location(1) size_px: vec2<f32>,
+    @location(2) uv_min:  vec2<f32>,
+    @location(3) uv_size: vec2<f32>,
+    @location(4) color:   vec4<f32>,
+};
+struct GlyphVsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv:    vec2<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32, in: GlyphIn) -> GlyphVsOut {
+    var corner = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let c = corner[vi];
+    let p = in.pos_px + c * in.size_px;
+    var out: GlyphVsOut;
+    out.pos = vec4<f32>(
+        2.0 * p.x / g.surface_px.x - 1.0,
+        1.0 - 2.0 * p.y / g.surface_px.y,
+        0.0, 1.0,
+    );
+    out.uv = in.uv_min + c * in.uv_size;
+    out.color = in.color;
+    return out;
+}
+
+@fragment
+fn fs_main(in: GlyphVsOut) -> @location(0) vec4<f32> {
+    let cov = textureSample(t_atlas, s_atlas, in.uv).r;
+    let a = in.color.a * cov;
+    return vec4<f32>(in.color.rgb * a, a);
+}
+"#;
+
 /// One render layer passed to `GpuPresenter::present_layers`.
 ///
 /// `pixels` must be an RGBA8 byte slice of exactly `width * height * 4` bytes.
@@ -109,14 +169,34 @@ pub struct OffscreenRef {
     pub dirty: bool,
 }
 
+/// One glyph for the atlas pipeline (D109 Step 4). Primitives only (Layer
+/// 0): `bitmap` is the coverage mask, read ONLY on the atlas's first sight
+/// of `key`; `color` is LINEAR straight-alpha (the platform converts from
+/// sRGB — same convention as shape quads). Key bit 63 is RESERVED for
+/// color-bitmap glyphs (emoji/COLR, D115) — a future RGBA atlas page keyed
+/// by the same map; mask glyphs must keep it 0.
+#[derive(Clone, Copy)]
+pub struct AtlasGlyph<'a> {
+    pub key: u64,
+    pub bitmap: &'a [u8],
+    /// Top-left, physical px.
+    pub x: f32,
+    pub y: f32,
+    pub w: u32,
+    pub h: u32,
+    pub color: [f32; 4],
+}
+
 /// One item of a presented frame, drawn strictly in slice order —
 /// bottom-to-top z. Pixel layers keep their D089 persistent-texture cache;
 /// shader quads execute their registered pipeline directly on the surface;
-/// offscreen refs sample a texture rendered via `render_offscreen`.
+/// offscreen refs sample a texture rendered via `render_offscreen`; glyph
+/// batches draw as instanced quads over the glyph atlas.
 pub enum FrameItem<'a> {
     Pixels(CompositorLayer<'a>),
     Shader(ShaderQuad<'a>),
     Offscreen(OffscreenRef),
+    Glyphs { glyphs: Vec<AtlasGlyph<'a>>, clip: Option<(f32, f32, f32, f32)> },
 }
 
 impl<'a> CompositorLayer<'a> {
@@ -175,6 +255,63 @@ fn placed_uniform(
         uv_min_x, uv_min_y,     // uv_min
         uv_span_x, uv_span_y,   // uv_span
     ]
+}
+
+/// Atlas size — 2048² of R8 coverage holds thousands of UI-size glyphs.
+/// Growth/eviction is NAMED FUTURE WORK (a full atlas warns loudly and
+/// skips new glyphs), not silently assumed away.
+const GLYPH_ATLAS_DIM: u32 = 2048;
+
+/// One packed glyph in the atlas: its texel rect.
+#[derive(Clone, Copy)]
+struct AtlasSlot {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+/// Shelf packer over the atlas texture: rows of similar-height glyphs,
+/// 1px gutters against sampling bleed. Pure allocator — unit-testable.
+struct ShelfPacker {
+    shelves: Vec<(u32, u32, u32)>, // (y, height, cursor_x)
+    next_y: u32,
+    dim: u32,
+}
+
+impl ShelfPacker {
+    fn new(dim: u32) -> Self {
+        Self { shelves: Vec::new(), next_y: 0, dim }
+    }
+
+    fn alloc(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
+        if w + 2 > self.dim || h + 2 > self.dim { return None; }
+        let (w2, h2) = (w + 1, h + 1); // 1px gutter right/below
+        for (sy, sh, cursor) in self.shelves.iter_mut() {
+            if h2 <= *sh && *sh <= h2 + h2 / 2 && *cursor + w2 <= self.dim {
+                let pos = (*cursor, *sy);
+                *cursor += w2;
+                return Some(pos);
+            }
+        }
+        if self.next_y + h2 > self.dim { return None; }
+        let y = self.next_y;
+        self.next_y += h2;
+        self.shelves.push((y, h2, w2));
+        Some((0, y))
+    }
+}
+
+/// The glyph atlas (D109 Step 4): coverage masks uploaded once per
+/// distinct key, sampled as instanced quads forever after.
+struct GlyphAtlas {
+    texture:    wgpu::Texture,
+    view:       wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    packer:     ShelfPacker,
+    slots:      std::collections::HashMap<u64, AtlasSlot>,
+    /// Warned-once flag for a full atlas.
+    full_warned: bool,
 }
 
 /// An offscreen render target (D109 C2): scroll-layer content rendered
@@ -283,6 +420,19 @@ pub struct GpuPresenter {
     /// Offscreen render targets keyed by caller key (D109 C2 — GPU scroll
     /// layers). Unreferenced keys are evicted after each full present.
     offscreen:             std::collections::HashMap<u64, OffscreenLayer>,
+    /// The glyph atlas + its instanced pipeline (D109 Step 4).
+    glyph_atlas:           GlyphAtlas,
+    glyph_pipeline:        wgpu::RenderPipeline,
+    glyph_bgl:             wgpu::BindGroupLayout,
+    glyph_globals_buf:     wgpu::Buffer,
+    /// Last surface size written to the glyph globals uniform.
+    glyph_globals_size:    (u32, u32),
+    /// Coverage gamma LUT applied at atlas upload — set by the platform
+    /// from the render crate's curve so both text paths share one source.
+    glyph_gamma:           Option<&'static [u8; 256]>,
+    /// Per-slot cached glyph batches (instance bytes + clip) — the
+    /// skip-present comparison for text, mirroring cached_quads.
+    cached_glyph_batches:  Vec<(Option<(f32, f32, f32, f32)>, Vec<f32>)>,
     /// Pipeline ids already warned about as unregistered — warn once, not
     /// per frame.
     missing_pipeline_warned: std::collections::HashSet<u64>,
@@ -503,6 +653,109 @@ impl GpuPresenter {
             push_constant_ranges: &[],
         });
 
+        // ── Glyph atlas + instanced pipeline (D109 Step 4) ──────────────
+        let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label:           Some("glyph-atlas"),
+            size:            wgpu::Extent3d {
+                width: GLYPH_ATLAS_DIM, height: GLYPH_ATLAS_DIM, depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count:    1,
+            dimension:       wgpu::TextureDimension::D2,
+            format:          wgpu::TextureFormat::R8Unorm,
+            usage:           wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats:    &[],
+        });
+        let atlas_view = atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let glyph_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label:   Some("glyph-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding:    0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                 wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:   None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type:    wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled:   false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let glyph_globals = [width as f32, height as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let glyph_globals_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("glyph-globals"),
+            contents: bytemuck_f32x8(&glyph_globals),
+            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let atlas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("glyph-atlas-bg"),
+            layout:  &glyph_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: glyph_globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
+        let glyph_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label:  Some("glyph-pipeline"),
+            source: wgpu::ShaderSource::Wgsl(GLYPH_WGSL.into()),
+        });
+        let glyph_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:                Some("glyph-pl"),
+            bind_group_layouts:   &[&glyph_bgl],
+            push_constant_ranges: &[],
+        });
+        let glyph_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label:  Some("glyph-pipeline"),
+            layout: Some(&glyph_pl),
+            vertex: wgpu::VertexState {
+                module:      &glyph_module,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 48, // 12 f32s per instance
+                    step_mode:    wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2, 1 => Float32x2,
+                        2 => Float32x2, 3 => Float32x2,
+                        4 => Float32x4,
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module:      &glyph_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend:      Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive:     wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample:   wgpu::MultisampleState::default(),
+            multiview:     None,
+            cache:         None,
+        });
+
         Some(Self {
             surface,
             device,
@@ -520,8 +773,82 @@ impl GpuPresenter {
             shader_pipeline_layout,
             cached_quads: Vec::new(),
             offscreen: std::collections::HashMap::new(),
+            glyph_atlas: GlyphAtlas {
+                texture:     atlas_texture,
+                view:        atlas_view,
+                bind_group:  atlas_bind_group,
+                packer:      ShelfPacker::new(GLYPH_ATLAS_DIM),
+                slots:       std::collections::HashMap::new(),
+                full_warned: false,
+            },
+            glyph_pipeline,
+            glyph_bgl,
+            glyph_globals_buf,
+            glyph_globals_size: (width, height),
+            glyph_gamma: None,
+            cached_glyph_batches: Vec::new(),
             missing_pipeline_warned: std::collections::HashSet::new(),
         })
+    }
+
+    /// Set the coverage-gamma LUT applied at glyph upload (D109 Step 4).
+    /// The platform passes the render crate's `text_gamma_lut()` so the
+    /// CPU blit path and the atlas share ONE curve — this Layer-0 crate
+    /// cannot import it.
+    pub fn set_glyph_gamma(&mut self, lut: &'static [u8; 256]) {
+        self.glyph_gamma = Some(lut);
+    }
+
+    /// Upload any first-seen glyphs to the atlas and build the per-batch
+    /// instance floats (12 per glyph). Atlas-full is loud-once + skip.
+    fn prepare_glyphs(&mut self, glyphs: &[AtlasGlyph<'_>]) -> Vec<f32> {
+        let mut out: Vec<f32> = Vec::with_capacity(glyphs.len() * 12);
+        let inv_dim = 1.0 / GLYPH_ATLAS_DIM as f32;
+        for g in glyphs {
+            if !self.glyph_atlas.slots.contains_key(&g.key) {
+                let Some((ax, ay)) = self.glyph_atlas.packer.alloc(g.w, g.h) else {
+                    if !self.glyph_atlas.full_warned {
+                        self.glyph_atlas.full_warned = true;
+                        log::error!(
+                            "glyph atlas full ({} glyphs) — new glyphs will not render; \
+                             atlas growth/eviction is named follow-up work (PHASE_27.md)",
+                            self.glyph_atlas.slots.len(),
+                        );
+                    }
+                    continue;
+                };
+                // Apply the text gamma curve once, at upload.
+                let bytes: Vec<u8> = match self.glyph_gamma {
+                    Some(lut) => g.bitmap.iter().map(|&b| lut[b as usize]).collect(),
+                    None      => g.bitmap.to_vec(),
+                };
+                self.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture:   &self.glyph_atlas.texture,
+                        mip_level: 0,
+                        origin:    wgpu::Origin3d { x: ax, y: ay, z: 0 },
+                        aspect:    wgpu::TextureAspect::All,
+                    },
+                    &bytes,
+                    wgpu::TexelCopyBufferLayout {
+                        offset:         0,
+                        bytes_per_row:  Some(g.w),
+                        rows_per_image: Some(g.h),
+                    },
+                    wgpu::Extent3d { width: g.w, height: g.h, depth_or_array_layers: 1 },
+                );
+                self.glyph_atlas.slots.insert(g.key, AtlasSlot { x: ax, y: ay, w: g.w, h: g.h });
+            }
+            let Some(slot) = self.glyph_atlas.slots.get(&g.key) else { continue; };
+            out.extend_from_slice(&[
+                g.x, g.y,
+                g.w as f32, g.h as f32,
+                slot.x as f32 * inv_dim, slot.y as f32 * inv_dim,
+                slot.w as f32 * inv_dim, slot.h as f32 * inv_dim,
+                g.color[0], g.color[1], g.color[2], g.color[3],
+            ]);
+        }
+        out
     }
 
     /// Render `items` into the offscreen texture for `key` (D109 C2 — GPU
@@ -590,6 +917,8 @@ impl GpuPresenter {
         // Transient per-item resources, dropped after submit (see doc note).
         let mut transient_layers: Vec<CachedLayer> = Vec::new();
         let mut transient_quads:  Vec<(u64, wgpu::BindGroup, Option<(u32, u32, u32, u32)>)> = Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut transient_glyphs: Vec<Option<(wgpu::BindGroup, wgpu::Buffer, u32, Option<(u32, u32, u32, u32)>)>> = Vec::new();
         for item in items {
             match item {
                 FrameItem::Pixels(layer) => {
@@ -628,6 +957,44 @@ impl GpuPresenter {
                     });
                     transient_quads.push((quad.pipeline, bind_group, scissor));
                 }
+                FrameItem::Glyphs { glyphs, clip } => {
+                    // Uploads to the SHARED atlas; instances are target-
+                    // local px. Globals must be the TARGET size, so each
+                    // batch gets a transient globals buffer + bind group.
+                    let scissor = match clip {
+                        Some(c) => match scissor_for(*c, width, height) {
+                            Some(s) => Some(s),
+                            None => { transient_glyphs.push(None); continue; }
+                        },
+                        None => None,
+                    };
+                    let instances = self.prepare_glyphs(glyphs);
+                    if instances.is_empty() {
+                        transient_glyphs.push(None);
+                        continue;
+                    }
+                    let globals = [width as f32, height as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                    let globals_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label:    Some("offscreen-glyph-globals"),
+                        contents: bytemuck_f32x8(&globals),
+                        usage:    wgpu::BufferUsages::UNIFORM,
+                    });
+                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label:   Some("offscreen-glyph-bg"),
+                        layout:  &self.glyph_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.glyph_atlas.view) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                        ],
+                    });
+                    let inst_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label:    Some("offscreen-glyph-instances"),
+                        contents: f32s_as_bytes(&instances),
+                        usage:    wgpu::BufferUsages::VERTEX,
+                    });
+                    transient_glyphs.push(Some((bind_group, inst_buf, (instances.len() / 12) as u32, scissor)));
+                }
                 FrameItem::Offscreen(_) => {
                     debug_assert!(false, "nested offscreen items are not supported");
                     continue;
@@ -635,11 +1002,12 @@ impl GpuPresenter {
             }
         }
 
-        // Draw in item order. `layer_idx`/`quad_idx` walk the transient
-        // vecs in the same order they were filled above.
+        // Draw in item order. `layer_idx`/`quad_idx`/`glyph_idx` walk the
+        // transient vecs in the same order they were filled above.
         let mut cleared = false;
         let mut layer_idx = 0usize;
         let mut quad_idx = 0usize;
+        let mut glyph_idx = 0usize;
         for item in items {
             let load = if !cleared {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
@@ -697,6 +1065,30 @@ impl GpuPresenter {
                     rpass.set_pipeline(&entry.pipeline);
                     rpass.set_bind_group(0, bind_group, &[]);
                     rpass.draw(0..6, 0..1);
+                }
+                FrameItem::Glyphs { .. } => {
+                    let prepared = &transient_glyphs[glyph_idx];
+                    glyph_idx += 1;
+                    let Some((bind_group, inst_buf, count, scissor)) = prepared else { continue; };
+                    cleared = true;
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("offscreen-glyph-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &target_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    if let Some((x, y, w, h)) = scissor {
+                        rpass.set_scissor_rect(*x, *y, *w, *h);
+                    }
+                    rpass.set_pipeline(&self.glyph_pipeline);
+                    rpass.set_bind_group(0, bind_group, &[]);
+                    rpass.set_vertex_buffer(0, inst_buf.slice(..));
+                    rpass.draw(0..6, 0..*count);
                 }
                 FrameItem::Offscreen(_) => continue,
             }
@@ -871,7 +1263,23 @@ impl GpuPresenter {
         let offs: Vec<&OffscreenRef> = items.iter()
             .filter_map(|i| match i { FrameItem::Offscreen(o) => Some(o), _ => None })
             .collect();
-        if pixel_layers.is_empty() && quads.is_empty() && offs.is_empty() { return; }
+        let glyph_batches: Vec<(&Vec<AtlasGlyph<'_>>, Option<(f32, f32, f32, f32)>)> = items.iter()
+            .filter_map(|i| match i {
+                FrameItem::Glyphs { glyphs, clip } => Some((glyphs, *clip)),
+                _ => None,
+            })
+            .collect();
+        if pixel_layers.is_empty() && quads.is_empty() && offs.is_empty()
+            && glyph_batches.is_empty() { return; }
+
+        // Upload first-seen glyphs + build per-batch instance floats
+        // (D109 Step 4). Runs before the skip check so the comparison
+        // sees the final instance data.
+        let new_glyph_batches: Vec<(Option<(f32, f32, f32, f32)>, Vec<f32>)> = glyph_batches
+            .iter()
+            .map(|(glyphs, clip)| (*clip, self.prepare_glyphs(glyphs)))
+            .collect();
+        let glyphs_unchanged = self.cached_glyph_batches == new_glyph_batches;
 
         // ── Skip-present fast path (D089) ──────────────────────────────────
         // If the frame is structurally identical to the last one — same
@@ -902,12 +1310,20 @@ impl GpuPresenter {
                     ))
                     .unwrap_or(false)
         });
-        if layers_unchanged && quads_unchanged && offscreen_unchanged {
+        if layers_unchanged && quads_unchanged && offscreen_unchanged && glyphs_unchanged {
             log::debug!(
-                "compositor: skip present ({} layers + {} quads + {} offscreen unchanged)",
-                pixel_layers.len(), quads.len(), offs.len(),
+                "compositor: skip present ({} layers + {} quads + {} offscreen + {} glyph batches unchanged)",
+                pixel_layers.len(), quads.len(), offs.len(), glyph_batches.len(),
             );
             return;
+        }
+        self.cached_glyph_batches = new_glyph_batches;
+
+        // Glyph globals track the surface size (vertex px→NDC mapping).
+        if self.glyph_globals_size != (sw, sh) {
+            self.glyph_globals_size = (sw, sh);
+            let globals = [sw as f32, sh as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            self.queue.write_buffer(&self.glyph_globals_buf, 0, bytemuck_f32x8(&globals));
         }
         log::debug!(
             "compositor: present {} layers ({} dirty) + {} shader quads",
@@ -983,6 +1399,7 @@ impl GpuPresenter {
         let mut cleared = false;
         let mut pixel_idx = 0usize;
         let mut quad_idx = 0usize;
+        let mut glyph_idx = 0usize;
 
         for item in items {
             match item {
@@ -1116,6 +1533,50 @@ impl GpuPresenter {
                     rpass.set_pipeline(&self.pipeline_overlay);
                     rpass.set_bind_group(0, &entry.bind_group, &[]);
                     rpass.draw(0..6, 0..1);
+                }
+                FrameItem::Glyphs { .. } => {
+                    let (clip, instances) = &self.cached_glyph_batches[glyph_idx];
+                    glyph_idx += 1;
+                    if instances.is_empty() { continue; }
+                    let scissor = match clip {
+                        Some(c) => match scissor_for(*c, sw, sh) {
+                            Some(s) => Some(s),
+                            None => continue,
+                        },
+                        None => None,
+                    };
+                    // Transient instance buffer — a text-heavy frame is a
+                    // few KB; revisit with a persistent ring if measured.
+                    let inst_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label:    Some("glyph-instances"),
+                        contents: f32s_as_bytes(instances),
+                        usage:    wgpu::BufferUsages::VERTEX,
+                    });
+                    let load = if !cleared {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    };
+                    cleared = true;
+
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("glyph-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    if let Some((x, y, w, h)) = scissor {
+                        rpass.set_scissor_rect(x, y, w, h);
+                    }
+                    rpass.set_pipeline(&self.glyph_pipeline);
+                    rpass.set_bind_group(0, &self.glyph_atlas.bind_group, &[]);
+                    rpass.set_vertex_buffer(0, inst_buf.slice(..));
+                    rpass.draw(0..6, 0..(instances.len() / 12) as u32);
                 }
             }
         }
