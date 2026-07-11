@@ -289,6 +289,24 @@ silently baked into the contracts below, per the project's violation policy
     computation on the headless path. The windowed apps don't hit it.
     Needs its own root-cause; not chased during Phase 27.
 
+14. **GPU scroll view's scrollbar thumb doesn't move during scroll** —
+    user-reported 2026-07-11 on the Phase 27 demo; confirmed PRE-EXISTING
+    D090 behavior, not a Phase 27 change. `ScrollView::paint_gpu`
+    (`scroll_view.rs`) draws the thumb into the BASE canvas from
+    `scroll_offset()` read at paint time, but a wheel/trackpad tick
+    updates the non-reactive channel and requests only a PRESENT (UV
+    shift) — no repaint, by design — so the thumb is stale until anything
+    else repaints (resize, hover, momentum-animation frames). Content
+    scrolls correctly; only the thumb lags. Clean fix now that Phase 27
+    exists: make the thumb a present-time shader quad — the platform
+    computes the thumb rect from the live offset each present and appends
+    a `FrameItem::Shader` after the scroll layer's item, so the thumb
+    costs a uniform write like the scroll itself (needs per-layer
+    thumb metadata on `ScrollLayer`: track rect, ratio, color,
+    visibility). Scope alongside the remaining Phase 27 polish or as its
+    own small step — NOT by making scroll ticks dirty the frame, which
+    would undo D090's zero-re-raster scroll.
+
 **Fixed 2026-07-09, unrelated to #9/#10 above**: `rosace-animate::Spring::
 update` used a single semi-implicit-Euler step per call, unconditionally
 stable only below a step-size threshold — a real wall-clock `dt` near
