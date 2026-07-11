@@ -1359,4 +1359,14 @@ D-DEF-007  Package manager              → Phase 4
 D-DEF-008  Server-side rendering        → not planned
 D-DEF-009  React Native interop         → not planned
 D-DEF-010  Embedded/no-std             → Phase 5
+D-DEF-011  Web GPU presenter            → own phase after 27; wgpu-on-wasm
+                                          (WebGPU) replaces web.rs's
+                                          putImageData path; GATES the
+                                          final tiny-skia removal (see
+                                          PHASE_27.md Out of Scope)
+D-DEF-012  Backdrop blur / glassmorphism → follow-up on Phase 27; most
+                                          machinery already exists
+                                          (render_offscreen, C2) — needs a
+                                          blur pass sampling the scene
+                                          below the panel
 ```
