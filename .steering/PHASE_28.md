@@ -264,6 +264,29 @@ rewrite must not disturb it (its tests are the regression bar).
 `.field()` are all additive. `rosace-ime`'s public types are reused
 where they fit (Step 6), per the original scope.
 
+## Capstone demo — the phase's exit artifact (user-requested 2026-07-12)
+
+Two demo bins, built incrementally as the steps land, kept permanently
+(like Phase 27's `shader_effects_demo`/`glass_demo`):
+
+- **`markdown_editor_demo`** — a real, usable markdown editor built ONLY
+  from public APIs: a `TextArea` with a `SpanSource` doing live
+  `**bold**`/`# heading`/`` `code` `` highlighting (Step 5), a toolbar
+  whose Bold/Italic buttons wrap the selection via `EditController`
+  (Step 2), and a side-by-side rendered preview (a read-only widget the
+  app derives from the same atom). The point it proves: the framework
+  never learned what markdown is — the app brought the tokenizer and the
+  toolbar, the core supplied editing/selection/styling seams. First
+  runnable (plain, toolbar-only) after Steps 2+4; fully highlighted
+  after Step 5.
+- **`text_showcase_demo`** — one screen exercising every feature as it
+  lands: obscured password field, filtered numeric field (Step 8),
+  custom `CursorStyle` incl. block + icon carets (Step 5), undo/redo
+  (Step 2), drag selection + double/triple-click (Step 3), context menu
+  (Step 7), IME-composed CJK text (Step 6), and a validated form
+  (Step 8). Doubles as the manual regression surface for the whole
+  stack.
+
 ## What this phase still deliberately does NOT build (per D116)
 
 Editable rich text/WYSIWYG; a code-editor-class widget (gutters,
