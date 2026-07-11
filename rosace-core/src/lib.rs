@@ -10,6 +10,7 @@ pub mod platform;
 pub mod render_object;
 pub mod safe_area;
 pub mod semantic_node;
+pub mod shader;
 pub mod types;
 
 pub use app::App;

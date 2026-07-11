@@ -278,6 +278,17 @@ silently baked into the contracts below, per the project's violation policy
     intended) or folded into `rosace-render` is its own undecided
     question — its contract entry below describes intent, not reality.
 
+13. **`WidgetApp::render_png` (headless) panics with an integer overflow
+    in `draw_text_weighted`** — found 2026-07-11 while trying to use
+    `app_showcase` (a headless PNG renderer, not a windowed app) for
+    Phase 27 parity verification. `cargo run --bin app_showcase` panics
+    at HEAD with "attempt to add with overflow" inside
+    `SkiaCanvas::draw_text_weighted` (debug build; confirmed PRE-EXISTING
+    by reproducing on a stashed tree with no Phase 27 Step 3b changes).
+    Likely a negative/huge coordinate reaching an unchecked index
+    computation on the headless path. The windowed apps don't hit it.
+    Needs its own root-cause; not chased during Phase 27.
+
 **Fixed 2026-07-09, unrelated to #9/#10 above**: `rosace-animate::Spring::
 update` used a single semi-implicit-Euler step per call, unconditionally
 stable only below a step-size threshold — a real wall-clock `dt` near

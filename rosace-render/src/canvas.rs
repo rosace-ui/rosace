@@ -67,6 +67,29 @@ pub struct SkiaCanvas {
     /// damage region would wrongly crop it) and drained by the platform via
     /// [`take_shader_quads`] for the compositor to execute.
     pending_shader_quads: Vec<ShaderQuadCmd>,
+    /// GPU-shapes mode (D109/Phase 27 Step 3): when true, the eight
+    /// built-in shape commands divert to built-in SDF pipelines instead of
+    /// tiny-skia, and `play_picture` partitions the stream into ordered
+    /// [`CanvasFrameItem`]s (the C1 segment executor). Enabled per-canvas
+    /// by the platform ONLY where a `GpuPresenter` exists — the base
+    /// window canvas today; scroll-content and overlay canvases stay CPU
+    /// until C2, and softbuffer/web never enable it.
+    gpu_shapes: bool,
+    /// Ordered frame items collected in GPU-shapes mode; drained via
+    /// [`take_frame_items`].
+    pending_frame_items: Vec<CanvasFrameItem>,
+    /// Bounding box (physical px, x0/y0/x1/y1) of the CPU commands
+    /// rasterized since the last segment cut — the open segment.
+    seg_bbox: Option<(f32, f32, f32, f32)>,
+}
+
+/// One item of a GPU-mode frame, in z-order (D109 C1): either a GPU quad
+/// or a CPU-rasterized segment (a bbox-sized premultiplied-RGBA buffer cut
+/// out of the scratch pixmap, placed at `(x, y)` physical px).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CanvasFrameItem {
+    Shader(ShaderQuadCmd),
+    Segment { x: u32, y: u32, w: u32, h: u32, pixels: Vec<u8> },
 }
 
 /// One collected `DrawCommand::ShaderFill`, in PHYSICAL pixels, ready for
@@ -108,6 +131,12 @@ impl Color {
     /// Create an opaque color from red, green, and blue components.
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b, a: 255 }
+    }
+
+    /// The color as `[r, g, b, a]` bytes — what the GPU shape conversions
+    /// (`gpu_shapes`) take.
+    pub const fn rgba_bytes(self) -> [u8; 4] {
+        [self.r, self.g, self.b, self.a]
     }
 
     /// Create a color with explicit alpha.
@@ -309,6 +338,9 @@ impl SkiaCanvas {
             clip_masks: HashMap::new(),
             shadow_cache: HashMap::new(),
             pending_shader_quads: Vec::new(),
+            gpu_shapes: false,
+            pending_frame_items: Vec::new(),
+            seg_bbox: None,
         }
     }
 
@@ -318,6 +350,87 @@ impl SkiaCanvas {
     /// scroll layers persist through frame-skip.
     pub fn take_shader_quads(&mut self) -> Vec<ShaderQuadCmd> {
         std::mem::take(&mut self.pending_shader_quads)
+    }
+
+    /// Enable/disable GPU-shapes mode (D109/Phase 27 Step 3). Platform-only:
+    /// set it exactly where a `GpuPresenter` will consume
+    /// [`take_frame_items`] — a GPU-mode canvas's pixmap is a segment
+    /// scratch buffer, NOT a presentable frame.
+    pub fn set_gpu_shapes(&mut self, on: bool) {
+        self.gpu_shapes = on;
+    }
+
+    pub fn gpu_shapes(&self) -> bool {
+        self.gpu_shapes
+    }
+
+    /// Drain the ordered frame items collected in GPU-shapes mode. Same
+    /// retention contract as [`take_shader_quads`]: called on painted
+    /// frames, retained by the platform across skipped frames.
+    pub fn take_frame_items(&mut self) -> Vec<CanvasFrameItem> {
+        std::mem::take(&mut self.pending_frame_items)
+    }
+
+    /// Close the open CPU segment (GPU mode): cut its bbox out of the
+    /// scratch pixmap into an owned buffer, erase that region back to
+    /// transparent (so later segments can't re-capture it), and append the
+    /// Segment item.
+    fn cut_segment(&mut self) {
+        let Some((x0, y0, x1, y1)) = self.seg_bbox.take() else { return; };
+        let pw = self.pixmap.width() as i32;
+        let ph = self.pixmap.height() as i32;
+        let ix0 = (x0.floor() as i32).clamp(0, pw);
+        let iy0 = (y0.floor() as i32).clamp(0, ph);
+        let ix1 = (x1.ceil() as i32).clamp(0, pw);
+        let iy1 = (y1.ceil() as i32).clamp(0, ph);
+        if ix1 <= ix0 || iy1 <= iy0 { return; }
+        let (w, h) = ((ix1 - ix0) as u32, (iy1 - iy0) as u32);
+
+        let stride = pw as usize * 4;
+        let data = self.pixmap.data_mut();
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        for row in 0..h as usize {
+            let src = (iy0 as usize + row) * stride + ix0 as usize * 4;
+            let dst = row * w as usize * 4;
+            pixels[dst..dst + w as usize * 4]
+                .copy_from_slice(&data[src..src + w as usize * 4]);
+            data[src..src + w as usize * 4].fill(0);
+        }
+        self.pending_frame_items.push(CanvasFrameItem::Segment {
+            x: ix0 as u32, y: iy0 as u32, w, h, pixels,
+        });
+    }
+
+    /// Grow the open segment's bbox (GPU mode) by a command's conservative
+    /// physical-px bounds, clipped to the active clip.
+    fn grow_segment(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (x0, y0, x1, y1);
+        if let Some((cx, cy, cr, cb)) = self.clip {
+            x0 = x0.max(cx as f32);
+            y0 = y0.max(cy as f32);
+            x1 = x1.min(cr as f32);
+            y1 = y1.min(cb as f32);
+        }
+        if x1 <= x0 || y1 <= y0 { return; }
+        self.seg_bbox = Some(match self.seg_bbox {
+            Some((a, b, c, d)) => (a.min(x0), b.min(y0), c.max(x1), d.max(y1)),
+            None => (x0, y0, x1, y1),
+        });
+    }
+
+    /// Push a built-in shape quad (GPU mode), cutting any open CPU segment
+    /// first so z-order is preserved.
+    fn push_builtin_quad(
+        &mut self,
+        pipeline_id: u64,
+        quad: (f32, f32, f32, f32),
+        uniforms: Vec<u8>,
+        widget_clip: Option<(f32, f32, f32, f32)>,
+    ) {
+        self.cut_segment();
+        self.pending_frame_items.push(CanvasFrameItem::Shader(ShaderQuadCmd {
+            pipeline_id, rect: quad, uniforms, clip: widget_clip,
+        }));
     }
 
     /// Physical pixel width of the underlying framebuffer.
@@ -368,6 +481,26 @@ impl SkiaCanvas {
 
     /// Fill the entire canvas with a solid color.
     pub fn clear(&mut self, color: Color) {
+        if self.gpu_shapes {
+            // GPU mode: the pixmap is segment scratch — clear it to
+            // transparent, reset this frame's items, and make the
+            // background the frame's first GPU quad (full-frame fill).
+            self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
+            self.pending_frame_items.clear();
+            self.seg_bbox = None;
+            let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
+            let (quad, uniforms) = crate::gpu_shapes::fill_rrect_quad(
+                (0.0, 0.0, w, h), 0.0, [color.r, color.g, color.b, color.a],
+            );
+            self.pending_frame_items.push(CanvasFrameItem::Shader(ShaderQuadCmd {
+                pipeline_id: crate::gpu_shapes::FILL_RRECT_ID,
+                rect: quad,
+                uniforms,
+                clip: None,
+            }));
+            self.has_drawn = true;
+            return;
+        }
         self.pixmap.fill(
             tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.a),
         );
@@ -839,38 +972,152 @@ impl SkiaCanvas {
                     widget_clip = widget_clip_stack.pop().unwrap_or(None);
                 }
 
-                DrawCommand::FillRect { rect, color } => self.fill_rect(sr(*rect), *color),
-                DrawCommand::StrokeRect { rect, color, width } => self.stroke_rect(sr(*rect), *color, *width * s),
-                DrawCommand::FillRRect { rect, radius, color } => self.fill_rrect(sr(*rect), *radius * s, *color),
-                DrawCommand::StrokeRRect { rect, radius, color, width } => {
-                    self.stroke_rrect(sr(*rect), *radius * s, *color, *width * s);
+                DrawCommand::FillRect { rect, color } => {
+                    if self.gpu_shapes {
+                        let r = sr(*rect);
+                        let (q, u) = crate::gpu_shapes::fill_rrect_quad(
+                            (r.origin.x, r.origin.y, r.size.width, r.size.height),
+                            0.0, color.rgba_bytes(),
+                        );
+                        self.push_builtin_quad(crate::gpu_shapes::FILL_RRECT_ID, q, u, widget_clip);
+                    } else {
+                        self.fill_rect(sr(*rect), *color);
+                    }
                 }
-                DrawCommand::FillCircle { center, radius, color } => self.fill_circle(sp(*center), *radius * s, *color),
-                DrawCommand::FillGradient { rect, radius, from, to, vertical } => self.fill_gradient(sr(*rect), *radius * s, *from, *to, *vertical),
-                DrawCommand::FillArc { center, radius, thickness, start_deg, sweep_deg, color } => self.fill_arc(sp(*center), *radius * s, *thickness * s, *start_deg, *sweep_deg, *color),
-                DrawCommand::DrawText { text, origin, color, px, weight } => {
-                    self.draw_text_weighted(text, sp(*origin), *color, font, *px * s, *weight);
+                DrawCommand::StrokeRect { rect, color, width } => {
+                    if self.gpu_shapes {
+                        let r = sr(*rect);
+                        let (q, u) = crate::gpu_shapes::stroke_rrect_quad(
+                            (r.origin.x, r.origin.y, r.size.width, r.size.height),
+                            0.0, *width * s, color.rgba_bytes(),
+                        );
+                        self.push_builtin_quad(crate::gpu_shapes::STROKE_RRECT_ID, q, u, widget_clip);
+                    } else {
+                        self.stroke_rect(sr(*rect), *color, *width * s);
+                    }
+                }
+                DrawCommand::FillRRect { rect, radius, color } => {
+                    if self.gpu_shapes {
+                        let r = sr(*rect);
+                        let (q, u) = crate::gpu_shapes::fill_rrect_quad(
+                            (r.origin.x, r.origin.y, r.size.width, r.size.height),
+                            *radius * s, color.rgba_bytes(),
+                        );
+                        self.push_builtin_quad(crate::gpu_shapes::FILL_RRECT_ID, q, u, widget_clip);
+                    } else {
+                        self.fill_rrect(sr(*rect), *radius * s, *color);
+                    }
+                }
+                DrawCommand::StrokeRRect { rect, radius, color, width } => {
+                    if self.gpu_shapes {
+                        let r = sr(*rect);
+                        let (q, u) = crate::gpu_shapes::stroke_rrect_quad(
+                            (r.origin.x, r.origin.y, r.size.width, r.size.height),
+                            *radius * s, *width * s, color.rgba_bytes(),
+                        );
+                        self.push_builtin_quad(crate::gpu_shapes::STROKE_RRECT_ID, q, u, widget_clip);
+                    } else {
+                        self.stroke_rrect(sr(*rect), *radius * s, *color, *width * s);
+                    }
+                }
+                DrawCommand::FillCircle { center, radius, color } => {
+                    if self.gpu_shapes {
+                        // A circle is a square rrect at full corner radius.
+                        let c = sp(*center);
+                        let r = *radius * s;
+                        let (q, u) = crate::gpu_shapes::fill_rrect_quad(
+                            (c.x - r, c.y - r, r * 2.0, r * 2.0), r, color.rgba_bytes(),
+                        );
+                        self.push_builtin_quad(crate::gpu_shapes::FILL_RRECT_ID, q, u, widget_clip);
+                    } else {
+                        self.fill_circle(sp(*center), *radius * s, *color);
+                    }
+                }
+                DrawCommand::FillGradient { rect, radius, from, to, vertical } => {
+                    if self.gpu_shapes {
+                        let r = sr(*rect);
+                        let (q, u) = crate::gpu_shapes::gradient_quad(
+                            (r.origin.x, r.origin.y, r.size.width, r.size.height),
+                            *radius * s, from.rgba_bytes(), to.rgba_bytes(), *vertical,
+                        );
+                        self.push_builtin_quad(crate::gpu_shapes::GRADIENT_ID, q, u, widget_clip);
+                    } else {
+                        self.fill_gradient(sr(*rect), *radius * s, *from, *to, *vertical);
+                    }
+                }
+                DrawCommand::FillArc { center, radius, thickness, start_deg, sweep_deg, color } => {
+                    if self.gpu_shapes {
+                        let c = sp(*center);
+                        let (q, u) = crate::gpu_shapes::arc_quad(
+                            (c.x, c.y), *radius * s, *thickness * s,
+                            *start_deg, *sweep_deg, color.rgba_bytes(),
+                        );
+                        self.push_builtin_quad(crate::gpu_shapes::ARC_ID, q, u, widget_clip);
+                    } else {
+                        self.fill_arc(sp(*center), *radius * s, *thickness * s, *start_deg, *sweep_deg, *color);
+                    }
                 }
                 DrawCommand::DrawShadow { rect, radius, color, blur } => {
-                    self.draw_shadow(sr(*rect), *radius * s, *color, *blur * s);
+                    if self.gpu_shapes {
+                        let r = sr(*rect);
+                        let (q, u) = crate::gpu_shapes::shadow_quad(
+                            (r.origin.x, r.origin.y, r.size.width, r.size.height),
+                            *radius * s, *blur * s, color.rgba_bytes(),
+                        );
+                        self.push_builtin_quad(crate::gpu_shapes::SHADOW_ID, q, u, widget_clip);
+                    } else {
+                        self.draw_shadow(sr(*rect), *radius * s, *color, *blur * s);
+                    }
+                }
+                DrawCommand::DrawText { text, origin, color, px, weight } => {
+                    let o = sp(*origin);
+                    let pxp = *px * s;
+                    if self.gpu_shapes {
+                        // CPU segment content (until Step 4's glyph atlas).
+                        // Conservative bbox: 1em horizontal slack + 1em/char
+                        // width, ±1.6em vertical — over-covers any
+                        // baseline/ascent convention; correctness over
+                        // tightness (an undersized bbox clips glyphs).
+                        let n = text.chars().count() as f32;
+                        self.grow_segment(
+                            o.x - pxp, o.y - 1.6 * pxp,
+                            o.x + (n + 1.0) * pxp, o.y + 1.6 * pxp,
+                        );
+                    }
+                    self.draw_text_weighted(text, o, *color, font, pxp, *weight);
                 }
                 DrawCommand::BlitRgba { pixels, src_width, src_height, dest_rect, opacity } => {
-                    self.blit_rgba(pixels, *src_width, *src_height, sr(*dest_rect), *opacity);
+                    let d = sr(*dest_rect);
+                    if self.gpu_shapes {
+                        self.grow_segment(
+                            d.origin.x - 1.0, d.origin.y - 1.0,
+                            d.origin.x + d.size.width + 1.0, d.origin.y + d.size.height + 1.0,
+                        );
+                    }
+                    self.blit_rgba(pixels, *src_width, *src_height, d, *opacity);
                 }
                 DrawCommand::ShaderFill { pipeline_id, rect, uniforms } => {
                     // No CPU rasterization by design — collect for the GPU
                     // compositor. Always collected, even on a damage-clipped
                     // replay: quads re-render in full every present.
                     let r = sr(*rect);
-                    self.pending_shader_quads.push(ShaderQuadCmd {
-                        pipeline_id: *pipeline_id,
-                        rect: (r.origin.x, r.origin.y, r.size.width, r.size.height),
-                        uniforms: uniforms.clone(),
-                        clip: widget_clip,
-                    });
+                    let quad = (r.origin.x, r.origin.y, r.size.width, r.size.height);
+                    if self.gpu_shapes {
+                        self.push_builtin_quad(*pipeline_id, quad, uniforms.clone(), widget_clip);
+                    } else {
+                        self.pending_shader_quads.push(ShaderQuadCmd {
+                            pipeline_id: *pipeline_id,
+                            rect: quad,
+                            uniforms: uniforms.clone(),
+                            clip: widget_clip,
+                        });
+                    }
                 }
             }
         }
+        // GPU mode: close the trailing CPU segment so the last text/blit
+        // run of the picture is emitted.
+        self.cut_segment();
 
         // Restore clip to what it was before play_picture (handles nested calls).
         self.clip = outer_clip;

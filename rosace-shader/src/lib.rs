@@ -98,17 +98,10 @@ impl ShaderSpec {
     }
 }
 
-/// Produces this value's bytes in WGSL *uniform address space* layout
-/// (scalar align 4; `vec2<f32>` align 8; `vec3<f32>`/`vec4<f32>`/`mat4x4`
-/// align 16; total size rounded up to 16).
-///
-/// Do not implement by hand — `#[derive(ShaderUniforms)]` generates the
-/// packing with compile-time-checked field order, alignment padding, and
-/// supported-type enforcement. A hand-rolled impl that gets padding wrong
-/// produces garbage uniforms with no error at any stage.
-pub trait ShaderUniforms {
-    fn to_bytes(&self) -> Vec<u8>;
-}
+/// Re-exported from `rosace-core` (the trait lives at Layer 2 so
+/// `rosace-render`'s built-in shape conversions can produce uniform bytes
+/// without an upward dependency — see `rosace_render::gpu_shapes`).
+pub use rosace_core::shader::ShaderUniforms;
 
 /// Pending registrations, queued by [`register_shader`] and drained by the
 /// platform layer via [`take_pending_shaders`] — compiled into real

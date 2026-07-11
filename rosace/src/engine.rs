@@ -162,7 +162,13 @@ impl FrameEngine {
         if needs_paint {
         // A full repaint clears the whole canvas; otherwise we clear
         // and replay only the damaged region (computed by the walk).
-        let full_repaint = global_dirty || window_resized || !canvas.has_drawn();
+        // GPU-shapes mode (D109/Phase 27) is ALWAYS a full repaint: the
+        // frame is re-expressed as ordered items (quads + segments) from
+        // the full picture each paint — damage-scoped pixel clearing is a
+        // CPU-buffer economy that doesn't apply (frame-skip still does,
+        // via `needs_paint` above).
+        let full_repaint = global_dirty || window_resized || !canvas.has_drawn()
+            || canvas.gpu_shapes();
         let bg = theme_color(&current_theme.colors.background);
 
         // ── Set up main display-list recording ──────────────────────────

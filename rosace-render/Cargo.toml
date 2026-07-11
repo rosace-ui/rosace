@@ -10,5 +10,6 @@ repository.workspace = true
 rosace-trace  = { path = "../rosace-trace" }
 rosace-core   = { path = "../rosace-core" }
 rosace-layout = { path = "../rosace-layout" }
+rosace-macros = { path = "../rosace-macros" }
 tiny-skia      = "0.11"
 fontdue        = "0.8"

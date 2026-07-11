@@ -7,6 +7,7 @@
 pub mod canvas;
 pub mod draw_command;
 pub mod font;
+pub mod gpu_shapes;
 pub mod image;
 pub mod picture;
 
@@ -154,6 +155,82 @@ mod tests {
         assert_eq!(quads[0].clip, Some((30.0, 30.0, 30.0, 30.0)));
         // Outside all PushClips: no widget clip, damage clip ignored.
         assert_eq!(quads[1].clip, None);
+    }
+
+    // ── GPU-shapes mode: C1 segment executor (D109/Phase 27 Step 3b) ────
+
+    #[test]
+    fn gpu_mode_partitions_commands_into_ordered_quads_and_segments() {
+        use crate::canvas::CanvasFrameItem;
+        use crate::draw_command::DrawCommand;
+        use crate::font::FontCache;
+        use crate::picture::PictureRecorder;
+
+        let mut canvas = SkiaCanvas::new(200, 200);
+        canvas.set_gpu_shapes(true);
+        canvas.clear(Color::rgb(30, 31, 34));
+
+        let mut rec = PictureRecorder::new();
+        // shape → text → shape: the text must land in a Segment BETWEEN the
+        // two shape quads (the Stack z-order case, correct by construction).
+        rec.push(DrawCommand::FillRect { rect: rect(10.0, 10.0, 50.0, 50.0), color: Color::RED });
+        rec.push(DrawCommand::DrawText {
+            text: "hi".into(), origin: Point { x: 20.0, y: 30.0 },
+            color: Color::WHITE, px: 14.0, weight: crate::FontWeight::Regular,
+        });
+        rec.push(DrawCommand::FillCircle { center: Point { x: 100.0, y: 100.0 }, radius: 20.0, color: Color::BLUE });
+        canvas.play_picture(&rec.finish(), &FontCache::embedded());
+
+        let items = canvas.take_frame_items();
+        assert_eq!(items.len(), 4, "bg quad + rect quad + text segment + circle quad: {items:?}");
+        assert!(matches!(&items[0], CanvasFrameItem::Shader(q) if q.pipeline_id == crate::gpu_shapes::FILL_RRECT_ID),
+            "item 0 must be the background quad");
+        assert!(matches!(&items[1], CanvasFrameItem::Shader(q) if q.pipeline_id == crate::gpu_shapes::FILL_RRECT_ID));
+        let CanvasFrameItem::Segment { x, y, w, h, pixels } = &items[2] else {
+            panic!("item 2 must be the text segment, got {:?}", items[2]);
+        };
+        // The segment must cover the text origin and contain real pixels.
+        assert!(*x <= 20 && *y <= 30 && x + w >= 20 && y + h >= 30, "bbox must cover the text");
+        assert!(pixels.iter().any(|&b| b != 0), "segment must contain rasterized glyph pixels");
+        assert!(matches!(&items[3], CanvasFrameItem::Shader(q) if q.pipeline_id == crate::gpu_shapes::FILL_RRECT_ID),
+            "circle renders via the fill-rrect pipeline");
+
+        // After extraction the scratch pixmap must be fully transparent —
+        // segments are cut out, never double-presented (and the shapes
+        // never touched the CPU buffer at all).
+        assert!(canvas.pixels().iter().all(|&b| b == 0), "scratch pixmap must be empty after take");
+    }
+
+    #[test]
+    fn gpu_mode_clear_records_background_quad_and_resets_items() {
+        use crate::canvas::CanvasFrameItem;
+
+        let mut canvas = SkiaCanvas::new(50, 40);
+        canvas.set_gpu_shapes(true);
+        canvas.clear(Color::rgb(10, 20, 30));
+        canvas.clear(Color::rgb(10, 20, 30)); // second frame: items reset, not appended
+        let items = canvas.take_frame_items();
+        assert_eq!(items.len(), 1, "clear must reset the item list each frame");
+        let CanvasFrameItem::Shader(q) = &items[0] else { panic!("bg must be a quad") };
+        // Full-frame + 1px AA inflation on each side.
+        assert_eq!(q.rect, (-1.0, -1.0, 52.0, 42.0));
+    }
+
+    #[test]
+    fn cpu_mode_is_unchanged_by_gpu_mode_existing() {
+        // Default canvases (engine tests, scroll content, overlay, web)
+        // must behave exactly as before: shapes rasterize, no items.
+        use crate::draw_command::DrawCommand;
+        use crate::font::FontCache;
+        use crate::picture::PictureRecorder;
+
+        let mut canvas = SkiaCanvas::new(20, 20);
+        canvas.clear(Color::WHITE);
+        let mut rec = PictureRecorder::new();
+        rec.push(DrawCommand::FillRect { rect: rect(0.0, 0.0, 10.0, 10.0), color: Color::BLUE });
+        canvas.play_picture(&rec.finish(), &FontCache::embedded());
+        assert_eq!(canvas.pixels()[2], 255, "CPU mode must still rasterize");
+        assert!(canvas.take_frame_items().is_empty());
     }
 
     #[test]

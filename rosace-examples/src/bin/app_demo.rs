@@ -38,10 +38,26 @@ impl Screen {
 
 struct AppDemo;
 
+/// Initial screen override — `ROSACE_DEMO_SCREEN=gallery` etc. Lets
+/// verification harnesses (e.g. Phase 27's CPU/GPU pixel comparisons)
+/// deep-link straight to a screen without synthesizing input.
+fn initial_screen() -> Screen {
+    match std::env::var("ROSACE_DEMO_SCREEN").as_deref() {
+        Ok("typography") => Screen::Typography,
+        Ok("scrolling")  => Screen::Scrolling,
+        Ok("overlays")   => Screen::Overlays,
+        Ok("vlist")      => Screen::VirtualList,
+        Ok("gallery")    => Screen::Gallery,
+        Ok("showcase")   => Screen::Showcase,
+        Ok("gpulayer")   => Screen::GpuLayer,
+        _                => Screen::Home,
+    }
+}
+
 impl Component for AppDemo {
     fn build(&self, ctx: &mut Context) -> Element {
         // Hooks — unconditional, stable order.
-        let nav = ScreenNav::new(ctx, Screen::Home);
+        let nav = ScreenNav::new(ctx, initial_screen());
         let page_ctrl = ScrollController::for_ctx(ctx);
         let is_dark:     Atom<bool> = ctx.state(true);
         let dialog_open: Atom<bool> = ctx.state(false);

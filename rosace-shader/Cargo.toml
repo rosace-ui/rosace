@@ -10,4 +10,5 @@ repository.workspace = true
 [dependencies]
 rosace-core   = { path = "../rosace-core" }
 rosace-macros = { path = "../rosace-macros" }
+rosace-render = { path = "../rosace-render" }
 rosace-trace  = { path = "../rosace-trace" }

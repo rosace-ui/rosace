@@ -117,6 +117,7 @@ impl PlatformWindow {
             last_frame_time: None,
             scroll_layers: Vec::new(),
             shader_quads: Vec::new(),
+            frame_items: Vec::new(),
             shader_fallback_warned: false,
         };
         // Native blocks on the OS event loop; web cannot block, so it hands the
@@ -163,6 +164,10 @@ struct AppState<F> {
     // canvas re-collects them on every `play_picture`), reused across clean
     // frames so quads persist through frame-skip like scroll layers do.
     shader_quads: Vec<rosace_render::ShaderQuadCmd>,
+    // Retained ordered frame items for GPU-shapes mode (D109 Step 3 / C1):
+    // the base canvas's quads + CPU segments, refreshed on painted frames,
+    // reused across clean frames (same contract as shader_quads above).
+    frame_items: Vec<rosace_render::canvas::CanvasFrameItem>,
     // Warn-once flag: shader registrations/quads on the softbuffer fallback
     // path (no GPU) are dropped — loud the first time, silent after.
     shader_fallback_warned: bool,
@@ -281,10 +286,21 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             self.surface = Some(surface);
         }
         self.presenter = presenter;
-        // Eager pipeline compilation (D109, the Impeller lesson): shaders
-        // registered before `App::run` compile right here at startup, before
-        // any frame could reference them — never lazily on first paint.
         if let Some(p) = self.presenter.as_mut() {
+            // GPU-shapes mode (D109/Phase 27 Step 3): built-in shape
+            // commands render as SDF pipelines on the BASE canvas only —
+            // scroll-content and overlay canvases stay tiny-skia until C2.
+            // `ROSACE_CPU_SHAPES=1` is the kill switch (and the A/B
+            // measurement lever): full tiny-skia path, as before Step 3.
+            if std::env::var_os("ROSACE_CPU_SHAPES").is_none() {
+                rosace_shader::builtin::register_builtins();
+                self.canvas.set_gpu_shapes(true);
+                log::info!("rosace-platform: GPU shapes enabled (ROSACE_CPU_SHAPES=1 to disable)");
+            }
+            // Eager pipeline compilation (D109, the Impeller lesson):
+            // everything queued before `App::run` — including the
+            // built-ins just registered — compiles right here at startup,
+            // never lazily on first paint.
             drain_shader_registrations(p);
         }
         self.window = Some(window);
@@ -363,7 +379,12 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     || self.canvas.height() != phys_h
                     || (self.canvas.scale() - scale).abs() > 0.01
                 {
+                    // Recreation must carry the GPU-shapes flag over — a
+                    // resized window silently dropping to CPU shapes would
+                    // be an invisible mode flip (D109).
+                    let gpu_shapes = self.canvas.gpu_shapes();
                     self.canvas         = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
+                    self.canvas.set_gpu_shapes(gpu_shapes);
                     self.overlay_canvas = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
                 }
 
@@ -390,13 +411,17 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     // when the frame loop actually redraws it.
                     let base_dirty = self.canvas.take_frame_dirty();
 
-                    // Refresh the retained shader quads only on painted frames
-                    // (`play_picture` re-collects the full set each paint —
-                    // including painting to an empty set when shader content
-                    // disappeared). Clean frames keep the retained quads, same
-                    // pattern as scroll layers below (D109).
+                    // Refresh the retained shader quads / frame items only on
+                    // painted frames (`play_picture` re-collects the full set
+                    // each paint — including painting to an empty set when
+                    // shader content disappeared). Clean frames keep the
+                    // retained set, same pattern as scroll layers below (D109).
                     if base_dirty {
-                        self.shader_quads = self.canvas.take_shader_quads();
+                        if self.canvas.gpu_shapes() {
+                            self.frame_items = self.canvas.take_frame_items();
+                        } else {
+                            self.shader_quads = self.canvas.take_shader_quads();
+                        }
                     }
                     // Overlay shader content is not supported yet (the overlay
                     // is replayed every frame; quads there would need their own
@@ -427,22 +452,56 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     // viewport), then the overlay on top (D090). Scroll layers
                     // re-upload only on a publish frame (scroll_dirty);
                     // otherwise D089 reuses their persistent textures.
-                    let mut items = vec![
-                        rosace_compositor::FrameItem::Pixels(
+                    let mut items: Vec<rosace_compositor::FrameItem<'_>> = Vec::new();
+                    if self.canvas.gpu_shapes() {
+                        // GPU-shapes mode (D109 Step 3, C1): the frame IS
+                        // the ordered item list — background quad, shape
+                        // quads, and CPU segments (text/blits) placed at
+                        // their bboxes, in command order. No full-frame
+                        // base buffer exists.
+                        for it in &self.frame_items {
+                            match it {
+                                rosace_render::canvas::CanvasFrameItem::Shader(q) => {
+                                    items.push(rosace_compositor::FrameItem::Shader(
+                                        rosace_compositor::ShaderQuad {
+                                            pipeline: q.pipeline_id,
+                                            rect:     q.rect,
+                                            uniforms: &q.uniforms,
+                                            clip:     q.clip,
+                                        },
+                                    ));
+                                }
+                                rosace_render::canvas::CanvasFrameItem::Segment { x, y, w, h, pixels } => {
+                                    items.push(rosace_compositor::FrameItem::Pixels(
+                                        rosace_compositor::CompositorLayer::placed(
+                                            pixels, *w, *h,
+                                            rosace_compositor::LayerRect {
+                                                x: *x as f32, y: *y as f32,
+                                                w: *w as f32, h: *h as f32,
+                                            },
+                                            (0.0, 0.0),
+                                            base_dirty,
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                    } else {
+                        items.push(rosace_compositor::FrameItem::Pixels(
                             rosace_compositor::CompositorLayer::tracked(
                                 self.canvas.pixels(), phys_w, phys_h, base_dirty,
                             ),
-                        ),
-                    ];
-                    for q in &self.shader_quads {
-                        items.push(rosace_compositor::FrameItem::Shader(
-                            rosace_compositor::ShaderQuad {
-                                pipeline: q.pipeline_id,
-                                rect:     q.rect,
-                                uniforms: &q.uniforms,
-                                clip:     q.clip,
-                            },
                         ));
+                        for q in &self.shader_quads {
+                            items.push(rosace_compositor::FrameItem::Shader(
+                                rosace_compositor::ShaderQuad {
+                                    pipeline: q.pipeline_id,
+                                    rect:     q.rect,
+                                    uniforms: &q.uniforms,
+                                    clip:     q.clip,
+                                },
+                            ));
+                        }
                     }
                     for sl in &self.scroll_layers {
                         // Live scroll offset from the non-reactive channel

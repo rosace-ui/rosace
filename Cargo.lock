@@ -2132,6 +2132,7 @@ dependencies = [
  "fontdue",
  "rosace-core",
  "rosace-layout",
+ "rosace-macros",
  "rosace-trace",
  "tiny-skia 0.11.4",
 ]
@@ -2153,6 +2154,7 @@ version = "0.1.0"
 dependencies = [
  "rosace-core",
  "rosace-macros",
+ "rosace-render",
  "rosace-trace",
 ]
 

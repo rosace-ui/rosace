@@ -372,16 +372,36 @@ Steps:
             profiles match within ~3/255 with σ = blur/2. sRGB→linear
             color conversion round-trip unit-tested against the known
             gamma-bug color (#2B2D30).
-      - [ ] 3b: `play_picture` GPU-shapes mode — divert the 8 shape
-            variants through the C1 segment executor (CPU runs → placed
-            bbox sub-buffers, GPU runs → builtin quads, ordered
-            `FrameItem`s); platform enables it per-canvas (base only;
-            scroll/overlay canvases stay CPU until C2); engine disables
-            damage-culling on GPU-mode frames (full re-record is the
-            model). Existing widget tests must pass unchanged.
-      - [ ] 3c: C2 scroll-layer render-to-texture; C4 frame-skip
-            re-verification; representative-screen pixel compare;
-            sustained-animation CPU before/after measurement.
+      - [x] 3b (landed 2026-07-11): `play_picture` GPU-shapes mode — the 8
+            shape variants divert to builtin quads; text/blits rasterize
+            into per-run bbox segments cut out of the scratch pixmap
+            (transparent-erased after extraction, so z-order interleaving
+            is correct by construction — unit-tested with the
+            shape→text→shape Stack case); `clear()` becomes the frame's
+            background quad; platform enables per-canvas (base only —
+            scroll/overlay canvases confirmed to be separate `SkiaCanvas`
+            instances, engine.rs:391, so they stay CPU until C2), carries
+            the flag across resize recreation, retains items through
+            frame-skip; engine forces full repaint in GPU mode (damage
+            culling is a CPU-buffer economy). Kill switch + A/B lever:
+            `ROSACE_CPU_SHAPES=1`. Verified for real: all existing widget
+            tests pass unchanged; app_demo pixel-compared CPU-vs-GPU on
+            two screens via `ROSACE_DEMO_SCREEN` deep-link (home: 99.53%
+            of pixels within 8/255; Widget Gallery: 99.96%, zero pixels
+            differ >60/255, remainder is AA-edge noise).
+      - [x] 3c-measurement (2026-07-11): `bench_paint` (release,
+            Retina-sized 1800×1280, gallery-like 24-row screen + spinner,
+            steady-state animated frames): CPU shapes 7.595 ms/frame →
+            GPU shapes 0.748 ms/frame — **10.2× lower CPU-side cost per
+            animated frame** (excludes CPU-mode's full-frame texture
+            upload, so the real gap is larger). The remaining 0.75ms is
+            text raster + segment copies — exactly Step 4's target.
+            Idle evidence for C4: occluded GPU-mode app measured 0.00s
+            CPU over 10s (frame-skip + skip-present engaged).
+      - [ ] 3c-remaining: C2 scroll-layer render-to-texture (scroll
+            interiors still CPU); C4 focused-idle frame-skip
+            re-verification with skip-present logs; on-device mobile
+            sanity check (same code path as desktop, unverified there).
 - [ ] Step 4 — GPU glyph atlas on `FontCache`, text-heavy scroll
       measurement
 - [ ] Step 5 — `ShaderPaint` widget + real novel-effect demo
