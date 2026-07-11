@@ -1364,9 +1364,10 @@ D-DEF-011  Web GPU presenter            → own phase after 27; wgpu-on-wasm
                                           putImageData path; GATES the
                                           final tiny-skia removal (see
                                           PHASE_27.md Out of Scope)
-D-DEF-012  Backdrop blur / glassmorphism → follow-up on Phase 27; most
-                                          machinery already exists
-                                          (render_offscreen, C2) — needs a
-                                          blur pass sampling the scene
-                                          below the panel
+D-DEF-012  Backdrop blur / glassmorphism → IMPLEMENTED 2026-07-11:
+                                          DrawCommand::BackdropBlur →
+                                          scene-texture indirection +
+                                          half-res separable Gaussian +
+                                          glass pass (see PHASE_27.md
+                                          checklist; glass_demo verified)
 ```

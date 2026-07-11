@@ -216,6 +216,141 @@ pub enum FrameItem<'a> {
     Offscreen(OffscreenRef),
     Glyphs { glyphs: Vec<AtlasGlyph<'a>>, clip: Option<(f32, f32, f32, f32)> },
     Image(ImageQuad<'a>),
+    Backdrop(BackdropQuad),
+}
+
+/// A frosted-glass panel (D-DEF-012): everything drawn BEFORE this item is
+/// blurred within `rect` and composited back as a tinted rounded panel.
+/// Frames containing one render through an intermediate scene texture
+/// (zero cost for frames without any). All physical px.
+#[derive(Clone, Copy, PartialEq)]
+pub struct BackdropQuad {
+    pub rect: (f32, f32, f32, f32),
+    pub radius: f32,
+    /// Gaussian strength in physical px.
+    pub blur: f32,
+    /// LINEAR straight-alpha tint; alpha = mix strength over the blur.
+    pub tint: [f32; 4],
+}
+
+/// Separable 9-tap Gaussian, run twice (H then V) at half resolution.
+const BLUR_WGSL: &str = r#"
+struct BlurUniform {
+    // xy = one texel in UV units, zw = blur direction (1,0) or (0,1),
+    texel_dir: vec4<f32>,
+    // x = tap spread multiplier (blur strength / 3).
+    params:    vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> u: BlurUniform;
+@group(0) @binding(1) var t_src: texture_2d<f32>;
+@group(0) @binding(2) var s_src: sampler;
+
+struct BlurVsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> BlurVsOut {
+    var corner = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let c = corner[vi];
+    var out: BlurVsOut;
+    out.pos = vec4<f32>(c.x * 2.0 - 1.0, 1.0 - c.y * 2.0, 0.0, 1.0);
+    out.uv = c;
+    return out;
+}
+
+@fragment
+fn fs_main(in: BlurVsOut) -> @location(0) vec4<f32> {
+    let step = u.texel_dir.xy * u.texel_dir.zw * u.params.x;
+    var acc = textureSample(t_src, s_src, in.uv) * 0.227027;
+    var w = array<f32, 4>(0.1945946, 0.1216216, 0.054054, 0.016216);
+    for (var i = 1; i <= 4; i++) {
+        let o = step * f32(i);
+        acc += textureSample(t_src, s_src, in.uv + o) * w[i - 1];
+        acc += textureSample(t_src, s_src, in.uv - o) * w[i - 1];
+    }
+    return acc;
+}
+"#;
+
+/// The glass panel: samples the blurred scene at the panel's screen UVs,
+/// tints it, masks to a rounded rect with a soft rim.
+const GLASS_WGSL: &str = r#"
+struct GlassUniform {
+    dest_min: vec2<f32>,   // NDC
+    dest_max: vec2<f32>,
+    uv_min:   vec2<f32>,   // panel rect in screen UV (samples the blur tex)
+    uv_span:  vec2<f32>,
+    size_px:  vec2<f32>,   // panel size, physical px
+    radius:   vec2<f32>,   // x = corner radius px
+    tint:     vec4<f32>,   // linear straight-alpha; a = mix strength
+};
+@group(0) @binding(0) var<uniform> u: GlassUniform;
+@group(0) @binding(1) var t_blur: texture_2d<f32>;
+@group(0) @binding(2) var s_blur: sampler;
+
+struct GlassVsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) local: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+};
+
+fn sd_rrect(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
+    let q = abs(p) - half + vec2<f32>(r, r);
+    return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> GlassVsOut {
+    var corner = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let c = corner[vi];
+    var out: GlassVsOut;
+    out.pos = vec4<f32>(
+        mix(u.dest_min.x, u.dest_max.x, c.x),
+        mix(u.dest_max.y, u.dest_min.y, c.y),
+        0.0, 1.0,
+    );
+    out.local = c;
+    out.uv = u.uv_min + c * u.uv_span;
+    return out;
+}
+
+@fragment
+fn fs_main(in: GlassVsOut) -> @location(0) vec4<f32> {
+    let p = in.local * u.size_px - u.size_px * 0.5;
+    let d = sd_rrect(p, u.size_px * 0.5, u.radius.x);
+    let mask = clamp(0.5 - d, 0.0, 1.0);
+    if mask <= 0.0 { return vec4<f32>(0.0); }
+
+    let blurred = textureSample(t_blur, s_blur, in.uv).rgb;
+    // Tint over the blur, slight lift so glass reads brighter than what's
+    // behind it, and a soft rim at the panel edge.
+    var col = mix(blurred, u.tint.rgb, u.tint.a) * 1.04 + vec3<f32>(0.015);
+    let rim = smoothstep(-3.0, -0.5, d) * 0.25;
+    col += vec3<f32>(rim);
+    return vec4<f32>(col * mask, mask);
+}
+"#;
+
+/// Full-resolution scene + half-resolution blur ping-pong targets, created
+/// lazily on the first backdrop frame and resized with the surface.
+struct SceneTargets {
+    #[allow(dead_code)]
+    scene:       wgpu::Texture,
+    scene_view:  wgpu::TextureView,
+    half_a_view: wgpu::TextureView,
+    half_b_view: wgpu::TextureView,
+    /// Blits the finished scene to the surface (pipeline_base).
+    blit_bind_group: wgpu::BindGroup,
+    w: u32,
+    h: u32,
 }
 
 /// The image-quad pipeline's WGSL (D109): one quad, dest in NDC via
@@ -532,6 +667,13 @@ pub struct GpuPresenter {
     present_seq:           u64,
     /// Warned-once flag: visible images alone exceed the byte budget.
     image_budget_warned:   bool,
+    /// Backdrop-blur pipelines + scene targets (D-DEF-012). Targets are
+    /// lazy — frames without a Backdrop item never allocate them.
+    blur_pipeline:         wgpu::RenderPipeline,
+    glass_pipeline:        wgpu::RenderPipeline,
+    scene:                 Option<SceneTargets>,
+    /// Skip-present comparison for backdrops.
+    cached_backdrops:      Vec<BackdropQuad>,
     /// Pipeline ids already warned about as unregistered — warn once, not
     /// per frame.
     missing_pipeline_warned: std::collections::HashSet<u64>,
@@ -929,6 +1071,45 @@ impl GpuPresenter {
             cache:         None,
         });
 
+        // Backdrop blur + glass pipelines (D-DEF-012) — same bind layout
+        // shape as images (uniform + texture + sampler), so image_bgl is
+        // reused for both.
+        let mk_pipeline = |label: &str, src: &str| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label:  Some(label),
+                source: wgpu::ShaderSource::Wgsl(src.into()),
+            });
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label:                Some(label),
+                bind_group_layouts:   &[&image_bgl],
+                push_constant_ranges: &[],
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label:  Some(label),
+                layout: Some(&pl),
+                vertex: wgpu::VertexState {
+                    module: &module, entry_point: Some("vs_main"),
+                    buffers: &[], compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module, entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend:      Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive:     wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample:   wgpu::MultisampleState::default(),
+                multiview:     None,
+                cache:         None,
+            })
+        };
+        let blur_pipeline  = mk_pipeline("backdrop-blur", BLUR_WGSL);
+        let glass_pipeline = mk_pipeline("backdrop-glass", GLASS_WGSL);
+
         Some(Self {
             surface,
             device,
@@ -969,8 +1150,60 @@ impl GpuPresenter {
             image_bgl,
             sampler_linear,
             cached_images: Vec::new(),
+            blur_pipeline,
+            glass_pipeline,
+            scene: None,
+            cached_backdrops: Vec::new(),
             missing_pipeline_warned: std::collections::HashSet::new(),
         })
+    }
+
+    /// Ensure the scene + half-res blur targets exist at the surface size.
+    fn ensure_scene(&mut self, sw: u32, sh: u32) {
+        if self.scene.as_ref().map(|t| t.w == sw && t.h == sh).unwrap_or(false) {
+            return;
+        }
+        let mk = |w: u32, h: u32, label: &str| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label:           Some(label),
+                size:            wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count:    1,
+                dimension:       wgpu::TextureDimension::D2,
+                format:          self.config.format,
+                usage:           wgpu::TextureUsages::RENDER_ATTACHMENT
+                               | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats:    &[],
+            })
+        };
+        let scene = mk(sw, sh, "backdrop-scene");
+        let scene_view = scene.create_view(&wgpu::TextureViewDescriptor::default());
+        let half_a = mk(sw / 2, sh / 2, "backdrop-half-a");
+        let half_b = mk(sw / 2, sh / 2, "backdrop-half-b");
+        // Fullscreen blit of the finished scene onto the surface: reuse the
+        // layer machinery (pipeline_base + bind_group_layout).
+        let uniform = placed_uniform(None, sw, sh, (0.0, 0.0), sw, sh);
+        let blit_uniform = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("scene-blit-uniform"),
+            contents: bytemuck_f32x8(&uniform),
+            usage:    wgpu::BufferUsages::UNIFORM,
+        });
+        let blit_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("scene-blit-bg"),
+            layout:  &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: blit_uniform.as_entire_binding() },
+            ],
+        });
+        self.scene = Some(SceneTargets {
+            scene, scene_view,
+            half_a_view: half_a.create_view(&wgpu::TextureViewDescriptor::default()),
+            half_b_view: half_b.create_view(&wgpu::TextureViewDescriptor::default()),
+            blit_bind_group,
+            w: sw, h: sh,
+        });
     }
 
     /// Ensure `q`'s texture exists in the image cache (uploading on first
@@ -1292,6 +1525,10 @@ impl GpuPresenter {
                             .map(|bg| (bg, scissor)),
                     );
                 }
+                FrameItem::Backdrop(_) => {
+                    log::debug!("backdrop inside scroll content is not supported yet — skipped");
+                    continue;
+                }
                 FrameItem::Offscreen(_) => {
                     debug_assert!(false, "nested offscreen items are not supported");
                     continue;
@@ -1427,6 +1664,7 @@ impl GpuPresenter {
                     rpass.set_bind_group(0, bind_group, &[]);
                     rpass.draw(0..6, 0..1);
                 }
+                FrameItem::Backdrop(_) => continue,
                 FrameItem::Offscreen(_) => continue,
             }
         }
@@ -1609,8 +1847,12 @@ impl GpuPresenter {
         let images: Vec<&ImageQuad<'_>> = items.iter()
             .filter_map(|i| match i { FrameItem::Image(q) => Some(q), _ => None })
             .collect();
+        let backdrops: Vec<BackdropQuad> = items.iter()
+            .filter_map(|i| match i { FrameItem::Backdrop(b) => Some(*b), _ => None })
+            .collect();
         if pixel_layers.is_empty() && quads.is_empty() && offs.is_empty()
-            && glyph_batches.is_empty() && images.is_empty() { return; }
+            && glyph_batches.is_empty() && images.is_empty() && backdrops.is_empty() { return; }
+        let backdrops_unchanged = self.cached_backdrops == backdrops;
 
         let new_images: Vec<(u64, (f32, f32, f32, f32), f32, Option<(f32, f32, f32, f32)>)> =
             images.iter().map(|q| (q.key, q.dest, q.opacity, q.clip)).collect();
@@ -1655,7 +1897,7 @@ impl GpuPresenter {
                     .unwrap_or(false)
         });
         if layers_unchanged && quads_unchanged && offscreen_unchanged && glyphs_unchanged
-            && images_unchanged
+            && images_unchanged && backdrops_unchanged
         {
             log::debug!(
                 "compositor: skip present ({} layers + {} quads + {} offscreen + {} glyph batches + {} images unchanged)",
@@ -1677,6 +1919,7 @@ impl GpuPresenter {
         self.glyph_atlas.flushed = false;
         self.cached_glyph_batches = new_glyph_batches;
         self.cached_images = new_images;
+        self.cached_backdrops = backdrops.clone();
 
         // LRU clock tick — image textures drawn by THIS present get this
         // stamp and are exempt from eviction below.
@@ -1756,9 +1999,19 @@ impl GpuPresenter {
         // ── Sync the persistent quad resources (same D089 discipline) ──────
         self.sync_cached_quads(&quads, sw, sh);
 
-        // ── Composite the items onto the surface, in order ─────────────────
+        // ── Composite the items, in order ───────────────────────────────────
+        // Frames containing a Backdrop render into an intermediate scene
+        // texture (so the glass can SAMPLE what's beneath it) and blit to
+        // the surface at the end; all other frames render direct.
+        let use_scene = !backdrops.is_empty();
+        if use_scene { self.ensure_scene(sw, sh); }
         let Ok(output) = self.surface.get_current_texture() else { return; };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let target: &wgpu::TextureView = if use_scene {
+            &self.scene.as_ref().expect("ensure_scene above").scene_view
+        } else {
+            &view
+        };
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("compositor-enc"),
@@ -1794,7 +2047,7 @@ impl GpuPresenter {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("compositor-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view:           &view,
+                            view:           target,
                             resolve_target: None,
                             ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                         })],
@@ -1845,7 +2098,7 @@ impl GpuPresenter {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("shader-quad-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view:           &view,
+                            view:           target,
                             resolve_target: None,
                             ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                         })],
@@ -1893,7 +2146,7 @@ impl GpuPresenter {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("offscreen-sample-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view:           &view,
+                            view:           target,
                             resolve_target: None,
                             ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                         })],
@@ -1933,7 +2186,7 @@ impl GpuPresenter {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("glyph-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view:           &view,
+                            view:           target,
                             resolve_target: None,
                             ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                         })],
@@ -1948,6 +2201,95 @@ impl GpuPresenter {
                     rpass.set_bind_group(0, &self.glyph_atlas.bind_group, &[]);
                     rpass.set_vertex_buffer(0, inst_buf.slice(..));
                     rpass.draw(0..6, 0..(instances.len() / 12) as u32);
+                }
+                FrameItem::Backdrop(b) => {
+                    let Some(st) = self.scene.as_ref() else { continue; };
+                    let spread = (b.blur / 3.0).max(1.0);
+                    let mk_blur_bg = |src: &wgpu::TextureView, texel: (f32, f32), dir: (f32, f32)| {
+                        let u = [texel.0, texel.1, dir.0, dir.1, spread, 0.0, 0.0, 0.0];
+                        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label:    Some("blur-uniform"),
+                            contents: bytemuck_f32x8(&u),
+                            usage:    wgpu::BufferUsages::UNIFORM,
+                        });
+                        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label:   Some("blur-bg"),
+                            layout:  &self.image_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src) },
+                                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler_linear) },
+                            ],
+                        })
+                    };
+                    // H: scene -> half_a, V: half_a -> half_b.
+                    let passes = [
+                        (&st.scene_view,  &st.half_a_view, (1.0 / sw as f32, 1.0 / sh as f32), (1.0f32, 0.0f32)),
+                        (&st.half_a_view, &st.half_b_view, (2.0 / sw as f32, 2.0 / sh as f32), (0.0, 1.0)),
+                    ];
+                    for (src, dst, texel, dir) in passes {
+                        let bg = mk_blur_bg(src, texel, dir);
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("backdrop-blur-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: dst,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes:         None,
+                            occlusion_query_set:      None,
+                        });
+                        rpass.set_pipeline(&self.blur_pipeline);
+                        rpass.set_bind_group(0, &bg, &[]);
+                        rpass.draw(0..6, 0..1);
+                    }
+                    // Glass panel into the scene, sampling the blurred copy.
+                    let ndc = shader_quad_uniform(b.rect, sw, sh);
+                    let (x, y, w, h) = b.rect;
+                    let gu: [f32; 16] = [
+                        ndc[0], ndc[1], ndc[2], ndc[3],
+                        x / sw as f32, y / sh as f32, w / sw as f32, h / sh as f32,
+                        w, h, b.radius, 0.0,
+                        b.tint[0], b.tint[1], b.tint[2], b.tint[3],
+                    ];
+                    let gbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label:    Some("glass-uniform"),
+                        contents: f32s_as_bytes(&gu),
+                        usage:    wgpu::BufferUsages::UNIFORM,
+                    });
+                    let gbg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label:   Some("glass-bg"),
+                        layout:  &self.image_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: gbuf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&st.half_b_view) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler_linear) },
+                        ],
+                    });
+                    let load = if !cleared {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    };
+                    cleared = true;
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("backdrop-glass-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           target,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    rpass.set_pipeline(&self.glass_pipeline);
+                    rpass.set_bind_group(0, &gbg, &[]);
+                    rpass.draw(0..6, 0..1);
                 }
                 FrameItem::Image(q) => {
                     let prepared = &prepared_images[image_idx];
@@ -1970,7 +2312,7 @@ impl GpuPresenter {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("image-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view:           &view,
+                            view:           target,
                             resolve_target: None,
                             ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                         })],
@@ -1986,6 +2328,28 @@ impl GpuPresenter {
                     rpass.draw(0..6, 0..1);
                 }
             }
+        }
+
+        // Scene frames: blit the finished scene onto the surface.
+        if use_scene {
+            let st = self.scene.as_ref().expect("scene exists");
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene-blit-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view:           &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes:         None,
+                occlusion_query_set:      None,
+            });
+            rpass.set_pipeline(&self.pipeline_base);
+            rpass.set_bind_group(0, &st.blit_bind_group, &[]);
+            rpass.draw(0..6, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

@@ -495,5 +495,17 @@ Steps:
       evicting them would thrash re-uploads). ShelfPacker
       bounds/overlap/exhaustion unit-tested; workspace green; app_demo
       live-sanity-checked.
+- [x] Backdrop blur / glassmorphism (D-DEF-012, landed 2026-07-11):
+      `DrawCommand::BackdropBlur { rect, radius, blur, tint }` +
+      `PaintCtx::backdrop_blur`. Frames containing one render through an
+      intermediate scene texture (lazy — zero cost otherwise): at the
+      panel, the scene is blurred (two-pass separable 9-tap Gaussian at
+      half resolution) and a tinted rounded glass quad samples it back
+      into the scene; final fullscreen blit to the surface. CPU fallback
+      (softbuffer/web): translucent tint, no blur — honest degradation.
+      Backdrop inside scroll content: not supported yet (skipped with
+      debug log). Verified live (`glass_demo`): content sharp outside the
+      panel, frosted inside, widgets on top crisp. WGSL lesson: dynamic
+      indexing needs `var`, not `let`, arrays.
 - [ ] Final cleanup (desktop/mobile tiny-skia removal) — BLOCKED on web
       GPU phase, do not attempt inside this phase

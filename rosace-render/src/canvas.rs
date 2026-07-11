@@ -184,6 +184,15 @@ pub enum CanvasFrameItem {
         opacity: f32,
         clip: Option<(f32, f32, f32, f32)>,
     },
+    /// Frosted-glass panel (D-DEF-012): the compositor blurs everything
+    /// drawn before this item within `rect` and draws a tinted rounded
+    /// panel over it. All physical px; `tint` is sRGB straight-alpha.
+    Backdrop {
+        rect: (f32, f32, f32, f32),
+        radius: f32,
+        blur: f32,
+        tint: [u8; 4],
+    },
 }
 
 /// One collected `DrawCommand::ShaderFill`, in PHYSICAL pixels, ready for
@@ -1212,6 +1221,23 @@ impl SkiaCanvas {
                         });
                     } else {
                         self.blit_rgba(pixels, *src_width, *src_height, d, *opacity);
+                    }
+                }
+                DrawCommand::BackdropBlur { rect, radius, blur, tint } => {
+                    let r = sr(*rect);
+                    if self.gpu_shapes {
+                        self.cut_segment();
+                        self.pending_frame_items.push(CanvasFrameItem::Backdrop {
+                            rect: (r.origin.x, r.origin.y, r.size.width, r.size.height),
+                            radius: *radius * s,
+                            blur: *blur * s,
+                            tint: tint.rgba_bytes(),
+                        });
+                    } else {
+                        // CPU fallback: translucent tint, no blur — honest
+                        // degradation (softbuffer/web have no backdrop pass).
+                        let a = ((tint.a as f32 * 0.75) as u8).max(90);
+                        self.fill_rrect(r, *radius * s, Color { r: tint.r, g: tint.g, b: tint.b, a });
                     }
                 }
                 DrawCommand::ShaderFill { pipeline_id, rect, uniforms } => {

@@ -211,6 +211,14 @@ fn canvas_item_to_frame<'a>(
                 clip:   *clip,
             })
         }
+        rosace_render::canvas::CanvasFrameItem::Backdrop { rect, radius, blur, tint } => {
+            rosace_compositor::FrameItem::Backdrop(rosace_compositor::BackdropQuad {
+                rect:   *rect,
+                radius: *radius,
+                blur:   *blur,
+                tint:   rosace_render::gpu_shapes::linear_rgba(*tint),
+            })
+        }
         rosace_render::canvas::CanvasFrameItem::Glyphs { glyphs, clip } => {
             // Text color converts sRGB->linear here (same convention as
             // shape quads — the shader outputs linear, the surface

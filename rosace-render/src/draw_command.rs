@@ -41,6 +41,12 @@ pub enum DrawCommand {
     PushClip   { rect: Rect },
     /// Restore the clip rect that was active before the matching [`DrawCommand::PushClip`].
     PopClip,
+    /// Frosted-glass panel (D-DEF-012 backdrop blur): everything already
+    /// drawn beneath `rect` is blurred and tinted behind a rounded panel.
+    /// GPU-composited targets only; the CPU fallback renders a translucent
+    /// tint (no blur) — honest degradation, not silence. `blur` is the
+    /// Gaussian strength in logical px; `tint`'s alpha is the tint mix.
+    BackdropBlur { rect: Rect, radius: f32, blur: f32, tint: Color },
     /// Fill `rect` with a registered GPU shader pipeline (D109/Phase 27).
     ///
     /// `pipeline_id` is the raw value of a `rosace-shader` `PipelineId`
@@ -77,6 +83,8 @@ impl DrawCommand {
             Self::PopClip                              => Self::PopClip,
             Self::ShaderFill { pipeline_id, rect, uniforms } =>
                 Self::ShaderFill { pipeline_id, rect: shift(rect, dx, dy), uniforms },
+            Self::BackdropBlur { rect, radius, blur, tint } =>
+                Self::BackdropBlur { rect: shift(rect, dx, dy), radius, blur, tint },
         }
     }
 
@@ -120,6 +128,8 @@ impl DrawCommand {
             // that's the shader author's contract, documented on ShaderFill.
             Self::ShaderFill { pipeline_id, rect, uniforms } =>
                 Self::ShaderFill { pipeline_id, rect: rc(rect, src_origin, dst_origin, sx, sy), uniforms },
+            Self::BackdropBlur { rect, radius, blur, tint } =>
+                Self::BackdropBlur { rect: rc(rect, src_origin, dst_origin, sx, sy), radius: radius * s, blur: blur * s, tint },
         }
     }
 }

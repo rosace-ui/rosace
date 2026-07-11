@@ -573,6 +573,15 @@ impl<'a> PaintCtx<'a> {
         self.recorder.push(DrawCommand::FillCircle { center, radius, color });
     }
 
+    /// Frosted-glass panel (D-DEF-012): blurs and tints everything already
+    /// painted beneath `rect` behind a rounded panel — real backdrop
+    /// glassmorphism on GPU-composited targets (CPU fallback: translucent
+    /// tint, no blur). `blur` is the Gaussian strength in logical px;
+    /// `tint.a` controls how strongly the tint mixes over the blur.
+    pub fn backdrop_blur(&mut self, rect: Rect, radius: f32, blur: f32, tint: Color) {
+        self.recorder.push(DrawCommand::BackdropBlur { rect, radius, blur, tint });
+    }
+
     /// Fill `rect` with a registered GPU shader pipeline (D109/Phase 27).
     ///
     /// `uniforms` come from a `#[derive(ShaderUniforms)]` struct's
