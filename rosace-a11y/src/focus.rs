@@ -64,6 +64,43 @@ impl FocusManager {
         self.activate(prev_idx);
     }
 
+    /// Directly focus a KNOWN node by id (D112/Phase 28 Step 1:
+    /// click-to-focus) — unlike `focus_next_node`/`focus_prev_node`,
+    /// which step relative to the current position, this jumps straight
+    /// to a target found some other way (a click hit test). Same
+    /// release-old/request-new invariant as `activate`, so a click never
+    /// leaves two nodes simultaneously reporting `is_focused() == true`.
+    /// A no-op if `id` isn't in the current Tab-order snapshot (stale
+    /// caller, or called before the first `sync_from_nodes`).
+    pub fn focus_specific(&mut self, id: u64) {
+        if self.focused == Some(id) {
+            return;
+        }
+        if let Some(fid) = self.focused {
+            if let Some(old) = self.nodes.iter().find(|n| n.id() == fid) {
+                old.release();
+            }
+        }
+        if let Some(node) = self.nodes.iter().find(|n| n.id() == id) {
+            node.request();
+            self.focused = Some(id);
+        }
+    }
+
+    /// Release focus entirely — no node becomes focused (D112/Phase 28
+    /// Step 1: clicking blank space blurs whatever was focused). Distinct
+    /// from `clear_focus` (which only forgets the id, leaving the actual
+    /// `FocusNode`'s own reactive `focused` flag — and thus its drawn
+    /// focus ring — stuck on).
+    pub fn blur(&mut self) {
+        if let Some(fid) = self.focused {
+            if let Some(node) = self.nodes.iter().find(|n| n.id() == fid) {
+                node.release();
+            }
+        }
+        self.focused = None;
+    }
+
     fn activate(&mut self, idx: usize) {
         // Release current.
         if let Some(fid) = self.focused {
@@ -267,6 +304,81 @@ mod tests {
         // Sync with an empty tree — stale focus should be removed
         let empty_tree = A11yTree::new(99);
         fm.sync(&empty_tree);
+        assert!(fm.focused.is_none());
+    }
+
+    // ── focus_specific / blur (D112/Phase 28 Step 1 — click-to-focus) ────
+    //
+    // These exercise the REAL `FocusNode` path (`sync_from_nodes`), not
+    // the older bare-`u64` `sync`/`set_focus` API above — `set_focus`
+    // only writes `self.focused`, it never touches an actual `FocusNode`'s
+    // own reactive `is_focused()` flag, which is exactly the gap that let
+    // a click silently focus-in-name-only (caught live via
+    // `rosace/src/engine.rs`'s integration tests, root-caused here).
+
+    #[test]
+    fn focus_specific_sets_focused_and_the_real_node_reports_is_focused() {
+        let a = FocusNode::new();
+        let b = FocusNode::new();
+        let mut fm = FocusManager::new();
+        fm.sync_from_nodes(vec![a.clone(), b.clone()]);
+
+        fm.focus_specific(b.id());
+        assert_eq!(fm.focused, Some(b.id()));
+        assert!(b.is_focused(), "the actual FocusNode must report focused, not just FocusManager's id field");
+        assert!(!a.is_focused());
+    }
+
+    #[test]
+    fn focus_specific_releases_the_previously_focused_node() {
+        let a = FocusNode::new();
+        let b = FocusNode::new();
+        let mut fm = FocusManager::new();
+        fm.sync_from_nodes(vec![a.clone(), b.clone()]);
+
+        fm.focus_specific(a.id());
+        assert!(a.is_focused());
+        fm.focus_specific(b.id());
+        assert!(!a.is_focused(), "moving focus must release the old node — two simultaneously focused nodes is the exact bug this method exists to prevent");
+        assert!(b.is_focused());
+    }
+
+    #[test]
+    fn focus_specific_on_already_focused_node_is_a_noop() {
+        let a = FocusNode::new();
+        let mut fm = FocusManager::new();
+        fm.sync_from_nodes(vec![a.clone()]);
+        fm.focus_specific(a.id());
+        fm.focus_specific(a.id()); // must not release-then-immediately-refocus
+        assert!(a.is_focused());
+    }
+
+    #[test]
+    fn focus_specific_unknown_id_is_a_noop() {
+        let a = FocusNode::new();
+        let mut fm = FocusManager::new();
+        fm.sync_from_nodes(vec![a.clone()]);
+        fm.focus_specific(999_999);
+        assert_eq!(fm.focused, None, "an id outside the current Tab-order snapshot must not become focused");
+    }
+
+    #[test]
+    fn blur_releases_the_focused_node_and_clears_the_id() {
+        let a = FocusNode::new();
+        let mut fm = FocusManager::new();
+        fm.sync_from_nodes(vec![a.clone()]);
+        fm.focus_specific(a.id());
+        assert!(a.is_focused());
+
+        fm.blur();
+        assert!(fm.focused.is_none());
+        assert!(!a.is_focused(), "blur must release the real node, not just forget its id");
+    }
+
+    #[test]
+    fn blur_with_nothing_focused_is_a_noop() {
+        let mut fm = FocusManager::new();
+        fm.blur(); // must not panic
         assert!(fm.focused.is_none());
     }
 }

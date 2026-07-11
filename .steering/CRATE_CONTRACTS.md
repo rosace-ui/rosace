@@ -307,6 +307,23 @@ silently baked into the contracts below, per the project's violation policy
     own small step — NOT by making scroll ticks dirty the frame, which
     would undo D090's zero-re-raster scroll.
 
+15. **`rosace-ffi`'s C-ABI key mapping doesn't cover `Key::Delete`/
+    `Key::Home`/`Key::End`** — found 2026-07-12 while landing D112/Phase
+    28 Step 1 (real `TextInput` keyboard editing added these three `Key`
+    variants). `rosace-ffi/src/event.rs`'s `TZR_KEY_*` constant → `Key`
+    translation only covers the pre-existing variants (Enter/Escape/
+    Space/Backspace/Tab/Arrows/modifiers/Char) — a mobile host (iOS/
+    Android via the D106 FFI bridge) currently has no `TZR_KEY_DELETE`/
+    `_HOME`/`_END` constant to send, so Delete/Home/End are unreachable
+    from mobile even though desktop now dispatches them for real. Not
+    fixed here deliberately: Phase 28 Step 3 (real OS IME) already needs
+    to substantially touch this same FFI surface (`UITextInput`/
+    `InputConnection` capability, same three-piece shape as camera/
+    lifecycle) — extending the C header/constants piecemeal now, without
+    a mobile host to verify against, risks getting it wrong twice. Step 3
+    should add the three missing `TZR_KEY_*` constants as part of its own
+    scope, not rediscover this gap live.
+
 **Fixed 2026-07-09, unrelated to #9/#10 above**: `rosace-animate::Spring::
 update` used a single semi-implicit-Euler step per call, unconditionally
 stable only below a step-size threshold — a real wall-clock `dt` near
@@ -483,6 +500,16 @@ Phase 21, see `.steering/WIDGET_AUTHORING_GUIDE.md`).
   touches `ImageCache` at all; found during D108/Phase 26 Step 4, same
   duplicate-parallel-implementation shape as `rosace_scroll::ScrollView`
   and `Navigator`/`NavigatorAnimated`)
+- Text editing (D112/Phase 28 Step 1): `tree::text_edit` module —
+  `TextEditState`/`EditableDecl` + pure, unit-tested char-indexed ops
+  (`insert_str`/`insert_char`/`backspace`/`delete_forward`/`move_left`/
+  `move_right`/`move_home`/`move_end`/`select_all`/`selected_text`).
+  `PaintCtx::focus_node`/`focus_node_seeded` (a per-node-position
+  auto-created `FocusNode`, same "zero wiring by default" precedent as
+  `scroll_controller`) and `register_editable`/`text_edit`. `TextInput`
+  is a real controlled input now — see `rosace/src/engine.rs`'s dispatch
+  for the mutating half (this crate only declares/reads; `paint(&self)`
+  can't mutate its own node).
 - Escape hatches: `CustomPaint`, `RepaintBoundary`, `TransformLayer`,
   `RectReader`
 **Must NOT**: Bypass the `Widget`/render-tree protocol. Import internals of

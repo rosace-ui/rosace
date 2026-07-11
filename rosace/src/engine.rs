@@ -15,7 +15,8 @@ use std::sync::Arc;
 use rosace_core::Component;
 use rosace_core::types::Rect;
 use rosace_render::SkiaCanvas;
-use rosace_widgets::tree::{clear_overlays, drain_overlays};
+use rosace_widgets::tree::{clear_overlays, drain_overlays, text_edit, NodeId};
+use rosace_clipboard::ClipboardProvider as _;
 
 use crate::{inflate_rect, rect_contains, theme_color, walk_element, OverlayRoute};
 
@@ -34,6 +35,13 @@ pub struct FrameEngine {
     // ── Focus + input state ─────────────────────────────────────────────
     focus_manager: rosace_a11y::FocusManager,
     shift_held: bool,
+    /// Held-modifier state for text-editing shortcuts (D112/Phase 28 Step
+    /// 1) — mirrors `shift_held`. Cmd/Ctrl+A/C/X/V trigger on EITHER
+    /// being held (`ctrl_held || meta_held`), covering macOS's Cmd
+    /// convention and Linux/Windows's Ctrl convention without branching
+    /// on target OS.
+    ctrl_held: bool,
+    meta_held: bool,
     /// Active drag grab: a POSITIONAL hit (on_press_at) captured on
     /// MouseDown receives streamed MouseMove positions until MouseUp —
     /// slider thumbs, pickers. Plain hits never drag.
@@ -59,6 +67,8 @@ impl FrameEngine {
             render_tree: Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
             focus_manager: rosace_a11y::FocusManager::new(),
             shift_held: false,
+            ctrl_held: false,
+            meta_held: false,
             active_drag: None,
             forced_repaint: false,
             lp_cancel: None,
@@ -76,6 +86,56 @@ impl FrameEngine {
     /// (`SkiaCanvas` is a plain in-memory CPU pixmap).
     pub fn semantics(&self) -> rosace_core::SemanticNode {
         self.render_tree.borrow().collect_semantics()
+    }
+
+    // ── Text editing dispatch (D112/Phase 28 Step 1) ────────────────────
+    //
+    // `TextInput::paint` can't mutate its own render-tree node (`paint`
+    // takes `&self`) and a click/key callback can't capture the render
+    // tree or `FontCache` (both fail `on_press_at`'s `Send + Sync` bound —
+    // `Rc<RefCell<_>>` and fontdue's internal `RefCell` caches are
+    // neither). So, like `pressed`/`hovered` before it, real text editing
+    // is DISPATCHER-owned: the engine looks up the focused editable node
+    // directly and mutates its persistent `text_edit` state here.
+
+    /// The render-tree node behind the currently focused widget, if it
+    /// declared itself editable this paint. `None` when nothing is
+    /// focused, the focused thing isn't editable (a focused `Button`,
+    /// say), or its `FocusNode` is stale (shouldn't happen post-sync, but
+    /// cheap to guard).
+    fn focused_editable(&self) -> Option<(NodeId, String, text_edit::TextEditState, bool)> {
+        let focused_id = self.focus_manager.focused?;
+        let tree = self.render_tree.borrow();
+        let node_id = tree.focus_owner(focused_id)?;
+        let n = tree.node(node_id);
+        let e = n.editable.as_ref()?;
+        Some((node_id, e.value.clone(), n.text_edit.clone(), e.multiline))
+    }
+
+    /// Write a computed `(new_value, new_state)` back: persists the
+    /// caret/selection to the render tree, reports the value upward via
+    /// `on_change` ONLY when it actually changed (a pure cursor move must
+    /// not fire `on_change` — it would spuriously re-notify the app with
+    /// an unchanged string every arrow-key press), and forces a repaint —
+    /// required even for a value-less move, to show the caret land.
+    fn commit_text_edit(
+        &mut self, node_id: NodeId, old_value: &str,
+        new_value: String, new_state: text_edit::TextEditState,
+    ) {
+        let on_change = {
+            let mut tree = self.render_tree.borrow_mut();
+            tree.node_mut(node_id).text_edit = new_state;
+            if new_value != old_value {
+                tree.node(node_id).editable.as_ref().map(|e| e.on_change.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(cb) = on_change {
+            cb(new_value);
+        }
+        self.forced_repaint = true;
+        rosace_state::request_frame();
     }
 
     /// Runs one frame: build (if dirty), layout, paint into `canvas` and
@@ -471,6 +531,63 @@ impl FrameEngine {
                                 self.active_drag = Some(cb);
                             }
                         }
+                        // Click-to-focus for editable widgets (D112/Phase
+                        // 28 Step 1) — independent of the hit_test above:
+                        // an editable widget doesn't register a plain hit
+                        // callback (mutating the caret needs the render
+                        // tree directly, unreachable from a captured
+                        // Send+Sync closure — see EditableDecl's doc
+                        // comment), it's found via its own declared rect.
+                        // Scoped to the same `!handled` fallback as
+                        // hit_test above; an editable inside a modal
+                        // dialog's own overlay route is a follow-up once
+                        // forms/dialogs are exercised together (Step 4).
+                        let editable_hit = self.render_tree.borrow().editable_test(*x, *y);
+                        if let Some(node_id) = editable_hit {
+                            // Route through FocusManager (`focus_specific`),
+                            // not a raw `FocusNode::request()` — the manager
+                            // owns the "exactly one focused at a time"
+                            // invariant AND is the source `focused_editable`
+                            // reads from; calling `.request()` directly sets
+                            // only that node's own reactive flag, leaving
+                            // `FocusManager.focused` (and thus every later
+                            // keystroke's target lookup) unset. Found the
+                            // hard way — this exact gap is why the first
+                            // pass at this dispatch never actually typed
+                            // anything, caught by the headless integration
+                            // tests below, not by eyeballing a screenshot.
+                            let focus_id = self.render_tree.borrow()
+                                .node(node_id).focus_node.as_ref().map(|f| f.id());
+                            if let Some(fid) = focus_id {
+                                self.focus_manager.focus_specific(fid);
+                            }
+                            let now = rosace_widgets::tree::anim_clock();
+                            let mut tree = self.render_tree.borrow_mut();
+                            let node = tree.node_mut(node_id);
+                            // Step 1 scoping: place the caret at the end
+                            // on click, not at the clicked glyph — precise
+                            // click->position needs font metrics, and
+                            // `FontCache` can't cross into this dispatch
+                            // path (its internal `RefCell` caches are
+                            // `!Sync`). Real click-to-glyph placement is a
+                            // named follow-up, not a silent gap.
+                            if let Some(editable) = &node.editable {
+                                node.text_edit.cursor = text_edit::char_count(&editable.value);
+                                node.text_edit.selection_anchor = None;
+                            }
+                            node.text_edit.last_edit_at = now;
+                            drop(tree);
+                            self.forced_repaint = true;
+                            rosace_state::request_frame();
+                        } else if self.focus_manager.focused.is_some() {
+                            // Clicking truly blank space blurs whatever was
+                            // focused — standard desktop convention, and the
+                            // only way a caret ever stops blinking in a
+                            // field the user clicked away from (Tab-cycling
+                            // already unfocuses cleanly via FocusManager;
+                            // this covers the mouse path).
+                            self.focus_manager.blur();
+                        }
                     }
                     // Press/tap feedback (D108/Phase 26 Step 1): mirror hover
                     // resolution at the moment of MouseDown, held until
@@ -582,6 +699,136 @@ impl FrameEngine {
                 rosace_platform::InputEvent::KeyUp {
                     key: rosace_platform::Key::Shift
                 } => { self.shift_held = false; }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::Control
+                } => { self.ctrl_held = true; }
+                rosace_platform::InputEvent::KeyUp {
+                    key: rosace_platform::Key::Control
+                } => { self.ctrl_held = false; }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::Meta
+                } => { self.meta_held = true; }
+                rosace_platform::InputEvent::KeyUp {
+                    key: rosace_platform::Key::Meta
+                } => { self.meta_held = false; }
+
+                // ── Text editing (D112/Phase 28 Step 1) ─────────────────
+                // Literal character insertion goes through `Text`, NOT
+                // `KeyDown{Char}` — `Text` is winit's already-composed,
+                // layout/shift-aware source (a `KeyDown{Char('a')}` fires
+                // ALONGSIDE `Text{'a'}` for every plain letter today, so
+                // handling both would double-insert). Gated off entirely
+                // while Ctrl/Meta is held, in case a platform still
+                // populates `event.text` for a modified key — belt and
+                // braces against accidentally typing a shortcut's letter.
+                rosace_platform::InputEvent::Text { character } => {
+                    if !self.ctrl_held && !self.meta_held && !character.is_control() {
+                        if let Some((node_id, value, state, _)) = self.focused_editable() {
+                            let now = rosace_widgets::tree::anim_clock();
+                            let (nv, ns) = text_edit::insert_char(&value, &state, *character, now);
+                            self.commit_text_edit(node_id, &value, nv, ns);
+                        }
+                    }
+                }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::Backspace
+                } => {
+                    if let Some((node_id, value, state, _)) = self.focused_editable() {
+                        let now = rosace_widgets::tree::anim_clock();
+                        let (nv, ns) = text_edit::backspace(&value, &state, now);
+                        self.commit_text_edit(node_id, &value, nv, ns);
+                    }
+                }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::Delete
+                } => {
+                    if let Some((node_id, value, state, _)) = self.focused_editable() {
+                        let now = rosace_widgets::tree::anim_clock();
+                        let (nv, ns) = text_edit::delete_forward(&value, &state, now);
+                        self.commit_text_edit(node_id, &value, nv, ns);
+                    }
+                }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::ArrowLeft
+                } => {
+                    if let Some((node_id, value, state, _)) = self.focused_editable() {
+                        let now = rosace_widgets::tree::anim_clock();
+                        let ns = text_edit::move_left(&state, self.shift_held, now);
+                        self.commit_text_edit(node_id, &value, value.clone(), ns);
+                    }
+                }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::ArrowRight
+                } => {
+                    if let Some((node_id, value, state, _)) = self.focused_editable() {
+                        let now = rosace_widgets::tree::anim_clock();
+                        let ns = text_edit::move_right(&value, &state, self.shift_held, now);
+                        self.commit_text_edit(node_id, &value, value.clone(), ns);
+                    }
+                }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::Home
+                } => {
+                    if let Some((node_id, value, state, _)) = self.focused_editable() {
+                        let now = rosace_widgets::tree::anim_clock();
+                        let ns = text_edit::move_home(&state, self.shift_held, now);
+                        self.commit_text_edit(node_id, &value, value.clone(), ns);
+                    }
+                }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::End
+                } => {
+                    if let Some((node_id, value, state, _)) = self.focused_editable() {
+                        let now = rosace_widgets::tree::anim_clock();
+                        let ns = text_edit::move_end(&value, &state, self.shift_held, now);
+                        self.commit_text_edit(node_id, &value, value.clone(), ns);
+                    }
+                }
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::Char(c)
+                } => {
+                    // Shortcut letters ONLY — plain typing is Text's job
+                    // (see the comment above). Cmd (macOS) or Ctrl
+                    // (Linux/Windows) triggers either way, deliberately
+                    // not OS-branched.
+                    if self.ctrl_held || self.meta_held {
+                        if let Some((node_id, value, state, multiline)) = self.focused_editable() {
+                            let now = rosace_widgets::tree::anim_clock();
+                            match c.to_ascii_lowercase() {
+                                'a' => {
+                                    let ns = text_edit::select_all(&value, now);
+                                    self.commit_text_edit(node_id, &value, value.clone(), ns);
+                                }
+                                'c' => {
+                                    if let Some(sel) = text_edit::selected_text(&value, &state) {
+                                        let _ = rosace_clipboard::SystemClipboard::new().write(&sel);
+                                    }
+                                }
+                                'x' => {
+                                    if let Some(sel) = text_edit::selected_text(&value, &state) {
+                                        let _ = rosace_clipboard::SystemClipboard::new().write(&sel);
+                                        let (nv, ns) = text_edit::backspace(&value, &state, now);
+                                        self.commit_text_edit(node_id, &value, nv, ns);
+                                    }
+                                }
+                                'v' => {
+                                    if let Some(text) = rosace_clipboard::SystemClipboard::new().read() {
+                                        let clean: String = if multiline {
+                                            text.chars().filter(|c| !c.is_control() || *c == '\n').collect()
+                                        } else {
+                                            text.chars().filter(|c| !c.is_control()).collect()
+                                        };
+                                        if !clean.is_empty() {
+                                            let (nv, ns) = text_edit::insert_str(&value, &state, &clean, now);
+                                            self.commit_text_edit(node_id, &value, nv, ns);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1168,5 +1415,281 @@ mod tests {
         // declared 20x20 size, same as a plain (untagged) Container would.
         let area = blue_pixel_count(&canvas);
         assert!(area > 300 && area < 500, "a Hero-tagged widget outside any transition must render exactly like its untagged inner widget, got {area} px");
+    }
+
+    // ── Text editing (D112/Phase 28 Step 1) ──────────────────────────────
+    //
+    // Driven through `engine.paint(canvas, overlay, events)` with real
+    // synthetic `InputEvent`s — the same production dispatch code a real
+    // OS keystroke reaches — and asserted against the REAL app-owned atom
+    // an `on_change` closure writes to, not just the render tree's
+    // ephemeral `text_edit` state. This is the substitute for on-device
+    // OS-level input verification: synthetic `CGEvent` mouse/keyboard
+    // injection into another process requires Accessibility permission
+    // this sandbox doesn't have (confirmed empirically — a real click
+    // landed on the field's declared rect, real window frontmost, and
+    // produced no observable effect; the same gap was hit and documented
+    // earlier in this project). A headless `FrameEngine` integration test
+    // is not a weaker substitute: it exercises the exact same
+    // `rosace/src/engine.rs` dispatch code real input reaches, and — unlike
+    // eyeballing a screenshot — asserts an exact resulting value.
+
+    use rosace_widgets::tree::TextInput;
+    use std::sync::OnceLock;
+
+    /// Root with a single real, atom-bound `TextInput` — `on_change`
+    /// writes into the SAME atom `build()` reads `.value()` from, the
+    /// exact controlled wiring a real app uses. `captured` lets the test
+    /// read that atom's live value after painting; `Component` requires
+    /// `Send + Sync` so an `Rc<RefCell<_>>` field (used for this same
+    /// purpose in web/FFI code elsewhere) isn't an option here — a
+    /// `OnceLock` is, and the atom's identity is stable across rebuilds
+    /// (D091 position-based persistence) so capturing it once is enough.
+    struct OneTextInput {
+        captured: Arc<OnceLock<rosace_state::Atom<String>>>,
+    }
+    impl Component for OneTextInput {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let name: rosace_state::Atom<String> = ctx.state(String::new());
+            let _ = self.captured.set(name.clone());
+            TextInput::new()
+                .value(name.get())
+                .on_change({
+                    let name = name.clone();
+                    move |v| name.set(v)
+                })
+                .into_element()
+        }
+    }
+
+    fn headless_text_input_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas, Arc<OnceLock<rosace_state::Atom<String>>>) {
+        let captured = Arc::new(OnceLock::new());
+        let engine = FrameEngine::new(Box::new(OneTextInput { captured: captured.clone() }), rosace_render::FontCache::embedded());
+        (engine, SkiaCanvas::new(200, 60), SkiaCanvas::new(200, 60), captured)
+    }
+
+    fn click(x: f32, y: f32) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::MouseDown { x, y, button: rosace_platform::MouseButton::Left }
+    }
+    fn text(c: char) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::Text { character: c }
+    }
+    fn key(k: rosace_platform::Key) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::KeyDown { key: k }
+    }
+    fn key_up(k: rosace_platform::Key) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::KeyUp { key: k }
+    }
+    fn type_str(engine: &mut FrameEngine, canvas: &mut SkiaCanvas, overlay: &mut SkiaCanvas, s: &str) {
+        for c in s.chars() {
+            engine.paint(canvas, overlay, &[text(c)]);
+        }
+    }
+
+    #[test]
+    fn click_focuses_the_input_and_typed_text_reaches_the_bound_atom() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]); // populate editable/focus regions
+        assert_eq!(atom.get().unwrap().get(), "", "starts empty");
+
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi");
+
+        assert_eq!(atom.get().unwrap().get(), "hi", "typed text must reach the app-owned atom via on_change");
+    }
+
+    #[test]
+    fn typing_before_any_click_does_nothing_nothing_is_focused_yet() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi");
+        assert_eq!(atom.get().unwrap().get(), "", "no widget is focused, so Text events must be dropped");
+    }
+
+    #[test]
+    fn backspace_removes_the_last_character() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Backspace)]);
+        assert_eq!(atom.get().unwrap().get(), "h");
+    }
+
+    #[test]
+    fn delete_forward_removes_the_char_after_the_cursor() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi");
+        // Click places the caret at the end (Step 1 scoping) — Home first
+        // so Delete has something after the cursor to remove.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Home)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Delete)]);
+        assert_eq!(atom.get().unwrap().get(), "i");
+    }
+
+    #[test]
+    fn arrow_left_then_insert_lands_in_the_middle_not_appended_at_the_end() {
+        // Real proof the caret tracks a POSITION, not just "always append":
+        // type "ac", move left once, type "b" -> must read "abc".
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "ac");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowLeft)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "b");
+        assert_eq!(atom.get().unwrap().get(), "abc");
+    }
+
+    #[test]
+    fn shift_arrow_selects_then_typing_replaces_the_selection() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Home)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Shift)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowRight)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowRight)]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Shift)]);
+        // "he" now selected; typing must replace it, not insert alongside.
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "Xllo");
+    }
+
+    #[test]
+    fn cmd_a_selects_all_then_backspace_clears_everything() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('a'))]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Backspace)]);
+        assert_eq!(atom.get().unwrap().get(), "");
+    }
+
+    #[test]
+    fn ctrl_a_also_triggers_select_all_not_only_meta() {
+        // Linux/Windows convention — deliberately not OS-branched, see
+        // the dispatch comment in `paint`.
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Control)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('a'))]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Control)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Backspace)]);
+        assert_eq!(atom.get().unwrap().get(), "");
+    }
+
+    #[test]
+    fn clicking_blank_space_blurs_the_focused_input() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi");
+        assert_eq!(atom.get().unwrap().get(), "hi");
+
+        // Click well outside the input's rect (200x60 canvas) — blank space.
+        engine.paint(&mut canvas, &mut overlay, &[click(199.0, 59.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "MORE");
+        assert_eq!(atom.get().unwrap().get(), "hi", "typing after a blank-space blur must not reach the now-unfocused input");
+    }
+
+    /// Two real, independently atom-bound `TextInput`s stacked in a
+    /// Column — Tab must move focus from the first to the second, and
+    /// typed text after Tab must land in the SECOND field's atom, not the
+    /// first's (proves `focus_owner` resolves the CORRECT node, not just
+    /// "whichever was focused first").
+    struct TwoTextInputs {
+        first: Arc<OnceLock<rosace_state::Atom<String>>>,
+        second: Arc<OnceLock<rosace_state::Atom<String>>>,
+    }
+    impl Component for TwoTextInputs {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let a: rosace_state::Atom<String> = ctx.state(String::new());
+            let b: rosace_state::Atom<String> = ctx.state(String::new());
+            let _ = self.first.set(a.clone());
+            let _ = self.second.set(b.clone());
+            Column::new()
+                .child(TextInput::new().height(30.0).value(a.get()).on_change({
+                    let a = a.clone(); move |v| a.set(v)
+                }))
+                .child(TextInput::new().height(30.0).value(b.get()).on_change({
+                    let b = b.clone(); move |v| b.set(v)
+                }))
+                .into_element()
+        }
+    }
+
+    #[test]
+    fn tab_moves_focus_from_the_first_input_to_the_second() {
+        let first = Arc::new(OnceLock::new());
+        let second = Arc::new(OnceLock::new());
+        let engine_root = TwoTextInputs { first: first.clone(), second: second.clone() };
+        let mut engine = FrameEngine::new(Box::new(engine_root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(200, 100);
+        let mut overlay = SkiaCanvas::new(200, 100);
+
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        // Click into the FIRST field (near the top of the column).
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 12.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "one");
+        assert_eq!(first.get().unwrap().get(), "one");
+        assert_eq!(second.get().unwrap().get(), "");
+
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Tab)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "two");
+        assert_eq!(first.get().unwrap().get(), "one", "the first field must be unchanged");
+        assert_eq!(second.get().unwrap().get(), "two", "typed text after Tab must land in the SECOND field");
+    }
+
+    #[test]
+    fn cut_then_paste_round_trips_through_the_real_system_clipboard() {
+        // Touches the REAL OS clipboard (rosace-clipboard's own test
+        // suite only exercises NoopClipboard) — save and restore whatever
+        // was there so this test leaves no lasting side effect on the
+        // developer's actual clipboard.
+        use rosace_clipboard::ClipboardProvider;
+        let cb = rosace_clipboard::SystemClipboard::new();
+        let original = cb.read();
+
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+
+        // Select "llo" (chars 2..5): Home, then Shift+Right x3.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Home)]);
+        for _ in 0..2 {
+            engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowRight)]);
+        }
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Shift)]);
+        for _ in 0..3 {
+            engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowRight)]);
+        }
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Shift)]);
+
+        // Cmd+X: cuts "llo" to the real clipboard, leaves "he".
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('x'))]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Meta)]);
+        assert_eq!(atom.get().unwrap().get(), "he", "cut must remove the selection from the field");
+        assert_eq!(cb.read().as_deref(), Some("llo"), "cut must write the selection to the real system clipboard");
+
+        // Cmd+V at the end: pastes "llo" back -> "hello" again.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('v'))]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Meta)]);
+        assert_eq!(atom.get().unwrap().get(), "hello", "paste must insert the real clipboard's content at the caret");
+
+        match original {
+            Some(text) => { let _ = cb.write(&text); }
+            None => cb.clear(),
+        }
     }
 }

@@ -68,6 +68,13 @@ pub struct TreeNode {
     pub transforms: Vec<TransformLayerEntry>,
     pub semantics:  Vec<super::Semantics>,
 
+    /// Editable text content declared this paint (D112/Phase 28 Step 1) —
+    /// current value, rect, and the `on_change` callback. Cleared each
+    /// repaint like `hits`/`scrolls`; the engine's key/click dispatch
+    /// reads it fresh rather than caching, since a rebuild may swap in a
+    /// different `on_change` closure.
+    pub editable: Option<super::text_edit::EditableDecl>,
+
     // ── Persistent per-node state (NOT cleared on repaint) ───────────────
     /// The node's implicit scroll position (D101) — created lazily by the
     /// first scrollable painted at this position, survives rebuilds like
@@ -76,6 +83,14 @@ pub struct TreeNode {
     /// A persistent eased scalar (0..1) for toggle transitions — advanced by
     /// PaintCtx::animate_to. `None` until first observed (then snaps).
     pub anim: Option<f32>,
+    /// This node's [`rosace_a11y::FocusNode`] (D112/Phase 28 Step 1) —
+    /// created lazily by [`super::PaintCtx::focus_node`], survives
+    /// rebuilds like `scroll_ctrl` above.
+    pub focus_node: Option<rosace_a11y::FocusNode>,
+    /// Persistent cursor/selection state for an editable node (D091/D112)
+    /// — NOT cleared on repaint, so the caret survives a rebuild with the
+    /// same displayed value.
+    pub text_edit: super::text_edit::TextEditState,
 
     // ── Picture cache (Phase 20 unification — was the flat RenderNode) ───
     /// Widget type name at this position; a mismatch resets the caches.
@@ -155,6 +170,7 @@ impl RenderTree {
         n.pointer_mode = 0;
         n.hover_regions.clear();
         n.long_hits.clear();
+        n.editable = None;
         self.begun_this_frame.push(node);
     }
 
@@ -466,6 +482,45 @@ impl RenderTree {
         for &child in &n.children {
             self.collect_focus_node(child, out);
         }
+    }
+
+    /// The render-tree node that declared the [`rosace_a11y::FocusNode`]
+    /// with id `focus_id` (D112/Phase 28 Step 1) — bridges
+    /// `FocusManager::focused` (a `FocusNode`'s own global id) back to a
+    /// `NodeId`, so the engine's key dispatch can find and mutate that
+    /// node's persistent `text_edit`/`editable` state.
+    pub fn focus_owner(&self, focus_id: u64) -> Option<NodeId> {
+        self.nodes.iter().position(|n| n.focus.iter().any(|f| f.id() == focus_id))
+    }
+
+    /// Topmost editable node whose declared rect contains `(x, y)` — used
+    /// by the engine to focus (and, Step 1: place the caret at the end
+    /// of) an editable widget on click (D112/Phase 28). Same z-order
+    /// traversal as [`Self::hover_test`]; editable rects live in
+    /// `TreeNode::editable`, declared by [`super::PaintCtx::register_editable`].
+    pub fn editable_test(&self, x: f32, y: f32) -> Option<NodeId> {
+        self.editable_test_node(Self::ROOT, x, y)
+    }
+
+    fn editable_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<NodeId> {
+        let n = &self.nodes[id];
+        if n.pointer_mode == 1 {
+            return None;
+        }
+        let (cx, cy, clipped) = self.child_coords(n, id, x, y);
+        if !clipped {
+            for &child in n.children.iter().rev() {
+                if let Some(hit) = self.editable_test_node(child, cx, cy) {
+                    return Some(hit);
+                }
+            }
+        }
+        if let Some(e) = &n.editable {
+            if contains(&e.rect, x, y) {
+                return Some(id);
+            }
+        }
+        None
     }
 
     /// Derive the accessibility tree (D099): semantics entries in paint

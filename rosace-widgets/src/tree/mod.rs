@@ -61,6 +61,7 @@ pub mod stack;
 pub mod switch;
 pub mod tab;
 pub mod text;
+pub mod text_edit;
 pub mod text_input;
 pub mod toast;
 pub mod tooltip;
@@ -122,6 +123,7 @@ pub use stack::Stack;
 pub use switch::Switch;
 pub use tab::{Tab, TabBar};
 pub use text::{Text, TextAlign, FontWeight};
+pub use text_edit::{EditableDecl, TextEditState};
 pub use text_input::TextInput;
 pub use tooltip::Tooltip;
 pub use transform_layer::TransformLayer;
@@ -461,6 +463,58 @@ impl<'a> PaintCtx<'a> {
     /// from the render tree each frame.
     pub fn semantics(&self, s: Semantics) {
         self.tree.borrow_mut().node_mut(self.node).semantics.push(s);
+    }
+
+    /// The [`rosace_a11y::FocusNode`] for this widget's tree position —
+    /// created lazily on first paint and persists across rebuilds, the
+    /// same "zero wiring by default" precedent as [`Self::scroll_controller`]
+    /// (D101: "this is why `ScrollView::new(child)` scrolls with zero
+    /// wiring"). Powers `TextInput`'s built-in click-to-focus/Tab-cycling
+    /// (D112/Phase 28) without requiring every app to construct and wire
+    /// an explicit `FocusNode` for the common single-field case — apps
+    /// that DO want explicit neighbor wiring can still layer
+    /// `FocusApi::focus_node` on top; the two are independent focus-graph
+    /// nodes if both are used on the same widget.
+    pub fn focus_node(&self) -> rosace_a11y::FocusNode {
+        self.focus_node_seeded(false)
+    }
+
+    /// Same as [`Self::focus_node`], but if this is the FIRST paint of
+    /// this render-tree node (no focus node existed yet) and `seed` is
+    /// true, requests focus immediately. Backs `TextInput::focused()`'s
+    /// "start focused" behavior: a one-shot seed, not a per-frame
+    /// re-request — a later paint with `seed == true` on an
+    /// already-focus-noded position does NOT steal focus back after the
+    /// user has tabbed away.
+    pub fn focus_node_seeded(&self, seed: bool) -> rosace_a11y::FocusNode {
+        let mut tree = self.tree.borrow_mut();
+        let node = tree.node_mut(self.node);
+        if let Some(f) = &node.focus_node {
+            return f.clone();
+        }
+        let f = rosace_a11y::FocusNode::new();
+        if seed {
+            f.request();
+        }
+        node.focus_node = Some(f.clone());
+        f
+    }
+
+    /// Declare this widget's rect as editable text content (D112/Phase 28
+    /// Step 1). The engine's key/click dispatch (`rosace/src/engine.rs`)
+    /// finds it via the render tree, not a captured closure — see
+    /// [`text_edit::EditableDecl`]'s doc comment for why a plain
+    /// `Arc<dyn Fn + Send + Sync>` hit callback can't do this job.
+    pub fn register_editable(&self, decl: text_edit::EditableDecl) {
+        self.tree.borrow_mut().node_mut(self.node).editable = Some(decl);
+    }
+
+    /// This widget's persistent cursor/selection state (D091) — read
+    /// during paint to draw the caret/selection highlight. Mutated by the
+    /// engine's key/click dispatch, never by the widget itself (`paint`
+    /// takes `&self`).
+    pub fn text_edit(&self) -> text_edit::TextEditState {
+        self.tree.borrow().node(self.node).text_edit.clone()
     }
 
     /// Record `paint` into a standalone [`Picture`] at `rect`, returning it —

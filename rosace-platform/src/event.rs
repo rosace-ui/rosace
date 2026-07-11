@@ -19,6 +19,10 @@ pub enum MouseButton { Left, Right, Middle }
 pub enum Key {
     Enter, Escape, Space, Backspace, Tab,
     ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
+    /// Forward delete — distinct from `Backspace` (D112/Phase 28 Step 1:
+    /// real `TextInput` editing needs both directions).
+    Delete,
+    Home, End,
     Shift, Control, Alt, Meta,
     Char(char),
 }
