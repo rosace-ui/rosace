@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use rosace_core::types::{Point, Rect, Size};
 use rosace_render::{Color, DrawCommand};
 
@@ -54,35 +52,40 @@ impl Widget for Image {
         let h = self.inner.height;
         let dest_rect = Rect { origin: Point { x, y }, size: Size { width: w, height: h } };
 
-        // Try to load and decode the source pixels.
-        let raw_bytes = match &self.inner.source {
-            ImageSource::Placeholder => None,
-            ImageSource::File(path) => std::fs::read(path).ok(),
-            ImageSource::Bytes(b) => Some(b.clone()),
+        // Decode ONCE via the global cache (Phase 27 — this paint
+        // previously did `fs::read` + PNG decode on EVERY frame, the
+        // "orphaned ImageCache" known issue). The cached `Arc` is recorded
+        // directly: zero pixel copies per frame, and its stable content
+        // gives the compositor a stable GPU-texture key.
+        let decoded = {
+            let mut cache = crate::ImageCache::global().lock().unwrap_or_else(|e| e.into_inner());
+            match &self.inner.source {
+                ImageSource::Placeholder => None,
+                ImageSource::File(path) => cache.get_or_load(path),
+                ImageSource::Bytes(b) => cache.get_or_decode_bytes(b),
+            }
         };
 
-        if let Some(bytes) = raw_bytes {
-            if let Ok(pixmap) = tiny_skia::Pixmap::decode_png(&bytes) {
-                // No default load-in fade (D111 corrects D108/Phase 26 Step
-                // 4): this widget has no stable per-image identity inside a
-                // virtualized list (`ListView` allocates render-tree nodes
-                // positionally by viewport slot, not by data index — see
-                // D111), so an `animate_to`-driven fade here would bind its
-                // animated opacity to whichever image currently occupies a
-                // given on-screen slot, not to the image itself. Full
-                // opacity, always, is the only default that's correct in
-                // every context. `opacity` stays a real per-call parameter
-                // on `DrawCommand::BlitRgba` for callers with real identity
-                // (e.g. Hero transitions) to use deliberately.
-                ctx.record(DrawCommand::BlitRgba {
-                    pixels: Arc::new(pixmap.data().to_vec()),
-                    src_width: pixmap.width(),
-                    src_height: pixmap.height(),
-                    dest_rect,
-                    opacity: 1.0,
-                });
-                return;
-            }
+        if let Some(img) = decoded {
+            // No default load-in fade (D111 corrects D108/Phase 26 Step
+            // 4): this widget has no stable per-image identity inside a
+            // virtualized list (`ListView` allocates render-tree nodes
+            // positionally by viewport slot, not by data index — see
+            // D111), so an `animate_to`-driven fade here would bind its
+            // animated opacity to whichever image currently occupies a
+            // given on-screen slot, not to the image itself. Full
+            // opacity, always, is the only default that's correct in
+            // every context. `opacity` stays a real per-call parameter
+            // on `DrawCommand::BlitRgba` for callers with real identity
+            // (e.g. Hero transitions) to use deliberately.
+            ctx.record(DrawCommand::BlitRgba {
+                pixels: img.pixels,
+                src_width: img.width,
+                src_height: img.height,
+                dest_rect,
+                opacity: 1.0,
+            });
+            return;
         }
 
         // Placeholder: colored box + icon.

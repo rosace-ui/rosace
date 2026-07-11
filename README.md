@@ -1,13 +1,9 @@
 <div align="center">
-  <img src="assets/rosace/rosace-logo-spectrum.svg" alt="Rosace" width="420"/>
-
-  <br/><br/>
+  <img src="assets/rosace/rosace-logo-aurora.svg" alt="Rosace" width="420"/>
 
   <p><em>Fast by nature. Beautiful by design.</em></p>
 
   <p><strong>The UI framework Rust deserved from day one.</strong></p>
-
-  <br/>
 
   ![Status](https://img.shields.io/badge/status-work%20in%20progress-orange)
   ![Phase](https://img.shields.io/badge/phase-1%20foundation-yellow)

@@ -298,9 +298,30 @@ impl Default for ImageWidget {
 // ImageCache
 // ---------------------------------------------------------------------------
 
-/// Caches decoded image pixmaps by file path to avoid re-decoding on every frame.
+/// A decoded image: shared premultiplied-RGBA pixels + dimensions. The
+/// `Arc` is what `DrawCommand::BlitRgba` carries, so a cached image costs
+/// zero copies per frame — and its stable content makes the compositor's
+/// GPU texture key (a content hash) stable across frames too.
+#[derive(Debug, Clone)]
+pub struct DecodedImage {
+    pub width:  u32,
+    pub height: u32,
+    pub pixels: std::sync::Arc<Vec<u8>>,
+}
+
+/// Caches decoded images to avoid re-decoding on every frame — keyed by
+/// file path (or a content hash for byte sources). Wired for real in
+/// Phase 27 (`Image::paint` previously did `fs::read` + PNG decode on
+/// EVERY paint — the former Known-Issues "orphaned ImageCache" entry);
+/// paint-time access goes through [`ImageCache::global`].
+///
+/// Unbounded by design for now: it holds each distinct image an app ever
+/// shows, which is the same bound the old decode-per-paint had on peak
+/// memory. A byte budget + eviction is real follow-up work, tracked with
+/// the compositor's image-texture eviction.
 pub struct ImageCache {
-    cache: HashMap<PathBuf, tiny_skia::Pixmap>,
+    cache: HashMap<PathBuf, DecodedImage>,
+    by_bytes: HashMap<u64, DecodedImage>,
 }
 
 impl ImageCache {
@@ -308,37 +329,72 @@ impl ImageCache {
     pub fn new() -> Self {
         Self {
             cache: HashMap::new(),
+            by_bytes: HashMap::new(),
         }
     }
 
-    /// Return the cached pixmap for `path`, loading and decoding it on first access.
-    ///
-    /// Returns `None` if the file cannot be read or decoded as PNG.
-    pub fn get_or_load(&mut self, path: impl Into<PathBuf>) -> Option<&tiny_skia::Pixmap> {
+    /// The process-wide cache used by `Image::paint` — same global-service
+    /// pattern as the scroll-offset channel.
+    pub fn global() -> &'static std::sync::Mutex<ImageCache> {
+        use std::sync::{Mutex, OnceLock};
+        static CACHE: OnceLock<Mutex<ImageCache>> = OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(ImageCache::new()))
+    }
+
+    /// Return the cached image for `path`, loading and decoding it on first
+    /// access. Returns `None` if the file cannot be read or decoded as PNG.
+    pub fn get_or_load(&mut self, path: impl Into<PathBuf>) -> Option<DecodedImage> {
         let path = path.into();
         if !self.cache.contains_key(&path) {
-            if let Ok(bytes) = std::fs::read(&path) {
-                if let Ok(pixmap) = tiny_skia::Pixmap::decode_png(&bytes) {
-                    self.cache.insert(path.clone(), pixmap);
-                }
-            }
+            let bytes = std::fs::read(&path).ok()?;
+            let pixmap = tiny_skia::Pixmap::decode_png(&bytes).ok()?;
+            self.cache.insert(path.clone(), DecodedImage {
+                width:  pixmap.width(),
+                height: pixmap.height(),
+                pixels: std::sync::Arc::new(pixmap.data().to_vec()),
+            });
         }
-        self.cache.get(&path)
+        self.cache.get(&path).cloned()
     }
 
-    /// Number of cached entries.
+    /// Decode-once for byte sources, keyed by a content hash (dims + len +
+    /// sampled windows — same scheme as the compositor's texture key).
+    pub fn get_or_decode_bytes(&mut self, bytes: &[u8]) -> Option<DecodedImage> {
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut eat = |b: u8| {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        };
+        for b in (bytes.len() as u64).to_le_bytes() { eat(b); }
+        let n = bytes.len();
+        for &start in &[0usize, n / 2, n.saturating_sub(32)] {
+            for &b in &bytes[start..(start + 32).min(n)] { eat(b); }
+        }
+        if !self.by_bytes.contains_key(&h) {
+            let pixmap = tiny_skia::Pixmap::decode_png(bytes).ok()?;
+            self.by_bytes.insert(h, DecodedImage {
+                width:  pixmap.width(),
+                height: pixmap.height(),
+                pixels: std::sync::Arc::new(pixmap.data().to_vec()),
+            });
+        }
+        self.by_bytes.get(&h).cloned()
+    }
+
+    /// Number of cached entries (path + byte sources).
     pub fn len(&self) -> usize {
-        self.cache.len()
+        self.cache.len() + self.by_bytes.len()
     }
 
     /// Returns `true` if the cache holds no entries.
     pub fn is_empty(&self) -> bool {
-        self.cache.is_empty()
+        self.cache.is_empty() && self.by_bytes.is_empty()
     }
 
     /// Remove all cached entries.
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.by_bytes.clear();
     }
 
     /// Returns `true` if the given path is already in the cache.

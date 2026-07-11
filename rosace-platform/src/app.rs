@@ -200,6 +200,17 @@ fn canvas_item_to_frame<'a>(
                 ),
             )
         }
+        rosace_render::canvas::CanvasFrameItem::Image { key, pixels, src_w, src_h, dest, opacity, clip } => {
+            rosace_compositor::FrameItem::Image(rosace_compositor::ImageQuad {
+                key:    *key,
+                pixels: &pixels.0,
+                src_w:  *src_w,
+                src_h:  *src_h,
+                dest:   *dest,
+                opacity: *opacity,
+                clip:   *clip,
+            })
+        }
         rosace_render::canvas::CanvasFrameItem::Glyphs { glyphs, clip } => {
             // Text color converts sRGB->linear here (same convention as
             // shape quads — the shader outputs linear, the surface

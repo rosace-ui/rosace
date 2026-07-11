@@ -463,5 +463,24 @@ Steps:
       green. bench_paint: 7.57 → **0.324 ms/frame — 23.4× lower** CPU
       per animated frame (was 10.2× with segment text).
 - [ ] Step 5 — `ShaderPaint` widget + real novel-effect demo
+- [x] Image textures + ImageCache wiring (landed 2026-07-11): `Image::paint`
+      no longer does `fs::read` + PNG decode EVERY paint — the formerly
+      orphaned `ImageCache` (rewritten to hold shared `Arc` pixel buffers,
+      path- and content-keyed, with a `global()` accessor) is now its real
+      consumer, so decode happens once and `BlitRgba` records the cached
+      `Arc` with zero per-frame copies (helps CPU mode too). In GPU mode,
+      `BlitRgba` becomes `CanvasFrameItem::Image` keyed by a content hash
+      (`blit_key` — dims+len+sampled-windows FNV; covers Image, Hero
+      captures, RemoteImage without any API change), uploaded once to a
+      compositor texture cache (128-entry budget, referenced-retain
+      eviction; byte budget = named follow-up with atlas eviction) and
+      drawn as a bilinear textured quad with a per-DRAW opacity uniform
+      (per-texture would break duplicate images in one frame). Offscreen
+      scroll content supported. Verified: real PNG (app_showcase.png)
+      CPU-vs-GPU 0.48% within 12/255; the 124 px >60 are sRGB-space (CPU)
+      vs linear-space (GPU) bilinear filtering on a downscaled busy
+      screenshot — the GPU's is the color-correct one. bench_paint:
+      7.70 → **0.214 ms/frame (36.1× lower)**, up from 23.4× with
+      segment-blitted images.
 - [ ] Final cleanup (desktop/mobile tiny-skia removal) — BLOCKED on web
       GPU phase, do not attempt inside this phase

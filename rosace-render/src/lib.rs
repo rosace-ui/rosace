@@ -245,6 +245,40 @@ mod tests {
     }
 
     #[test]
+    fn gpu_mode_blit_becomes_image_item_with_stable_content_key() {
+        use crate::canvas::CanvasFrameItem;
+        use crate::draw_command::DrawCommand;
+        use crate::font::FontCache;
+        use crate::picture::PictureRecorder;
+        use std::sync::Arc;
+
+        let mut canvas = SkiaCanvas::new(100, 100);
+        canvas.set_gpu_shapes(true);
+        canvas.clear(Color::rgb(0, 0, 0));
+        let px: Arc<Vec<u8>> = Arc::new(vec![200u8; 8 * 8 * 4]);
+        let mut rec = PictureRecorder::new();
+        rec.push(DrawCommand::BlitRgba {
+            pixels: px.clone(), src_width: 8, src_height: 8,
+            dest_rect: rect(10.0, 20.0, 16.0, 16.0), opacity: 0.5,
+        });
+        canvas.play_picture(&rec.finish(), &FontCache::embedded());
+        let items = canvas.take_frame_items();
+        let CanvasFrameItem::Image { key, dest, opacity, src_w, .. } = &items[1] else {
+            panic!("blit must become an Image item, got {:?}", items[1]);
+        };
+        assert_eq!(*dest, (10.0, 20.0, 16.0, 16.0));
+        assert_eq!(*opacity, 0.5);
+        assert_eq!(*src_w, 8);
+        // Key is content-derived and stable: a SEPARATE allocation with the
+        // same bytes produces the same key (decode-cache misses can't
+        // invalidate GPU textures).
+        let px2: Arc<Vec<u8>> = Arc::new(vec![200u8; 8 * 8 * 4]);
+        assert_eq!(*key, crate::canvas::blit_key(&px2, 8, 8));
+        // No CPU pixel was touched.
+        assert!(canvas.pixels().iter().all(|&b| b == 0));
+    }
+
+    #[test]
     fn cpu_mode_is_unchanged_by_gpu_mode_existing() {
         // Default canvases (engine tests, scroll content, overlay, web)
         // must behave exactly as before: shapes rasterize, no items.

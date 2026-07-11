@@ -67,4 +67,4 @@ pub use tree::TextInput;
 pub use tree::Image;
 pub use tree::Tooltip;
 
-pub use image::{ImageCache, ImageFit, ImageSource, ImageWidget};
+pub use image::{DecodedImage, ImageCache, ImageFit, ImageSource, ImageWidget};

@@ -126,14 +126,64 @@ pub fn text_gamma_lut() -> &'static [u8; 256] {
     })
 }
 
+/// Shared image pixels headed for the compositor's texture cache. The
+/// newtype keeps `CanvasFrameItem`'s derives sane: Debug prints the length
+/// (never megabytes of bytes), equality compares Arc identity — the
+/// content-derived `key` is what real image equality is judged by.
+#[derive(Clone)]
+pub struct ImagePixels(pub std::sync::Arc<Vec<u8>>);
+
+impl PartialEq for ImagePixels {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl std::fmt::Debug for ImagePixels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ImagePixels({} bytes)", self.0.len())
+    }
+}
+
+/// Content-derived identity for a blit source (D109 image textures): FNV
+/// over dims, length, and three 32-byte windows. Cheap enough per frame;
+/// dims+len in the hash make collisions between real UI images
+/// astronomically unlikely, and unlike `Arc` pointer identity it can't
+/// suffer ABA when a cache entry is dropped and reallocated.
+pub fn blit_key(pixels: &[u8], w: u32, h: u32) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut eat = |b: u8| {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    };
+    for v in [w, h, pixels.len() as u32] {
+        for b in v.to_le_bytes() { eat(b); }
+    }
+    let n = pixels.len();
+    for &start in &[0usize, n / 2, n.saturating_sub(32)] {
+        for &b in &pixels[start..(start + 32).min(n)] { eat(b); }
+    }
+    hash
+}
+
 /// One item of a GPU-mode frame, in z-order (D109 C1): a GPU shape quad, a
 /// CPU-rasterized segment (bbox-sized premultiplied-RGBA buffer cut out of
-/// the scratch pixmap), or a batch of atlas glyphs (Step 4).
+/// the scratch pixmap), a batch of atlas glyphs (Step 4), or an image drawn
+/// from the compositor's texture cache (uploaded on first sight of `key`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanvasFrameItem {
     Shader(ShaderQuadCmd),
     Segment { x: u32, y: u32, w: u32, h: u32, pixels: Vec<u8> },
     Glyphs { glyphs: Vec<GlyphQuad>, clip: Option<(f32, f32, f32, f32)> },
+    Image {
+        key: u64,
+        pixels: ImagePixels,
+        src_w: u32,
+        src_h: u32,
+        /// Dest rect (x, y, w, h), physical px.
+        dest: (f32, f32, f32, f32),
+        opacity: f32,
+        clip: Option<(f32, f32, f32, f32)>,
+    },
 }
 
 /// One collected `DrawCommand::ShaderFill`, in PHYSICAL pixels, ready for
@@ -1145,12 +1195,24 @@ impl SkiaCanvas {
                 DrawCommand::BlitRgba { pixels, src_width, src_height, dest_rect, opacity } => {
                     let d = sr(*dest_rect);
                     if self.gpu_shapes {
-                        self.grow_segment(
-                            d.origin.x - 1.0, d.origin.y - 1.0,
-                            d.origin.x + d.size.width + 1.0, d.origin.y + d.size.height + 1.0,
-                        );
+                        // Image textures (D109): uploaded once per distinct
+                        // content, drawn as a textured quad — no per-frame
+                        // CPU copy. Keyed by content, so any blit source
+                        // (Image widget, Hero capture, RemoteImage) gets
+                        // caching without carrying an id.
+                        self.cut_segment();
+                        self.pending_frame_items.push(CanvasFrameItem::Image {
+                            key: blit_key(pixels, *src_width, *src_height),
+                            pixels: ImagePixels(pixels.clone()),
+                            src_w: *src_width,
+                            src_h: *src_height,
+                            dest: (d.origin.x, d.origin.y, d.size.width, d.size.height),
+                            opacity: *opacity,
+                            clip: widget_clip,
+                        });
+                    } else {
+                        self.blit_rgba(pixels, *src_width, *src_height, d, *opacity);
                     }
-                    self.blit_rgba(pixels, *src_width, *src_height, d, *opacity);
                 }
                 DrawCommand::ShaderFill { pipeline_id, rect, uniforms } => {
                     // No CPU rasterization by design — collect for the GPU

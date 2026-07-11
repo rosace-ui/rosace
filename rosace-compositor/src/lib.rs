@@ -187,17 +187,95 @@ pub struct AtlasGlyph<'a> {
     pub color: [f32; 4],
 }
 
+/// One image draw (D109 image textures): `pixels` (premultiplied RGBA,
+/// `src_w * src_h * 4` bytes) is read ONLY on the cache's first sight of
+/// `key` — every later frame is a textured-quad draw with zero CPU pixel
+/// work. `opacity` scales the whole quad (Hero fades).
+#[derive(Clone, Copy)]
+pub struct ImageQuad<'a> {
+    pub key: u64,
+    pub pixels: &'a [u8],
+    pub src_w: u32,
+    pub src_h: u32,
+    /// Dest rect (x, y, w, h), physical px.
+    pub dest: (f32, f32, f32, f32),
+    pub opacity: f32,
+    /// Optional scissor (x, y, w, h), physical px.
+    pub clip: Option<(f32, f32, f32, f32)>,
+}
+
 /// One item of a presented frame, drawn strictly in slice order —
 /// bottom-to-top z. Pixel layers keep their D089 persistent-texture cache;
 /// shader quads execute their registered pipeline directly on the surface;
 /// offscreen refs sample a texture rendered via `render_offscreen`; glyph
-/// batches draw as instanced quads over the glyph atlas.
+/// batches draw as instanced quads over the glyph atlas; images draw from
+/// the content-keyed texture cache.
 pub enum FrameItem<'a> {
     Pixels(CompositorLayer<'a>),
     Shader(ShaderQuad<'a>),
     Offscreen(OffscreenRef),
     Glyphs { glyphs: Vec<AtlasGlyph<'a>>, clip: Option<(f32, f32, f32, f32)> },
+    Image(ImageQuad<'a>),
 }
+
+/// The image-quad pipeline's WGSL (D109): one quad, dest in NDC via
+/// uniform, texture sampled bilinearly, whole output scaled by opacity
+/// (premultiplied fade — matches the CPU blit's alpha-scale semantics).
+const IMAGE_WGSL: &str = r#"
+struct ImgUniform {
+    dest_min: vec2<f32>,
+    dest_max: vec2<f32>,
+    // x = opacity; yzw unused (16-byte alignment).
+    params:   vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> u: ImgUniform;
+@group(0) @binding(1) var t_img: texture_2d<f32>;
+@group(0) @binding(2) var s_img: sampler;
+
+struct ImgVsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> ImgVsOut {
+    var corner = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let c = corner[vi];
+    var out: ImgVsOut;
+    let ndc_x = mix(u.dest_min.x, u.dest_max.x, c.x);
+    let ndc_y = mix(u.dest_max.y, u.dest_min.y, c.y);
+    out.pos = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    out.uv = c;
+    return out;
+}
+
+@fragment
+fn fs_main(in: ImgVsOut) -> @location(0) vec4<f32> {
+    return textureSample(t_img, s_img, in.uv) * u.params.x;
+}
+"#;
+
+/// A cached image texture (D109): uploaded once per distinct content key.
+/// Holds only the texture — the dest/opacity uniform is a per-DRAW
+/// transient (a per-texture uniform would break when the same image
+/// appears at two dest rects in one frame, e.g. a repeated avatar).
+struct ImageTexEntry {
+    #[allow(dead_code)] // owns the view's backing texture
+    texture:    wgpu::Texture,
+    view:       wgpu::TextureView,
+    /// Referenced by the current present — unreferenced entries are
+    /// dropped when the cache exceeds its entry budget.
+    referenced: bool,
+}
+
+/// Entry budget for the image-texture cache: beyond this, unreferenced
+/// entries are dropped after a present. Generous for UI (a screen rarely
+/// shows >32 images); a byte-based budget is follow-up work alongside
+/// glyph-atlas eviction.
+const IMAGE_CACHE_MAX: usize = 128;
 
 impl<'a> CompositorLayer<'a> {
     /// Convenience: full-surface opaque layer, always re-uploaded.
@@ -433,6 +511,15 @@ pub struct GpuPresenter {
     /// Per-slot cached glyph batches (instance bytes + clip) — the
     /// skip-present comparison for text, mirroring cached_quads.
     cached_glyph_batches:  Vec<(Option<(f32, f32, f32, f32)>, Vec<f32>)>,
+    /// Image textures keyed by content hash (D109 image textures).
+    image_cache:           std::collections::HashMap<u64, ImageTexEntry>,
+    image_pipeline:        wgpu::RenderPipeline,
+    image_bgl:             wgpu::BindGroupLayout,
+    /// Bilinear sampler — images scale to their dest rect (unlike layers
+    /// and glyphs, which are 1:1 and use the nearest sampler).
+    sampler_linear:        wgpu::Sampler,
+    /// Skip-present comparison for images: (key, dest, opacity, clip).
+    cached_images:         Vec<(u64, (f32, f32, f32, f32), f32, Option<(f32, f32, f32, f32)>)>,
     /// Pipeline ids already warned about as unregistered — warn once, not
     /// per frame.
     missing_pipeline_warned: std::collections::HashSet<u64>,
@@ -756,6 +843,80 @@ impl GpuPresenter {
             cache:         None,
         });
 
+        // ── Image-quad pipeline (D109 image textures) ───────────────────
+        let sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter:     wgpu::FilterMode::Linear,
+            min_filter:     wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let image_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label:   Some("image-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding:    0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                 wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:   None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type:    wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled:   false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let image_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label:  Some("image-pipeline"),
+            source: wgpu::ShaderSource::Wgsl(IMAGE_WGSL.into()),
+        });
+        let image_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:                Some("image-pl"),
+            bind_group_layouts:   &[&image_bgl],
+            push_constant_ranges: &[],
+        });
+        let image_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label:  Some("image-pipeline"),
+            layout: Some(&image_pl),
+            vertex: wgpu::VertexState {
+                module:              &image_module,
+                entry_point:         Some("vs_main"),
+                buffers:             &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module:      &image_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend:      Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive:     wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample:   wgpu::MultisampleState::default(),
+            multiview:     None,
+            cache:         None,
+        });
+
         Some(Self {
             surface,
             device,
@@ -787,8 +948,77 @@ impl GpuPresenter {
             glyph_globals_size: (width, height),
             glyph_gamma: None,
             cached_glyph_batches: Vec::new(),
+            image_cache: std::collections::HashMap::new(),
+            image_pipeline,
+            image_bgl,
+            sampler_linear,
+            cached_images: Vec::new(),
             missing_pipeline_warned: std::collections::HashSet::new(),
         })
+    }
+
+    /// Ensure `q`'s texture exists in the image cache (uploading on first
+    /// sight of the key) and return whether it's usable.
+    fn ensure_image_texture(&mut self, q: &ImageQuad<'_>) -> bool {
+        if q.src_w == 0 || q.src_h == 0 { return false; }
+        if !self.image_cache.contains_key(&q.key) {
+            let expected = (q.src_w * q.src_h * 4) as usize;
+            if q.pixels.len() < expected {
+                log::error!(
+                    "image {:#x}: {} pixel bytes for {}x{} (need {expected}) — skipped",
+                    q.key, q.pixels.len(), q.src_w, q.src_h,
+                );
+                return false;
+            }
+            let texture = self.device.create_texture_with_data(
+                &self.queue,
+                &wgpu::TextureDescriptor {
+                    label:           Some("image-texture"),
+                    size:            wgpu::Extent3d {
+                        width: q.src_w, height: q.src_h, depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count:    1,
+                    dimension:       wgpu::TextureDimension::D2,
+                    format:          wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage:           wgpu::TextureUsages::TEXTURE_BINDING
+                                   | wgpu::TextureUsages::COPY_DST,
+                    view_formats:    &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &q.pixels[..expected],
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.image_cache.insert(q.key, ImageTexEntry { texture, view, referenced: true });
+        }
+        if let Some(e) = self.image_cache.get_mut(&q.key) { e.referenced = true; }
+        true
+    }
+
+    /// Per-draw transient uniform + bind group for an image quad against a
+    /// `(target_w, target_h)` render target. `None` if the texture is
+    /// missing/unusable.
+    fn image_draw_bind_group(
+        &mut self, q: &ImageQuad<'_>, target_w: u32, target_h: u32,
+    ) -> Option<wgpu::BindGroup> {
+        if !self.ensure_image_texture(q) { return None; }
+        let ndc = shader_quad_uniform(q.dest, target_w, target_h);
+        let uniform = [ndc[0], ndc[1], ndc[2], ndc[3], q.opacity, 0.0, 0.0, 0.0];
+        let uniform_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("image-uniform"),
+            contents: bytemuck_f32x8(&uniform),
+            usage:    wgpu::BufferUsages::UNIFORM,
+        });
+        let entry = &self.image_cache[&q.key];
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("image-bg"),
+            layout:  &self.image_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&entry.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler_linear) },
+            ],
+        }))
     }
 
     /// Set the coverage-gamma LUT applied at glyph upload (D109 Step 4).
@@ -919,6 +1149,8 @@ impl GpuPresenter {
         let mut transient_quads:  Vec<(u64, wgpu::BindGroup, Option<(u32, u32, u32, u32)>)> = Vec::new();
         #[allow(clippy::type_complexity)]
         let mut transient_glyphs: Vec<Option<(wgpu::BindGroup, wgpu::Buffer, u32, Option<(u32, u32, u32, u32)>)>> = Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut transient_images: Vec<Option<(wgpu::BindGroup, Option<(u32, u32, u32, u32)>)>> = Vec::new();
         for item in items {
             match item {
                 FrameItem::Pixels(layer) => {
@@ -995,6 +1227,19 @@ impl GpuPresenter {
                     });
                     transient_glyphs.push(Some((bind_group, inst_buf, (instances.len() / 12) as u32, scissor)));
                 }
+                FrameItem::Image(q) => {
+                    let scissor = match q.clip {
+                        Some(c) => match scissor_for(c, width, height) {
+                            Some(sc) => Some(sc),
+                            None => { transient_images.push(None); continue; }
+                        },
+                        None => None,
+                    };
+                    transient_images.push(
+                        self.image_draw_bind_group(q, width, height)
+                            .map(|bg| (bg, scissor)),
+                    );
+                }
                 FrameItem::Offscreen(_) => {
                     debug_assert!(false, "nested offscreen items are not supported");
                     continue;
@@ -1008,6 +1253,7 @@ impl GpuPresenter {
         let mut layer_idx = 0usize;
         let mut quad_idx = 0usize;
         let mut glyph_idx = 0usize;
+        let mut image_idx = 0usize;
         for item in items {
             let load = if !cleared {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
@@ -1089,6 +1335,29 @@ impl GpuPresenter {
                     rpass.set_bind_group(0, bind_group, &[]);
                     rpass.set_vertex_buffer(0, inst_buf.slice(..));
                     rpass.draw(0..6, 0..*count);
+                }
+                FrameItem::Image(_) => {
+                    let prepared = &transient_images[image_idx];
+                    image_idx += 1;
+                    let Some((bind_group, scissor)) = prepared else { continue; };
+                    cleared = true;
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("offscreen-image-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &target_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    if let Some((x, y, w, h)) = scissor {
+                        rpass.set_scissor_rect(*x, *y, *w, *h);
+                    }
+                    rpass.set_pipeline(&self.image_pipeline);
+                    rpass.set_bind_group(0, bind_group, &[]);
+                    rpass.draw(0..6, 0..1);
                 }
                 FrameItem::Offscreen(_) => continue,
             }
@@ -1269,8 +1538,15 @@ impl GpuPresenter {
                 _ => None,
             })
             .collect();
+        let images: Vec<&ImageQuad<'_>> = items.iter()
+            .filter_map(|i| match i { FrameItem::Image(q) => Some(q), _ => None })
+            .collect();
         if pixel_layers.is_empty() && quads.is_empty() && offs.is_empty()
-            && glyph_batches.is_empty() { return; }
+            && glyph_batches.is_empty() && images.is_empty() { return; }
+
+        let new_images: Vec<(u64, (f32, f32, f32, f32), f32, Option<(f32, f32, f32, f32)>)> =
+            images.iter().map(|q| (q.key, q.dest, q.opacity, q.clip)).collect();
+        let images_unchanged = self.cached_images == new_images;
 
         // Upload first-seen glyphs + build per-batch instance floats
         // (D109 Step 4). Runs before the skip check so the comparison
@@ -1310,14 +1586,24 @@ impl GpuPresenter {
                     ))
                     .unwrap_or(false)
         });
-        if layers_unchanged && quads_unchanged && offscreen_unchanged && glyphs_unchanged {
+        if layers_unchanged && quads_unchanged && offscreen_unchanged && glyphs_unchanged
+            && images_unchanged
+        {
             log::debug!(
-                "compositor: skip present ({} layers + {} quads + {} offscreen + {} glyph batches unchanged)",
-                pixel_layers.len(), quads.len(), offs.len(), glyph_batches.len(),
+                "compositor: skip present ({} layers + {} quads + {} offscreen + {} glyph batches + {} images unchanged)",
+                pixel_layers.len(), quads.len(), offs.len(), glyph_batches.len(), images.len(),
             );
             return;
         }
         self.cached_glyph_batches = new_glyph_batches;
+        self.cached_images = new_images;
+
+        // Per-draw image bind groups, in item order (uploads first-seen
+        // textures as a side effect).
+        let prepared_images: Vec<Option<wgpu::BindGroup>> = images
+            .iter()
+            .map(|q| self.image_draw_bind_group(q, sw, sh))
+            .collect();
 
         // Glyph globals track the surface size (vertex px→NDC mapping).
         if self.glyph_globals_size != (sw, sh) {
@@ -1400,6 +1686,7 @@ impl GpuPresenter {
         let mut pixel_idx = 0usize;
         let mut quad_idx = 0usize;
         let mut glyph_idx = 0usize;
+        let mut image_idx = 0usize;
 
         for item in items {
             match item {
@@ -1578,11 +1865,54 @@ impl GpuPresenter {
                     rpass.set_vertex_buffer(0, inst_buf.slice(..));
                     rpass.draw(0..6, 0..(instances.len() / 12) as u32);
                 }
+                FrameItem::Image(q) => {
+                    let prepared = &prepared_images[image_idx];
+                    image_idx += 1;
+                    let Some(bind_group) = prepared else { continue; };
+                    if q.dest.2 <= 0.0 || q.dest.3 <= 0.0 { continue; }
+                    let scissor = match q.clip {
+                        Some(c) => match scissor_for(c, sw, sh) {
+                            Some(s) => Some(s),
+                            None => continue,
+                        },
+                        None => None,
+                    };
+                    let load = if !cleared {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    };
+                    cleared = true;
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("image-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view:           &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes:         None,
+                        occlusion_query_set:      None,
+                    });
+                    if let Some((x, y, w, h)) = scissor {
+                        rpass.set_scissor_rect(x, y, w, h);
+                    }
+                    rpass.set_pipeline(&self.image_pipeline);
+                    rpass.set_bind_group(0, bind_group, &[]);
+                    rpass.draw(0..6, 0..1);
+                }
             }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+
+        // Image-texture budget: beyond the cap, drop entries this frame
+        // didn't reference, then reset the marks for the next present.
+        if self.image_cache.len() > IMAGE_CACHE_MAX {
+            self.image_cache.retain(|_, e| e.referenced);
+        }
+        for e in self.image_cache.values_mut() { e.referenced = false; }
 
         // Evict offscreen targets no longer referenced by any frame item —
         // a removed scroll view must not pin its content texture forever.
