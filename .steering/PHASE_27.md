@@ -482,5 +482,18 @@ Steps:
       screenshot — the GPU's is the color-correct one. bench_paint:
       7.70 → **0.214 ms/frame (36.1× lower)**, up from 23.4× with
       segment-blitted images.
+- [x] Cache eviction (landed 2026-07-11): glyph atlas uses
+      flush-and-repopulate (Skia's glyph-cache strategy) — when full, all
+      slots clear and the current working set re-uploads lazily (every
+      batch carries its bitmaps, so repopulation is automatic; no shelf
+      fragmentation bookkeeping). A mid-prepare flush sets a flag and the
+      caller rebuilds that pass's instance floats (stale-UV hazard handled
+      in both present_frame and render_offscreen). Loud failure now only
+      when a SINGLE frame's working set exceeds the whole 2048² atlas.
+      Image cache: 256MB byte budget + LRU by last-used present; visible
+      images are never evicted (warn-once if they alone exceed budget —
+      evicting them would thrash re-uploads). ShelfPacker
+      bounds/overlap/exhaustion unit-tested; workspace green; app_demo
+      live-sanity-checked.
 - [ ] Final cleanup (desktop/mobile tiny-skia removal) — BLOCKED on web
       GPU phase, do not attempt inside this phase

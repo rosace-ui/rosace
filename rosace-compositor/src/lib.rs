@@ -264,18 +264,20 @@ fn fs_main(in: ImgVsOut) -> @location(0) vec4<f32> {
 /// appears at two dest rects in one frame, e.g. a repeated avatar).
 struct ImageTexEntry {
     #[allow(dead_code)] // owns the view's backing texture
-    texture:    wgpu::Texture,
-    view:       wgpu::TextureView,
-    /// Referenced by the current present — unreferenced entries are
-    /// dropped when the cache exceeds its entry budget.
-    referenced: bool,
+    texture:   wgpu::Texture,
+    view:      wgpu::TextureView,
+    /// GPU size of this texture (w * h * 4).
+    bytes:     usize,
+    /// The present sequence number that last drew this image — the LRU
+    /// ordering for byte-budget eviction.
+    last_used: u64,
 }
 
-/// Entry budget for the image-texture cache: beyond this, unreferenced
-/// entries are dropped after a present. Generous for UI (a screen rarely
-/// shows >32 images); a byte-based budget is follow-up work alongside
-/// glyph-atlas eviction.
-const IMAGE_CACHE_MAX: usize = 128;
+/// Byte budget for the image-texture cache. When exceeded after a
+/// present, least-recently-USED off-screen entries are evicted until back
+/// under budget; on-screen entries are never evicted. 256MB comfortably
+/// holds dozens of full-screen Retina images while bounding VRAM.
+const IMAGE_CACHE_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 impl<'a> CompositorLayer<'a> {
     /// Convenience: full-surface opaque layer, always re-uploaded.
@@ -388,7 +390,11 @@ struct GlyphAtlas {
     bind_group: wgpu::BindGroup,
     packer:     ShelfPacker,
     slots:      std::collections::HashMap<u64, AtlasSlot>,
-    /// Warned-once flag for a full atlas.
+    /// Set when the atlas was flushed during THIS present's prepare pass —
+    /// instance floats built before the flush hold stale UVs and must be
+    /// rebuilt (see present_frame / render_offscreen).
+    flushed:    bool,
+    /// Warned-once flag: a single frame's working set exceeds the atlas.
     full_warned: bool,
 }
 
@@ -520,6 +526,12 @@ pub struct GpuPresenter {
     sampler_linear:        wgpu::Sampler,
     /// Skip-present comparison for images: (key, dest, opacity, clip).
     cached_images:         Vec<(u64, (f32, f32, f32, f32), f32, Option<(f32, f32, f32, f32)>)>,
+    /// Total bytes held by `image_cache` (kept in sync on insert/evict).
+    image_cache_bytes:     usize,
+    /// Monotonic present counter — the LRU clock for image eviction.
+    present_seq:           u64,
+    /// Warned-once flag: visible images alone exceed the byte budget.
+    image_budget_warned:   bool,
     /// Pipeline ids already warned about as unregistered — warn once, not
     /// per frame.
     missing_pipeline_warned: std::collections::HashSet<u64>,
@@ -940,6 +952,7 @@ impl GpuPresenter {
                 bind_group:  atlas_bind_group,
                 packer:      ShelfPacker::new(GLYPH_ATLAS_DIM),
                 slots:       std::collections::HashMap::new(),
+                flushed:     false,
                 full_warned: false,
             },
             glyph_pipeline,
@@ -949,6 +962,9 @@ impl GpuPresenter {
             glyph_gamma: None,
             cached_glyph_batches: Vec::new(),
             image_cache: std::collections::HashMap::new(),
+            image_cache_bytes: 0,
+            present_seq: 0,
+            image_budget_warned: false,
             image_pipeline,
             image_bgl,
             sampler_linear,
@@ -989,9 +1005,12 @@ impl GpuPresenter {
                 &q.pixels[..expected],
             );
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            self.image_cache.insert(q.key, ImageTexEntry { texture, view, referenced: true });
+            self.image_cache.insert(q.key, ImageTexEntry {
+                texture, view, bytes: expected, last_used: self.present_seq,
+            });
+            self.image_cache_bytes += expected;
         }
-        if let Some(e) = self.image_cache.get_mut(&q.key) { e.referenced = true; }
+        if let Some(e) = self.image_cache.get_mut(&q.key) { e.last_used = self.present_seq; }
         true
     }
 
@@ -1029,6 +1048,70 @@ impl GpuPresenter {
         self.glyph_gamma = Some(lut);
     }
 
+    /// Allocate an atlas slot, FLUSHING the atlas when full (Skia-style
+    /// glyph-cache strategy): clear every slot and let the current working
+    /// set re-upload lazily — every batch carries its bitmaps, so
+    /// repopulation is automatic, and there's no shelf-fragmentation
+    /// bookkeeping. Instances built before a flush hold stale UVs; the
+    /// `flushed` flag makes the caller rebuild them. Returns `None` only
+    /// when a single frame's working set (or one glyph) exceeds the atlas.
+    fn atlas_alloc(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
+        if let Some(pos) = self.glyph_atlas.packer.alloc(w, h) {
+            return Some(pos);
+        }
+        if !self.glyph_atlas.slots.is_empty() {
+            log::info!(
+                "glyph atlas full — flushing {} glyphs; current working set re-uploads",
+                self.glyph_atlas.slots.len(),
+            );
+            self.glyph_atlas.slots.clear();
+            self.glyph_atlas.packer = ShelfPacker::new(GLYPH_ATLAS_DIM);
+            self.glyph_atlas.flushed = true;
+            return self.glyph_atlas.packer.alloc(w, h);
+        }
+        None
+    }
+
+    /// Build one offscreen glyph batch's transient resources: instances
+    /// against the SHARED atlas, globals sized to the TARGET (not the
+    /// surface). `None` = nothing to draw for this batch.
+    #[allow(clippy::type_complexity)]
+    fn offscreen_glyph_transient(
+        &mut self,
+        glyphs: &[AtlasGlyph<'_>],
+        clip: Option<(f32, f32, f32, f32)>,
+        width: u32,
+        height: u32,
+    ) -> Option<(wgpu::BindGroup, wgpu::Buffer, u32, Option<(u32, u32, u32, u32)>)> {
+        let scissor = match clip {
+            Some(c) => Some(scissor_for(c, width, height)?),
+            None => None,
+        };
+        let instances = self.prepare_glyphs(glyphs);
+        if instances.is_empty() { return None; }
+        let globals = [width as f32, height as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let globals_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("offscreen-glyph-globals"),
+            contents: bytemuck_f32x8(&globals),
+            usage:    wgpu::BufferUsages::UNIFORM,
+        });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:   Some("offscreen-glyph-bg"),
+            layout:  &self.glyph_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.glyph_atlas.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        let inst_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label:    Some("offscreen-glyph-instances"),
+            contents: f32s_as_bytes(&instances),
+            usage:    wgpu::BufferUsages::VERTEX,
+        });
+        Some((bind_group, inst_buf, (instances.len() / 12) as u32, scissor))
+    }
+
     /// Upload any first-seen glyphs to the atlas and build the per-batch
     /// instance floats (12 per glyph). Atlas-full is loud-once + skip.
     fn prepare_glyphs(&mut self, glyphs: &[AtlasGlyph<'_>]) -> Vec<f32> {
@@ -1036,13 +1119,15 @@ impl GpuPresenter {
         let inv_dim = 1.0 / GLYPH_ATLAS_DIM as f32;
         for g in glyphs {
             if !self.glyph_atlas.slots.contains_key(&g.key) {
-                let Some((ax, ay)) = self.glyph_atlas.packer.alloc(g.w, g.h) else {
+                let Some((ax, ay)) = self.atlas_alloc(g.w, g.h) else {
                     if !self.glyph_atlas.full_warned {
                         self.glyph_atlas.full_warned = true;
                         log::error!(
-                            "glyph atlas full ({} glyphs) — new glyphs will not render; \
-                             atlas growth/eviction is named follow-up work (PHASE_27.md)",
+                            "glyph atlas exhausted even after a flush ({} slots) — a \
+                             single frame's glyph working set exceeds {}x{}; those \
+                             glyphs will not render",
                             self.glyph_atlas.slots.len(),
+                            GLYPH_ATLAS_DIM, GLYPH_ATLAS_DIM,
                         );
                     }
                     continue;
@@ -1190,42 +1275,9 @@ impl GpuPresenter {
                     transient_quads.push((quad.pipeline, bind_group, scissor));
                 }
                 FrameItem::Glyphs { glyphs, clip } => {
-                    // Uploads to the SHARED atlas; instances are target-
-                    // local px. Globals must be the TARGET size, so each
-                    // batch gets a transient globals buffer + bind group.
-                    let scissor = match clip {
-                        Some(c) => match scissor_for(*c, width, height) {
-                            Some(s) => Some(s),
-                            None => { transient_glyphs.push(None); continue; }
-                        },
-                        None => None,
-                    };
-                    let instances = self.prepare_glyphs(glyphs);
-                    if instances.is_empty() {
-                        transient_glyphs.push(None);
-                        continue;
-                    }
-                    let globals = [width as f32, height as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-                    let globals_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label:    Some("offscreen-glyph-globals"),
-                        contents: bytemuck_f32x8(&globals),
-                        usage:    wgpu::BufferUsages::UNIFORM,
-                    });
-                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label:   Some("offscreen-glyph-bg"),
-                        layout:  &self.glyph_bgl,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.glyph_atlas.view) },
-                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                        ],
-                    });
-                    let inst_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label:    Some("offscreen-glyph-instances"),
-                        contents: f32s_as_bytes(&instances),
-                        usage:    wgpu::BufferUsages::VERTEX,
-                    });
-                    transient_glyphs.push(Some((bind_group, inst_buf, (instances.len() / 12) as u32, scissor)));
+                    transient_glyphs.push(
+                        self.offscreen_glyph_transient(glyphs, *clip, width, height),
+                    );
                 }
                 FrameItem::Image(q) => {
                     let scissor = match q.clip {
@@ -1245,6 +1297,22 @@ impl GpuPresenter {
                     continue;
                 }
             }
+        }
+
+        // A flush during the prep above invalidates glyph UVs built before
+        // it — rebuild ONLY the glyph transients (nothing else references
+        // the atlas). The rebuild cannot flush again: every needed slot
+        // was allocated post-flush.
+        if std::mem::take(&mut self.glyph_atlas.flushed) {
+            transient_glyphs.clear();
+            for item in items {
+                if let FrameItem::Glyphs { glyphs, clip } = item {
+                    transient_glyphs.push(
+                        self.offscreen_glyph_transient(glyphs, *clip, width, height),
+                    );
+                }
+            }
+            self.glyph_atlas.flushed = false;
         }
 
         // Draw in item order. `layer_idx`/`quad_idx`/`glyph_idx` walk the
@@ -1595,8 +1663,24 @@ impl GpuPresenter {
             );
             return;
         }
+        // A mid-prepare atlas flush invalidates instance UVs built earlier
+        // in this pass — rebuild from the now-stable slot map (every alloc
+        // already happened, so a rebuild cannot flush again unless one
+        // frame's working set exceeds the whole atlas).
+        let new_glyph_batches = if std::mem::take(&mut self.glyph_atlas.flushed) {
+            glyph_batches.iter()
+                .map(|(glyphs, clip)| (*clip, self.prepare_glyphs(glyphs)))
+                .collect()
+        } else {
+            new_glyph_batches
+        };
+        self.glyph_atlas.flushed = false;
         self.cached_glyph_batches = new_glyph_batches;
         self.cached_images = new_images;
+
+        // LRU clock tick — image textures drawn by THIS present get this
+        // stamp and are exempt from eviction below.
+        self.present_seq += 1;
 
         // Per-draw image bind groups, in item order (uploads first-seen
         // textures as a side effect).
@@ -1907,12 +1991,31 @@ impl GpuPresenter {
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-        // Image-texture budget: beyond the cap, drop entries this frame
-        // didn't reference, then reset the marks for the next present.
-        if self.image_cache.len() > IMAGE_CACHE_MAX {
-            self.image_cache.retain(|_, e| e.referenced);
+        // Image-texture byte budget: evict least-recently-used OFF-SCREEN
+        // entries until back under budget. On-screen entries (stamped with
+        // this present's seq) are never evicted — if they alone exceed the
+        // budget, warn once and carry on (dropping visible textures would
+        // just thrash re-uploads every frame).
+        if self.image_cache_bytes > IMAGE_CACHE_MAX_BYTES {
+            let mut evictable: Vec<(u64, u64, usize)> = self.image_cache.iter()
+                .filter(|(_, e)| e.last_used != self.present_seq)
+                .map(|(k, e)| (e.last_used, *k, e.bytes))
+                .collect();
+            evictable.sort_unstable();
+            for (_, key, bytes) in evictable {
+                if self.image_cache_bytes <= IMAGE_CACHE_MAX_BYTES { break; }
+                self.image_cache.remove(&key);
+                self.image_cache_bytes -= bytes;
+                log::debug!("image cache: evicted {key:#x} ({bytes} bytes)");
+            }
+            if self.image_cache_bytes > IMAGE_CACHE_MAX_BYTES && !self.image_budget_warned {
+                self.image_budget_warned = true;
+                log::warn!(
+                    "on-screen images alone exceed the {}MB texture budget",
+                    IMAGE_CACHE_MAX_BYTES / (1024 * 1024),
+                );
+            }
         }
-        for e in self.image_cache.values_mut() { e.referenced = false; }
 
         // Evict offscreen targets no longer referenced by any frame item —
         // a removed scroll view must not pin its content texture forever.
@@ -2091,6 +2194,37 @@ mod tests {
         assert!((u[1] + 0.5).abs() < 1e-6, "bottom: {}", u[1]);
         assert!((u[2] - 0.5).abs() < 1e-6, "right: {}", u[2]);
         assert!((u[3] - 0.5).abs() < 1e-6, "top: {}", u[3]);
+    }
+
+    #[test]
+    fn shelf_packer_fills_shelves_then_exhausts_then_resets() {
+        let mut p = ShelfPacker::new(64);
+        // 20x20 glyphs (+1px gutter = 21): 3 per shelf row, 3 shelves = 9.
+        let mut got = 0;
+        while p.alloc(20, 20).is_some() { got += 1; }
+        assert!(got >= 6, "should pack several 20x20 glyphs into 64x64, got {got}");
+        assert!(p.alloc(20, 20).is_none(), "exhausted");
+        // Oversized never fits.
+        assert!(ShelfPacker::new(64).alloc(100, 10).is_none());
+        // A fresh packer (the flush path) allocates again.
+        assert!(ShelfPacker::new(64).alloc(20, 20).is_some());
+    }
+
+    #[test]
+    fn shelf_packer_slots_never_overlap_or_escape_bounds() {
+        let mut p = ShelfPacker::new(128);
+        let mut taken: Vec<(u32, u32, u32, u32)> = Vec::new();
+        for (w, h) in [(30u32, 12u32), (30, 12), (50, 30), (10, 10), (60, 12), (40, 28)] {
+            if let Some((x, y)) = p.alloc(w, h) {
+                assert!(x + w <= 128 && y + h <= 128, "escaped bounds: {x},{y} {w}x{h}");
+                for &(tx, ty, tw, th) in &taken {
+                    let overlap = x < tx + tw && tx < x + w && y < ty + th && ty < y + h;
+                    assert!(!overlap, "overlap: ({x},{y},{w},{h}) vs ({tx},{ty},{tw},{th})");
+                }
+                taken.push((x, y, w, h));
+            }
+        }
+        assert!(taken.len() >= 5, "most allocations should fit");
     }
 
     #[test]
