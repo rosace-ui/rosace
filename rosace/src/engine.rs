@@ -1311,7 +1311,7 @@ impl FrameEngine {
                 }
                 // App-lifecycle transition (D042/D110, Phase 29 Step 1) —
                 // sent by a mobile native host over the FFI bridge
-                // (`TZR_EVENT_LIFECYCLE_*`). One write to the global atom;
+                // (`RSC_EVENT_LIFECYCLE_*`). One write to the global atom;
                 // components subscribed via `use_app_lifecycle` are marked
                 // dirty and re-render on this same frame's rebuild pass.
                 rosace_platform::InputEvent::Lifecycle(state) => {

@@ -57,7 +57,7 @@ pub fn run(opts: BundleIdOptions) -> Result<(), String> {
     if !Path::new("rsc.toml").exists() {
         return Err("no rsc.toml here — run `rsc bundle-id` from an app directory".to_string());
     }
-    let current = read_tzr_toml_bundle_id()?;
+    let current = read_rsc_toml_bundle_id()?;
 
     let Some(new_id) = opts.new_id else {
         println!("{}", current);
@@ -66,7 +66,7 @@ pub fn run(opts: BundleIdOptions) -> Result<(), String> {
 
     let mut updated = Vec::new();
 
-    if write_tzr_toml_bundle_id(&new_id)? {
+    if write_rsc_toml_bundle_id(&new_id)? {
         updated.push("rsc.toml");
     }
     if update_plist_bundle_id(Path::new("ios/Info.plist"), &new_id)? {
@@ -94,7 +94,7 @@ pub fn run(opts: BundleIdOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn read_tzr_toml_bundle_id() -> Result<String, String> {
+fn read_rsc_toml_bundle_id() -> Result<String, String> {
     let s = fs::read_to_string("rsc.toml").map_err(|e| format!("cannot read rsc.toml: {}", e))?;
     for line in s.lines() {
         if let Some((k, v)) = line.split_once('=') {
@@ -106,7 +106,7 @@ fn read_tzr_toml_bundle_id() -> Result<String, String> {
     Err("rsc.toml has no bundle_id line".to_string())
 }
 
-fn write_tzr_toml_bundle_id(new_id: &str) -> Result<bool, String> {
+fn write_rsc_toml_bundle_id(new_id: &str) -> Result<bool, String> {
     let content = fs::read_to_string("rsc.toml").map_err(|e| format!("cannot read rsc.toml: {}", e))?;
     let mut out = String::with_capacity(content.len());
     let mut found = false;
@@ -236,17 +236,17 @@ PRODUCT_BUNDLE_IDENTIFIER = "dev.rosace.old";"#;
     }
 
     #[test]
-    fn write_tzr_toml_bundle_id_updates_only_that_line() {
+    fn write_rsc_toml_bundle_id_updates_only_that_line() {
         let _guard = crate::test_support::CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("tzr_bundleid_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_bundleid_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
 
         fs::write("rsc.toml", "name = \"myapp\"\nbundle_id = \"dev.rosace.myapp\"\nplatforms = [\"macos\"]\n").unwrap();
-        assert_eq!(read_tzr_toml_bundle_id().unwrap(), "dev.rosace.myapp");
-        write_tzr_toml_bundle_id("com.example.myapp").unwrap();
-        assert_eq!(read_tzr_toml_bundle_id().unwrap(), "com.example.myapp");
+        assert_eq!(read_rsc_toml_bundle_id().unwrap(), "dev.rosace.myapp");
+        write_rsc_toml_bundle_id("com.example.myapp").unwrap();
+        assert_eq!(read_rsc_toml_bundle_id().unwrap(), "com.example.myapp");
         let content = fs::read_to_string("rsc.toml").unwrap();
         assert!(content.contains("name = \"myapp\""));
         assert!(content.contains("platforms = [\"macos\"]"));
@@ -257,7 +257,7 @@ PRODUCT_BUNDLE_IDENTIFIER = "dev.rosace.old";"#;
 
     #[test]
     fn update_plist_bundle_id_returns_false_when_file_missing() {
-        let dir = std::env::temp_dir().join(format!("tzr_bundleid_missing_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_bundleid_missing_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let missing = dir.join("nope.plist");
         assert!(!update_plist_bundle_id(&missing, "x").unwrap());

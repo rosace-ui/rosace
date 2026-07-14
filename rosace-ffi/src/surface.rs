@@ -32,7 +32,7 @@ enum Kind {
 ///
 /// # Safety contract (upheld by the native host, not checked here)
 /// The wrapped pointer must stay valid for the lifetime of the `Engine`
-/// built from this surface — the host must call `tzr_engine_shutdown`
+/// built from this surface — the host must call `rsc_engine_shutdown`
 /// (dropping the `Engine`) before releasing the view/window it points to.
 pub struct RawSurface {
     kind: Kind,

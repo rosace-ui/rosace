@@ -145,7 +145,7 @@ fn resolve_app_meta(opts: &PackageOptions) -> Result<(String, String, String), S
     // bundle-id` maintain) rather than inventing a separate id here — this
     // used to independently derive `com.rosace.<name>`, which silently
     // diverged from whatever `rsc new` had actually written everywhere else.
-    let bundle_id = read_tzr_toml_field("bundle_id")
+    let bundle_id = read_rsc_toml_field("bundle_id")
         .unwrap_or_else(|| format!("dev.rosace.{}", name.replace(['-', ' '], "_")));
     Ok((name, version, bundle_id))
 }
@@ -165,7 +165,7 @@ fn read_cargo_field(field: &str) -> Option<String> {
     None
 }
 
-fn read_tzr_toml_field(field: &str) -> Option<String> {
+fn read_rsc_toml_field(field: &str) -> Option<String> {
     let content = fs::read_to_string("rsc.toml").ok()?;
     for line in content.lines() {
         if let Some((k, v)) = line.split_once('=') {
@@ -513,13 +513,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_meta_falls_back_to_dev_rosace_prefix_without_tzr_toml() {
+    fn resolve_meta_falls_back_to_dev_rosace_prefix_without_rsc_toml() {
         // No rsc.toml in the test's cwd (the workspace root, which has no
         // rsc.toml of its own) — should derive dev.rosace.<name>, not the
         // old hardcoded com.rosace.<name> this function used to invent
         // independently of rsc.toml.
         let _guard = crate::test_support::CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("tzr_pkg_meta_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_pkg_meta_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
@@ -538,9 +538,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_meta_reads_bundle_id_from_tzr_toml_when_present() {
+    fn resolve_meta_reads_bundle_id_from_rsc_toml_when_present() {
         let _guard = crate::test_support::CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("tzr_pkg_meta_toml_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_pkg_meta_toml_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();

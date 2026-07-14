@@ -8,7 +8,7 @@
 //!
 //! This struct is intentionally NOT exposed as `#[no_mangle] extern "C"`
 //! here — only a concrete app crate knows its root `Component`, so the
-//! actual `tzr_engine_*` C functions are generated per-app (see
+//! actual `rsc_engine_*` C functions are generated per-app (see
 //! `examples/ios_stub.rs` for the pattern). `Engine` is what that ~15 lines
 //! of per-app glue calls into.
 
@@ -17,7 +17,7 @@ use rosace_core::Component;
 use rosace_render::SkiaCanvas;
 use rosace_theme::ThemeData;
 
-use crate::event::TzrInputEventFfi;
+use crate::event::RscInputEventFfi;
 use crate::surface::RawSurface;
 
 pub struct Engine {
@@ -101,7 +101,7 @@ impl Engine {
     /// event still queues too, so `FrameEngine`'s dispatch sees the same
     /// ordered stream on its next frame (re-writing the same value is a
     /// harmless no-op).
-    pub fn input(&mut self, events: &[TzrInputEventFfi]) {
+    pub fn input(&mut self, events: &[RscInputEventFfi]) {
         for &e in events {
             let event: rosace_platform::InputEvent = e.into();
             if let rosace_platform::InputEvent::Lifecycle(state) = event {

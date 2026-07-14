@@ -576,11 +576,13 @@ Kotlin `Activity`) drives instead of winit owning the app lifecycle — see
 `init`/`resize`/`input`/`frame`), `RawSurface` (`src/surface.rs` — implements
 `wgpu::rwh::HasWindowHandle`/`HasDisplayHandle` directly from a raw
 `CAMetalLayer*`/`ANativeWindow*` pointer; the only `unsafe` in the crate),
-`TzrInputEventFfi` (`src/event.rs` — one flat `#[repr(C)]` struct covering
-every `InputEvent` variant via a `kind` tag), `include/tzr_engine.h`
+`RscInputEventFfi` (`src/event.rs` — one flat `#[repr(C)]` struct covering
+every `InputEvent` variant via a `kind` tag), `include/rsc_engine.h`
 (hand-written C header, not `cbindgen` — the surface is small and stable).
+All ABI names were `tzr_*`/`TZR_*`/`Tzr*` until 2026-07-14 — renamed to
+`rsc` per D120 (older docs/decisions keep the historical names).
 **Must NOT**: Export `#[no_mangle] extern "C"` functions itself — only a
-concrete app knows its root `Component`, so the actual `tzr_engine_init/
+concrete app knows its root `Component`, so the actual `rsc_engine_init/
 resize/input/frame/shutdown` symbols are per-app glue (~15 lines; see
 `examples/ios_stub.rs` for the reference pattern Step 2's `rsc new` codegen
 follows). Never imported by `rosace` or any lower layer — dependency flows

@@ -279,7 +279,7 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
 
     // ── Core project files ─────────────────────────────────────────────────
     write(dir.join("Cargo.toml"), &cargo_toml(name, &crate_name, &framework, &opts))?;
-    write(dir.join("rsc.toml"), &tzr_toml(name, &bundle_id, &opts))?;
+    write(dir.join("rsc.toml"), &rsc_toml(name, &bundle_id, &opts))?;
     write(dir.join(".gitignore"), "/target\n/dist\n*.app\n")?;
     write(dir.join("README.md"), &readme(name, &opts))?;
 
@@ -521,7 +521,7 @@ rosace = {{ path = "{framework}/rosace" }}
     )
 }
 
-fn tzr_toml(name: &str, bundle_id: &str, opts: &NewOptions) -> String {
+fn rsc_toml(name: &str, bundle_id: &str, opts: &NewOptions) -> String {
     let plats = opts
         .platforms
         .iter()
@@ -889,7 +889,7 @@ fn web_index_html(name: &str, crate_name: &str) -> String {
        shadow-DOM-aware crawler sees a real shadow root). The canvas the
        script below creates paints over it for sighted users; nothing here
        is itself rendered as a second visual layer. -->
-  <div id="rsc-seo"><!--TZR_SEO_SHADOW_DOM--></div>
+  <div id="rsc-seo"><!--RSC_SEO_SHADOW_DOM--></div>
   <script type="module">
     import init from './{crate_name}.js';
     init().catch((e) => {{
@@ -1298,8 +1298,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
         setContentView(surfaceView)
     }}
 
-    // App lifecycle -> TZR_EVENT_LIFECYCLE_* (D110 Phase 29 Step 1);
-    // kinds match tzr_engine.h (8 = active, 9 = inactive, 10 = background).
+    // App lifecycle -> RSC_EVENT_LIFECYCLE_* (D110 Phase 29 Step 1);
+    // kinds match rsc_engine.h (8 = active, 9 = inactive, 10 = background).
     // Android has no reliable pre-kill callback, so SUSPENDED (11) is not
     // sent — onDestroy is not guaranteed to run. Applied immediately on
     // the Rust side, so onStop's event lands even though the Choreographer
@@ -1365,7 +1365,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
 // Our own AppDelegate/SceneDelegate own the app lifecycle — not winit's
 // implicit one (D106's whole point). `EngineViewController` is the real
 // version of the throwaway stub validated in Step 1: a CAMetalLayer-backed
-// view driving `tzr_engine_init`/`resize`/`input`/`frame` through the FFI
+// view driving `rsc_engine_init`/`resize`/`input`/`frame` through the FFI
 // boundary `rosace-ffi` provides. FFI functions are declared via
 // `@_silgen_name` (no bridging header needed) — the same mechanism proven
 // working in `rosace-ffi/examples/ios_stub.rs`'s Simulator verification.
@@ -1420,7 +1420,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 "#;
 
 const IOS_ENGINE_VIEW_CONTROLLER_SWIFT: &str = r#"//! Drives the ROSACE engine through the `rosace-ffi` C boundary
-//! (`rosace-ffi/include/tzr_engine.h`) — a CAMetalLayer-backed view,
+//! (`rosace-ffi/include/rsc_engine.h`) — a CAMetalLayer-backed view,
 //! init/resize/input/frame calls, and real `UIView.safeAreaInsets` feeding
 //! `rosace_core::SafeArea` (replacing the old winit outer/inner-size
 //! workaround from Phase 20-22).
@@ -1428,13 +1428,13 @@ const IOS_ENGINE_VIEW_CONTROLLER_SWIFT: &str = r#"//! Drives the ROSACE engine t
 import UIKit
 import QuartzCore
 
-// MARK: - FFI declarations (mirrors rosace-ffi/include/tzr_engine.h;
+// MARK: - FFI declarations (mirrors rosace-ffi/include/rsc_engine.h;
 // no bridging header needed — matches the pattern proven in
 // rosace-ffi/examples/ios_stub.rs's Simulator verification).
 
-typealias TzrEngine = OpaquePointer
+typealias RscEngine = OpaquePointer
 
-struct TzrInputEvent {
+struct RscInputEvent {
     var kind: UInt32
     var x: Float
     var y: Float
@@ -1447,32 +1447,32 @@ struct TzrInputEvent {
     var delta_y: Float
 }
 
-private let TZR_EVENT_MOUSE_MOVE: UInt32 = 0
-private let TZR_EVENT_MOUSE_DOWN: UInt32 = 1
-private let TZR_EVENT_MOUSE_UP: UInt32 = 2
-private let TZR_BUTTON_LEFT: UInt32 = 0
-private let TZR_EVENT_LIFECYCLE_ACTIVE: UInt32 = 8
-private let TZR_EVENT_LIFECYCLE_INACTIVE: UInt32 = 9
-private let TZR_EVENT_LIFECYCLE_BACKGROUND: UInt32 = 10
-private let TZR_EVENT_LIFECYCLE_SUSPENDED: UInt32 = 11
+private let RSC_EVENT_MOUSE_MOVE: UInt32 = 0
+private let RSC_EVENT_MOUSE_DOWN: UInt32 = 1
+private let RSC_EVENT_MOUSE_UP: UInt32 = 2
+private let RSC_BUTTON_LEFT: UInt32 = 0
+private let RSC_EVENT_LIFECYCLE_ACTIVE: UInt32 = 8
+private let RSC_EVENT_LIFECYCLE_INACTIVE: UInt32 = 9
+private let RSC_EVENT_LIFECYCLE_BACKGROUND: UInt32 = 10
+private let RSC_EVENT_LIFECYCLE_SUSPENDED: UInt32 = 11
 
-@_silgen_name("tzr_engine_init")
-func tzr_engine_init(_ surfaceHandle: UnsafeMutableRawPointer?, _ width: UInt32, _ height: UInt32, _ scale: Float) -> TzrEngine?
+@_silgen_name("rsc_engine_init")
+func rsc_engine_init(_ surfaceHandle: UnsafeMutableRawPointer?, _ width: UInt32, _ height: UInt32, _ scale: Float) -> RscEngine?
 
-@_silgen_name("tzr_engine_resize")
-func tzr_engine_resize(
-    _ engine: TzrEngine?, _ width: UInt32, _ height: UInt32, _ scale: Float,
+@_silgen_name("rsc_engine_resize")
+func rsc_engine_resize(
+    _ engine: RscEngine?, _ width: UInt32, _ height: UInt32, _ scale: Float,
     _ safeTop: Float, _ safeRight: Float, _ safeBottom: Float, _ safeLeft: Float
 )
 
-@_silgen_name("tzr_engine_input")
-func tzr_engine_input(_ engine: TzrEngine?, _ events: UnsafePointer<TzrInputEvent>?, _ count: Int)
+@_silgen_name("rsc_engine_input")
+func rsc_engine_input(_ engine: RscEngine?, _ events: UnsafePointer<RscInputEvent>?, _ count: Int)
 
-@_silgen_name("tzr_engine_frame")
-func tzr_engine_frame(_ engine: TzrEngine?)
+@_silgen_name("rsc_engine_frame")
+func rsc_engine_frame(_ engine: RscEngine?)
 
-@_silgen_name("tzr_engine_shutdown")
-func tzr_engine_shutdown(_ engine: TzrEngine?)
+@_silgen_name("rsc_engine_shutdown")
+func rsc_engine_shutdown(_ engine: RscEngine?)
 
 // MARK: - View
 
@@ -1501,7 +1501,7 @@ final class MetalView: UIView {
 }
 
 final class EngineViewController: UIViewController {
-    private var engine: TzrEngine?
+    private var engine: RscEngine?
     private var displayLink: CADisplayLink?
 
     override func loadView() {
@@ -1514,13 +1514,13 @@ final class EngineViewController: UIViewController {
         let width = UInt32(view.bounds.width * CGFloat(scale))
         let height = UInt32(view.bounds.height * CGFloat(scale))
         let viewPtr = Unmanaged.passUnretained(view).toOpaque()
-        engine = tzr_engine_init(viewPtr, width, height, scale)
+        engine = rsc_engine_init(viewPtr, width, height, scale)
 
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .default)
         displayLink = link
 
-        // MARK: App lifecycle -> TZR_EVENT_LIFECYCLE_* (D110 Phase 29
+        // MARK: App lifecycle -> RSC_EVENT_LIFECYCLE_* (D110 Phase 29
         // Step 1). UIApplication notifications rather than AppDelegate/
         // SceneDelegate plumbing — this controller owns the engine handle,
         // so no cross-object wiring is needed. The Rust side applies these
@@ -1538,18 +1538,18 @@ final class EngineViewController: UIViewController {
                        name: UIApplication.willTerminateNotification, object: nil)
     }
 
-    @objc private func lifecycleActive() { sendLifecycle(TZR_EVENT_LIFECYCLE_ACTIVE) }
-    @objc private func lifecycleInactive() { sendLifecycle(TZR_EVENT_LIFECYCLE_INACTIVE) }
-    @objc private func lifecycleBackground() { sendLifecycle(TZR_EVENT_LIFECYCLE_BACKGROUND) }
-    @objc private func lifecycleSuspended() { sendLifecycle(TZR_EVENT_LIFECYCLE_SUSPENDED) }
+    @objc private func lifecycleActive() { sendLifecycle(RSC_EVENT_LIFECYCLE_ACTIVE) }
+    @objc private func lifecycleInactive() { sendLifecycle(RSC_EVENT_LIFECYCLE_INACTIVE) }
+    @objc private func lifecycleBackground() { sendLifecycle(RSC_EVENT_LIFECYCLE_BACKGROUND) }
+    @objc private func lifecycleSuspended() { sendLifecycle(RSC_EVENT_LIFECYCLE_SUSPENDED) }
 
     private func sendLifecycle(_ kind: UInt32) {
         guard let engine else { return }
-        var event = TzrInputEvent(
+        var event = RscInputEvent(
             kind: kind, x: 0, y: 0, button: 0,
             key: 0, character: 0, width: 0, height: 0, delta_x: 0, delta_y: 0
         )
-        withUnsafePointer(to: &event) { tzr_engine_input(engine, $0, 1) }
+        withUnsafePointer(to: &event) { rsc_engine_input(engine, $0, 1) }
     }
 
     override func viewDidLayoutSubviews() {
@@ -1559,7 +1559,7 @@ final class EngineViewController: UIViewController {
         let width = UInt32(view.bounds.width * CGFloat(scale))
         let height = UInt32(view.bounds.height * CGFloat(scale))
         let insets = view.safeAreaInsets
-        tzr_engine_resize(
+        rsc_engine_resize(
             engine, width, height, scale,
             Float(insets.top), Float(insets.right), Float(insets.bottom), Float(insets.left)
         )
@@ -1567,42 +1567,42 @@ final class EngineViewController: UIViewController {
 
     @objc private func tick() {
         guard let engine else { return }
-        tzr_engine_frame(engine)
+        rsc_engine_frame(engine)
     }
 
     // MARK: Touch -> MouseDown/MouseMove/MouseUp (same convention the
-    // existing winit `Touch` handling and `TzrInputEventFfi` conversion use
+    // existing winit `Touch` handling and `RscInputEventFfi` conversion use
     // — no separate touch event kind needed).
 
     private func send(kind: UInt32, touches: Set<UITouch>) {
         guard let engine, let touch = touches.first else { return }
         let p = touch.location(in: view)
-        var event = TzrInputEvent(
-            kind: kind, x: Float(p.x), y: Float(p.y), button: TZR_BUTTON_LEFT,
+        var event = RscInputEvent(
+            kind: kind, x: Float(p.x), y: Float(p.y), button: RSC_BUTTON_LEFT,
             key: 0, character: 0, width: 0, height: 0, delta_x: 0, delta_y: 0
         )
-        withUnsafePointer(to: &event) { tzr_engine_input(engine, $0, 1) }
+        withUnsafePointer(to: &event) { rsc_engine_input(engine, $0, 1) }
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        send(kind: TZR_EVENT_MOUSE_DOWN, touches: touches)
+        send(kind: RSC_EVENT_MOUSE_DOWN, touches: touches)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        send(kind: TZR_EVENT_MOUSE_MOVE, touches: touches)
+        send(kind: RSC_EVENT_MOUSE_MOVE, touches: touches)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        send(kind: TZR_EVENT_MOUSE_UP, touches: touches)
+        send(kind: RSC_EVENT_MOUSE_UP, touches: touches)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        send(kind: TZR_EVENT_MOUSE_UP, touches: touches)
+        send(kind: RSC_EVENT_MOUSE_UP, touches: touches)
     }
 
     deinit {
         displayLink?.invalidate()
-        if let engine { tzr_engine_shutdown(engine) }
+        if let engine { rsc_engine_shutdown(engine) }
     }
 }
 "#;
@@ -1982,7 +1982,7 @@ fn ios_xcscheme() -> String {
 }
 
 /// Per-app FFI glue (D106 Phase 24 Step 1/2) — the ~15-line shim that
-/// exports the `tzr_engine_*` C symbols the native host links against,
+/// exports the `rsc_engine_*` C symbols the native host links against,
 /// instantiating the app's own `AppRoot` (the SAME root component
 /// desktop/web already drive). Mirrors `rosace-ffi/examples/ios_stub.rs`,
 /// the reference pattern this template is generated from.
@@ -1992,7 +1992,7 @@ fn ffi_rs(bundle_id: &str) -> String {
     let header = r#"//! Native-host FFI glue (D106 Phase 24) — exports the ABI
 //! `ios/App/EngineViewController.swift` and `android/.../MainActivity.kt`
 //! call into. iOS uses the plain C ABI in `rosace-ffi`'s
-//! `include/tzr_engine.h` (pattern: `rosace-ffi/examples/ios_stub.rs`).
+//! `include/rsc_engine.h` (pattern: `rosace-ffi/examples/ios_stub.rs`).
 //! Android uses JNI instead — Kotlin's `external fun` resolves to a symbol
 //! literally named `Java_<package>_<Class>_<method>` (JNI's mangling: `.` ->
 //! `_`, a literal `_` -> `_1` — see `jni_class_prefix` in
@@ -2006,7 +2006,7 @@ use std::ptr::NonNull;
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use rosace::prelude::*;
-use rosace_ffi::{Engine, TzrInputEventFfi};
+use rosace_ffi::{Engine, RscInputEventFfi};
 #[cfg(target_os = "ios")]
 use rosace_ffi::RawSurface;
 #[cfg(target_os = "android")]
@@ -2022,7 +2022,7 @@ use crate::app::AppRoot;
 /// `UIView*` for the engine's lifetime.
 #[cfg(target_os = "ios")]
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_init(
+pub unsafe extern "C" fn rsc_engine_init(
     surface_handle: *mut c_void,
     width: u32,
     height: u32,
@@ -2039,7 +2039,7 @@ pub unsafe extern "C" fn tzr_engine_init(
 
 #[cfg(not(target_os = "ios"))]
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_init(
+pub unsafe extern "C" fn rsc_engine_init(
     _surface_handle: *mut c_void,
     _width: u32,
     _height: u32,
@@ -2049,10 +2049,10 @@ pub unsafe extern "C" fn tzr_engine_init(
 }
 
 /// # Safety
-/// `engine` must be a live pointer previously returned by `tzr_engine_init`
+/// `engine` must be a live pointer previously returned by `rsc_engine_init`
 /// (or null, which is a no-op).
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_resize(
+pub unsafe extern "C" fn rsc_engine_resize(
     engine: *mut Engine,
     width: u32,
     height: u32,
@@ -2068,12 +2068,12 @@ pub unsafe extern "C" fn tzr_engine_resize(
 }
 
 /// # Safety
-/// `engine` must be a live pointer from `tzr_engine_init`; `events` must
-/// point to at least `count` valid `TzrInputEvent`s.
+/// `engine` must be a live pointer from `rsc_engine_init`; `events` must
+/// point to at least `count` valid `RscInputEvent`s.
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_input(
+pub unsafe extern "C" fn rsc_engine_input(
     engine: *mut Engine,
-    events: *const TzrInputEventFfi,
+    events: *const RscInputEventFfi,
     count: usize,
 ) {
     if engine.is_null() || events.is_null() { return; }
@@ -2082,18 +2082,18 @@ pub unsafe extern "C" fn tzr_engine_input(
 }
 
 /// # Safety
-/// `engine` must be a live pointer from `tzr_engine_init` (or null).
+/// `engine` must be a live pointer from `rsc_engine_init` (or null).
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_frame(engine: *mut Engine) {
+pub unsafe extern "C" fn rsc_engine_frame(engine: *mut Engine) {
     if engine.is_null() { return; }
     unsafe { (*engine).frame() };
 }
 
 /// # Safety
-/// `engine` must be a pointer previously returned by `tzr_engine_init` and
+/// `engine` must be a pointer previously returned by `rsc_engine_init` and
 /// not yet passed to this function; it must not be used again afterward.
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_shutdown(engine: *mut Engine) {
+pub unsafe extern "C" fn rsc_engine_shutdown(engine: *mut Engine) {
     if engine.is_null() { return; }
     drop(unsafe { Box::from_raw(engine) });
 }
@@ -2159,7 +2159,7 @@ pub extern "system" fn Java_{jni_prefix}_nativeResize(
 }}
 
 /// One touch/pointer event per call — `kind` is `0` = move, `1` = down,
-/// `2` = up (matching `rosace_ffi`'s `TZR_EVENT_MOUSE_*` constants); a
+/// `2` = up (matching `rosace_ffi`'s `RSC_EVENT_MOUSE_*` constants); a
 /// touch is always reported as the left button, mirroring how the existing
 /// winit `Touch` handling already treats touch input (see `rosace-ffi`'s
 /// `event.rs` module doc).
@@ -2175,7 +2175,7 @@ pub extern "system" fn Java_{jni_prefix}_nativeTouch(
 ) {{
     if handle == 0 {{ return; }}
     let ptr = handle as *mut AndroidEngine;
-    let event = TzrInputEventFfi {{
+    let event = RscInputEventFfi {{
         kind: kind as u32, x, y, button: 0, key: 0, character: 0,
         width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
     }};
@@ -2183,7 +2183,7 @@ pub extern "system" fn Java_{jni_prefix}_nativeTouch(
 }}
 
 /// One app-lifecycle transition per call (D110 Phase 29 Step 1) — `kind`
-/// is a `TZR_EVENT_LIFECYCLE_*` constant (8 = active, 9 = inactive,
+/// is a `RSC_EVENT_LIFECYCLE_*` constant (8 = active, 9 = inactive,
 /// 10 = background). `Engine::input` applies lifecycle immediately (see
 /// its doc), so calling this from `onStop` — after the Choreographer
 /// callback has gone quiet — still takes effect right away.
@@ -2197,7 +2197,7 @@ pub extern "system" fn Java_{jni_prefix}_nativeLifecycle(
 ) {{
     if handle == 0 {{ return; }}
     let ptr = handle as *mut AndroidEngine;
-    let event = TzrInputEventFfi {{
+    let event = RscInputEventFfi {{
         kind: kind as u32, x: 0.0, y: 0.0, button: 0, key: 0, character: 0,
         width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
     }};

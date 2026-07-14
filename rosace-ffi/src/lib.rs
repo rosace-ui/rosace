@@ -8,11 +8,11 @@
 //! Rust engine through this small C-compatible boundary instead.
 //!
 //! This crate provides the safe Rust machinery (`Engine`, `RawSurface`,
-//! `TzrInputEventFfi`); it does NOT itself export `#[no_mangle] extern "C"`
+//! `RscInputEventFfi`); it does NOT itself export `#[no_mangle] extern "C"`
 //! functions, because only a concrete app knows its root `Component`. Each
 //! app's own thin glue (see `examples/ios_stub.rs`) supplies that and
-//! exports the actual `tzr_engine_init`/`_resize`/`_input`/`_frame`/
-//! `_shutdown` symbols described in `include/tzr_engine.h` — the same
+//! exports the actual `rsc_engine_init`/`_resize`/`_input`/`_frame`/
+//! `_shutdown` symbols described in `include/rsc_engine.h` — the same
 //! pattern `rsc new`'s generated `lib.rs` already uses for
 //! `#[wasm_bindgen(start)]` on web.
 
@@ -27,5 +27,5 @@ mod surface;
 pub use android::AndroidSurfaceHandle;
 pub use capability::{report_camera_result, request_camera, take_camera_request, CAMERA_PERMISSION};
 pub use engine::Engine;
-pub use event::{focused_keyboard_type, TzrInputEventFfi};
+pub use event::{focused_keyboard_type, RscInputEventFfi};
 pub use surface::RawSurface;

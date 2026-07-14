@@ -417,3 +417,17 @@ Builder-method names for widget properties are normative in
 `API_DESIGN.md` §3 (D094): .background() for surfaces, .color() for
 foreground/content only, .border(color, width), .radius(), .elevation(),
 .padding(EdgeInsets), .spacing(), .align(Alignment), .on_press(), .on_change().
+
+## C ABI prefix (D120, 2026-07-14)
+
+Everything crossing the FFI boundary uses the `rsc` prefix, matching the
+CLI binary and `rsc.toml`:
+```
+rsc_engine_*            (symbols: init/resize/input/frame/shutdown, capabilities)
+RSC_EVENT_* / RSC_KEY_* / RSC_KEYBOARD_* / RSC_BUTTON_*   (constants)
+RscEngine / RscInputEvent / RscInputEventFfi              (types)
+include/rsc_engine.h                                      (header)
+```
+The Tezzera-era `tzr`/`TZR_`/`Tzr` prefix is retired — never introduce it
+in new code. Historical decision entries (D106–D119) and phase docs keep
+the old spellings; D120 is the rename record.

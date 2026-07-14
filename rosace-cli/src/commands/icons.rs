@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn write_ico_produces_a_well_formed_directory() {
-        let dir = std::env::temp_dir().join(format!("tzr_icons_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_icons_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.ico");
         write_ico(&path, &[16, 32]).expect("ico write should succeed");
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn write_icns_starts_with_magic_and_reports_consistent_length() {
-        let dir = std::env::temp_dir().join(format!("tzr_icns_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_icns_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.icns");
         write_icns(&path).expect("icns write should succeed");
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn generate_writes_expected_files_for_all_platforms() {
-        let dir = std::env::temp_dir().join(format!("tzr_gen_icons_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_gen_icons_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let platforms = [
             Platform::MacOs, Platform::Windows, Platform::Linux,
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn generate_only_writes_folders_for_selected_platforms() {
-        let dir = std::env::temp_dir().join(format!("tzr_gen_icons_partial_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_gen_icons_partial_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         generate(&dir, &[Platform::MacOs]).expect("generate should succeed");
 
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn android_adaptive_icon_layers_are_generated() {
-        let dir = std::env::temp_dir().join(format!("tzr_gen_adaptive_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rsc_gen_adaptive_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         write_android_icons(&dir).expect("android icon generation should succeed");
 

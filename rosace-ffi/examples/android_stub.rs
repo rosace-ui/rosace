@@ -15,7 +15,7 @@
 //! `Java_dev_rosace_stub_MainActivity_native*` name.
 
 use rosace_core::{Component, Context, Element};
-use rosace_ffi::{Engine, TzrInputEventFfi};
+use rosace_ffi::{Engine, RscInputEventFfi};
 
 #[cfg(target_os = "android")]
 use jni::objects::JObject;
@@ -98,7 +98,7 @@ pub extern "system" fn Java_dev_rosace_stub_MainActivity_nativeInput(
     _env: JNIEnv,
     _class: JObject,
     handle: jlong,
-    events: *const TzrInputEventFfi,
+    events: *const RscInputEventFfi,
     count: jint,
 ) {
     if handle == 0 || events.is_null() { return; }
@@ -136,5 +136,5 @@ pub extern "system" fn Java_dev_rosace_stub_MainActivity_nativeShutdown(
 fn _typecheck_only() {
     let _ = StubRoot;
     let _: Option<Box<Engine>> = None;
-    let _: Option<&[TzrInputEventFfi]> = None;
+    let _: Option<&[RscInputEventFfi]> = None;
 }

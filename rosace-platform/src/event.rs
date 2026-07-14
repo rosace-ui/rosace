@@ -20,7 +20,7 @@ pub enum InputEvent {
     Ime(rosace_ime::ImeEvent),
     /// An OS app-lifecycle transition (D042/D110, Phase 29 Step 1) —
     /// reported by a mobile native host over the FFI bridge
-    /// (`TZR_EVENT_LIFECYCLE_*`). Desktop winit never sends this (desktop
+    /// (`RSC_EVENT_LIFECYCLE_*`). Desktop winit never sends this (desktop
     /// lifecycle is explicitly out of Phase 29's scope); the engine's
     /// dispatch writes it to `rosace_core::set_app_lifecycle`.
     Lifecycle(rosace_core::LifecycleState),

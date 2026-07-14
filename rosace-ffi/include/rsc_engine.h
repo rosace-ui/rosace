@@ -1,4 +1,4 @@
-/* tzr_engine.h — ROSACE native-host FFI boundary (D106 Phase 24 Step 1).
+/* rsc_engine.h — ROSACE native-host FFI boundary (D106 Phase 24 Step 1).
  *
  * Hand-written (not cbindgen-generated — the surface is small and stable
  * enough not to warrant the extra build dependency). Keep this in sync with
@@ -11,11 +11,11 @@
  *              layer — matches `RawSurface::from_ca_metal_layer`).
  *   - Android: an `ANativeWindow*` obtained via `ANativeWindow_fromSurface`.
  * It must stay valid for the engine's lifetime — release it only after
- * calling `tzr_engine_shutdown`.
+ * calling `rsc_engine_shutdown`.
  */
 
-#ifndef TZR_ENGINE_H
-#define TZR_ENGINE_H
+#ifndef RSC_ENGINE_H
+#define RSC_ENGINE_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -25,11 +25,11 @@ extern "C" {
 #endif
 
 /* Opaque handle — never dereferenced by the host. */
-typedef struct TzrEngine TzrEngine;
+typedef struct RscEngine RscEngine;
 
 /* One input event. Unused fields for a given `kind` are ignored.
- * `character` holds a Unicode scalar value for TZR_EVENT_TEXT / TZR_KEY_CHAR.
- * Layout must match `rosace_ffi::event::TzrInputEventFfi` exactly. */
+ * `character` holds a Unicode scalar value for RSC_EVENT_TEXT / RSC_KEY_CHAR.
+ * Layout must match `rosace_ffi::event::RscInputEventFfi` exactly. */
 typedef struct {
     uint32_t kind;
     float x;
@@ -41,108 +41,108 @@ typedef struct {
     uint32_t height;
     float delta_x;
     float delta_y;
-} TzrInputEvent;
+} RscInputEvent;
 
 /* `kind` values */
-#define TZR_EVENT_MOUSE_MOVE     0
-#define TZR_EVENT_MOUSE_DOWN     1
-#define TZR_EVENT_MOUSE_UP       2
-#define TZR_EVENT_KEY_DOWN       3
-#define TZR_EVENT_KEY_UP         4
-#define TZR_EVENT_TEXT           5
-#define TZR_EVENT_WINDOW_RESIZED 6
-#define TZR_EVENT_SCROLL         7
+#define RSC_EVENT_MOUSE_MOVE     0
+#define RSC_EVENT_MOUSE_DOWN     1
+#define RSC_EVENT_MOUSE_UP       2
+#define RSC_EVENT_KEY_DOWN       3
+#define RSC_EVENT_KEY_UP         4
+#define RSC_EVENT_TEXT           5
+#define RSC_EVENT_WINDOW_RESIZED 6
+#define RSC_EVENT_SCROLL         7
 /* App-lifecycle transitions (D042/D110, Phase 29 Step 1) — send from the
  * host's real lifecycle callbacks (iOS UIApplication notifications /
  * Android onResume/onPause/onStop). All other fields are ignored. */
-#define TZR_EVENT_LIFECYCLE_ACTIVE     8
-#define TZR_EVENT_LIFECYCLE_INACTIVE   9
-#define TZR_EVENT_LIFECYCLE_BACKGROUND 10
-#define TZR_EVENT_LIFECYCLE_SUSPENDED  11
+#define RSC_EVENT_LIFECYCLE_ACTIVE     8
+#define RSC_EVENT_LIFECYCLE_INACTIVE   9
+#define RSC_EVENT_LIFECYCLE_BACKGROUND 10
+#define RSC_EVENT_LIFECYCLE_SUSPENDED  11
 
-/* `button` values (TZR_EVENT_MOUSE_DOWN / TZR_EVENT_MOUSE_UP) */
-#define TZR_BUTTON_LEFT   0
-#define TZR_BUTTON_RIGHT  1
-#define TZR_BUTTON_MIDDLE 2
+/* `button` values (RSC_EVENT_MOUSE_DOWN / RSC_EVENT_MOUSE_UP) */
+#define RSC_BUTTON_LEFT   0
+#define RSC_BUTTON_RIGHT  1
+#define RSC_BUTTON_MIDDLE 2
 
-/* `key` values (TZR_EVENT_KEY_DOWN / TZR_EVENT_KEY_UP); TZR_KEY_CHAR reads `character`. */
-#define TZR_KEY_ENTER       0
-#define TZR_KEY_ESCAPE      1
-#define TZR_KEY_SPACE       2
-#define TZR_KEY_BACKSPACE   3
-#define TZR_KEY_TAB         4
-#define TZR_KEY_ARROW_UP    5
-#define TZR_KEY_ARROW_DOWN  6
-#define TZR_KEY_ARROW_LEFT  7
-#define TZR_KEY_ARROW_RIGHT 8
-#define TZR_KEY_SHIFT       9
-#define TZR_KEY_CONTROL     10
-#define TZR_KEY_ALT         11
-#define TZR_KEY_META        12
-#define TZR_KEY_CHAR        13
+/* `key` values (RSC_EVENT_KEY_DOWN / RSC_EVENT_KEY_UP); RSC_KEY_CHAR reads `character`. */
+#define RSC_KEY_ENTER       0
+#define RSC_KEY_ESCAPE      1
+#define RSC_KEY_SPACE       2
+#define RSC_KEY_BACKSPACE   3
+#define RSC_KEY_TAB         4
+#define RSC_KEY_ARROW_UP    5
+#define RSC_KEY_ARROW_DOWN  6
+#define RSC_KEY_ARROW_LEFT  7
+#define RSC_KEY_ARROW_RIGHT 8
+#define RSC_KEY_SHIFT       9
+#define RSC_KEY_CONTROL     10
+#define RSC_KEY_ALT         11
+#define RSC_KEY_META        12
+#define RSC_KEY_CHAR        13
 /* Added D116 Phase 28 Step 6 (Known Issue #15) — see event.rs's comment
  * on the Rust-side constants for why these were missing until now. */
-#define TZR_KEY_DELETE       14
-#define TZR_KEY_HOME         15
-#define TZR_KEY_END          16
+#define RSC_KEY_DELETE       14
+#define RSC_KEY_HOME         15
+#define RSC_KEY_END          16
 
 /* Keyboard-type hint values (D116 Phase 28 Step 6) — poll
- * tzr_focused_keyboard_type() (per-app codegen wraps
+ * rsc_focused_keyboard_type() (per-app codegen wraps
  * rosace_ffi::focused_keyboard_type()) once per frame to know which
  * software keyboard layout to show for the currently-focused field. */
-#define TZR_KEYBOARD_DEFAULT 0
-#define TZR_KEYBOARD_EMAIL   1
-#define TZR_KEYBOARD_NUMERIC 2
-#define TZR_KEYBOARD_URL     3
-#define TZR_KEYBOARD_PHONE   4
+#define RSC_KEYBOARD_DEFAULT 0
+#define RSC_KEYBOARD_EMAIL   1
+#define RSC_KEYBOARD_NUMERIC 2
+#define RSC_KEYBOARD_URL     3
+#define RSC_KEYBOARD_PHONE   4
 
 /* Creates the engine against `surface_handle`. Returns NULL on failure
  * (e.g. no suitable GPU adapter) — mirrors `GpuPresenter::new`. */
-TzrEngine *tzr_engine_init(void *surface_handle, uint32_t width, uint32_t height, float scale);
+RscEngine *rsc_engine_init(void *surface_handle, uint32_t width, uint32_t height, float scale);
 
 /* Resizes the surface + canvases (e.g. on rotation / layout change), and
  * updates the safe-area insets (logical points) — e.g. from a real
  * `UIView.safeAreaInsets` on iOS. Resize and safe-area change together in
  * practice (rotation, layout), so they share one call rather than needing a
  * separate function. Pass zeros if the host has no safe-area concept. */
-void tzr_engine_resize(TzrEngine *engine, uint32_t width, uint32_t height, float scale,
+void rsc_engine_resize(RscEngine *engine, uint32_t width, uint32_t height, float scale,
                         float safe_top, float safe_right, float safe_bottom, float safe_left);
 
-/* Queues `count` events, applied on the next `tzr_engine_frame` call. */
-void tzr_engine_input(TzrEngine *engine, const TzrInputEvent *events, size_t count);
+/* Queues `count` events, applied on the next `rsc_engine_frame` call. */
+void rsc_engine_input(RscEngine *engine, const RscInputEvent *events, size_t count);
 
 /* Builds (if dirty), paints, and presents one frame. */
-void tzr_engine_frame(TzrEngine *engine);
+void rsc_engine_frame(RscEngine *engine);
 
 /* Releases the engine. `engine` must not be used again after this call. */
-void tzr_engine_shutdown(TzrEngine *engine);
+void rsc_engine_shutdown(RscEngine *engine);
 
 /* -- Platform capabilities (D106 Phase 24 Step 5) --------------------------
  * Proves the native-host model reaches things a winit-owned app structurally
  * couldn't: a real permission prompt, with the result flowing back into Rust
  * app code. Deliberately ONE capability (camera) — see
  * rosace-ffi/src/capability.rs's module doc and .steering/PHASE_24.md's
- * Step 5 scope note. Engine-independent (not `TzrEngine*`-scoped) — there's
+ * Step 5 scope note. Engine-independent (not `RscEngine*`-scoped) — there's
  * only one engine per app process, matching how `rosace_platform`'s own
  * scroll-layer registry is also a bare global, not window-scoped.
  *
  * Host usage (see ios_stub.rs / a real app's EngineViewController.swift):
- *   - Poll `tzr_camera_permission_take_request()` once per frame tick
- *     (alongside `tzr_engine_frame`). If it returns true, trigger the real
+ *   - Poll `rsc_camera_permission_take_request()` once per frame tick
+ *     (alongside `rsc_engine_frame`). If it returns true, trigger the real
  *     platform permission API (e.g. `AVCaptureDevice.requestAccess`).
- *   - When that resolves, call `tzr_camera_permission_report_result`.
+ *   - When that resolves, call `rsc_camera_permission_report_result`.
  */
 
 /* True at most once per Rust-side `rosace_ffi::request_camera()` call —
  * act on it immediately, don't cache a `true` result. */
-uint8_t tzr_camera_permission_take_request(void);
+uint8_t rsc_camera_permission_take_request(void);
 
 /* Reports the native permission API's result back into Rust — updates the
  * `rosace_ffi::CAMERA_PERMISSION` atom, which notifies subscribed widgets. */
-void tzr_camera_permission_report_result(uint8_t granted);
+void rsc_camera_permission_report_result(uint8_t granted);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* TZR_ENGINE_H */
+#endif /* RSC_ENGINE_H */

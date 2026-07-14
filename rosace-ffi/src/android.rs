@@ -3,9 +3,9 @@
 //! Android's native host calls Rust via JNI, not a plain C ABI — a Kotlin
 //! `external fun` resolves to a symbol named `Java_<package>_<Class>_<method>`
 //! taking `JNIEnv`/`JObject` parameters, unlike iOS's plain
-//! `tzr_engine_init(*mut c_void, ...)`. Since the package name varies per
+//! `rsc_engine_init(*mut c_void, ...)`. Since the package name varies per
 //! app, those `Java_*`-named functions are generated per-app by `rsc new`
-//! (mirroring how `tzr_engine_*` itself is per-app glue — see
+//! (mirroring how `rsc_engine_*` itself is per-app glue — see
 //! `examples/ios_stub.rs`'s module doc). What's reusable, and lives here, is
 //! turning the JNI `android.view.Surface` object the generated glue
 //! receives into the same kind of raw pointer `RawSurface::from_native_window`
@@ -14,7 +14,7 @@
 //! The NDK's `ANativeWindow_fromSurface` acquires a reference that must be
 //! released with a matching `ANativeWindow_release` — `AndroidSurfaceHandle`
 //! does this via `Drop`, so a generated app just keeps the handle alongside
-//! its `Engine` (both torn down together on `tzr_engine_shutdown`) instead of
+//! its `Engine` (both torn down together on `rsc_engine_shutdown`) instead of
 //! managing the raw pointer by hand.
 
 use std::ptr::NonNull;

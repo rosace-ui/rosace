@@ -67,7 +67,7 @@ pub fn request_camera() {
 }
 
 /// Polled by the native host once per frame tick (alongside
-/// `tzr_engine_frame`). Returns `true` at most once per [`request_camera`]
+/// `rsc_engine_frame`). Returns `true` at most once per [`request_camera`]
 /// call — the host is expected to act on it immediately (trigger the real
 /// permission API), not to hold a `true` result and ask again later.
 pub fn take_camera_request() -> bool {

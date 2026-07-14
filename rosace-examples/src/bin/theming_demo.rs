@@ -6,8 +6,8 @@
 //!
 //! ```bash
 //! cargo run --bin theming_demo               # desktop -> falls back to light_theme()
-//! TZR_PREVIEW=ios cargo run --bin theming_demo       # forced Platform::Ios -> cupertino()
-//! TZR_PREVIEW=android cargo run --bin theming_demo   # forced Platform::Android -> material()
+//! RSC_PREVIEW=ios cargo run --bin theming_demo       # forced Platform::Ios -> cupertino()
+//! RSC_PREVIEW=android cargo run --bin theming_demo   # forced Platform::Android -> material()
 //! ```
 
 use rosace::prelude::*;
@@ -35,7 +35,7 @@ impl Component for ThemingDemo {
 }
 
 fn main() {
-    let preview = std::env::var("TZR_PREVIEW").unwrap_or_default();
+    let preview = std::env::var("RSC_PREVIEW").unwrap_or_default();
     let themes = Themes::new(light_theme())
         .platform(Platform::Ios, cupertino())
         .platform(Platform::Android, material());

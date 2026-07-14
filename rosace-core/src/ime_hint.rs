@@ -48,7 +48,7 @@ pub fn ime_cursor_area() -> Option<Rect> {
 /// `rosace-platform`/`app.rs` never reads it) — it exists ONLY for the
 /// D106 FFI bridge, the same "real Rust plumbing, native host piece
 /// verified separately on real hardware" shape as camera permission and
-/// the `TZR_KEY_*` mapping.
+/// the `RSC_KEY_*` mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KeyboardType {
     #[default]

@@ -10,14 +10,14 @@
 //!
 //! Build: `cargo build -p rosace-ffi --example ios_stub --target
 //! aarch64-apple-ios-sim --release` — produces `libios_stub.a`, matching
-//! `include/tzr_engine.h`.
+//! `include/rsc_engine.h`.
 
 use std::os::raw::c_void;
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use std::ptr::NonNull;
 
 use rosace_core::{Component, Context, Element};
-use rosace_ffi::{Engine, TzrInputEventFfi};
+use rosace_ffi::{Engine, RscInputEventFfi};
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use rosace_ffi::RawSurface;
 
@@ -25,7 +25,7 @@ use rosace_ffi::RawSurface;
 /// and returns a handle, not that a real UI paints correctly (that's
 /// exercised by the existing desktop examples via `App::launch`, which now
 /// shares this same `FrameEngine` internally).
-// Constructed only inside the ios/android cfg branch of `tzr_engine_init`.
+// Constructed only inside the ios/android cfg branch of `rsc_engine_init`.
 #[cfg_attr(not(any(target_os = "ios", target_os = "android")), allow(dead_code))]
 struct StubRoot;
 
@@ -40,7 +40,7 @@ impl Component for StubRoot {
 /// `UIView*` (iOS) or `ANativeWindow*` (Android) for the engine's lifetime.
 #[cfg(any(target_os = "ios", target_os = "android"))]
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_init(
+pub unsafe extern "C" fn rsc_engine_init(
     surface_handle: *mut c_void,
     width: u32,
     height: u32,
@@ -70,7 +70,7 @@ pub unsafe extern "C" fn tzr_engine_init(
 /// identical to the real mobile variant above.
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_init(
+pub unsafe extern "C" fn rsc_engine_init(
     _surface_handle: *mut c_void,
     _width: u32,
     _height: u32,
@@ -80,10 +80,10 @@ pub unsafe extern "C" fn tzr_engine_init(
 }
 
 /// # Safety
-/// `engine` must be a live pointer previously returned by `tzr_engine_init`
+/// `engine` must be a live pointer previously returned by `rsc_engine_init`
 /// (or null, which is a no-op).
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_resize(
+pub unsafe extern "C" fn rsc_engine_resize(
     engine: *mut Engine,
     width: u32,
     height: u32,
@@ -99,12 +99,12 @@ pub unsafe extern "C" fn tzr_engine_resize(
 }
 
 /// # Safety
-/// `engine` must be a live pointer from `tzr_engine_init`; `events` must
-/// point to at least `count` valid `TzrInputEvent`s.
+/// `engine` must be a live pointer from `rsc_engine_init`; `events` must
+/// point to at least `count` valid `RscInputEvent`s.
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_input(
+pub unsafe extern "C" fn rsc_engine_input(
     engine: *mut Engine,
-    events: *const TzrInputEventFfi,
+    events: *const RscInputEventFfi,
     count: usize,
 ) {
     if engine.is_null() || events.is_null() { return; }
@@ -113,31 +113,31 @@ pub unsafe extern "C" fn tzr_engine_input(
 }
 
 /// # Safety
-/// `engine` must be a live pointer from `tzr_engine_init` (or null).
+/// `engine` must be a live pointer from `rsc_engine_init` (or null).
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_frame(engine: *mut Engine) {
+pub unsafe extern "C" fn rsc_engine_frame(engine: *mut Engine) {
     if engine.is_null() { return; }
     unsafe { (*engine).frame() };
 }
 
 /// # Safety
-/// `engine` must be a pointer previously returned by `tzr_engine_init` and
+/// `engine` must be a pointer previously returned by `rsc_engine_init` and
 /// not yet passed to this function; it must not be used again afterward.
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_shutdown(engine: *mut Engine) {
+pub unsafe extern "C" fn rsc_engine_shutdown(engine: *mut Engine) {
     if engine.is_null() { return; }
     drop(unsafe { Box::from_raw(engine) });
 }
 
 // -- Platform capabilities (D106 Phase 24 Step 5) ----------------------------
-// Engine-independent by design — see tzr_engine.h's doc comment on these two.
+// Engine-independent by design — see rsc_engine.h's doc comment on these two.
 
 #[no_mangle]
-pub extern "C" fn tzr_camera_permission_take_request() -> u8 {
+pub extern "C" fn rsc_camera_permission_take_request() -> u8 {
     rosace_ffi::take_camera_request() as u8
 }
 
 #[no_mangle]
-pub extern "C" fn tzr_camera_permission_report_result(granted: u8) {
+pub extern "C" fn rsc_camera_permission_report_result(granted: u8) {
     rosace_ffi::report_camera_result(granted != 0);
 }

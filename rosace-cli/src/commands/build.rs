@@ -199,7 +199,7 @@ fn build_web() -> Result<(), String> {
         println!("  Extracting semantic tree for SEO/crawlers...");
         match run_seo_extract() {
             Ok((shadow_dom, text)) => {
-                html = html.replacen("<!--TZR_SEO_SHADOW_DOM-->", &shadow_dom, 1);
+                html = html.replacen("<!--RSC_SEO_SHADOW_DOM-->", &shadow_dom, 1);
                 std::fs::write("dist/llms.txt", &text)
                     .map_err(|e| format!("failed to write dist/llms.txt: {}", e))?;
                 println!("  Wrote dist/llms.txt");
@@ -300,7 +300,7 @@ fn generate_index_html(crate_name: &str) -> String {
        shadowrootmode="open"> block by build_web() when
        examples/seo_extract.rs exists — crawlable text/structure baked
        into the raw HTML response, present whether or not JS runs. -->
-  <div id="rsc-seo"><!--TZR_SEO_SHADOW_DOM--></div>
+  <div id="rsc-seo"><!--RSC_SEO_SHADOW_DOM--></div>
   <canvas id="rosace-canvas"></canvas>
   <script type="module">
     // If wasm-bindgen output exists, use it; otherwise load raw wasm.

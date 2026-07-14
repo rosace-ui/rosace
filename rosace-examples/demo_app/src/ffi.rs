@@ -1,7 +1,7 @@
 //! Native-host FFI glue (D106 Phase 24) — exports the ABI
 //! `ios/App/EngineViewController.swift` and `android/.../MainActivity.kt`
 //! call into. iOS uses the plain C ABI in `rosace-ffi`'s
-//! `include/tzr_engine.h` (pattern: `rosace-ffi/examples/ios_stub.rs`).
+//! `include/rsc_engine.h` (pattern: `rosace-ffi/examples/ios_stub.rs`).
 //! Android uses JNI instead — Kotlin's `external fun` resolves to a symbol
 //! literally named `Java_<package>_<Class>_<method>` (JNI's mangling: `.` ->
 //! `_`, a literal `_` -> `_1` — see `jni_class_prefix` in
@@ -15,7 +15,7 @@ use std::ptr::NonNull;
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use rosace::prelude::*;
-use rosace_ffi::{Engine, TzrInputEventFfi};
+use rosace_ffi::{Engine, RscInputEventFfi};
 #[cfg(target_os = "ios")]
 use rosace_ffi::RawSurface;
 #[cfg(target_os = "android")]
@@ -31,7 +31,7 @@ use crate::app::AppRoot;
 /// `UIView*` for the engine's lifetime.
 #[cfg(target_os = "ios")]
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_init(
+pub unsafe extern "C" fn rsc_engine_init(
     surface_handle: *mut c_void,
     width: u32,
     height: u32,
@@ -48,7 +48,7 @@ pub unsafe extern "C" fn tzr_engine_init(
 
 #[cfg(not(target_os = "ios"))]
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_init(
+pub unsafe extern "C" fn rsc_engine_init(
     _surface_handle: *mut c_void,
     _width: u32,
     _height: u32,
@@ -58,10 +58,10 @@ pub unsafe extern "C" fn tzr_engine_init(
 }
 
 /// # Safety
-/// `engine` must be a live pointer previously returned by `tzr_engine_init`
+/// `engine` must be a live pointer previously returned by `rsc_engine_init`
 /// (or null, which is a no-op).
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_resize(
+pub unsafe extern "C" fn rsc_engine_resize(
     engine: *mut Engine,
     width: u32,
     height: u32,
@@ -77,12 +77,12 @@ pub unsafe extern "C" fn tzr_engine_resize(
 }
 
 /// # Safety
-/// `engine` must be a live pointer from `tzr_engine_init`; `events` must
-/// point to at least `count` valid `TzrInputEvent`s.
+/// `engine` must be a live pointer from `rsc_engine_init`; `events` must
+/// point to at least `count` valid `RscInputEvent`s.
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_input(
+pub unsafe extern "C" fn rsc_engine_input(
     engine: *mut Engine,
-    events: *const TzrInputEventFfi,
+    events: *const RscInputEventFfi,
     count: usize,
 ) {
     if engine.is_null() || events.is_null() { return; }
@@ -91,18 +91,18 @@ pub unsafe extern "C" fn tzr_engine_input(
 }
 
 /// # Safety
-/// `engine` must be a live pointer from `tzr_engine_init` (or null).
+/// `engine` must be a live pointer from `rsc_engine_init` (or null).
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_frame(engine: *mut Engine) {
+pub unsafe extern "C" fn rsc_engine_frame(engine: *mut Engine) {
     if engine.is_null() { return; }
     unsafe { (*engine).frame() };
 }
 
 /// # Safety
-/// `engine` must be a pointer previously returned by `tzr_engine_init` and
+/// `engine` must be a pointer previously returned by `rsc_engine_init` and
 /// not yet passed to this function; it must not be used again afterward.
 #[no_mangle]
-pub unsafe extern "C" fn tzr_engine_shutdown(engine: *mut Engine) {
+pub unsafe extern "C" fn rsc_engine_shutdown(engine: *mut Engine) {
     if engine.is_null() { return; }
     drop(unsafe { Box::from_raw(engine) });
 }
@@ -165,7 +165,7 @@ pub extern "system" fn Java_dev_rosace_demo_1app_MainActivity_nativeResize(
 }
 
 /// One touch/pointer event per call — `kind` is `0` = move, `1` = down,
-/// `2` = up (matching `rosace_ffi`'s `TZR_EVENT_MOUSE_*` constants); a
+/// `2` = up (matching `rosace_ffi`'s `RSC_EVENT_MOUSE_*` constants); a
 /// touch is always reported as the left button, mirroring how the existing
 /// winit `Touch` handling already treats touch input (see `rosace-ffi`'s
 /// `event.rs` module doc).
@@ -181,7 +181,7 @@ pub extern "system" fn Java_dev_rosace_demo_1app_MainActivity_nativeTouch(
 ) {
     if handle == 0 { return; }
     let ptr = handle as *mut AndroidEngine;
-    let event = TzrInputEventFfi {
+    let event = RscInputEventFfi {
         kind: kind as u32, x, y, button: 0, key: 0, character: 0,
         width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
     };

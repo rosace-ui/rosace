@@ -1402,6 +1402,18 @@ Also export a per-route `llms.txt`/plain-text summary from the same semantic tre
 
 ---
 
+### D120 — The C ABI drops the Tezzera-era `tzr` prefix for `rsc` (user-decided 2026-07-14, mid-Phase-29)
+
+**Status**: LANDED 2026-07-14.
+**Decision**: Every FFI-boundary name renames `tzr` → `rsc` in all three casings: `tzr_engine_*` symbols → `rsc_engine_*`, `TZR_EVENT_*`/`TZR_KEY_*`/`TZR_KEYBOARD_*`/`TZR_BUTTON_*` constants → `RSC_*`, `TzrEngine`/`TzrInputEvent`/`TzrInputEventFfi` types → `Rsc*`, and `include/tzr_engine.h` → `include/rsc_engine.h`. Internal stragglers (`read_tzr_toml_bundle_id`, cli test temp-dir prefixes) rename too — no mixed prefix survives outside historical decision text.
+**Reason**: The user asked "are we still using tzr instead of rsc?" during Phase 29 Step 1 — audit confirmed the entire C ABI still carried the old Tezzera prefix with NO decision backing it (nothing in NAMING.md/DECISIONS.md — legacy, not choice), while the CLI (`rsc`), config (`rsc.toml`), and crates (`rosace-*`) had all moved on. Renamed NOW because it's the cheapest it will ever be: pre-1.0, every native host is an `rsc new`-generated template (regenerate to migrate), and each new capability (the lifecycle events landed the same day) would otherwise bake more `TZR_` into app-side Swift/Kotlin.
+**Migration**: previously scaffolded apps regenerate their host projects with `rsc new` (or hand-rename the same three casings). No compat aliases kept — pre-1.0, sole consumer is the generated templates.
+**Historical text is NOT rewritten**: decision entries D106–D119 and phase docs keep their `TZR_*` references — they accurately describe what landed at the time; this entry is the rename record.
+**Affects**: `rosace-ffi` (header + all symbol/type/constant names), `rosace-cli` (generated Swift/Kotlin/Rust templates, internal fn names), `rosace-examples` (demo_app ffi, stubs), doc comments across `rosace-core`/`rosace-platform`/`rosace`.
+**Relates to**: D106 (the FFI bridge being renamed), D110 (the phase this interrupted — its lifecycle constants shipped under `RSC_` from the first commit that reaches a generated app).
+
+---
+
 ## DEFERRED DECISIONS
 
 ```
