@@ -13,3 +13,4 @@ rosace-layout = { path = "../rosace-layout" }
 rosace-macros = { path = "../rosace-macros" }
 tiny-skia      = "0.11"
 fontdue        = "0.8"
+ttf-parser     = "0.20"

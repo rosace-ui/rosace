@@ -125,8 +125,82 @@ impl FontCache {
         None
     }
 
+    /// Score how well `name` (a face's full/typographic name) matches the
+    /// weight we're looking for. Higher is better; `None` means "not a
+    /// candidate at all" for this weight.
+    ///
+    /// This exists because `.ttc` collections (how macOS ships every UI
+    /// family — Avenir Next, Helvetica Neue, ...) do NOT put the Regular
+    /// face at index 0. `fontdue::Font::from_bytes` defaults to index 0,
+    /// so naively loading a `.ttc` silently picks WHATEVER face happens to
+    /// be first — on Avenir Next.ttc that's actually "Avenir Next Bold".
+    /// Loading that as "regular" and then falling back to an unrelated
+    /// Arial Bold for "bold" produces two different type families where
+    /// the nominal "bold" face is visually THINNER than the nominal
+    /// "regular" one — bold becomes visually indistinguishable (or
+    /// reversed) from regular. Real fix: read the name table and pick the
+    /// actual matching face for each weight, from the same family when
+    /// possible.
+    fn weight_score(name: &str, want_bold: bool) -> Option<i32> {
+        let n = name.to_ascii_lowercase();
+        if n.contains("italic") || n.contains("oblique") {
+            return None;
+        }
+        if want_bold {
+            if n.ends_with("bold") && !n.contains("semi") && !n.contains("demi")
+                && !n.contains("ultra") && !n.contains("extra")
+            {
+                return Some(3);
+            }
+            if n.contains("bold") { return Some(2); }
+            if n.contains("heavy") || n.contains("black") { return Some(1); }
+            None
+        } else {
+            if n.ends_with("regular") || n == "regular" { return Some(3); }
+            if !n.contains("bold") && !n.contains("black") && !n.contains("heavy")
+                && !n.contains("light") && !n.contains("thin") && !n.contains("medium")
+                && !n.contains("demi") && !n.contains("semi") && !n.contains("condensed")
+                && !n.contains("narrow") && !n.contains("ultra") && !n.contains("extra")
+            {
+                return Some(2);
+            }
+            Some(0)
+        }
+    }
+
+    fn face_name(bytes: &[u8], index: u32) -> Option<String> {
+        let face = ttf_parser::Face::parse(bytes, index).ok()?;
+        face.names().into_iter()
+            .find(|n| n.name_id == 4 && n.is_unicode())
+            .and_then(|n| n.to_string())
+    }
+
+    /// Pick the best-matching face index in `bytes` for `want_bold`, or
+    /// `None` if it isn't a (usable) collection / no good candidate exists.
+    fn best_face_index(bytes: &[u8], want_bold: bool) -> Option<u32> {
+        let n = ttf_parser::fonts_in_collection(bytes).unwrap_or(1);
+        let mut best: Option<(i32, u32)> = None;
+        for i in 0..n {
+            let Some(name) = Self::face_name(bytes, i) else { continue };
+            let Some(score) = Self::weight_score(&name, want_bold) else { continue };
+            if best.map(|(s, _)| score > s).unwrap_or(true) {
+                best = Some((score, i));
+            }
+        }
+        best.map(|(_, i)| i)
+    }
+
+    fn load_face(bytes: &[u8], index: u32) -> Option<Font> {
+        Font::from_bytes(bytes, FontSettings { collection_index: index, ..FontSettings::default() }).ok()
+    }
+
     /// Load a system proportional / UI font plus (when available) a real
-    /// bold face and the Unicode fallback chain.
+    /// bold face and the Unicode fallback chain. Prefers a same-family
+    /// bold face found inside the regular candidate's own file (see
+    /// [`Self::weight_score`]); only falls back to the unrelated
+    /// `BOLD_PATHS` standalone files when the chosen family has no bold
+    /// member of its own (e.g. plain `Arial.ttf`, which IS the regular
+    /// face and needs the separate `Arial Bold.ttf`).
     pub fn system_ui() -> Option<Self> {
         let candidates = [
             // macOS — clean proportional faces
@@ -142,9 +216,16 @@ impl FontCache {
             "C:\\Windows\\Fonts\\segoeui.ttf",
             "C:\\Windows\\Fonts\\arial.ttf",
         ];
-        let regular = Self::load_first(&candidates)?;
-        let bold = Self::load_first(BOLD_PATHS);
-        Some(Self::build(regular, bold))
+        for path in candidates {
+            let Ok(bytes) = std::fs::read(path) else { continue };
+            let reg_idx = Self::best_face_index(&bytes, false).unwrap_or(0);
+            let Some(regular) = Self::load_face(&bytes, reg_idx) else { continue };
+            let bold = Self::best_face_index(&bytes, true)
+                .and_then(|i| Self::load_face(&bytes, i))
+                .or_else(|| Self::load_first(BOLD_PATHS));
+            return Some(Self::build(regular, bold));
+        }
+        None
     }
 
     /// Load a system monospace font (Menlo, Courier, DejaVu Mono, etc.).
