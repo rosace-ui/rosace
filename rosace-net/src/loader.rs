@@ -1,7 +1,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use crate::client::HttpClient;
 use crate::load_state::LoadState;
-use crate::http::http_get;
 
 /// Result of an image load operation.
 pub type ImageBytes = Vec<u8>;
@@ -18,12 +18,15 @@ pub struct ImageLoader {
     tx: Sender<LoaderMessage>,
     rx: Receiver<LoaderMessage>,
     state: std::collections::HashMap<String, LoadState<ImageBytes>>,
+    /// The D113 general client (dogfooding, not a parallel implementation)
+    /// — one shared connection-pooling agent for every image load.
+    client: HttpClient,
 }
 
 impl ImageLoader {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
-        Self { tx, rx, state: std::collections::HashMap::new() }
+        Self { tx, rx, state: std::collections::HashMap::new(), client: HttpClient::new() }
     }
 
     /// Begin loading a URL (no-op if already loading or loaded).
@@ -35,12 +38,20 @@ impl ImageLoader {
         }
         self.state.insert(url.clone(), LoadState::Loading);
         let tx = self.tx.clone();
+        let client = self.client.clone();
         let url_clone = url.clone();
         thread::spawn(move || {
-            match http_get(&url_clone) {
-                Ok(bytes) => { let _ = tx.send(LoaderMessage::Loaded { url: url_clone, bytes }); }
-                Err(e)    => { let _ = tx.send(LoaderMessage::Failed { url: url_clone, error: e }); }
-            }
+            let msg = match client.get(&url_clone) {
+                Ok(resp) if resp.is_success() => {
+                    LoaderMessage::Loaded { url: url_clone, bytes: resp.body }
+                }
+                Ok(resp) => LoaderMessage::Failed {
+                    url: url_clone,
+                    error: format!("HTTP {}", resp.status),
+                },
+                Err(e) => LoaderMessage::Failed { url: url_clone, error: e },
+            };
+            let _ = tx.send(msg);
         });
     }
 

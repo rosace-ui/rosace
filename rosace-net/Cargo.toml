@@ -9,3 +9,9 @@ repository.workspace = true
 [dependencies]
 rosace-core  = { path = "../rosace-core" }
 rosace-trace = { path = "../rosace-trace" }
+
+# D113/Phase 30: real HTTP with rustls TLS. Target-gated — ureq is
+# std::net-based and rustls/ring don't build on wasm32; the client's wasm
+# stub returns a documented Err instead (see src/client.rs's module doc).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = "2"

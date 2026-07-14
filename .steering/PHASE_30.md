@@ -1,7 +1,7 @@
 # Phase 30 — Real Networking: Sync HTTP/WebSocket, Not Hand-Rolled TLS (D113)
 
-> Status: Scoped, not started.
-> Started: —
+> Status: Step 1 LANDED + live-verified. Steps 2-4 not started.
+> Started: 2026-07-14
 > Completed: —
 > Decision: **D113** — `rosace-net` gains a general HTTP client on
 > `ureq` (sync, `rustls`-based); `rosace-ws` moves from a hand-rolled
@@ -42,6 +42,31 @@ that panics at runtime on web without a documented decision.
 Generalize `rosace-net` beyond image loading: a `HttpClient` (or similar) that does GET/POST/PUT/DELETE with headers/body, still non-blocking via the existing `std::thread`/`mpsc` pattern the crate already uses for image loads — `ureq`'s blocking calls run inside that same background-thread wrapper, no architecture change, just a real HTTP implementation underneath instead of none. `RemoteImage`'s existing loader can be rebuilt on top of this same client (dogfooding, not a parallel implementation).
 
 Exit: a real running app fetches real JSON from a real HTTP endpoint (including HTTPS) and renders it — verified live, not mocked.
+
+**Landed 2026-07-14.** `rosace-net/src/client.rs`: `HttpClient` (Clone —
+shared connection-pooling `ureq::Agent`, 30s timeout) with blocking
+`get/post/put/delete/send` (documented background-thread contract) +
+non-blocking `fetch() -> HttpHandle` (thread + mpsc, `poll()` once per
+frame — the `ImageLoader` shape, and the seam Step 2's `use_query`
+builds on). `HttpRequest` builder (headers/body), `HttpResponse`
+(status/headers/body + `text()`/`is_success()`); non-2xx is a RESPONSE
+(status carried), `Err` is transport-only. `ureq = "2"` target-gated to
+non-wasm. **Wasm story resolved as the named-gap option**: wasm builds
+compile (verified `cargo check --target wasm32-unknown-unknown`), every
+request returns a documented `Err` (no panic — including `fetch`, whose
+wasm variant avoids `std::thread::spawn`, which PANICS at runtime on
+wasm; the browser-`fetch()` backend remains future work, this
+paragraph is the tracking record). The Phase-6 hand-rolled HTTP/1.0
+`http.rs` (the one that rejected https) is DELETED; `ImageLoader::load`
+now runs on the shared client (dogfooding — non-2xx maps to
+`LoadState::Failed("HTTP <code>")`, which the old status-line sniffing
+never did properly). `RemoteImage`'s public API untouched (Migration
+Rule held). Tests: builder/response unit tests, connection-refused
+transport error, plus `https_get_fetches_real_json`
+(`#[ignore = "hits the real network"]`, run explicitly — passed).
+Live exit bar: `http_demo` (new example bin) fetched
+`https://httpbin.org/json` in a running app — screenshot shows HTTP 200
++ the rendered JSON body.
 
 ### Step 2 — `use_query` hook
 The `Stream<T>`-bridge shape D012 decided: `use_query(url) -> QueryState<T>` (Idle/Loading/Loaded(T)/Failed) built on Step 1's client, auto-cleanup on unmount (D012's stated rule — "all connections auto-cleaned").
