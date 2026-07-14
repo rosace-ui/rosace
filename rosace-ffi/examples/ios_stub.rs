@@ -141,3 +141,45 @@ pub extern "C" fn rsc_camera_permission_take_request() -> u8 {
 pub extern "C" fn rsc_camera_permission_report_result(granted: u8) {
     rosace_ffi::report_camera_result(granted != 0);
 }
+
+// -- Push notifications (D110 Phase 29 Step 2) — same shape as camera, plus
+// a token report and a foreground-delivery report (both C strings).
+
+#[no_mangle]
+pub extern "C" fn rsc_push_permission_take_request() -> u8 {
+    rosace_ffi::take_push_request() as u8
+}
+
+#[no_mangle]
+pub extern "C" fn rsc_push_permission_report_result(granted: u8) {
+    rosace_ffi::report_push_result(granted != 0);
+}
+
+/// # Safety
+/// `token` must be a valid NUL-terminated C string (UTF-8 expected; other
+/// bytes are replaced, never UB) or null (a no-op).
+#[no_mangle]
+pub unsafe extern "C" fn rsc_push_report_token(token: *const std::os::raw::c_char) {
+    if token.is_null() { return; }
+    let token = unsafe { std::ffi::CStr::from_ptr(token) }.to_string_lossy().into_owned();
+    rosace_ffi::report_push_token(token);
+}
+
+/// # Safety
+/// Each argument must be a valid NUL-terminated C string or null (null
+/// reads as the empty string; the call still delivers).
+#[no_mangle]
+pub unsafe extern "C" fn rsc_push_report_notification(
+    title: *const std::os::raw::c_char,
+    body: *const std::os::raw::c_char,
+    payload_json: *const std::os::raw::c_char,
+) {
+    let read = |p: *const std::os::raw::c_char| -> String {
+        if p.is_null() {
+            String::new()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        }
+    };
+    rosace_ffi::report_push_notification(read(title), read(body), read(payload_json));
+}

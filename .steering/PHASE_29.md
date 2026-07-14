@@ -1,8 +1,12 @@
 # Phase 29 — App Lifecycle + Push Notifications (D110)
 
-> Status: Step 1 LANDED + live-verified. Step 2 (push) not started.
+> Status: BOTH STEPS LANDED + live-verified on the iOS Simulator.
+> Named account-blocked deferrals on Step 2: real APNs token/network
+> push (needs the Apple Developer team) and Android FCM (needs a
+> Firebase project) — see Step 2's landed note. Android lifecycle
+> (Step 1's other half) awaits an emulator session.
 > Started: 2026-07-14
-> Completed: —
+> Completed: 2026-07-14 (with the named deferrals above)
 > Decision: **D110** — wire real app lifecycle state (resume/pause/
 > background/suspend) and push-notification registration/delivery across
 > the existing D106 native-host FFI bridge, reusing the exact
@@ -139,6 +143,47 @@ device token, and a real test push notification (sent via APNs/FCM to
 that token) is received and observably handled by Rust app code while the
 app is in the foreground — proven live on-device, same discipline as
 every prior phase's exit bar.
+
+**Landed 2026-07-14.** `capability.rs` gained the second capability in
+the exact camera shape plus two new pieces camera didn't need:
+`PUSH_PERMISSION` (`0xFFF8`), `PUSH_TOKEN` (`0xFFF7`, tokens rotate —
+later reports win), and `PUSH_MESSAGE` (`0xFFF6`) — latest-wins by
+design with a receipt `seq` so two identical payloads still re-render
+subscribers (`request_push_permission`/`take_push_request`/
+`report_push_result`/`report_push_token`/`report_push_notification`).
+C ABI: `rsc_push_permission_take_request/_report_result`,
+`rsc_push_report_token`, `rsc_push_report_notification` (C strings,
+null-safe) — declared in `rsc_engine.h`, exported by `ios_stub.rs` and
+the generated per-app `ffi.rs`. iOS template: `AppDelegate` is now the
+`UNUserNotificationCenterDelegate` (set in `didFinishLaunching`, before
+any notification can arrive) reporting foreground `willPresent`
+deliveries + `didRegisterForRemoteNotificationsWithDeviceToken` (hex
+token) / graceful `didFail` logging; `EngineViewController.tick()` polls
+`take_request` once per frame and drives the real
+`UNUserNotificationCenter.requestAuthorization` →
+`registerForRemoteNotifications` on grant.
+
+**Live verification 2026-07-14, iOS Simulator, fresh `rsc new push_proof`
+scaffold (zero hand-patching)**: the REAL OS permission dialog appeared
+(request path: Rust queue → frame-tick poll → `requestAuthorization`);
+the user's Allow tap flowed back to `PUSH_PERMISSION` and the widget
+re-rendered "GRANTED"; a payload with custom keys delivered via
+`xcrun simctl push` (the OS's real notification-daemon delivery path)
+landed through `willPresent` → `rsc_push_report_notification` →
+`PUSH_MESSAGE`, and the widget rendered title/body/full payload JSON.
+APNs registration was exercised and failed GRACEFULLY as designed (no
+signing team/`aps-environment` entitlement on the simulator) — the token
+atom stays `None`, the UI says so, nothing crashes.
+
+**Named deferrals (account-blocked, not silently dropped)**: (1) a real
+APNs device token + a push over the actual APNs network — needs the
+user's Apple Developer team (signing + APNs key); the `simctl push` hop
+covers everything after the network. (2) Android push entirely — FCM
+requires a real Firebase project (`google-services.json`, gradle
+plugin); templating that blind with nothing to verify against violates
+the D106 device-session discipline, so the Android host template gains
+push wiring in the session that has a Firebase project to test with.
+Both fold into the next real device/account session.
 
 ## Sequencing
 

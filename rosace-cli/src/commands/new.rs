@@ -1382,14 +1382,28 @@ const IOS_APP_DELEGATE_SWIFT: &str = r#"//! Owns the app lifecycle — our own A
 //! tasks).
 
 import UIKit
+import UserNotifications
+
+// Push-notification FFI (D110 Phase 29 Step 2) — the app's own staticlib
+// exports these (src/ffi.rs); same @_silgen_name mechanism as the engine
+// calls in EngineViewController.swift.
+@_silgen_name("rsc_push_report_token")
+private func rsc_push_report_token(_ token: UnsafePointer<CChar>?)
+@_silgen_name("rsc_push_report_notification")
+private func rsc_push_report_notification(
+    _ title: UnsafePointer<CChar>?, _ body: UnsafePointer<CChar>?, _ payload: UnsafePointer<CChar>?
+)
 
 @main
-final class AppDelegate: UIResponder, UIApplicationDelegate {
+final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
-        true
+        // Foreground-delivery hook — must be set before any notification
+        // can arrive, so it lives here, not behind the permission request.
+        UNUserNotificationCenter.current().delegate = self
+        return true
     }
 
     func application(
@@ -1400,6 +1414,49 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let config = UISceneConfiguration(name: "Default", sessionRole: connectingSceneSession.role)
         config.delegateClass = SceneDelegate.self
         return config
+    }
+
+    // MARK: Push registration outcome (D110 Phase 29 Step 2)
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        token.withCString { rsc_push_report_token($0) }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        // A legitimate outcome (no aps-environment entitlement, Simulator
+        // without a signing team, no network) — the permission result was
+        // already reported; the token atom simply stays unset.
+        NSLog("rosace push: APNs registration failed: \(error.localizedDescription)")
+    }
+
+    // MARK: Foreground delivery (D110 Phase 29 Step 2)
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        let content = notification.request.content
+        var payload = "{}"
+        if let userInfo = content.userInfo as? [String: Any],
+           JSONSerialization.isValidJSONObject(userInfo),
+           let data = try? JSONSerialization.data(withJSONObject: userInfo),
+           let s = String(data: data, encoding: .utf8) {
+            payload = s
+        }
+        content.title.withCString { t in
+            content.body.withCString { b in
+                payload.withCString { p in rsc_push_report_notification(t, b, p) }
+            }
+        }
+        completionHandler([.banner, .sound])
     }
 }
 "#;
@@ -1427,6 +1484,7 @@ const IOS_ENGINE_VIEW_CONTROLLER_SWIFT: &str = r#"//! Drives the ROSACE engine t
 
 import UIKit
 import QuartzCore
+import UserNotifications
 
 // MARK: - FFI declarations (mirrors rosace-ffi/include/rsc_engine.h;
 // no bridging header needed — matches the pattern proven in
@@ -1473,6 +1531,12 @@ func rsc_engine_frame(_ engine: RscEngine?)
 
 @_silgen_name("rsc_engine_shutdown")
 func rsc_engine_shutdown(_ engine: RscEngine?)
+
+@_silgen_name("rsc_push_permission_take_request")
+func rsc_push_permission_take_request() -> UInt8
+
+@_silgen_name("rsc_push_permission_report_result")
+func rsc_push_permission_report_result(_ granted: UInt8)
 
 // MARK: - View
 
@@ -1568,6 +1632,28 @@ final class EngineViewController: UIViewController {
     @objc private func tick() {
         guard let engine else { return }
         rsc_engine_frame(engine)
+
+        // Capability polling (D110 Phase 29 Step 2) — the same
+        // once-per-frame-tick shape rsc_engine.h documents for camera.
+        if rsc_push_permission_take_request() != 0 {
+            requestPushPermission()
+        }
+    }
+
+    /// Real OS permission prompt + APNs registration. The result flows back
+    /// through `rsc_push_permission_report_result`; a device token (if
+    /// registration succeeds — it can legitimately fail without an
+    /// aps-environment entitlement) arrives via AppDelegate's
+    /// `didRegisterForRemoteNotificationsWithDeviceToken`.
+    private func requestPushPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
+            rsc_push_permission_report_result(granted ? 1 : 0)
+            if granted {
+                DispatchQueue.main.async {
+                    UIApplication.shared.registerForRemoteNotifications()
+                }
+            }
+        }
     }
 
     // MARK: Touch -> MouseDown/MouseMove/MouseUp (same convention the
@@ -2096,6 +2182,48 @@ pub unsafe extern "C" fn rsc_engine_frame(engine: *mut Engine) {
 pub unsafe extern "C" fn rsc_engine_shutdown(engine: *mut Engine) {
     if engine.is_null() { return; }
     drop(unsafe { Box::from_raw(engine) });
+}
+
+// -- Push notifications (D110 Phase 29 Step 2) --------------------------------
+// Engine-independent, same as the camera capability (see rsc_engine.h's doc)
+// — the host polls take_request once per frame tick and reports back.
+
+#[no_mangle]
+pub extern "C" fn rsc_push_permission_take_request() -> u8 {
+    rosace_ffi::take_push_request() as u8
+}
+
+#[no_mangle]
+pub extern "C" fn rsc_push_permission_report_result(granted: u8) {
+    rosace_ffi::report_push_result(granted != 0);
+}
+
+/// # Safety
+/// `token` must be a valid NUL-terminated C string or null (a no-op).
+#[no_mangle]
+pub unsafe extern "C" fn rsc_push_report_token(token: *const std::os::raw::c_char) {
+    if token.is_null() { return; }
+    let token = unsafe { std::ffi::CStr::from_ptr(token) }.to_string_lossy().into_owned();
+    rosace_ffi::report_push_token(token);
+}
+
+/// # Safety
+/// Each argument must be a valid NUL-terminated C string or null (null
+/// reads as the empty string; the call still delivers).
+#[no_mangle]
+pub unsafe extern "C" fn rsc_push_report_notification(
+    title: *const std::os::raw::c_char,
+    body: *const std::os::raw::c_char,
+    payload_json: *const std::os::raw::c_char,
+) {
+    let read = |p: *const std::os::raw::c_char| -> String {
+        if p.is_null() {
+            String::new()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        }
+    };
+    rosace_ffi::report_push_notification(read(title), read(body), read(payload_json));
 }
 
 // -- Android: JNI -------------------------------------------------------------

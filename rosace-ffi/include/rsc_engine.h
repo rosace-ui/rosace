@@ -141,6 +141,35 @@ uint8_t rsc_camera_permission_take_request(void);
  * `rosace_ffi::CAMERA_PERMISSION` atom, which notifies subscribed widgets. */
 void rsc_camera_permission_report_result(uint8_t granted);
 
+/* -- Push notifications (D110 Phase 29 Step 2) ------------------------------
+ * Same three-piece shape as camera, plus a device-token report and a
+ * foreground-delivery report. Host usage (see a generated app's
+ * EngineViewController.swift):
+ *   - Poll `rsc_push_permission_take_request()` once per frame tick. If
+ *     true: UNUserNotificationCenter.requestAuthorization (iOS) /
+ *     POST_NOTIFICATIONS (Android 13+), then report the result; on grant,
+ *     register for remote notifications.
+ *   - Registration success → `rsc_push_report_token` (APNs hex / FCM token).
+ *     Tokens rotate — report every time the OS hands you one.
+ *   - A notification arriving while FOREGROUNDED (willPresent /
+ *     onMessageReceived) → `rsc_push_report_notification`. Background and
+ *     silent push are out of Phase 29's scope.
+ */
+
+/* True at most once per Rust-side `request_push_permission()` call. */
+uint8_t rsc_push_permission_take_request(void);
+
+/* Updates the `rosace_ffi::PUSH_PERMISSION` atom. */
+void rsc_push_permission_report_result(uint8_t granted);
+
+/* NUL-terminated UTF-8; updates the `rosace_ffi::PUSH_TOKEN` atom. */
+void rsc_push_report_token(const char *token);
+
+/* All three NUL-terminated UTF-8 (null reads as empty); updates the
+ * `rosace_ffi::PUSH_MESSAGE` atom with a receipt-ordered `seq`. */
+void rsc_push_report_notification(const char *title, const char *body,
+                                  const char *payload_json);
+
 #ifdef __cplusplus
 }
 #endif
