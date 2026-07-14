@@ -1,6 +1,6 @@
 # Phase 30 — Real Networking: Sync HTTP/WebSocket, Not Hand-Rolled TLS (D113)
 
-> Status: Step 1 LANDED + live-verified. Steps 2-4 not started.
+> Status: Steps 1-2 LANDED + live-verified. Steps 3-4 not started.
 > Started: 2026-07-14
 > Completed: —
 > Decision: **D113** — `rosace-net` gains a general HTTP client on
@@ -72,6 +72,29 @@ Live exit bar: `http_demo` (new example bin) fetched
 The `Stream<T>`-bridge shape D012 decided: `use_query(url) -> QueryState<T>` (Idle/Loading/Loaded(T)/Failed) built on Step 1's client, auto-cleanup on unmount (D012's stated rule — "all connections auto-cleaned").
 
 Exit: a real running app's screen shows a loading state, then real fetched data, and the request is provably cancelled/cleaned up when the screen is popped (not just "looks fine") — verified via a real test that checks the connection/thread is actually gone, not just that the UI stopped rendering it.
+
+**Landed 2026-07-14.** `rosace-net/src/query.rs`: `use_query(ctx, url) ->
+QueryState` (D012's Idle/Loading/Loaded/Failed; `Loaded` carries the
+whole `HttpResponse` — non-2xx is Loaded-with-status, `Failed` is
+transport-only, matching Step 1's client semantics). NO per-frame
+polling: the worker thread writes the state atom directly on completion
+(`Atom::set` cross-thread marks the subscribed component dirty — the
+app-lifecycle watcher pattern), so clean frames stay clean mid-flight.
+Auto-cleanup (D012's rule) via a shared `alive: Arc<AtomicBool>` flipped
+by `on_unmount`: the worker checks it (AND that the component still
+wants this URL — a changed URL can't be overwritten by a stale slow
+response) before writing, then terminates, dropping its connection.
+Disclosed limit: sync `ureq` can't abort a blocking read mid-flight, so
+an in-flight request runs to completion or the 30s timeout before the
+thread exits — bounded, never leaked. Exit bar's hard half proven by
+`unmount_discards_a_late_response_and_the_connection_is_actually_gone`:
+a local hold-the-response server, unmount fires (`cleanup_store::
+fire_and_clear`), THEN the server responds — the test asserts the
+worker's connection actually closes (server reads EOF) and the state
+atom was never written. Live half: `http_demo` rewritten onto
+`use_query` (dogfood), screenshot shows loading→HTTP 200 + rendered
+JSON over HTTPS. wasm: `use_query` short-circuits to `Failed(named-gap
+message)` without spawning (`std::thread::spawn` panics on wasm).
 
 ### Step 3 — `tungstenite`-backed `rosace-ws` + `use_websocket` hook
 Swap the hand-rolled handshake for `tungstenite` (sync crate, no tokio). `use_websocket(url) -> WsState` hook on top, matching `use_query`'s shape.

@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 rosace-core  = { path = "../rosace-core" }
+rosace-state = { path = "../rosace-state" }
 rosace-trace = { path = "../rosace-trace" }
 
 # D113/Phase 30: real HTTP with rustls TLS. Target-gated — ureq is

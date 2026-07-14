@@ -47,7 +47,7 @@ impl HttpMethod {
 /// layer — the request reached the server and got an answer; `status`
 /// carries it. `Err` is reserved for transport failures (DNS, TLS,
 /// timeout, connection refused).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HttpResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,

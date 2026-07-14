@@ -2264,6 +2264,7 @@ name = "rosace-net"
 version = "0.1.0"
 dependencies = [
  "rosace-core",
+ "rosace-state",
  "rosace-trace",
  "ureq",
 ]

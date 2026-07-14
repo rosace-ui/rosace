@@ -26,9 +26,11 @@
 pub mod client;
 pub mod load_state;
 pub mod loader;
+pub mod query;
 pub mod remote_image;
 
 pub use client::{HttpClient, HttpHandle, HttpMethod, HttpRequest, HttpResponse};
 pub use load_state::LoadState;
 pub use loader::ImageLoader;
+pub use query::{use_query, QueryState};
 pub use remote_image::{RemoteImage, RemoteImageFit};
