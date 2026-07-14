@@ -19,6 +19,15 @@ pub const TZR_EVENT_KEY_UP: u32 = 4;
 pub const TZR_EVENT_TEXT: u32 = 5;
 pub const TZR_EVENT_WINDOW_RESIZED: u32 = 6;
 pub const TZR_EVENT_SCROLL: u32 = 7;
+/// App-lifecycle transitions (D042/D110, Phase 29 Step 1). Four distinct
+/// kinds rather than one kind + a state field — matches this struct's
+/// flat-tag convention (no field is semantically overloaded per kind).
+/// iOS sends them from `UIApplication` notification observers, Android
+/// from `onResume`/`onPause`/`onStop`; all other fields are ignored.
+pub const TZR_EVENT_LIFECYCLE_ACTIVE: u32 = 8;
+pub const TZR_EVENT_LIFECYCLE_INACTIVE: u32 = 9;
+pub const TZR_EVENT_LIFECYCLE_BACKGROUND: u32 = 10;
+pub const TZR_EVENT_LIFECYCLE_SUSPENDED: u32 = 11;
 
 /// `button` values (`MouseDown`/`MouseUp`).
 // `TZR_BUTTON_LEFT` is the `match`'s fallback arm below (0 is also the
@@ -149,6 +158,14 @@ impl From<TzrInputEventFfi> for InputEvent {
             TZR_EVENT_SCROLL => InputEvent::Scroll {
                 x: e.x, y: e.y, delta_x: e.delta_x, delta_y: e.delta_y,
             },
+            TZR_EVENT_LIFECYCLE_ACTIVE =>
+                InputEvent::Lifecycle(rosace_core::LifecycleState::Active),
+            TZR_EVENT_LIFECYCLE_INACTIVE =>
+                InputEvent::Lifecycle(rosace_core::LifecycleState::Inactive),
+            TZR_EVENT_LIFECYCLE_BACKGROUND =>
+                InputEvent::Lifecycle(rosace_core::LifecycleState::Background),
+            TZR_EVENT_LIFECYCLE_SUSPENDED =>
+                InputEvent::Lifecycle(rosace_core::LifecycleState::Suspended),
             _ => InputEvent::MouseMove { x: e.x, y: e.y },
         }
     }
@@ -195,6 +212,28 @@ mod tests {
         match InputEvent::from(ffi) {
             InputEvent::WindowResized { width, height } => assert_eq!((width, height), (390, 844)),
             other => panic!("expected WindowResized, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lifecycle_kinds_map_to_the_matching_lifecycle_state() {
+        for (kind, expected) in [
+            (TZR_EVENT_LIFECYCLE_ACTIVE, rosace_core::LifecycleState::Active),
+            (TZR_EVENT_LIFECYCLE_INACTIVE, rosace_core::LifecycleState::Inactive),
+            (TZR_EVENT_LIFECYCLE_BACKGROUND, rosace_core::LifecycleState::Background),
+            (TZR_EVENT_LIFECYCLE_SUSPENDED, rosace_core::LifecycleState::Suspended),
+        ] {
+            let ffi = TzrInputEventFfi {
+                kind, x: 0.0, y: 0.0, button: 0,
+                key: 0, character: 0, width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
+            };
+            match InputEvent::from(ffi) {
+                InputEvent::Lifecycle(state) => assert_eq!(
+                    state, expected,
+                    "kind {kind} must map to {expected:?}"
+                ),
+                other => panic!("expected Lifecycle, got {other:?}"),
+            }
         }
     }
 

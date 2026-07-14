@@ -1275,6 +1275,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
         safeTop: Float, safeRight: Float, safeBottom: Float, safeLeft: Float,
     )
     private external fun nativeTouch(handle: Long, kind: Int, x: Float, y: Float)
+    private external fun nativeLifecycle(handle: Long, kind: Int)
     private external fun nativeFrame(handle: Long)
     private external fun nativeShutdown(handle: Long)
 
@@ -1295,6 +1296,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
         surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(this)
         setContentView(surfaceView)
+    }}
+
+    // App lifecycle -> TZR_EVENT_LIFECYCLE_* (D110 Phase 29 Step 1);
+    // kinds match tzr_engine.h (8 = active, 9 = inactive, 10 = background).
+    // Android has no reliable pre-kill callback, so SUSPENDED (11) is not
+    // sent — onDestroy is not guaranteed to run. Applied immediately on
+    // the Rust side, so onStop's event lands even though the Choreographer
+    // callback has gone quiet by then.
+    override fun onResume() {{
+        super.onResume()
+        if (engineHandle != 0L) nativeLifecycle(engineHandle, 8)
+    }}
+
+    override fun onPause() {{
+        super.onPause()
+        if (engineHandle != 0L) nativeLifecycle(engineHandle, 9)
+    }}
+
+    override fun onStop() {{
+        super.onStop()
+        if (engineHandle != 0L) nativeLifecycle(engineHandle, 10)
     }}
 
     override fun surfaceCreated(holder: SurfaceHolder) {{
@@ -1429,6 +1451,10 @@ private let TZR_EVENT_MOUSE_MOVE: UInt32 = 0
 private let TZR_EVENT_MOUSE_DOWN: UInt32 = 1
 private let TZR_EVENT_MOUSE_UP: UInt32 = 2
 private let TZR_BUTTON_LEFT: UInt32 = 0
+private let TZR_EVENT_LIFECYCLE_ACTIVE: UInt32 = 8
+private let TZR_EVENT_LIFECYCLE_INACTIVE: UInt32 = 9
+private let TZR_EVENT_LIFECYCLE_BACKGROUND: UInt32 = 10
+private let TZR_EVENT_LIFECYCLE_SUSPENDED: UInt32 = 11
 
 @_silgen_name("tzr_engine_init")
 func tzr_engine_init(_ surfaceHandle: UnsafeMutableRawPointer?, _ width: UInt32, _ height: UInt32, _ scale: Float) -> TzrEngine?
@@ -1493,6 +1519,37 @@ final class EngineViewController: UIViewController {
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .default)
         displayLink = link
+
+        // MARK: App lifecycle -> TZR_EVENT_LIFECYCLE_* (D110 Phase 29
+        // Step 1). UIApplication notifications rather than AppDelegate/
+        // SceneDelegate plumbing — this controller owns the engine handle,
+        // so no cross-object wiring is needed. The Rust side applies these
+        // immediately (not on the next frame): the display link pauses in
+        // background, so a frame-queued Background event would only be
+        // seen on resume.
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(lifecycleActive),
+                       name: UIApplication.didBecomeActiveNotification, object: nil)
+        nc.addObserver(self, selector: #selector(lifecycleInactive),
+                       name: UIApplication.willResignActiveNotification, object: nil)
+        nc.addObserver(self, selector: #selector(lifecycleBackground),
+                       name: UIApplication.didEnterBackgroundNotification, object: nil)
+        nc.addObserver(self, selector: #selector(lifecycleSuspended),
+                       name: UIApplication.willTerminateNotification, object: nil)
+    }
+
+    @objc private func lifecycleActive() { sendLifecycle(TZR_EVENT_LIFECYCLE_ACTIVE) }
+    @objc private func lifecycleInactive() { sendLifecycle(TZR_EVENT_LIFECYCLE_INACTIVE) }
+    @objc private func lifecycleBackground() { sendLifecycle(TZR_EVENT_LIFECYCLE_BACKGROUND) }
+    @objc private func lifecycleSuspended() { sendLifecycle(TZR_EVENT_LIFECYCLE_SUSPENDED) }
+
+    private func sendLifecycle(_ kind: UInt32) {
+        guard let engine else { return }
+        var event = TzrInputEvent(
+            kind: kind, x: 0, y: 0, button: 0,
+            key: 0, character: 0, width: 0, height: 0, delta_x: 0, delta_y: 0
+        )
+        withUnsafePointer(to: &event) { tzr_engine_input(engine, $0, 1) }
     }
 
     override func viewDidLayoutSubviews() {
@@ -2125,6 +2182,28 @@ pub extern "system" fn Java_{jni_prefix}_nativeTouch(
     unsafe {{ (*ptr).engine.input(&[event]) }};
 }}
 
+/// One app-lifecycle transition per call (D110 Phase 29 Step 1) — `kind`
+/// is a `TZR_EVENT_LIFECYCLE_*` constant (8 = active, 9 = inactive,
+/// 10 = background). `Engine::input` applies lifecycle immediately (see
+/// its doc), so calling this from `onStop` — after the Choreographer
+/// callback has gone quiet — still takes effect right away.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeLifecycle(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+    kind: jni::sys::jint,
+) {{
+    if handle == 0 {{ return; }}
+    let ptr = handle as *mut AndroidEngine;
+    let event = TzrInputEventFfi {{
+        kind: kind as u32, x: 0.0, y: 0.0, button: 0, key: 0, character: 0,
+        width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
+    }};
+    unsafe {{ (*ptr).engine.input(&[event]) }};
+}}
+
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_{jni_prefix}_nativeFrame(
@@ -2216,6 +2295,7 @@ mod ffi_codegen_tests {
     fn ffi_rs_embeds_the_derived_jni_prefix() {
         let src = ffi_rs("dev.rosace.myapp");
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeInit"));
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeLifecycle"));
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeFrame"));
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeShutdown"));
     }

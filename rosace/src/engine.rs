@@ -1309,6 +1309,14 @@ impl FrameEngine {
                         }
                     }
                 }
+                // App-lifecycle transition (D042/D110, Phase 29 Step 1) —
+                // sent by a mobile native host over the FFI bridge
+                // (`TZR_EVENT_LIFECYCLE_*`). One write to the global atom;
+                // components subscribed via `use_app_lifecycle` are marked
+                // dirty and re-render on this same frame's rebuild pass.
+                rosace_platform::InputEvent::Lifecycle(state) => {
+                    rosace_core::set_app_lifecycle(*state);
+                }
                 rosace_platform::InputEvent::KeyDown {
                     key: rosace_platform::Key::Char(c)
                 } => {
@@ -2970,6 +2978,60 @@ mod tests {
             engine.paint(&mut canvas, &mut overlay, &[]);
             println!("PROBE frame {i}: {:?}", scroll_offset(&engine));
         }
+    }
+
+    // ── App lifecycle (D042/D110, Phase 29 Step 1) ────────────────────────
+
+    /// Records the lifecycle state seen by each `build()` call, in order —
+    /// so the test can tell a real subscription-driven rebuild apart from
+    /// a rebuild-every-frame false positive.
+    struct LifecycleReader {
+        log: Arc<std::sync::Mutex<Vec<rosace_core::LifecycleState>>>,
+    }
+    impl Component for LifecycleReader {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let state = rosace_core::use_app_lifecycle(ctx);
+            self.log.lock().unwrap().push(state);
+            Element::Empty
+        }
+    }
+
+    #[test]
+    fn a_lifecycle_event_re_renders_a_subscribed_component_with_the_new_state() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        rosace_core::set_app_lifecycle(rosace_core::LifecycleState::Active);
+
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let root = LifecycleReader { log: log.clone() };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(200, 100);
+        let mut overlay = SkiaCanvas::new(200, 100);
+
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![rosace_core::LifecycleState::Active],
+            "first build must see the Active default"
+        );
+
+        // An idle frame must NOT rebuild — otherwise the assertions below
+        // would pass even with the subscription broken.
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert_eq!(log.lock().unwrap().len(), 1, "idle frame must reuse the cached element");
+
+        // The event is dispatched AFTER this frame's build, marking the
+        // subscribed root dirty; the NEXT frame rebuilds with the new state.
+        engine.paint(&mut canvas, &mut overlay, &[
+            rosace_platform::InputEvent::Lifecycle(rosace_core::LifecycleState::Background),
+        ]);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert_eq!(
+            log.lock().unwrap().last().copied(),
+            Some(rosace_core::LifecycleState::Background),
+            "the subscribed component must re-render with the reported state"
+        );
+
+        rosace_core::set_app_lifecycle(rosace_core::LifecycleState::Active); // reset
     }
 
     // ── SpanSource + CursorStyle (D116 Step 5) ────────────────────────────

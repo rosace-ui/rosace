@@ -91,8 +91,24 @@ impl Engine {
 
     /// Queues input events for the next `frame()` call — mirrors how the
     /// winit path batches `WindowEvent`s between `RedrawRequested`s.
+    ///
+    /// Lifecycle transitions (D110 Phase 29 Step 1) additionally apply
+    /// IMMEDIATELY, not just on the next frame: iOS pauses the display
+    /// link once backgrounded (and background Metal work is prohibited),
+    /// so a `Background` event only queued for the next `frame()` would
+    /// first be seen on RESUME — the exact opposite of "pause work while
+    /// backgrounded". The atom write is GPU-free and background-safe; the
+    /// event still queues too, so `FrameEngine`'s dispatch sees the same
+    /// ordered stream on its next frame (re-writing the same value is a
+    /// harmless no-op).
     pub fn input(&mut self, events: &[TzrInputEventFfi]) {
-        self.pending_events.extend(events.iter().map(|&e| e.into()));
+        for &e in events {
+            let event: rosace_platform::InputEvent = e.into();
+            if let rosace_platform::InputEvent::Lifecycle(state) = event {
+                rosace_core::set_app_lifecycle(state);
+            }
+            self.pending_events.push(event);
+        }
     }
 
     /// Runs one frame: build/paint/dispatch (via `FrameEngine`), then

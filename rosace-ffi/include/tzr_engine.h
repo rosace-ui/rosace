@@ -52,6 +52,13 @@ typedef struct {
 #define TZR_EVENT_TEXT           5
 #define TZR_EVENT_WINDOW_RESIZED 6
 #define TZR_EVENT_SCROLL         7
+/* App-lifecycle transitions (D042/D110, Phase 29 Step 1) — send from the
+ * host's real lifecycle callbacks (iOS UIApplication notifications /
+ * Android onResume/onPause/onStop). All other fields are ignored. */
+#define TZR_EVENT_LIFECYCLE_ACTIVE     8
+#define TZR_EVENT_LIFECYCLE_INACTIVE   9
+#define TZR_EVENT_LIFECYCLE_BACKGROUND 10
+#define TZR_EVENT_LIFECYCLE_SUSPENDED  11
 
 /* `button` values (TZR_EVENT_MOUSE_DOWN / TZR_EVENT_MOUSE_UP) */
 #define TZR_BUTTON_LEFT   0

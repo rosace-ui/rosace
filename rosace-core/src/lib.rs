@@ -1,4 +1,5 @@
 pub mod app;
+pub mod app_lifecycle;
 pub mod child_container;
 pub mod component;
 pub mod context;
@@ -15,6 +16,7 @@ pub mod shader;
 pub mod types;
 
 pub use app::App;
+pub use app_lifecycle::{app_lifecycle, set_app_lifecycle, use_app_lifecycle, LifecycleState};
 pub use child_container::ChildContainer;
 pub use component::Component;
 pub use context::Context;
