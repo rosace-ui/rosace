@@ -210,3 +210,16 @@ pub extern "system" fn Java_dev_rosace_demo_1app_MainActivity_nativeShutdown(
     if handle == 0 { return; }
     drop(unsafe { Box::from_raw(handle as *mut AndroidEngine) });
 }
+
+/// NEVER called — winit's android-native-activity backend references this
+/// symbol from its NativeActivity glue (rosace-platform compiles winit for
+/// android so the shared types typecheck; see its Cargo.toml note), and
+/// without a definition the final cdylib carries an undefined symbol that
+/// makes `System.loadLibrary` fail with `UnsatisfiedLinkError` at app
+/// startup. The D106 host drives the app entirely via the JNI functions
+/// above; winit's own Android entry path is deliberately unused.
+#[cfg(target_os = "android")]
+#[no_mangle]
+extern "C" fn android_main(_app: *mut std::ffi::c_void) {
+    unreachable!("NativeActivity entry is unused — the JNI host owns the app (D106)");
+}

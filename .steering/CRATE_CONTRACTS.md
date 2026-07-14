@@ -349,6 +349,33 @@ silently baked into the contracts below, per the project's violation policy
     same Step 6's other mobile deliverable) remains unverified against a
     real device — see `PHASE_28.md` Step 6 for what's real vs. deferred.
 
+16. **Android rendering is broken since the D109 GPU migration — wgpu
+    `Surface::configure` panics `Invalid surface` on the emulator**
+    (found 2026-07-14 while live-verifying Phase 29 Step 1's Android
+    lifecycle half on a fresh Android-34 arm64 emulator). Phase 24's
+    APK verification predates Phase 27/D109 — the Android path has never
+    actually run since the compositor became wgpu-GPU-based. The app
+    launches, `nativeInit` succeeds, then aborts within seconds with
+    `wgpu error: Validation Error / In Surface::configure / Invalid
+    surface` (SIGABRT — a Rust panic crossing the JNI `extern "C"`
+    boundary becomes abort, and the panic text goes to stderr, which
+    Android DROPS: it was only recoverable by installing a
+    panic-to-file hook in `nativeInit`; a permanent
+    logcat/file panic hook in the generated `ffi.rs` is part of the
+    fix's scope). Needs its own debugging session: suspects are the
+    `surfaceChanged`→`nativeResize` reconfigure against the
+    `ANativeWindow`, emulator gfxstream-Vulkan specifics, and
+    swapchain-size/scale mismatches. May behave differently on real
+    hardware. Two REAL fixes already landed from the same session
+    (commit pending): the generated cdylib carried an undefined
+    `android_main` symbol (winit's android-native-activity glue) that
+    made `System.loadLibrary` throw `UnsatisfiedLinkError` on modern
+    NDK/dlopen — fixed with a documented never-called stub in the
+    generated `ffi.rs` + `demo_app`; and `rsc run --target android`
+    requires `ANDROID_HOME`/`local.properties`, which the generated
+    project doesn't write (`rsc new` should emit `local.properties`
+    from the detected SDK path — unfixed, noted here).
+
 **Fixed 2026-07-09, unrelated to #9/#10 above**: `rosace-animate::Spring::
 update` used a single semi-implicit-Euler step per call, unconditionally
 stable only below a step-size threshold — a real wall-clock `dt` near
