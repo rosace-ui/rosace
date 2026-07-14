@@ -64,6 +64,9 @@ pub use tree::Tab;
 pub use tree::TabBar;
 pub use tree::{Text, TextAlign, FontWeight};
 pub use tree::TextInput;
+pub use tree::TextArea;
+pub use tree::{CursorShape, CursorStyle, EditController, InputFilter, Span, SpanFn, TextLayoutSnapshot};
+pub use rosace_forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
 pub use tree::Image;
 pub use tree::Tooltip;
 

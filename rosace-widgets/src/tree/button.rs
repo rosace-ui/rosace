@@ -48,6 +48,13 @@ impl Button {
 
     pub fn variant(mut self, v: ButtonVariant) -> Self { self.variant = v; self }
     pub fn disabled(mut self) -> Self { self.disabled = true; self }
+    /// Conditional form of [`Self::disabled`] (D116 Phase 28 Step 8) — the
+    /// natural way to gate a submit button on `form.is_valid()` without an
+    /// `if`/`else` at every call site: `Button::new("Submit").disabled_if(!form.is_valid())`.
+    pub fn disabled_if(mut self, condition: bool) -> Self {
+        if condition { self.disabled = true; }
+        self
+    }
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
     pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }

@@ -46,6 +46,40 @@ pub const TZR_KEY_META: u32 = 12;
 /// Same reasoning as `TZR_BUTTON_LEFT` above — it's the `match` fallback.
 #[allow(dead_code)]
 pub const TZR_KEY_CHAR: u32 = 13;
+/// Added D116 Phase 28 Step 6 (Known Issue #15) — `rosace_platform::Key`
+/// gained `Delete`/`Home`/`End` in Phase 28 Step 1 for real `TextInput`
+/// keyboard editing, but the FFI mapping was never extended to match,
+/// leaving them unreachable from a mobile host. New constants appended
+/// (not inserted alphabetically) so existing hosts' already-compiled
+/// constant values never shift.
+pub const TZR_KEY_DELETE: u32 = 14;
+pub const TZR_KEY_HOME: u32 = 15;
+pub const TZR_KEY_END: u32 = 16;
+
+/// Keyboard-type hint values (D116 Step 6) — what
+/// [`focused_keyboard_type`] returns, for a native host to poll once per
+/// frame and drive the real `UIKeyboardType`/Android `InputType` (the
+/// native mapping itself is unwritten — same deferred-to-a-real-device
+/// status `TZR_KEY_DELETE`/`_HOME`/`_END` had before this same step).
+pub const TZR_KEYBOARD_DEFAULT: u32 = 0;
+pub const TZR_KEYBOARD_EMAIL: u32 = 1;
+pub const TZR_KEYBOARD_NUMERIC: u32 = 2;
+pub const TZR_KEYBOARD_URL: u32 = 3;
+pub const TZR_KEYBOARD_PHONE: u32 = 4;
+
+/// The currently-focused field's keyboard-type hint, encoded as a
+/// `TZR_KEYBOARD_*` constant — a native host polls this once per frame
+/// tick (same polling shape `take_camera_request` uses) to know which
+/// software keyboard layout to show.
+pub fn focused_keyboard_type() -> u32 {
+    match rosace_core::keyboard_type() {
+        rosace_core::KeyboardType::Default => TZR_KEYBOARD_DEFAULT,
+        rosace_core::KeyboardType::Email => TZR_KEYBOARD_EMAIL,
+        rosace_core::KeyboardType::Numeric => TZR_KEYBOARD_NUMERIC,
+        rosace_core::KeyboardType::Url => TZR_KEYBOARD_URL,
+        rosace_core::KeyboardType::Phone => TZR_KEYBOARD_PHONE,
+    }
+}
 
 /// One input event crossing the FFI boundary. Unused fields for a given
 /// `kind` are ignored. `character` holds a Unicode scalar value (as `u32`)
@@ -88,6 +122,9 @@ fn key_from_ffi(k: u32, character: u32) -> Key {
         TZR_KEY_CONTROL => Key::Control,
         TZR_KEY_ALT => Key::Alt,
         TZR_KEY_META => Key::Meta,
+        TZR_KEY_DELETE => Key::Delete,
+        TZR_KEY_HOME => Key::Home,
+        TZR_KEY_END => Key::End,
         // TZR_KEY_CHAR and any unrecognized value
         _ => Key::Char(char::from_u32(character).unwrap_or('\u{FFFD}')),
     }
@@ -159,6 +196,54 @@ mod tests {
             InputEvent::WindowResized { width, height } => assert_eq!((width, height), (390, 844)),
             other => panic!("expected WindowResized, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn key_down_delete_home_end_round_trip() {
+        // Known Issue #15 (D116 Phase 28 Step 6) — these three were
+        // reachable on desktop since Phase 28 Step 1 but had no FFI
+        // constant at all until now.
+        for (ffi_key, expected) in [
+            (TZR_KEY_DELETE, Key::Delete),
+            (TZR_KEY_HOME, Key::Home),
+            (TZR_KEY_END, Key::End),
+        ] {
+            let ffi = TzrInputEventFfi {
+                kind: TZR_EVENT_KEY_DOWN, x: 0.0, y: 0.0, button: 0,
+                key: ffi_key, character: 0, width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
+            };
+            match InputEvent::from(ffi) {
+                InputEvent::KeyDown { key } => assert_eq!(key, expected, "TZR key {ffi_key} must map to {expected:?}"),
+                other => panic!("expected KeyDown, got {other:?}"),
+            }
+        }
+    }
+
+    /// `focused_keyboard_type` reads a process-global (`GlobalAtom`), and
+    /// tests in one binary run in parallel threads — the two tests below
+    /// must not interleave or the "still at factory default" assertion
+    /// races the mutating test. The mutating test resets the global
+    /// before releasing the lock, so either order passes.
+    static KEYBOARD_TYPE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn focused_keyboard_type_defaults_to_default_when_nothing_set_it() {
+        let _guard = KEYBOARD_TYPE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Nothing else in this process has the lock, so the GlobalAtom is
+        // at its factory default (or reset back to it).
+        assert_eq!(focused_keyboard_type(), TZR_KEYBOARD_DEFAULT);
+    }
+
+    #[test]
+    fn focused_keyboard_type_reflects_rosace_core_state() {
+        let _guard = KEYBOARD_TYPE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        rosace_core::set_keyboard_type(rosace_core::KeyboardType::Email);
+        assert_eq!(focused_keyboard_type(), TZR_KEYBOARD_EMAIL);
+        rosace_core::set_keyboard_type(rosace_core::KeyboardType::Numeric);
+        assert_eq!(focused_keyboard_type(), TZR_KEYBOARD_NUMERIC);
+        // Reset BEFORE the lock releases so the defaults test above can
+        // never observe a leaked value.
+        rosace_core::set_keyboard_type(rosace_core::KeyboardType::Default);
     }
 
     #[test]

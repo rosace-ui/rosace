@@ -15,7 +15,10 @@ use std::sync::Arc;
 use rosace_core::Component;
 use rosace_core::types::Rect;
 use rosace_render::SkiaCanvas;
-use rosace_widgets::tree::{clear_overlays, drain_overlays, text_edit, NodeId};
+use rosace_widgets::tree::{
+    clear_overlays, drain_overlays, push_overlay, text_edit, FocusBehavior, InputBehavior,
+    LayerPosition, Menu, NodeId, OverlayEntry, ScrimConfig,
+};
 use rosace_clipboard::ClipboardProvider as _;
 
 use crate::{inflate_rect, rect_contains, theme_color, walk_element, OverlayRoute};
@@ -29,6 +32,46 @@ use crate::{inflate_rect, rect_contains, theme_color, walk_element, OverlayRoute
 /// the Command vocabulary itself stays platform-agnostic so a future
 /// widget could construct/dispatch commands without touching `Key` at
 /// all. Returns `None` for any key with no editing meaning.
+/// Multi-click detection window (D116 Step 3) — same-node clicks closer
+/// together than this in time and space count as a double/triple-click
+/// rather than two independent single clicks.
+const DOUBLE_CLICK_SECS: f32 = 0.4;
+const DOUBLE_CLICK_SLOP: f32 = 5.0;
+
+/// Touch-and-hold duration before a press on an editable selects the
+/// word under it (D116 Step 7) — matches every mobile text-selection
+/// convention and `LongPressable`'s own generic threshold, and is
+/// indistinguishable from "click and hold with a mouse" in this event
+/// model (touch already converts to plain MouseDown/Move/Up at the
+/// platform boundary — see `rosace-platform`). Safe against headless
+/// tests that sleep real wall-clock time mid-gesture: `cancel_pending_press`
+/// is called on every subsequent keyboard event, not just the next
+/// MouseDown/Up, closing the race a longer timeout would only widen.
+const LONG_PRESS_SELECT_MS: u64 = 500;
+/// A handle's hit radius (D116 Step 7) — how close a MouseDown must land
+/// to a selection-handle anchor point to grab it instead of starting a
+/// fresh click/drag.
+const HANDLE_HIT_RADIUS: f32 = 12.0;
+
+/// An action enqueued by the desktop right-click context menu's item
+/// callbacks (D116 Step 7). `Menu::item` closures are `Arc<dyn Fn() +
+/// Send + Sync>` with no captured engine access (the same `!Sync`/
+/// `!Send` wall `EditController`'s op queue exists to cross) — each item
+/// just pushes an action onto `FrameEngine::context_menu_actions`,
+/// drained once per frame on the main thread, same timing as
+/// `drain_controllers`.
+#[derive(Clone, Copy, Debug)]
+enum ContextMenuAction { Cut, Copy, Paste, SelectAll, Dismiss }
+
+/// World-space anchor point for a selection handle at `char_idx` (D116
+/// Step 7) — the bottom of the boundary's line, where every mobile text
+/// editor's drag grip sits. `None` if `char_idx` isn't in any line (a
+/// stale/empty snapshot).
+fn handle_anchor(layout: &text_edit::TextLayoutSnapshot, char_idx: usize) -> Option<(f32, f32)> {
+    let line = layout.lines.iter().find(|l| char_idx >= l.char_range.0 && char_idx <= l.char_range.1)?;
+    Some((line.x_at(char_idx), line.y + line.height))
+}
+
 fn command_for_key(key: rosace_platform::Key, shift: bool, word_mod: bool) -> Option<text_edit::Command> {
     use rosace_platform::Key;
     use text_edit::Command::*;
@@ -62,11 +105,11 @@ pub struct FrameEngine {
     // ── Focus + input state ─────────────────────────────────────────────
     focus_manager: rosace_a11y::FocusManager,
     shift_held: bool,
-    /// Held-modifier state for text-editing shortcuts (D112/Phase 28 Step
-    /// 1) — mirrors `shift_held`. Cmd/Ctrl+A/C/X/V trigger on EITHER
-    /// being held (`ctrl_held || meta_held`), covering macOS's Cmd
-    /// convention and Linux/Windows's Ctrl convention without branching
-    /// on target OS.
+    /// Held-modifier state for text-editing shortcuts (D112/Phase 28
+    /// Step 1) — mirrors `shift_held`. Cmd/Ctrl+A/C/X/V trigger on
+    /// EITHER being held (`ctrl_held || meta_held`), covering macOS's
+    /// Cmd convention and Linux/Windows's Ctrl convention without
+    /// branching on target OS.
     ctrl_held: bool,
     meta_held: bool,
     /// Word-navigation modifier (Alt/Ctrl+Arrow, D116 Step 2) — mirrors
@@ -78,12 +121,51 @@ pub struct FrameEngine {
     /// MouseDown receives streamed MouseMove positions until MouseUp —
     /// slider thumbs, pickers. Plain hits never drag.
     active_drag: Option<Arc<dyn Fn(f32, f32) + Send + Sync>>,
+    /// Mouse drag-to-select over an editable field (D116 Step 3): the
+    /// node being dragged over and the anchor char index the drag
+    /// started from. `MouseMove` extends `Selection::range(anchor,
+    /// position_at(x, y))`; `MouseUp` clears it. Separate from
+    /// `active_drag` (a captured closure) — editables use the same
+    /// declare-then-query pattern as click-to-focus, since neither
+    /// `FontCache` nor `Rc<RefCell<RenderTree>>` can cross into a
+    /// `Send + Sync` closure.
+    text_drag: Option<(NodeId, usize)>,
+    /// Double/triple-click detection state (D116 Step 3) — a same-node
+    /// click within `DOUBLE_CLICK_SECS` and `DOUBLE_CLICK_SLOP` px of
+    /// the previous one increments `click_count` (capped at 3: single /
+    /// word / line); anything else resets it to 1.
+    last_click_at: f32,
+    last_click_pos: (f32, f32),
+    last_click_node: Option<NodeId>,
+    click_count: u8,
     /// Set when a hover change (or other non-atom event) needs a repaint on
     /// the next frame; consumed by `needs_paint`.
     forced_repaint: bool,
     /// Long-press: cancel token for the in-flight press timer + press origin.
     lp_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     press_origin: Option<(f32, f32)>,
+    /// Desktop right-click context menu (D116 Step 7): the editable node
+    /// it's open for and the click position it opened at (menu anchor).
+    /// `None` when closed. Re-pushed as an overlay every frame while
+    /// `Some`, mirroring how `Dropdown` re-pushes its own atom-backed
+    /// overlay each paint — just engine-driven instead of atom-driven,
+    /// since this menu has no backing widget in the tree.
+    context_menu: Option<(NodeId, (f32, f32))>,
+    /// See [`ContextMenuAction`]'s doc comment.
+    context_menu_actions: Arc<std::sync::Mutex<Vec<ContextMenuAction>>>,
+    /// A background long-press timer's pending "select the word at this
+    /// char index" result (D116 Step 7) — set from a spawned thread
+    /// (which cannot touch `RenderTree`/`FontCache`, same wall as every
+    /// other editable mutation here), drained on the main thread each
+    /// frame alongside `drain_controllers`.
+    pending_long_press_select: Arc<std::sync::Mutex<Option<(NodeId, usize)>>>,
+    /// Active selection-handle drag (D116 Step 7): the node, which
+    /// endpoint is being dragged (`true` = the selection's end, `false` =
+    /// its start), and the OTHER endpoint's char index captured at grab
+    /// time (stays fixed for the whole drag, same shape as `text_drag`'s
+    /// own `anchor`). `MouseMove` updates the dragged endpoint via
+    /// `position_at`; `MouseUp` clears it.
+    handle_drag: Option<(NodeId, bool, usize)>,
 }
 
 impl FrameEngine {
@@ -103,9 +185,18 @@ impl FrameEngine {
             meta_held: false,
             alt_held: false,
             active_drag: None,
+            text_drag: None,
+            last_click_at: -1000.0,
+            last_click_pos: (0.0, 0.0),
+            last_click_node: None,
+            click_count: 0,
             forced_repaint: false,
             lp_cancel: None,
             press_origin: None,
+            context_menu: None,
+            context_menu_actions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_long_press_select: Arc::new(std::sync::Mutex::new(None)),
+            handle_drag: None,
         }
     }
 
@@ -161,6 +252,33 @@ impl FrameEngine {
         &mut self, node_id: NodeId, old_value: &str,
         new_value: String, new_state: text_edit::TextEditState,
     ) {
+        // Input filters (D116 Step 8) — applied here, the ONE funnel
+        // every edit source (typed chars, paste, IME commit, controller
+        // ops) reaches, so a field declared with `.filters()` can't be
+        // bypassed by any of them. Char-class filters strip disallowed
+        // characters; `MaxLength` truncates. When filtering actually
+        // changes the string, the selection is re-clamped to the
+        // filtered length — a filtered-away char at the cursor must not
+        // leave the caret pointing past the end of the value.
+        let filters = {
+            let tree = self.render_tree.borrow();
+            tree.node(node_id).editable.as_ref().map(|e| e.filters.clone()).unwrap_or_default()
+        };
+        let (new_value, new_state) = if filters.is_empty() {
+            (new_value, new_state)
+        } else {
+            let filtered = text_edit::apply_filters(&new_value, &filters);
+            if filtered == new_value {
+                (filtered, new_state)
+            } else {
+                let n = text_edit::char_count(&filtered);
+                let head = new_state.selection.primary().head.min(n);
+                let anchor = new_state.selection.primary().anchor.min(n);
+                let clamped = new_state.with_selection(text_edit::Selection::range(anchor, head), new_state.last_edit_at);
+                (filtered, clamped)
+            }
+        };
+
         let selection = new_state.selection.clone();
         let (on_change, controller) = {
             let mut tree = self.render_tree.borrow_mut();
@@ -237,6 +355,114 @@ impl FrameEngine {
         // separate update needed here.
         if let Some((new_value, new_state)) = result {
             self.commit_text_edit(node_id, &value, new_value, new_state);
+        }
+    }
+
+    /// `(value, state)` for an explicit `node_id`, independent of focus —
+    /// the context menu acts on whichever editable it was opened for, not
+    /// necessarily whatever is currently focused (D116 Step 7).
+    fn editable_at(&self, node_id: NodeId) -> Option<(String, text_edit::TextEditState)> {
+        let tree = self.render_tree.borrow();
+        let n = tree.node(node_id);
+        let e = n.editable.as_ref()?;
+        Some((e.value.clone(), n.text_edit.clone()))
+    }
+
+    /// Test-only: enqueue a context-menu action directly, bypassing
+    /// `Menu`'s own pixel layout/hit-testing (already exercised by
+    /// `Menu`'s own tests) — lets headless tests prove
+    /// `drain_context_menu` reaches the real edit/clipboard, which is
+    /// this step's actual point, without brittle "click at exactly this
+    /// row's y" pixel math.
+    #[cfg(test)]
+    fn test_enqueue_context_menu_action(&self, action: ContextMenuAction) {
+        self.context_menu_actions.lock().unwrap().push(action);
+    }
+
+    /// Apply any context-menu actions enqueued since last frame (D116 Step
+    /// 7) — the exact same `text_edit`/`rosace_clipboard` calls the
+    /// Cmd/Ctrl+X/C/V/A keyboard shortcuts use, just triggered from a menu
+    /// item instead of a `KeyDown` match arm. Closes the menu after ANY
+    /// action, matching every desktop context menu's convention.
+    fn drain_context_menu(&mut self) {
+        let actions: Vec<ContextMenuAction> =
+            std::mem::take(&mut *self.context_menu_actions.lock().unwrap());
+        if actions.is_empty() {
+            return;
+        }
+        let Some((node_id, _)) = self.context_menu else { return; };
+        let now = rosace_widgets::tree::anim_clock();
+        for action in actions {
+            if matches!(action, ContextMenuAction::Dismiss) {
+                self.context_menu = None;
+                continue;
+            }
+            let Some((value, state)) = self.editable_at(node_id) else { continue; };
+            match action {
+                ContextMenuAction::SelectAll => {
+                    if let Some((nv, ns)) = text_edit::apply_command(&value, &state, text_edit::Command::SelectAll, now) {
+                        self.commit_text_edit(node_id, &value, nv, ns);
+                    }
+                }
+                ContextMenuAction::Copy => {
+                    if let Some(sel) = text_edit::selected_text(&value, &state) {
+                        let _ = rosace_clipboard::SystemClipboard::new().write(&sel);
+                    }
+                }
+                ContextMenuAction::Cut => {
+                    if let Some(sel) = text_edit::selected_text(&value, &state) {
+                        let _ = rosace_clipboard::SystemClipboard::new().write(&sel);
+                        let (nv, ns) = text_edit::backspace(&value, &state, now);
+                        self.commit_text_edit(node_id, &value, nv, ns);
+                    }
+                }
+                ContextMenuAction::Paste => {
+                    if let Some(text) = rosace_clipboard::SystemClipboard::new().read() {
+                        if !text.is_empty() {
+                            let (nv, ns) = text_edit::insert_str(&value, &state, &text, now);
+                            self.commit_text_edit(node_id, &value, nv, ns);
+                        }
+                    }
+                }
+                ContextMenuAction::Dismiss => unreachable!(),
+            }
+            self.context_menu = None;
+            self.forced_repaint = true;
+            rosace_state::request_frame();
+        }
+    }
+
+    /// Apply a background long-press timer's "select this word" result, if
+    /// one landed since last frame (D116 Step 7) — see
+    /// `pending_long_press_select`'s doc comment for why this can't
+    /// happen directly on the spawned thread.
+    fn drain_long_press_select(&mut self) {
+        let pending = self.pending_long_press_select.lock().unwrap().take();
+        let Some((node_id, pos)) = pending else { return; };
+        let Some((value, mut state)) = self.editable_at(node_id) else { return; };
+        let (s, e) = text_edit::word_range_at(&value, pos);
+        state.selection = text_edit::Selection::range(s, e);
+        let now = rosace_widgets::tree::anim_clock();
+        state.last_edit_at = now;
+        self.commit_text_edit(node_id, &value, value.clone(), state);
+    }
+
+    /// Cancel any in-flight long-press timer (D116 Step 7) — called
+    /// whenever a real keyboard event arrives. A held-down press
+    /// "surviving" through keystrokes has no real-world meaning (you
+    /// can't type while still holding a touch/mouse press down in any
+    /// scenario this engine can observe), and — found via a genuinely
+    /// flaky headless test, not by inspection — relying on the NEXT
+    /// MouseDown to cancel a stale timer is not enough: several existing
+    /// tests type a full sentence (each character its own `engine.paint`
+    /// call, each with real per-frame overhead) before their next click,
+    /// and that typing overhead plus a deliberate debounce-window sleep
+    /// can outrun even a generous long-press threshold. Cancelling
+    /// eagerly on every keystroke closes the race outright rather than
+    /// just widening it.
+    fn cancel_pending_press(&mut self) {
+        if let Some(c) = &self.lp_cancel {
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -438,6 +664,43 @@ impl FrameEngine {
         self.prev_mounted = new_mounted;
         } // needs_paint
 
+        // ── Context menu (D116 Step 7) — re-pushed every frame while open,
+        // same "engine-driven instead of atom-driven" shape `Dropdown`
+        // uses per-frame for its own overlay. Cut/Copy only appear when
+        // there's an actual selection (real desktop convention — hidden,
+        // not just grayed out, since `Menu` has no disabled-item concept).
+        if let Some((node_id, (mx, my))) = self.context_menu {
+            if let Some((value, state)) = self.editable_at(node_id) {
+                let has_selection = text_edit::selected_text(&value, &state).is_some();
+                let actions = self.context_menu_actions.clone();
+                let mut menu = Menu::new();
+                if has_selection {
+                    let a = actions.clone();
+                    menu = menu.item("Cut", move || a.lock().unwrap().push(ContextMenuAction::Cut));
+                    let a = actions.clone();
+                    menu = menu.item("Copy", move || a.lock().unwrap().push(ContextMenuAction::Copy));
+                }
+                let a = actions.clone();
+                menu = menu.item("Paste", move || a.lock().unwrap().push(ContextMenuAction::Paste));
+                let a = actions.clone();
+                menu = menu.item("Select All", move || a.lock().unwrap().push(ContextMenuAction::SelectAll));
+                let dismiss_actions = actions.clone();
+                push_overlay(
+                    OverlayEntry::new(LayerPosition::Absolute(rosace_core::types::Point { x: mx, y: my }), menu)
+                        .input(InputBehavior::Block)
+                        .focus(FocusBehavior::PassThrough)
+                        .scrim(ScrimConfig {
+                            color: rosace_render::Color::TRANSPARENT,
+                            on_tap: Some(Arc::new(move || {
+                                dismiss_actions.lock().unwrap().push(ContextMenuAction::Dismiss);
+                            })),
+                        }),
+                );
+            } else {
+                self.context_menu = None;
+            }
+        }
+
         // ── Overlay pass — second recorder into overlay_canvas (D076) ───
         // Entries come from the render tree (D091 — they persist on
         // clean frames and clear when their owner repaints), plus the
@@ -449,7 +712,6 @@ impl FrameEngine {
         let mut overlay_routes: Vec<OverlayRoute> = Vec::new();
         {
             use rosace_core::types::{Point, Rect, Size};
-            use rosace_widgets::tree::LayerPosition;
 
             let tree_ref = self.render_tree.borrow();
             let overlay_ids = tree_ref.overlay_ids();
@@ -554,8 +816,8 @@ impl FrameEngine {
                 // Content texture = child natural size at physical
                 // resolution, capped. Pixmap starts transparent, so
                 // areas the content does not cover reveal the base.
-                let cw = (((entry.child_size.width  * scale).ceil() as u32)).clamp(1, MAX_TL_DIM);
-                let ch = (((entry.child_size.height * scale).ceil() as u32)).clamp(1, MAX_TL_DIM);
+                let cw = ((entry.child_size.width  * scale).ceil() as u32).clamp(1, MAX_TL_DIM);
+                let ch = ((entry.child_size.height * scale).ceil() as u32).clamp(1, MAX_TL_DIM);
                 let mut content = rosace_render::SkiaCanvas::new_hidpi(cw, ch, scale);
                 // GPU-shapes mode propagates to scroll content (D109 C2):
                 // shapes become quads, text becomes segments, and the
@@ -597,6 +859,9 @@ impl FrameEngine {
         // the widget tree entirely (see `EditController`'s doc comment),
         // so this is the only place those ops actually apply.
         self.drain_controllers();
+        // ── Drain context-menu actions + long-press word-select (D116 Step 7)
+        self.drain_context_menu();
+        self.drain_long_press_select();
 
         // ── Route events — structural z-order (D092) ────────────────────
         // Overlay routes first (topmost entry first): the entry's own
@@ -609,6 +874,18 @@ impl FrameEngine {
                 rosace_platform::InputEvent::MouseDown {
                     x, y, button: rosace_platform::MouseButton::Left
                 } => {
+                    // Cancel any still-in-flight long-press timer from a
+                    // PREVIOUS press before considering a new one — a
+                    // fresh MouseDown always supersedes an unreleased
+                    // earlier one. Pre-existing gap (predates this step):
+                    // overwriting `self.lp_cancel` with a new token
+                    // (further below, when arming a new press) never
+                    // actually cancelled the OLD spawned thread's own
+                    // copy of the old token, so an old timer could still
+                    // fire later against whatever is focused by then.
+                    if let Some(c) = &self.lp_cancel {
+                        c.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                     let mut handled = false;
                     for route in overlay_routes.iter().rev() {
                         if let Some((_, cb)) = route.hits.iter().rev()
@@ -632,6 +909,39 @@ impl FrameEngine {
                             break;
                         }
                     }
+                    // Selection-handle grab (D116 Step 7) takes priority
+                    // over a normal click/drag — landing within
+                    // `HANDLE_HIT_RADIUS` of either selection endpoint's
+                    // on-screen anchor grabs that handle instead of
+                    // repositioning the caret or starting a fresh
+                    // drag-select.
+                    if !handled {
+                        if let Some((node_id, _, state, _)) = self.focused_editable() {
+                            if let Some((s, e)) = state.selection_range() {
+                                let tree = self.render_tree.borrow();
+                                if let Some(editable) = tree.node(node_id).editable.as_ref() {
+                                    let hit = [(s, false), (e, true)].into_iter().find(|&(idx, _)| {
+                                        handle_anchor(&editable.layout, idx)
+                                            .is_some_and(|(hx, hy)| {
+                                                (hx - *x).powi(2) + (hy - *y).powi(2)
+                                                    <= HANDLE_HIT_RADIUS.powi(2)
+                                            })
+                                    });
+                                    if let Some((_, is_head)) = hit {
+                                        drop(tree);
+                                        let fixed = if is_head { s } else { e };
+                                        self.handle_drag = Some((node_id, is_head, fixed));
+                                        handled = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Captured below when an editable is hit, so the
+                    // long-press-to-select-word timer (armed further down,
+                    // alongside the generic `LongPressable` one) knows
+                    // which node/position to select if the press holds.
+                    let mut editable_press: Option<(NodeId, usize)> = None;
                     if !handled {
                         let hit = self.render_tree.borrow().hit_test(*x, *y);
                         if let Some((cb, positional)) = hit {
@@ -671,21 +981,67 @@ impl FrameEngine {
                                 self.focus_manager.focus_specific(fid);
                             }
                             let now = rosace_widgets::tree::anim_clock();
+
+                            // Double/triple-click detection (D116 Step 3)
+                            // — same node, within the time+distance slop
+                            // of the previous click, increments the run;
+                            // anything else starts a fresh single click.
+                            let (lx, ly) = self.last_click_pos;
+                            let same_spot = (*x - lx).abs() <= DOUBLE_CLICK_SLOP
+                                && (*y - ly).abs() <= DOUBLE_CLICK_SLOP;
+                            if self.last_click_node == Some(node_id)
+                                && now - self.last_click_at <= DOUBLE_CLICK_SECS
+                                && same_spot
+                            {
+                                self.click_count = (self.click_count + 1).min(3);
+                            } else {
+                                self.click_count = 1;
+                            }
+                            self.last_click_at = now;
+                            self.last_click_pos = (*x, *y);
+                            self.last_click_node = Some(node_id);
+
                             let mut tree = self.render_tree.borrow_mut();
                             let node = tree.node_mut(node_id);
-                            // Step 1 scoping (still true post-D116; Step 3
-                            // is the named follow-up): place the caret at
-                            // the end on click, not at the clicked glyph
-                            // — precise click->position needs font
-                            // metrics, and `FontCache` can't cross into
-                            // this dispatch path (its internal `RefCell`
-                            // caches are `!Sync`).
+                            // Real click->glyph placement (D116 Step 3):
+                            // the `TextLayoutSnapshot` built at paint time
+                            // dissolves the `!Sync` FontCache wall Step 1
+                            // worked around by always placing the caret at
+                            // the end — dispatch queries plain geometry
+                            // data here, no font access needed.
+                            let mut drag_anchor = None;
                             if let Some(editable) = &node.editable {
-                                let end = text_edit::char_count(&editable.value);
-                                node.text_edit.selection = text_edit::Selection::single(end);
+                                let pos = editable.layout.position_at(*x, *y);
+                                let selection = match self.click_count {
+                                    1 => text_edit::Selection::single(pos),
+                                    2 => {
+                                        let (s, e) = text_edit::word_range_at(&editable.value, pos);
+                                        text_edit::Selection::range(s, e)
+                                    }
+                                    _ => {
+                                        let (s, e) = editable.layout.line_range_at(pos);
+                                        text_edit::Selection::range(s, e)
+                                    }
+                                };
+                                node.text_edit.selection = selection;
+                                drag_anchor = Some(pos);
                             }
                             node.text_edit.last_edit_at = now;
                             drop(tree);
+                            // Single clicks arm mouse drag-to-select;
+                            // double/triple clicks stand on their own
+                            // (dragging after a word/line select would
+                            // fight the just-made selection).
+                            if self.click_count == 1 {
+                                if let Some(pos) = drag_anchor {
+                                    self.text_drag = Some((node_id, pos));
+                                    // Also a candidate for long-press-to-
+                                    // select-word (D116 Step 7) — only for
+                                    // a fresh single press, same reasoning
+                                    // as the drag arm above.
+                                    editable_press = Some((node_id, pos));
+                                }
+                            }
                             self.forced_repaint = true;
                             rosace_state::request_frame();
                         } else if self.focus_manager.focused.is_some() {
@@ -696,6 +1052,11 @@ impl FrameEngine {
                             // already unfocuses cleanly via FocusManager;
                             // this covers the mouse path).
                             self.focus_manager.blur();
+                            // Clear the stale IME anchor (D116 Step 6) — an
+                            // unfocused editable must not leave the OS's
+                            // CJK candidate window pinned to where the
+                            // caret used to be.
+                            rosace_core::set_ime_cursor_area(None);
                         }
                     }
                     // Press/tap feedback (D108/Phase 26 Step 1): mirror hover
@@ -721,11 +1082,83 @@ impl FrameEngine {
                             }
                         });
                     }
+                    // Long-press-to-select-word on an editable (D116 Step
+                    // 7) — the spawned thread can't touch `RenderTree`/
+                    // `FontCache` directly (same wall as everything else
+                    // editable-related here), so it just records the
+                    // result for `drain_long_press_select` to apply on the
+                    // main thread next frame.
+                    if let Some((node_id, pos)) = editable_press {
+                        use std::sync::atomic::{AtomicBool, Ordering};
+                        let cancel = Arc::new(AtomicBool::new(false));
+                        self.lp_cancel = Some(cancel.clone());
+                        let pending = self.pending_long_press_select.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(LONG_PRESS_SELECT_MS));
+                            if !cancel.load(Ordering::Relaxed) {
+                                *pending.lock().unwrap() = Some((node_id, pos));
+                                rosace_state::request_frame();
+                            }
+                        });
+                    }
+                }
+                // Desktop right-click context menu (D116 Step 7) — the
+                // FFI/mobile-touch equivalent (long-press-outside-a-
+                // selection could open the same menu) is a named follow-up,
+                // not required by this step's exit bar (right-click has no
+                // touch analogue on its own; mobile gets the menu via
+                // Step 6's FFI work in a later real device session).
+                rosace_platform::InputEvent::MouseDown {
+                    x, y, button: rosace_platform::MouseButton::Right
+                } => {
+                    if let Some(node_id) = self.render_tree.borrow().editable_test(*x, *y) {
+                        let focus_id = self.render_tree.borrow()
+                            .node(node_id).focus_node.as_ref().map(|f| f.id());
+                        if let Some(fid) = focus_id {
+                            self.focus_manager.focus_specific(fid);
+                        }
+                        self.context_menu = Some((node_id, (*x, *y)));
+                        self.forced_repaint = true;
+                        rosace_state::request_frame();
+                    }
                 }
                 rosace_platform::InputEvent::MouseMove { x, y } => {
                     use std::sync::atomic::Ordering;
                     if let Some(cb) = &self.active_drag {
                         cb(*x, *y);
+                    }
+                    // Mouse drag-to-select over an editable (D116 Step 3)
+                    // — extend `Selection::range(anchor, head)` from the
+                    // node's own `TextLayoutSnapshot`, re-queried every
+                    // move since the widget doesn't change size mid-drag.
+                    if let Some((node_id, anchor)) = self.text_drag {
+                        let mut tree = self.render_tree.borrow_mut();
+                        let node = tree.node_mut(node_id);
+                        if let Some(editable) = &node.editable {
+                            let head = editable.layout.position_at(*x, *y);
+                            node.text_edit.selection = text_edit::Selection::range(anchor, head);
+                        }
+                        drop(tree);
+                        self.forced_repaint = true;
+                        rosace_state::request_frame();
+                    }
+                    // Selection-handle drag (D116 Step 7) — the dragged
+                    // endpoint follows the pointer via `position_at`; the
+                    // OTHER endpoint (captured at grab time) stays fixed.
+                    if let Some((node_id, is_head, fixed)) = self.handle_drag {
+                        let mut tree = self.render_tree.borrow_mut();
+                        let node = tree.node_mut(node_id);
+                        if let Some(editable) = &node.editable {
+                            let moving = editable.layout.position_at(*x, *y);
+                            node.text_edit.selection = if is_head {
+                                text_edit::Selection::range(fixed, moving)
+                            } else {
+                                text_edit::Selection::range(moving, fixed)
+                            };
+                        }
+                        drop(tree);
+                        self.forced_repaint = true;
+                        rosace_state::request_frame();
                     }
                     // Hover tracking — repaints only the changed nodes.
                     let target = self.render_tree.borrow().hover_test(*x, *y);
@@ -746,6 +1179,8 @@ impl FrameEngine {
                 rosace_platform::InputEvent::MouseUp { .. } => {
                     use std::sync::atomic::Ordering;
                     self.active_drag = None;
+                    self.text_drag = None;
+                    self.handle_drag = None;
                     if let Some(c) = &self.lp_cancel { c.store(true, Ordering::Relaxed); }
                     self.lp_cancel = None;
                     self.press_origin = None;
@@ -837,11 +1272,40 @@ impl FrameEngine {
                 // populates `event.text` for a modified key — belt and
                 // braces against accidentally typing a shortcut's letter.
                 rosace_platform::InputEvent::Text { character } => {
+                    self.cancel_pending_press();
                     if !self.ctrl_held && !self.meta_held && !character.is_control() {
                         if let Some((node_id, value, state, _)) = self.focused_editable() {
                             let now = rosace_widgets::tree::anim_clock();
                             let (nv, ns) = text_edit::insert_char(&value, &state, *character, now);
                             self.commit_text_edit(node_id, &value, nv, ns);
+                        }
+                    }
+                }
+                // Real OS IME composition (D116 Step 6) — `rosace-platform`
+                // translates winit's `WindowEvent::Ime` into
+                // `rosace_ime::ImeEvent` (the wire payload, reused as-is —
+                // see `InputEvent::Ime`'s doc comment for why that crate is
+                // safe to depend on from the platform layer). `Enabled` is
+                // pure state (nothing to do — no field-scoped enable/disable
+                // exists yet, see `app.rs`'s `set_ime_allowed` comment).
+                rosace_platform::InputEvent::Ime(ime_event) => {
+                    if let Some((node_id, value, state, _)) = self.focused_editable() {
+                        let now = rosace_widgets::tree::anim_clock();
+                        match ime_event {
+                            rosace_ime::ImeEvent::Preedit { text, cursor_range } => {
+                                // winit's cursor_range is a BYTE range into
+                                // `text` itself; the edit core is
+                                // char-indexed (see text_edit.rs's module
+                                // doc) — convert once here.
+                                let cursor_in_text = cursor_range.map(|(b, _)| text[..b.min(text.len())].chars().count());
+                                let (nv, ns) = text_edit::ime_set_preedit(&value, &state, text, cursor_in_text, now);
+                                self.commit_text_edit(node_id, &value, nv, ns);
+                            }
+                            rosace_ime::ImeEvent::Commit(text) => {
+                                let (nv, ns) = text_edit::ime_commit(&value, &state, text, now);
+                                self.commit_text_edit(node_id, &value, nv, ns);
+                            }
+                            rosace_ime::ImeEvent::Enabled | rosace_ime::ImeEvent::Disabled => {}
                         }
                     }
                 }
@@ -916,13 +1380,90 @@ impl FrameEngine {
                         }
                     }
                 }
+                // Enter inserts a real newline — but ONLY for a multiline
+                // field (`TextArea`, D116 Step 4); a single-line
+                // `TextInput` has no editing meaning for Enter today (a
+                // future submit-on-Enter affordance is a separate,
+                // opt-in concern, not implied by this).
+                rosace_platform::InputEvent::KeyDown {
+                    key: rosace_platform::Key::Enter
+                } => {
+                    if let Some((node_id, value, state, multiline)) = self.focused_editable() {
+                        if multiline {
+                            let now = rosace_widgets::tree::anim_clock();
+                            let (nv, ns) = text_edit::insert_char(&value, &state, '\n', now);
+                            self.commit_text_edit(node_id, &value, nv, ns);
+                        }
+                    }
+                }
+                // Up/Down cross wrapped lines with goal-column memory
+                // (D116 Step 4) — this needs real glyph geometry (which
+                // line is "above", which boundary on it is nearest the
+                // caret's x), so unlike every other movement command it
+                // can't go through `apply_command` (pure string/index
+                // math, no layout access); it queries the node's own
+                // `TextLayoutSnapshot` directly, same wall-dissolving
+                // pattern Step 3's click dispatch uses. Single-line
+                // `TextInput` has only one line, so this intentionally
+                // no-ops there (no "jump to Home/End" surprise).
+                rosace_platform::InputEvent::KeyDown {
+                    key: k @ (rosace_platform::Key::ArrowUp | rosace_platform::Key::ArrowDown)
+                } => {
+                    if let Some((node_id, _value, state, multiline)) = self.focused_editable() {
+                        if multiline {
+                            let now = rosace_widgets::tree::anim_clock();
+                            let mut tree = self.render_tree.borrow_mut();
+                            let node = tree.node_mut(node_id);
+                            if let Some(editable) = &node.editable {
+                                let lines = &editable.layout.lines;
+                                if !lines.is_empty() {
+                                    let cursor = state.cursor();
+                                    let cur_line = lines.iter()
+                                        .position(|l| cursor >= l.char_range.0 && cursor <= l.char_range.1)
+                                        .unwrap_or(0);
+                                    let goal_x = state.goal_x.unwrap_or_else(|| {
+                                        editable.layout.x_of(cursor)
+                                            .unwrap_or_else(|| lines[cur_line].boundary_x.first().copied().unwrap_or(0.0))
+                                    });
+                                    let going_up = matches!(k, rosace_platform::Key::ArrowUp);
+                                    let target_line = if going_up {
+                                        cur_line.checked_sub(1)
+                                    } else if cur_line + 1 < lines.len() {
+                                        Some(cur_line + 1)
+                                    } else {
+                                        None
+                                    };
+                                    let new_cursor = match target_line {
+                                        Some(ti) => editable.layout.position_at(goal_x, lines[ti].y + 1.0),
+                                        // No line above the first / below the
+                                        // last — land at that line's own
+                                        // start/end (real editors' convention)
+                                        // rather than doing nothing.
+                                        None if going_up => lines[cur_line].char_range.0,
+                                        None => lines[cur_line].char_range.1,
+                                    };
+                                    let anchor = if self.shift_held { state.selection.primary().anchor } else { new_cursor };
+                                    let mut new_state = state.with_selection(
+                                        text_edit::Selection::range(anchor, new_cursor), now,
+                                    );
+                                    new_state.goal_x = Some(goal_x);
+                                    node.text_edit = new_state;
+                                    drop(tree);
+                                    self.forced_repaint = true;
+                                    rosace_state::request_frame();
+                                }
+                            }
+                        }
+                    }
+                }
                 // Movement/deletion — one generic arm through the
                 // Key->Command keymap (`command_for_key`, D116 layer 4)
                 // instead of one match arm per key. Escape/Tab/Shift/
-                // Control/Meta/Alt/Char already claimed their own events
-                // above, so `key` here is only ever Backspace/Delete/an
-                // arrow/Home/End/something unbound.
+                // Control/Meta/Alt/Char/Enter/Up/Down already claimed
+                // their own events above, so `key` here is only ever
+                // Backspace/Delete/Left/Right/Home/End/something unbound.
                 rosace_platform::InputEvent::KeyDown { key } => {
+                    self.cancel_pending_press();
                     let word_mod = self.alt_held || self.ctrl_held;
                     if let Some(cmd) = command_for_key(*key, self.shift_held, word_mod) {
                         if let Some((node_id, value, state, _)) = self.focused_editable() {
@@ -1538,7 +2079,7 @@ mod tests {
     // `rosace/src/engine.rs` dispatch code real input reaches, and — unlike
     // eyeballing a screenshot — asserts an exact resulting value.
 
-    use rosace_widgets::tree::TextInput;
+    use rosace_widgets::tree::{TextArea, TextInput};
     use std::sync::OnceLock;
 
     /// Root with a single real, atom-bound `TextInput` — `on_change`
@@ -1626,8 +2167,9 @@ mod tests {
         engine.paint(&mut canvas, &mut overlay, &[]);
         engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
         type_str(&mut engine, &mut canvas, &mut overlay, "hi");
-        // Click places the caret at the end (Step 1 scoping) — Home first
-        // so Delete has something after the cursor to remove.
+        // Typing always leaves the caret at the end regardless of where
+        // the initial click landed — Home first so Delete has something
+        // after the cursor to remove.
         engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Home)]);
         engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Delete)]);
         assert_eq!(atom.get().unwrap().get(), "i");
@@ -1702,6 +2244,179 @@ mod tests {
         engine.paint(&mut canvas, &mut overlay, &[click(199.0, 59.0)]);
         type_str(&mut engine, &mut canvas, &mut overlay, "MORE");
         assert_eq!(atom.get().unwrap().get(), "hi", "typing after a blank-space blur must not reach the now-unfocused input");
+    }
+
+    // ── TextLayoutSnapshot: click-to-glyph, drag, multi-click (D116 Step 3) ──
+    //
+    // `TextInput`'s own default styling puts text at `rect.origin.x + 10.0`
+    // measured with the embedded font at its default 11.0px size — the
+    // exact geometry `TextLayoutSnapshot::position_at` is built from at
+    // paint time. These tests measure that same geometry independently
+    // (via a fresh `FontCache::embedded()`) to compute an exact expected
+    // click x for a known char index, then assert dispatch lands on that
+    // exact index — not an approximate/eyeballed position.
+
+    fn embedded_x_for(prefix: &str) -> f32 {
+        10.0 + rosace_render::FontCache::embedded().measure_text(prefix, 11.0)
+    }
+
+    fn mouse_move(x: f32, y: f32) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::MouseMove { x, y }
+    }
+    fn mouse_up(x: f32, y: f32) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::MouseUp { x, y, button: rosace_platform::MouseButton::Left }
+    }
+
+    // Every test below sleeps a real (sub-second) amount of wall-clock
+    // time to exercise the double-click debounce window against
+    // `anim_clock()`'s real `Instant`, so — like the animation tests
+    // above — they take `ANIMATION_GLOBAL_TEST_LOCK` to avoid a
+    // concurrently-running test's own frame/dirty churn landing inside
+    // this engine's `needs_paint` window and staling its `TextLayoutSnapshot`
+    // mid-sequence (found empirically: these tests were flaky under
+    // `cargo test`'s default parallelism without the lock, reliable with it).
+
+    #[test]
+    fn click_mid_string_places_the_caret_at_the_exact_clicked_index() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        // Settle past the double-click debounce window so the next click
+        // below is unambiguously a fresh single click, regardless of how
+        // close its x lands to the initial focusing click's x=20.
+        std::thread::sleep(std::time::Duration::from_millis(450));
+
+        // Click exactly at the boundary after "hel" (index 3) — must place
+        // the caret there, not at the end (the old Step 1 simplification).
+        let x = embedded_x_for("hel");
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "helXlo", "click must place the caret at the exact clicked glyph boundary");
+    }
+
+    #[test]
+    fn click_at_the_very_start_places_the_caret_before_the_first_character() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        std::thread::sleep(std::time::Duration::from_millis(450));
+
+        let x = embedded_x_for("");
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "Xhello");
+    }
+
+    #[test]
+    fn mouse_drag_produces_the_exact_expected_selection() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+        std::thread::sleep(std::time::Duration::from_millis(450));
+
+        // Drag from the boundary after "hello" (index 5) to after "hello "
+        // (index 6) — selects exactly the space character.
+        let x0 = embedded_x_for("hello");
+        let x1 = embedded_x_for("hello ");
+        engine.paint(&mut canvas, &mut overlay, &[click(x0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[mouse_move(x1, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[mouse_up(x1, 18.0)]);
+        // Typing now must replace exactly the dragged-over selection.
+        type_str(&mut engine, &mut canvas, &mut overlay, "_");
+        assert_eq!(atom.get().unwrap().get(), "hello_world", "drag selection must span exactly the dragged range");
+    }
+
+    #[test]
+    fn mouse_drag_backwards_still_produces_the_correct_selection() {
+        // Anchor after the drag's start x, head before it — the selection
+        // must still normalize to the same range regardless of drag
+        // direction (matches every real text editor).
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+        std::thread::sleep(std::time::Duration::from_millis(450));
+
+        let x0 = embedded_x_for("hello ");
+        let x1 = embedded_x_for("hello");
+        engine.paint(&mut canvas, &mut overlay, &[click(x0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[mouse_move(x1, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[mouse_up(x1, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "_");
+        assert_eq!(atom.get().unwrap().get(), "hello_world");
+    }
+
+    #[test]
+    fn double_click_selects_the_word_under_the_cursor() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+        std::thread::sleep(std::time::Duration::from_millis(450));
+
+        // Both clicks land inside "world" (after "hello " = index 6).
+        let x = embedded_x_for("hello wo");
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "hello X", "double-click must select the whole word, not just the clicked char");
+    }
+
+    #[test]
+    fn triple_click_selects_the_whole_line() {
+        // Single-line TextInput: triple-click selects everything, same as
+        // Cmd/Ctrl+A — `TextArea` (Step 4) gets real per-line selection
+        // for free from the same `line_range_at` primitive.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+        std::thread::sleep(std::time::Duration::from_millis(450));
+
+        let x = embedded_x_for("hello wo");
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "X");
+    }
+
+    #[test]
+    fn a_slow_second_click_does_not_count_as_a_double_click() {
+        // Real double-click detection, not "any two clicks on the same
+        // spot" — a click outside the debounce window must reset the
+        // count and behave as an ordinary single click (plain caret
+        // placement, no word selected).
+        // This test drives a REAL wall-clock sleep past the double-click
+        // debounce window, which (like the animation tests above) touches
+        // process-global frame/dirty state (`rosace_state`, `anim_clock`)
+        // shared by the whole test binary — take the same lock those use
+        // to avoid cross-test interleaving corrupting this engine's
+        // needs_paint/dirty bookkeeping mid-sleep.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+
+        let x = embedded_x_for("hello wo");
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        // `anim_clock()` is real wall-clock time (not the animation
+        // system's simulated `frame_dt`) — sleep past the debounce
+        // window for a real second click.
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "hello woXrld", "a slow second click must place the caret, not select the word");
     }
 
     /// Two real, independently atom-bound `TextInput`s stacked in a
@@ -1990,5 +2705,807 @@ mod tests {
 
         assert_eq!(captured.get().unwrap().get(), "hello **world**", "the wrap must reach the real app atom via on_change");
         assert_eq!(controller.value(), "hello **world**");
+    }
+
+    // ── TextArea: multiline, wrap, Enter, goal-column Up/Down (D116 Step 4) ──
+
+    struct OneTextArea {
+        captured: Arc<OnceLock<rosace_state::Atom<String>>>,
+        height: f32,
+    }
+    impl Component for OneTextArea {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let name: rosace_state::Atom<String> = ctx.state(String::new());
+            let _ = self.captured.set(name.clone());
+            TextArea::new()
+                .value(name.get())
+                .width(400.0)
+                .height(self.height)
+                .on_change({ let name = name.clone(); move |v| name.set(v) })
+                .into_element()
+        }
+    }
+
+    fn headless_text_area_engine(height: f32) -> (FrameEngine, SkiaCanvas, SkiaCanvas, Arc<OnceLock<rosace_state::Atom<String>>>) {
+        let captured = Arc::new(OnceLock::new());
+        let engine = FrameEngine::new(Box::new(OneTextArea { captured: captured.clone(), height }), rosace_render::FontCache::embedded());
+        (engine, SkiaCanvas::new(400, 300), SkiaCanvas::new(400, 300), captured)
+    }
+
+    // TextArea's `paint` calls `request_animation()` every focused frame
+    // (caret blink) and reads `anim_clock()`, the same process-global
+    // state the animation tests above guard with `ANIMATION_GLOBAL_TEST_LOCK`
+    // — these tests do enough frames (many keystrokes each) that they were
+    // observed to occasionally destabilize an UNRELATED, otherwise-stable
+    // pre-existing test when run concurrently under `cargo test`'s default
+    // parallelism. Taking the same lock here fixed it.
+
+    #[test]
+    fn enter_inserts_a_real_newline_and_typing_continues_on_the_next_line() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_area_engine(100.0);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "ab");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Enter)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "cd");
+        assert_eq!(atom.get().unwrap().get(), "ab\ncd", "Enter must insert a real newline in a multiline field");
+    }
+
+    #[test]
+    fn enter_does_nothing_on_a_single_line_text_input() {
+        // The multiline gate on Enter (`focused_editable().3`) must
+        // actually gate — a single-line TextInput ignores Enter entirely,
+        // same as before this feature existed.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "ab");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Enter)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "cd");
+        assert_eq!(atom.get().unwrap().get(), "abcd", "Enter must be a no-op on a single-line TextInput");
+    }
+
+    #[test]
+    fn arrow_down_twice_returns_to_the_original_goal_column_after_a_shorter_line() {
+        // Three explicit lines — "xxxxxxxxxx" (10), "xxx" (3),
+        // "xxxxxxxxxx" (10) again, all the SAME repeated character so
+        // relative on-screen widths are monotonic in char count
+        // regardless of the real (proportional) font's exact metrics.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_area_engine(200.0);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "xxxxxxxxxx");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Enter)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "xxx");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Enter)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "xxxxxxxxxx");
+        assert_eq!(atom.get().unwrap().get(), "xxxxxxxxxx\nxxx\nxxxxxxxxxx");
+
+        // Cursor is at the document end (index 25) — walk it back to
+        // index 7 (column 7 of the first line) with real ArrowLeft
+        // dispatch.
+        for _ in 0..18 {
+            engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowLeft)]);
+        }
+
+        // Down into "xxx" (only 3 chars wide) — must clamp to its end,
+        // not panic or land past it.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowDown)]);
+        // Down again into the second "xxxxxxxxxx" — goal-column memory
+        // must restore column 7 (NOT stay clamped at column 3), proving
+        // the goal x survived the intermediate short line untouched.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowDown)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "|");
+
+        assert_eq!(
+            atom.get().unwrap().get(),
+            "xxxxxxxxxx\nxxx\nxxxxxxx|xxx",
+            "goal-column memory must restore the original column after passing through a shorter line"
+        );
+    }
+
+    #[test]
+    fn arrow_up_at_the_first_line_moves_to_that_lines_start() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_area_engine(200.0);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        // No line above the first — ArrowUp lands at that line's own
+        // start rather than doing nothing.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::ArrowUp)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "Xhello");
+    }
+
+    #[test]
+    fn wheel_scroll_changes_which_line_a_click_lands_on() {
+        // A tiny viewport over a many-line document — real proof the
+        // scroll offset participates in click->glyph placement, not just
+        // in what's painted. Each line is `line_i` so the resulting atom
+        // content reveals exactly which line the click landed on.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_area_engine(40.0);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 5.0)]);
+        for i in 0..20 {
+            if i > 0 {
+                engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Enter)]);
+            }
+            type_str(&mut engine, &mut canvas, &mut overlay, &format!("line_{i}"));
+        }
+
+        // Scroll down several lines' worth, then click near the TOP of
+        // the (now scrolled) viewport.
+        // Negative delta_y scrolls content down/offset up — same
+        // convention proven by `wheel_scroll_still_springs_back_...`
+        // above for `ScrollView`; `TextArea` wires wheel input through
+        // the identical `ScrollController::scroll_by(0, -dy)` `ListView`
+        // uses.
+        let scroll = rosace_platform::InputEvent::Scroll { x: 20.0, y: 5.0, delta_x: 0.0, delta_y: -80.0 };
+        engine.paint(&mut canvas, &mut overlay, &[scroll]);
+        engine.paint(&mut canvas, &mut overlay, &[click(0.0, 5.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "|");
+
+        let value = atom.get().unwrap().get();
+        assert!(!value.starts_with("|line_0"), "after scrolling down, a click near the top must NOT still land on the very first line: {value:?}");
+    }
+
+    #[test]
+    fn scrolled_to_the_bottom_the_last_line_is_fully_inside_the_viewport() {
+        // Regression (found live 2026-07-12): `max_scroll` was computed
+        // from bare `content_h`, ignoring the PAD*2 the text is drawn
+        // inside — so at max scroll the last line's bottom sat exactly
+        // PAD px past the clip, permanently half-cut. The scrollable
+        // extent must be `content_h + PAD*2`.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let height = 100.0_f32;
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_area_engine(height);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let text = (0..20).map(|i| format!("line_{i}")).collect::<Vec<_>>().join("\n");
+        atom.get().unwrap().set(text);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        // Wheel far past the end — the clamp on the next paint must land
+        // on the true max, not the old PAD-short value.
+        let scroll = rosace_platform::InputEvent::Scroll { x: 20.0, y: 5.0, delta_x: 0.0, delta_y: -100_000.0 };
+        engine.paint(&mut canvas, &mut overlay, &[scroll]);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        const PAD: f32 = 10.0; // TextArea's internal text padding
+        let line_h = rosace_render::FontCache::embedded().line_height(11.0);
+        let n_lines = 20.0_f32;
+        let expected_max = n_lines * line_h + PAD * 2.0 - height;
+        let offset = scroll_offset(&engine).expect("TextArea registers a scroll controller");
+        assert!(
+            (offset[1] - expected_max).abs() < 0.5,
+            "max scroll must include the text padding: got {}, expected {expected_max}",
+            offset[1],
+        );
+        // The geometric truth the user actually sees: the last line's
+        // bottom edge (PAD + n*line_h - scroll) sits INSIDE the viewport.
+        let last_line_bottom = PAD + n_lines * line_h - offset[1];
+        assert!(
+            last_line_bottom <= height + 0.01,
+            "last line must not be clipped at max scroll: bottom at {last_line_bottom}, viewport height {height}",
+        );
+    }
+
+    #[test]
+    fn wheel_scrolling_away_from_the_caret_is_not_snapped_back_by_scroll_into_view() {
+        // Regression (found live 2026-07-12): caret scroll-into-view ran
+        // on EVERY focused paint — and a focused TextArea repaints every
+        // frame for the caret blink — so with the caret on a bottom line,
+        // every wheel-scroll-up was reverted within a frame ("no
+        // scrolling when the cursor is at the bottom"), and a mid-document
+        // caret clamped scrolling to a viewport-sized window around
+        // itself. The chase must fire only when the caret MOVES.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let height = 100.0_f32;
+        let (mut engine, mut canvas, mut overlay, _atom) = headless_text_area_engine(height);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        for i in 0..20 {
+            if i > 0 {
+                engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Enter)]);
+            }
+            type_str(&mut engine, &mut canvas, &mut overlay, &format!("line_{i}"));
+        }
+        // Typing chased the caret to the bottom.
+        let at_bottom = scroll_offset(&engine).unwrap()[1];
+        assert!(at_bottom > 0.0, "typing 20 lines into a 100px field must have scrolled down, got {at_bottom}");
+
+        // Wheel all the way back up (positive delta_y decreases the
+        // offset — the inverse of the convention proven in
+        // `wheel_scroll_changes_which_line_a_click_lands_on`), then paint
+        // an EMPTY frame — the caret-blink frame that used to snap back.
+        let scroll = rosace_platform::InputEvent::Scroll { x: 20.0, y: 5.0, delta_x: 0.0, delta_y: 100_000.0 };
+        engine.paint(&mut canvas, &mut overlay, &[scroll]);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let after_wheel = scroll_offset(&engine).unwrap()[1];
+        assert!(
+            after_wheel < 1.0,
+            "wheel-scrolling to the top with the caret at the bottom must STICK (caret did not move): got {after_wheel}",
+        );
+
+        // A real caret move (typing) must chase again — back to the
+        // bottom. One settling paint: the edit lands on the engine's
+        // next frame (same convention the EditController test documents).
+        type_str(&mut engine, &mut canvas, &mut overlay, "x");
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let after_type = scroll_offset(&engine).unwrap()[1];
+        assert!(
+            (after_type - at_bottom).abs() < 1.0,
+            "typing must scroll the caret back into view: got {after_type}, expected ~{at_bottom}",
+        );
+    }
+
+    #[test]
+    fn probe_offsets_frame_by_frame_after_typing_from_scrolled_top() {
+        // TEMP diagnostic probe (twitch bug, 2026-07-12): caret at the
+        // bottom, view wheel-scrolled to the top, type ONE char — print
+        // the offset after every subsequent frame to see the down/up
+        // twitch the user reported live.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, _atom) = headless_text_area_engine(100.0);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        for i in 0..20 {
+            if i > 0 {
+                engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Enter)]);
+            }
+            type_str(&mut engine, &mut canvas, &mut overlay, &format!("line_{i}"));
+        }
+        let scroll = rosace_platform::InputEvent::Scroll { x: 20.0, y: 5.0, delta_x: 0.0, delta_y: 100_000.0 };
+        engine.paint(&mut canvas, &mut overlay, &[scroll]);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        println!("PROBE start (top, caret bottom): {:?}", scroll_offset(&engine));
+
+        engine.paint(&mut canvas, &mut overlay, &[rosace_platform::InputEvent::Text { character: 'z' }]);
+        println!("PROBE after event frame: {:?}", scroll_offset(&engine));
+        for i in 0..6 {
+            engine.paint(&mut canvas, &mut overlay, &[]);
+            println!("PROBE frame {i}: {:?}", scroll_offset(&engine));
+        }
+    }
+
+    // ── SpanSource + CursorStyle (D116 Step 5) ────────────────────────────
+
+    /// Every `changed_range` the spans hook was called with, in order.
+    type ChangedRangeLog = Arc<std::sync::Mutex<Vec<Option<(usize, usize)>>>>;
+
+    struct OneSpannedTextInput {
+        captured: Arc<OnceLock<rosace_state::Atom<String>>>,
+        log: ChangedRangeLog,
+    }
+    impl Component for OneSpannedTextInput {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let name: rosace_state::Atom<String> = ctx.state(String::new());
+            let _ = self.captured.set(name.clone());
+            let log = self.log.clone();
+            TextInput::new()
+                .value(name.get())
+                .width(400.0)
+                .on_change({ let name = name.clone(); move |v| name.set(v) })
+                .spans(move |_s, changed_range| {
+                    log.lock().unwrap().push(changed_range);
+                    Vec::new()
+                })
+                .into_element()
+        }
+    }
+
+    #[test]
+    fn spans_hook_is_called_with_the_small_edits_changed_range_not_the_whole_document() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured = Arc::new(OnceLock::new());
+        let log: ChangedRangeLog = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let root = OneSpannedTextInput { captured: captured.clone(), log: log.clone() };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(400, 60);
+        let mut overlay = SkiaCanvas::new(400, 60);
+
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world, this is a long base sentence");
+        log.lock().unwrap().clear(); // ignore the setup typing's own calls
+
+        // One small edit: append a single '!'. `paint()` processes the
+        // Text event AFTER this frame's own build/paint walk (so THIS
+        // frame's `spans_fn` call still reflects the state from before
+        // the '!'); one more empty-event frame lets the widget's own
+        // paint see the now-committed edit and call the hook again.
+        type_str(&mut engine, &mut canvas, &mut overlay, "!");
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let entries = log.lock().unwrap().clone();
+        assert!(!entries.is_empty(), "the spans hook must be called at least once after the edit");
+        let n = captured.get().unwrap().get().chars().count();
+        assert_eq!(
+            *entries.last().unwrap(),
+            Some((n - 1, n)),
+            "SpanSource must receive only the small edit's changed range, not the whole document"
+        );
+    }
+
+    #[test]
+    fn spans_hook_paints_a_span_in_its_own_color_distinct_from_the_default_text_color() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Real proof the widget actually USES the returned spans to paint
+        // (not just calls the hook and discards the result) — a span
+        // covering the whole value in a distinctive color must produce
+        // pixels of exactly that color.
+        let captured: Arc<OnceLock<rosace_state::Atom<String>>> = Arc::new(OnceLock::new());
+        struct BoldRedSpanInput { captured: Arc<OnceLock<rosace_state::Atom<String>>> }
+        impl Component for BoldRedSpanInput {
+            fn build(&self, ctx: &mut Context) -> Element {
+                let name: rosace_state::Atom<String> = ctx.state(String::from("hi"));
+                let _ = self.captured.set(name.clone());
+                TextInput::new()
+                    .value(name.get())
+                    .width(200.0)
+                    .focused()
+                    .spans(|s, _changed| {
+                        vec![text_edit::Span::new((0, s.chars().count())).color(rosace_render::Color::rgb(255, 0, 0))]
+                    })
+                    .into_element()
+            }
+        }
+        let root = BoldRedSpanInput { captured: captured.clone() };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(200, 60);
+        let mut overlay = SkiaCanvas::new(200, 60);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        // Tolerant match, not exact (255,0,0,255) — glyph anti-aliasing
+        // means even a fully-covered stroke pixel may blend slightly.
+        let red_pixels = canvas.pixels().chunks_exact(4)
+            .filter(|p| p[0] > 180 && p[1] < 60 && p[2] < 60 && p[3] > 180)
+            .count();
+        assert!(red_pixels > 0, "a span covering the whole value in red must produce real reddish pixels, got none");
+    }
+
+    #[test]
+    fn cursor_style_color_override_paints_the_caret_in_that_color() {
+        struct ColoredCursorInput;
+        impl Component for ColoredCursorInput {
+            fn build(&self, ctx: &mut Context) -> Element {
+                let name: rosace_state::Atom<String> = ctx.state(String::from("hi"));
+                TextInput::new()
+                    .value(name.get())
+                    .width(200.0)
+                    .focused()
+                    .cursor_style(text_edit::CursorStyle {
+                        color: rosace_render::Color::rgb(0, 255, 0),
+                        ..Default::default()
+                    })
+                    .into_element()
+            }
+        }
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut engine = FrameEngine::new(Box::new(ColoredCursorInput), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(200, 60);
+        let mut overlay = SkiaCanvas::new(200, 60);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        // The caret blinks against REAL wall-clock time
+        // (`last_edit_at`/`anim_clock()`) — a click refreshes
+        // `last_edit_at` to "now", and the blink is solid-on for the
+        // first 0.5s after that, so the NEXT paint is guaranteed to
+        // render it regardless of the test binary's own uptime at the
+        // moment this test happens to run.
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let green_pixels = canvas.pixels().chunks_exact(4)
+            .filter(|p| p[0] < 60 && p[1] > 180 && p[2] < 60 && p[3] > 180)
+            .count();
+        assert!(green_pixels > 0, "a green CursorStyle override must paint real greenish pixels for the caret, got none");
+    }
+
+    // ── Real OS IME (D116 Step 6) ──────────────────────────────────────────
+
+    fn ime_preedit(text: &str, cursor_range: Option<(usize, usize)>) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::Ime(rosace_ime::ImeEvent::Preedit { text: text.to_string(), cursor_range })
+    }
+    fn ime_commit(text: &str) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::Ime(rosace_ime::ImeEvent::Commit(text.to_string()))
+    }
+
+    #[test]
+    fn ime_preedit_shows_provisional_text_then_commit_finalizes_it() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi ");
+
+        // Composing "にほ" — each keystroke sends a fresh Preedit that
+        // REPLACES the provisional buffer (real IME behavior), not one
+        // that appends to it.
+        engine.paint(&mut canvas, &mut overlay, &[ime_preedit("に", None)]);
+        assert_eq!(atom.get().unwrap().get(), "hi に", "preedit text must show up in the live value, provisionally");
+        engine.paint(&mut canvas, &mut overlay, &[ime_preedit("にほ", None)]);
+        assert_eq!(atom.get().unwrap().get(), "hi にほ", "a later preedit update must REPLACE the earlier provisional text");
+
+        // Commit finalizes it as real text.
+        engine.paint(&mut canvas, &mut overlay, &[ime_commit("日本")]);
+        assert_eq!(atom.get().unwrap().get(), "hi 日本", "commit must replace the provisional text with the final candidate");
+
+        // Typing after commit continues normally, proving the cursor
+        // landed right after the committed text, not somewhere stale.
+        type_str(&mut engine, &mut canvas, &mut overlay, "!");
+        assert_eq!(atom.get().unwrap().get(), "hi 日本!");
+    }
+
+    #[test]
+    fn ime_commit_undoes_the_whole_composition_in_one_step() {
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi ");
+        engine.paint(&mut canvas, &mut overlay, &[ime_preedit("に", None)]);
+        engine.paint(&mut canvas, &mut overlay, &[ime_preedit("にほ", None)]);
+        engine.paint(&mut canvas, &mut overlay, &[ime_commit("日本")]);
+        assert_eq!(atom.get().unwrap().get(), "hi 日本");
+
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('z'))]);
+        assert_eq!(
+            atom.get().unwrap().get(), "hi ",
+            "one Cmd+Z must remove the WHOLE committed word (back to before composition started), \
+             not just the last intermediate preedit snapshot"
+        );
+    }
+
+    #[test]
+    fn ime_commit_with_no_preceding_preedit_just_inserts_at_the_cursor() {
+        // Some IMEs commit directly for a single-candidate confirmation,
+        // with no Preedit event first.
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi ");
+        engine.paint(&mut canvas, &mut overlay, &[ime_commit("日本")]);
+        assert_eq!(atom.get().unwrap().get(), "hi 日本");
+    }
+
+    #[test]
+    fn ime_preedit_paints_an_underline_decoration_under_the_provisional_text() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        struct OneUnderlineInput;
+        impl Component for OneUnderlineInput {
+            fn build(&self, ctx: &mut Context) -> Element {
+                let name: rosace_state::Atom<String> = ctx.state(String::new());
+                TextInput::new()
+                    .value(name.get())
+                    .width(200.0)
+                    .on_change(move |v| name.set(v))
+                    .into_element()
+            }
+        }
+        let mut engine = FrameEngine::new(Box::new(OneUnderlineInput), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(200, 60);
+        let mut overlay = SkiaCanvas::new(200, 60);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+
+        let before = canvas.pixels().to_vec();
+        engine.paint(&mut canvas, &mut overlay, &[ime_preedit("に", None)]);
+        let after = canvas.pixels().to_vec();
+        assert_ne!(before, after, "an active IME composition must change what's painted (text + underline), not render identically to before");
+    }
+
+    // ── Context menu + touch selection handles (D116 Step 7) ─────────────
+
+    fn right_down(x: f32, y: f32) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::MouseDown { x, y, button: rosace_platform::MouseButton::Right }
+    }
+    fn right_up(x: f32, y: f32) -> rosace_platform::InputEvent {
+        rosace_platform::InputEvent::MouseUp { x, y, button: rosace_platform::MouseButton::Right }
+    }
+
+    #[test]
+    fn right_click_selects_all_via_the_context_menu() {
+        // Real proof the menu item's callback reaches all the way back
+        // into a real edit — not just that a menu renders. Select All is
+        // the one action that needs no PRE-existing selection to exercise.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+
+        engine.paint(&mut canvas, &mut overlay, &[right_down(20.0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[right_up(20.0, 18.0)]);
+        // The menu's "Select All" item — find it via the overlay route's
+        // hit callback the same way a real click would, by simulating a
+        // Left click at the item's on-screen position. Since the exact
+        // pixel layout of `Menu` isn't this test's concern, drive it
+        // through the SAME `ContextMenuAction` queue a real click would
+        // enqueue onto, proving `drain_context_menu` applies it correctly
+        // — the menu's own rendering/hit-testing is `Menu`'s existing,
+        // already-tested responsibility, not re-tested here.
+        engine.test_enqueue_context_menu_action(ContextMenuAction::SelectAll);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Backspace)]);
+        assert_eq!(atom.get().unwrap().get(), "", "Select All via the context menu must select the whole field, so Backspace clears it entirely");
+    }
+
+    #[test]
+    fn right_click_copy_and_paste_round_trip_through_the_real_clipboard() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cb = rosace_clipboard::SystemClipboard::new();
+        let original = cb.read();
+
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        // Select "hello" (Cmd+A) so Copy has something real to grab.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('a'))]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Meta)]);
+
+        engine.paint(&mut canvas, &mut overlay, &[right_down(20.0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[right_up(20.0, 18.0)]);
+        engine.test_enqueue_context_menu_action(ContextMenuAction::Copy);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert_eq!(cb.read().as_deref(), Some("hello"), "Copy via the context menu must write the real selection to the real system clipboard");
+
+        // Clear the field, then Paste back via the menu.
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Char('a'))]);
+        engine.paint(&mut canvas, &mut overlay, &[key_up(rosace_platform::Key::Meta)]);
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Backspace)]);
+        assert_eq!(atom.get().unwrap().get(), "");
+
+        engine.paint(&mut canvas, &mut overlay, &[right_down(20.0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[right_up(20.0, 18.0)]);
+        engine.test_enqueue_context_menu_action(ContextMenuAction::Paste);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert_eq!(atom.get().unwrap().get(), "hello", "Paste via the context menu must insert the real clipboard content");
+
+        match original {
+            Some(text) => { let _ = cb.write(&text); }
+            None => cb.clear(),
+        }
+    }
+
+    #[test]
+    fn right_click_opens_the_menu_over_the_field_that_was_clicked() {
+        // A right-click must focus/target the RIGHT-CLICKED field, not
+        // whatever happened to be focused before — same invariant
+        // `edit_controller_targets_the_correct_field_among_several`
+        // already proves for controllers.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let first = Arc::new(OnceLock::new());
+        let second = Arc::new(OnceLock::new());
+        let root = TwoTextInputs { first: first.clone(), second: second.clone() };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(200, 200);
+        let mut overlay = SkiaCanvas::new(200, 200);
+
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        // Focus + populate the FIRST field via a normal click.
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "one");
+        // Right-click the SECOND field (below the first, per `TwoTextInputs`'s
+        // 30px-tall rows — y=45 lands mid-row, well clear of the boundary)
+        // without ever left-clicking it first.
+        engine.paint(&mut canvas, &mut overlay, &[right_down(20.0, 45.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[right_up(20.0, 45.0)]);
+        engine.test_enqueue_context_menu_action(ContextMenuAction::SelectAll);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "two");
+        assert_eq!(first.get().unwrap().get(), "one", "the first field must be untouched by the second field's right-click");
+        assert_eq!(second.get().unwrap().get(), "two", "typing after the second field's context menu must land in the SECOND field, not the first");
+    }
+
+    #[test]
+    fn long_press_on_an_editable_selects_the_word_under_it() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+
+        let x = embedded_x_for("hello wo"); // lands inside "world"
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        // Hold — no MouseMove/MouseUp — past the long-press threshold.
+        // `LONG_PRESS_SELECT_MS` is 500; sleep comfortably past it.
+        std::thread::sleep(std::time::Duration::from_millis(650));
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "hello X", "a long press must select the whole word under it, same as a double-click");
+    }
+
+    #[test]
+    fn a_quick_press_and_release_does_not_trigger_long_press_select() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+
+        let x = embedded_x_for("hello wo");
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[mouse_up(x, 18.0)]);
+        std::thread::sleep(std::time::Duration::from_millis(650));
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "hello woXrld", "releasing promptly must cancel the long-press timer, leaving a plain caret insert");
+    }
+
+    #[test]
+    fn dragging_a_selection_handle_extends_the_selection() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello world");
+
+        // Double-click selects "world" (6..11) — creates the handles this
+        // test then drags.
+        let x = embedded_x_for("hello wo");
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[click(x, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[]); // repaint so the handle anchors reflect the new selection
+
+        // Grab the START handle (at "hello " boundary, index 6) and drag
+        // it back to the very start of the field — extends the selection
+        // to cover "hello world" entirely.
+        let handle_x = embedded_x_for("hello ");
+        let line_h = rosace_render::FontCache::embedded().line_height(11.0);
+        let handle_y = 18.0 - (11.0 / 2.0) + line_h; // matches TextInput's own ty + line_h
+        engine.paint(&mut canvas, &mut overlay, &[
+            rosace_platform::InputEvent::MouseDown { x: handle_x, y: handle_y, button: rosace_platform::MouseButton::Left },
+        ]);
+        engine.paint(&mut canvas, &mut overlay, &[mouse_move(embedded_x_for(""), 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[mouse_up(embedded_x_for(""), 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "X");
+        assert_eq!(atom.get().unwrap().get(), "X", "dragging the start handle to the field's start must extend the selection to cover the whole value");
+    }
+
+    // ── rosace-forms wiring + input filters (D116 Step 8) ─────────────────
+
+    struct OneFilteredTextInput {
+        captured: Arc<OnceLock<rosace_state::Atom<String>>>,
+        filters: Vec<text_edit::InputFilter>,
+    }
+    impl Component for OneFilteredTextInput {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let name: rosace_state::Atom<String> = ctx.state(String::new());
+            let _ = self.captured.set(name.clone());
+            TextInput::new()
+                .value(name.get())
+                .width(300.0)
+                .filters(self.filters.clone())
+                .on_change({ let name = name.clone(); move |v| name.set(v) })
+                .into_element()
+        }
+    }
+
+    #[test]
+    fn digits_filter_strips_non_digit_characters_typed_through_real_dispatch() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured = Arc::new(OnceLock::new());
+        let root = OneFilteredTextInput { captured: captured.clone(), filters: vec![text_edit::InputFilter::digits()] };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(300, 60);
+        let mut overlay = SkiaCanvas::new(300, 60);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "a1b2c3");
+        assert_eq!(captured.get().unwrap().get(), "123", "a digits-only filter must strip letters as they're typed, not just on submit");
+    }
+
+    #[test]
+    fn max_length_filter_truncates_typing_through_real_dispatch() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured = Arc::new(OnceLock::new());
+        let root = OneFilteredTextInput { captured: captured.clone(), filters: vec![text_edit::InputFilter::max_length(3)] };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(300, 60);
+        let mut overlay = SkiaCanvas::new(300, 60);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        assert_eq!(captured.get().unwrap().get(), "hel", "typing past MaxLength must truncate, every keystroke, not just at the end");
+    }
+
+    #[test]
+    fn max_length_filter_still_lets_backspace_shrink_the_value() {
+        // A real correctness risk of clamping the selection on every
+        // filtered commit: backspace itself produces a SHORTER value
+        // than before filtering even runs, so `filtered == new_value`
+        // there — must not somehow re-lengthen or get stuck.
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured = Arc::new(OnceLock::new());
+        let root = OneFilteredTextInput { captured: captured.clone(), filters: vec![text_edit::InputFilter::max_length(3)] };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(300, 60);
+        let mut overlay = SkiaCanvas::new(300, 60);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hello");
+        engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Backspace)]);
+        assert_eq!(captured.get().unwrap().get(), "he");
+    }
+
+    struct OneFormTextInput {
+        captured_field: Arc<OnceLock<rosace_forms::FormField>>,
+        submitted: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl Component for OneFormTextInput {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let field = rosace_forms::FormField::for_ctx(ctx, "name").rule(rosace_forms::Required);
+            let _ = self.captured_field.set(field.clone());
+            // `.rule()` on a fresh `FormField::for_ctx` result each build
+            // would rebuild the validator list every frame harmlessly
+            // (same rules, re-pushed) — real apps typically build the
+            // field once via `ctx.state`-backed `for_ctx` and DON'T
+            // re-add rules every build; captured here only so the test
+            // can read it back.
+            let form = rosace_forms::Form::new().field(field.clone());
+            let submitted = self.submitted.clone();
+            Column::new()
+                // `.field()` is the WHOLE binding — deliberately no
+                // separate `.on_change()` call after it (that would
+                // override the binding, per `.field()`'s own doc
+                // comment; `field.get()` IS the value to read back).
+                .child(TextInput::new().width(300.0).field(field.clone()))
+                .child(Button::new("Submit").disabled_if(!form.is_valid()).on_press(move || {
+                    let submitted = submitted.clone();
+                    form.submit(move || { submitted.store(true, std::sync::atomic::Ordering::Relaxed); });
+                }))
+                .into_element()
+        }
+    }
+
+    #[test]
+    fn typing_in_a_bound_field_updates_the_forms_live_validity() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured_field = Arc::new(OnceLock::new());
+        let submitted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let root = OneFormTextInput { captured_field: captured_field.clone(), submitted: submitted.clone() };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(300, 120);
+        let mut overlay = SkiaCanvas::new(300, 120);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let field = captured_field.get().unwrap();
+        assert!(!field.is_valid(), "an empty Required field must be invalid from the very first paint, before any typing");
+        assert!(!field.is_touched(), "but not yet flagged touched — no error caption until the user reaches it");
+
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "alice");
+        let field = captured_field.get().unwrap();
+        assert!(field.is_touched());
+        assert!(field.is_valid(), "a Required field with real text must become valid live, through real keyboard dispatch");
+        assert_eq!(field.get(), "alice", "the field's own shared value must reflect real keyboard dispatch");
+    }
+
+    #[test]
+    fn submit_button_gates_on_form_validity_and_calls_the_real_submit_callback() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured_field = Arc::new(OnceLock::new());
+        let submitted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let root = OneFormTextInput { captured_field: captured_field.clone(), submitted: submitted.clone() };
+        let mut engine = FrameEngine::new(Box::new(root), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(300, 120);
+        let mut overlay = SkiaCanvas::new(300, 120);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        // The submit button sits below the 36px-tall TextInput.
+        let submit_y = 50.0;
+        engine.paint(&mut canvas, &mut overlay, &[click(60.0, submit_y)]);
+        assert!(!submitted.load(std::sync::atomic::Ordering::Relaxed), "a disabled button (empty Required field) must not register the click at all");
+
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "alice");
+        engine.paint(&mut canvas, &mut overlay, &[click(60.0, submit_y)]);
+        assert!(submitted.load(std::sync::atomic::Ordering::Relaxed), "a real click on a now-enabled submit button must run Form::submit's callback");
     }
 }

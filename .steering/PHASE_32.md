@@ -43,7 +43,9 @@ Exit: an icon NOT in today's 27-shape list is added by a downstream crate (a rea
 ### Step 3 — Wire `RichText`/`TextSpan` into `Text`
 `Text` gains a way to render mixed-style spans (bold/italic/color changes mid-paragraph) using `rosace-text`'s existing `RichText`/`TextSpan`/`TextLayout` types — real integration, not a rewrite of those types.
 
-Exit: a real running app renders a paragraph with at least two different inline styles (e.g. bold + a colored link-style span) in a single `Text` widget, verified live.
+**Concrete motivating use-case (user-raised 2026-07-12, deliberately queued here rather than pulled forward)**: `markdown_editor_demo`'s "preview" pane is honestly just a SECOND `TextArea` with the same `SpanSource` highlighting — it shows the raw source with colors, markers (`**`, `#`, `` ` ``) visible. The user expected a rendered preview (markers hidden, real bold/heading formatting). That is exactly this step's deliverable: a read-only rich-text `Text`/`RichText` the demo's preview pane switches to, with the app-side markdown tokenizer emitting `TextSpan`s instead of editor `Span`s. D116 deliberately excludes WYSIWYG *editing* — the editor pane stays source-styled; only the preview pane changes.
+
+Exit: a real running app renders a paragraph with at least two different inline styles (e.g. bold + a colored link-style span) in a single `Text` widget, verified live — and `markdown_editor_demo`'s preview pane renders actual formatted markdown (markers hidden).
 
 ### Step 4 — Emoji / color-glyph support
 Depends on Phase 27 Step 4's glyph atlas existing. Add color-bitmap glyph handling (most fonts ship emoji as embedded bitmaps or COLR/CPAL layered outlines) as a distinct atlas-entry kind alongside the atlas's default monochrome-vector glyphs.

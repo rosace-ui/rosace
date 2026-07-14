@@ -73,6 +73,21 @@ typedef struct {
 #define TZR_KEY_ALT         11
 #define TZR_KEY_META        12
 #define TZR_KEY_CHAR        13
+/* Added D116 Phase 28 Step 6 (Known Issue #15) — see event.rs's comment
+ * on the Rust-side constants for why these were missing until now. */
+#define TZR_KEY_DELETE       14
+#define TZR_KEY_HOME         15
+#define TZR_KEY_END          16
+
+/* Keyboard-type hint values (D116 Phase 28 Step 6) — poll
+ * tzr_focused_keyboard_type() (per-app codegen wraps
+ * rosace_ffi::focused_keyboard_type()) once per frame to know which
+ * software keyboard layout to show for the currently-focused field. */
+#define TZR_KEYBOARD_DEFAULT 0
+#define TZR_KEYBOARD_EMAIL   1
+#define TZR_KEYBOARD_NUMERIC 2
+#define TZR_KEYBOARD_URL     3
+#define TZR_KEYBOARD_PHONE   4
 
 /* Creates the engine against `surface_handle`. Returns NULL on failure
  * (e.g. no suitable GPU adapter) — mirrors `GpuPresenter::new`. */

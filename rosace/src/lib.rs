@@ -424,7 +424,7 @@ struct OverlayRoute {
     input: rosace_widgets::tree::InputBehavior,
     on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
     hits: Vec<(rosace_core::types::Rect, Arc<dyn Fn() + Send + Sync>)>,
-    scrolls: Vec<(rosace_core::types::Rect, rosace_widgets::tree::ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
+    scrolls: Vec<(rosace_core::types::Rect, rosace_widgets::tree::ScrollAxes, rosace_widgets::tree::HitHandler)>,
 }
 
 /// Grow a rect by `m` logical pixels on every side.
@@ -497,8 +497,12 @@ pub use rosace_widgets::{
     push_overlay,
     Row, Scaffold, ScrollView, ScrollAxis, Sheet,
     Slider, Spacer, Stack, Switch,
-    Tab, TabBar, Text, TextInput, Toast, ToastKind, Tooltip,
+    Tab, TabBar, Text, TextArea, TextInput, Toast, ToastKind, Tooltip,
+    CursorShape, CursorStyle, EditController, InputFilter, Span,
 };
+
+// Forms (D116 Phase 28 Step 8)
+pub use rosace_forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
 
 // Text styling
 pub use rosace_widgets::{TextAlign, FontWeight};
@@ -509,6 +513,9 @@ pub use rosace_theme::built_in::{dark_theme, light_theme, material, cupertino};
 
 // Platform (D105)
 pub use rosace_core::Platform;
+
+// Keyboard-type hint (D116 Phase 28 Step 6)
+pub use rosace_core::KeyboardType;
 
 // Geometry
 pub use rosace_core::types::{Point, Rect, Size};
@@ -574,6 +581,7 @@ pub mod prelude {
     pub use rosace_theme::{ThemeData, ColorScheme, Themes, AppBarStyle, TitleAlign};
     pub use rosace_theme::built_in::{dark_theme, light_theme, material, cupertino};
     pub use rosace_core::Platform;
+    pub use rosace_core::KeyboardType;
     pub use rosace_core::types::{Point, Rect, Size};
     pub use rosace_layout::{Constraints, CrossAxisAlignment, MainAxisAlignment};
     pub use rosace_state::Atom;

@@ -607,6 +607,14 @@ fn scissor_for(clip: (f32, f32, f32, f32), surface_w: u32, surface_h: u32) -> Op
     if x1 > x0 && y1 > y0 { Some((x0, y0, x1 - x0, y1 - y0)) } else { None }
 }
 
+/// One prepared glyph batch for the skip-present comparison (D089):
+/// (clip rect, instance floats).
+type GlyphBatchData = (Option<(f32, f32, f32, f32)>, Vec<f32>);
+
+/// Skip-present comparison entry for one image draw (D089):
+/// (content key, dest rect, opacity, clip rect).
+type ImageDrawData = (u64, (f32, f32, f32, f32), f32, Option<(f32, f32, f32, f32)>);
+
 /// GPU compositor state. One instance per window.
 ///
 /// Created via [`GpuPresenter::new`]. Returns `None` if wgpu fails to find a
@@ -651,7 +659,7 @@ pub struct GpuPresenter {
     glyph_gamma:           Option<&'static [u8; 256]>,
     /// Per-slot cached glyph batches (instance bytes + clip) — the
     /// skip-present comparison for text, mirroring cached_quads.
-    cached_glyph_batches:  Vec<(Option<(f32, f32, f32, f32)>, Vec<f32>)>,
+    cached_glyph_batches:  Vec<GlyphBatchData>,
     /// Image textures keyed by content hash (D109 image textures).
     image_cache:           std::collections::HashMap<u64, ImageTexEntry>,
     image_pipeline:        wgpu::RenderPipeline,
@@ -660,7 +668,7 @@ pub struct GpuPresenter {
     /// and glyphs, which are 1:1 and use the nearest sampler).
     sampler_linear:        wgpu::Sampler,
     /// Skip-present comparison for images: (key, dest, opacity, clip).
-    cached_images:         Vec<(u64, (f32, f32, f32, f32), f32, Option<(f32, f32, f32, f32)>)>,
+    cached_images:         Vec<ImageDrawData>,
     /// Total bytes held by `image_cache` (kept in sync on insert/evict).
     image_cache_bytes:     usize,
     /// Monotonic present counter — the LRU clock for image eviction.
@@ -730,7 +738,6 @@ impl GpuPresenter {
                 required_limits:   wgpu::Limits::downlevel_webgl2_defaults()
                     .using_resolution(adapter.limits()),
                 memory_hints:      Default::default(),
-                ..Default::default()
             }, None)
             .await
             .ok()?;
@@ -1464,6 +1471,7 @@ impl GpuPresenter {
 
         // Transient per-item resources, dropped after submit (see doc note).
         let mut transient_layers: Vec<CachedLayer> = Vec::new();
+        #[allow(clippy::type_complexity)]
         let mut transient_quads:  Vec<(u64, wgpu::BindGroup, Option<(u32, u32, u32, u32)>)> = Vec::new();
         #[allow(clippy::type_complexity)]
         let mut transient_glyphs: Vec<Option<(wgpu::BindGroup, wgpu::Buffer, u32, Option<(u32, u32, u32, u32)>)>> = Vec::new();
@@ -1779,11 +1787,43 @@ impl GpuPresenter {
     /// Resize the wgpu surface.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 { return; }
+        if (width, height) == (self.width, self.height) { return; }
         self.width  = width;
         self.height = height;
         self.config.width  = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+
+        // A reconfigure invalidates two things the D089 skip/reuse caches
+        // assume, and both produced REAL live-resize bugs (2026-07-12):
+        //
+        // 1. "The swapchain already shows this frame." It doesn't — a
+        //    reconfigured surface's contents are undefined. If the next
+        //    frame's content happens to be byte-identical (window grew at
+        //    the bottom-right, content anchored top-left), every
+        //    `*_unchanged` comparison passes and the present is SKIPPED,
+        //    leaving garbage/blank on screen. Clearing the compare-state
+        //    guarantees the first present after a resize always draws.
+        //
+        // 2. Quad placement uniforms. `shader_quad_uniform(rect, sw, sh)`
+        //    bakes the SURFACE SIZE into each cached quad's px→NDC mapping,
+        //    but `sync_cached_quads` only rewrites the buffer when the
+        //    quad's RECT changes — so after a resize, any quad whose pixel
+        //    rect is unchanged kept its old-surface mapping and rendered
+        //    scaled/shifted, while the glyph pipeline (whose globals ARE
+        //    keyed on surface size) rendered correctly: backgrounds and
+        //    text visibly disagreeing during/after a window drag. Clearing
+        //    forces every quad uniform to rebuild against the new size.
+        //
+        // (`cached_images` is compare-metadata only — the image TEXTURE
+        // cache is untouched, so this costs a redraw, not re-uploads.
+        // Offscreen scroll layers are safe without clearing: their placed
+        // uniform is recomputed against the live surface size every draw.)
+        self.cached_quads.clear();
+        self.cached_layers.clear();
+        self.cached_glyph_batches.clear();
+        self.cached_images.clear();
+        self.cached_backdrops.clear();
     }
 
     /// Present a single opaque layer (backward-compatible shim for Phase 15 API).
@@ -1838,6 +1878,7 @@ impl GpuPresenter {
         let offs: Vec<&OffscreenRef> = items.iter()
             .filter_map(|i| match i { FrameItem::Offscreen(o) => Some(o), _ => None })
             .collect();
+        #[allow(clippy::type_complexity)]
         let glyph_batches: Vec<(&Vec<AtlasGlyph<'_>>, Option<(f32, f32, f32, f32)>)> = items.iter()
             .filter_map(|i| match i {
                 FrameItem::Glyphs { glyphs, clip } => Some((glyphs, *clip)),
@@ -1854,14 +1895,14 @@ impl GpuPresenter {
             && glyph_batches.is_empty() && images.is_empty() && backdrops.is_empty() { return; }
         let backdrops_unchanged = self.cached_backdrops == backdrops;
 
-        let new_images: Vec<(u64, (f32, f32, f32, f32), f32, Option<(f32, f32, f32, f32)>)> =
+        let new_images: Vec<ImageDrawData> =
             images.iter().map(|q| (q.key, q.dest, q.opacity, q.clip)).collect();
         let images_unchanged = self.cached_images == new_images;
 
         // Upload first-seen glyphs + build per-batch instance floats
         // (D109 Step 4). Runs before the skip check so the comparison
         // sees the final instance data.
-        let new_glyph_batches: Vec<(Option<(f32, f32, f32, f32)>, Vec<f32>)> = glyph_batches
+        let new_glyph_batches: Vec<GlyphBatchData> = glyph_batches
             .iter()
             .map(|(glyphs, clip)| (*clip, self.prepare_glyphs(glyphs)))
             .collect();
@@ -1905,6 +1946,39 @@ impl GpuPresenter {
             );
             return;
         }
+
+        // Acquire the swapchain texture BEFORE committing any of the
+        // `cached_*` skip-present bookkeeping below. During an OS-level
+        // live-resize drag on macOS, `get_current_texture()` routinely
+        // returns `Outdated` for a frame or two right after `resize()`
+        // reconfigures the surface — the old code silently `return`ed much
+        // further down, AFTER already committing this frame's
+        // `cached_glyph_batches`/`cached_images`/`cached_backdrops` to
+        // "this frame's" values. The frame was then never actually drawn,
+        // but the D089 skip-present fast path above would then think it
+        // HAD been (the caches already matched), so content could silently
+        // stay missing for many frames after — until something else
+        // changed. Bailing out here, before the caches below are touched,
+        // means a dropped frame is just a dropped frame: the next
+        // `present_frame` call sees the real diff again and draws it.
+        let output = match self.surface.get_current_texture() {
+            Ok(o) => o,
+            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                self.surface.configure(&self.device, &self.config);
+                match self.surface.get_current_texture() {
+                    Ok(o) => o,
+                    Err(e) => {
+                        log::debug!("compositor: surface unavailable after reconfigure ({e:?}), skipping frame");
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                log::debug!("compositor: surface unavailable ({e:?}), skipping frame");
+                return;
+            }
+        };
+
         // A mid-prepare atlas flush invalidates instance UVs built earlier
         // in this pass — rebuild from the now-stable slot map (every alloc
         // already happened, so a rebuild cannot flush again unless one
@@ -2005,7 +2079,6 @@ impl GpuPresenter {
         // the surface at the end; all other frames render direct.
         let use_scene = !backdrops.is_empty();
         if use_scene { self.ensure_scene(sw, sh); }
-        let Ok(output) = self.surface.get_current_texture() else { return; };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let target: &wgpu::TextureView = if use_scene {
             &self.scene.as_ref().expect("ensure_scene above").scene_view

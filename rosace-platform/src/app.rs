@@ -8,7 +8,7 @@ use rosace_trace::{event::RosaceTrace, trace};
 
 use rosace_render::canvas::SkiaCanvas;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
@@ -119,6 +119,7 @@ impl PlatformWindow {
             shader_quads: Vec::new(),
             frame_items: Vec::new(),
             shader_fallback_warned: false,
+            ime_composing: false,
         };
         // Native blocks on the OS event loop; web cannot block, so it hands the
         // app to the browser's requestAnimationFrame loop and returns.
@@ -171,6 +172,10 @@ struct AppState<F> {
     // Warn-once flag: shader registrations/quads on the softbuffer fallback
     // path (no GPU) are dropped — loud the first time, silent after.
     shader_fallback_warned: bool,
+    // True while a real OS IME session (D116 Step 6) is actively
+    // composing — suppresses winit's own key->text resolution so a
+    // composed CJK sequence doesn't also insert its raw keystrokes.
+    ime_composing: bool,
 }
 
 /// One canvas frame item (D109 C1) as a compositor item: quads pass
@@ -252,6 +257,303 @@ fn drain_shader_registrations(presenter: &mut rosace_compositor::GpuPresenter) {
         // add here — the pipeline simply isn't registered and any quad
         // referencing it warns once at present time.
         let _ = presenter.register_shader(id.raw(), &spec.wgsl_source, blend);
+    }
+}
+
+impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
+    /// Resize the GPU surface/canvases to the current physical window size,
+    /// run one paint pass, and present. Called from `RedrawRequested` (the
+    /// normal per-frame path) AND synchronously from `WindowEvent::Resized`
+    /// (see the comment there for why the latter matters on macOS).
+    fn redraw(&mut self) {
+        let window = self.window.as_ref().unwrap();
+        let scale = window.scale_factor() as f32;
+        let phys = physical_canvas_size(window);
+        let phys_w = phys.width;
+        let phys_h = phys.height;
+        if phys_w == 0 || phys_h == 0 {
+            return;
+        }
+
+        if let Some(surface) = self.surface.as_mut() {
+            surface
+                .resize(
+                    NonZeroU32::new(phys_w).unwrap(),
+                    NonZeroU32::new(phys_h).unwrap(),
+                )
+                .unwrap();
+        }
+
+        // Keep the GPU surface at the PHYSICAL canvas resolution every
+        // frame. The presenter is initialised at the window's logical
+        // size, so without this the first frame(s) render a physical
+        // (Retina) canvas into a half-resolution surface and the OS
+        // upscales the result → blurry text until a Resized event
+        // happens to correct it. Syncing here guarantees a 1:1 map.
+        // A surface reconfigure discards its contents, so force a
+        // repaint+present this frame (never skip it via D089).
+        if let Some(presenter) = self.presenter.as_mut() {
+            if presenter.surface_size() != (phys_w, phys_h) {
+                presenter.resize(phys_w, phys_h);
+                self.canvas.mark_frame_dirty();
+            }
+        }
+
+        let now = Instant::now();
+        let dt = self.last_frame_time
+            .map(|t| t.elapsed().as_secs_f32())
+            .unwrap_or(1.0 / 60.0)
+            .clamp(0.001, 0.1);
+        rosace_animate::set_frame_dt(dt);
+        self.last_frame_time = Some(now);
+
+        #[cfg(debug_assertions)]
+        let frame = self.frame_counter;
+        self.frame_counter += 1;
+
+        #[cfg(debug_assertions)]
+        trace!(RosaceTrace::FrameStart {
+            frame,
+            timestamp: now,
+        });
+
+        // Resize base + overlay canvases to match physical window size.
+        if self.canvas.width() != phys_w
+            || self.canvas.height() != phys_h
+            || (self.canvas.scale() - scale).abs() > 0.01
+        {
+            // Recreation must carry the GPU-shapes flag over — a
+            // resized window silently dropping to CPU shapes would
+            // be an invisible mode flip (D109).
+            let gpu_shapes = self.canvas.gpu_shapes();
+            self.canvas         = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
+            self.canvas.set_gpu_shapes(gpu_shapes);
+            self.overlay_canvas = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
+        }
+
+        // Clear overlay to transparent before each frame (D078).
+        self.overlay_canvas.clear_transparent();
+
+        let events = std::mem::take(&mut self.pending_events);
+        (self.paint_fn)(&mut self.canvas, &mut self.overlay_canvas, &events);
+
+        // Position the OS's CJK candidate window near the real
+        // caret (D116 Step 6) — `rosace_core::ime_cursor_area()`
+        // is a `GlobalAtom` bridge `TextInput`/`TextArea` publish
+        // to every paint while focused (see `ime_hint.rs` for why
+        // it lives in `rosace-core`, the lowest layer both this
+        // crate and `rosace-widgets` share). Logical -> physical
+        // via the same `scale` used for the canvas itself.
+        if let Some(rect) = rosace_core::ime_cursor_area() {
+            window.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(
+                    (rect.origin.x * scale) as i32,
+                    (rect.origin.y * scale) as i32,
+                ),
+                winit::dpi::PhysicalSize::new(
+                    (rect.size.width * scale).max(1.0) as u32,
+                    (rect.size.height * scale).max(1.0) as u32,
+                ),
+            );
+        }
+
+        // Present the frame — GPU multi-layer compositor (D076, D079),
+        // with softbuffer fallback that CPU-composites overlay on top.
+        if let Some(presenter) = &mut self.presenter {
+            // Runtime shader registrations (D109) — anything queued
+            // since startup compiles NOW, before this frame's present
+            // could reference it. Startup registrations already
+            // compiled in `resumed`.
+            drain_shader_registrations(presenter);
+
+            // Per-frame dirtiness drives the compositor's texture cache
+            // (D089): a clean base layer reuses its persistent GPU
+            // texture, and a frame where nothing changed skips the
+            // present entirely. `take_frame_dirty` must run every frame
+            // so the flag resets; the base only repaints (and re-marks)
+            // when the frame loop actually redraws it.
+            let base_dirty = self.canvas.take_frame_dirty();
+
+            // Refresh the retained shader quads / frame items only on
+            // painted frames (`play_picture` re-collects the full set
+            // each paint — including painting to an empty set when
+            // shader content disappeared). Clean frames keep the
+            // retained set, same pattern as scroll layers below (D109).
+            if base_dirty {
+                if self.canvas.gpu_shapes() {
+                    self.frame_items = self.canvas.take_frame_items();
+                } else {
+                    self.shader_quads = self.canvas.take_shader_quads();
+                }
+            }
+            // Overlay shader content is not supported yet (the overlay
+            // is replayed every frame; quads there would need their own
+            // altitude in the item order) — drain so they can't
+            // accumulate, loud once if anything shows up.
+            let overlay_quads = self.overlay_canvas.take_shader_quads();
+            if !overlay_quads.is_empty() && !self.shader_fallback_warned {
+                self.shader_fallback_warned = true;
+                log::warn!(
+                    "rosace-platform: {} ShaderFill command(s) recorded in the \
+                     OVERLAY pass are not supported yet and were dropped",
+                    overlay_quads.len(),
+                );
+            }
+
+            // Refresh the retained scroll layers only when the frame
+            // loop published (it repainted). `None` = clean frame →
+            // keep the retained set so the layers persist unchanged.
+            let refreshed = crate::scroll_layer::take_scroll_layers();
+            let scroll_dirty = refreshed.is_some();
+            if let Some(layers) = refreshed {
+                self.scroll_layers = layers;
+            }
+
+            // Composite bottom-to-top: base, shader quads (base-content
+            // altitude, D109 Step 2 — full per-command interleaving is
+            // Phase 27 C1), scroll layers (each placed at its
+            // viewport), then the overlay on top (D090). Scroll layers
+            // re-upload only on a publish frame (scroll_dirty);
+            // otherwise D089 reuses their persistent textures.
+            let mut items: Vec<rosace_compositor::FrameItem<'_>> = Vec::new();
+            if self.canvas.gpu_shapes() {
+                // GPU-shapes mode (D109 Step 3, C1): the frame IS
+                // the ordered item list — background quad, shape
+                // quads, and CPU segments (text/blits) placed at
+                // their bboxes, in command order. No full-frame
+                // base buffer exists.
+                for it in &self.frame_items {
+                    items.push(canvas_item_to_frame(it, base_dirty));
+                }
+            } else {
+                items.push(rosace_compositor::FrameItem::Pixels(
+                    rosace_compositor::CompositorLayer::tracked(
+                        self.canvas.pixels(), phys_w, phys_h, base_dirty,
+                    ),
+                ));
+                for q in &self.shader_quads {
+                    items.push(rosace_compositor::FrameItem::Shader(
+                        rosace_compositor::ShaderQuad {
+                            pipeline: q.pipeline_id,
+                            rect:     q.rect,
+                            uniforms: &q.uniforms,
+                            clip:     q.clip,
+                        },
+                    ));
+                }
+            }
+            for sl in &self.scroll_layers {
+                // Live scroll offset from the non-reactive channel
+                // (physical px). A wheel tick updates this without a
+                // repaint, so a scroll-only frame is a uniform write
+                // over the reused content texture (D090).
+                let off = rosace_state::scroll_offset(sl.id);
+                if !sl.items.is_empty() {
+                    // GPU-shapes scroll content (D109 C2): render
+                    // the items into the offscreen target on
+                    // publish frames, sample it at the live offset
+                    // every frame.
+                    if scroll_dirty {
+                        let sub: Vec<rosace_compositor::FrameItem<'_>> = sl.items
+                            .iter()
+                            .map(|it| canvas_item_to_frame(it, true))
+                            .collect();
+                        presenter.render_offscreen(sl.id, sl.width, sl.height, &sub);
+                    }
+                    items.push(rosace_compositor::FrameItem::Offscreen(
+                        rosace_compositor::OffscreenRef {
+                            key: sl.id,
+                            dest: rosace_compositor::LayerRect {
+                                x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
+                            },
+                            src_offset: (off[0] * scale, off[1] * scale),
+                            dirty: scroll_dirty,
+                        },
+                    ));
+                } else {
+                    items.push(rosace_compositor::FrameItem::Pixels(
+                        rosace_compositor::CompositorLayer::placed(
+                            &sl.pixels, sl.width, sl.height,
+                            rosace_compositor::LayerRect {
+                                x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
+                            },
+                            (off[0] * scale, off[1] * scale),
+                            scroll_dirty,
+                        ),
+                    ));
+                }
+            }
+            // Skip the overlay layer entirely when nothing drew into it
+            // this frame. When it did draw, treat it as dirty — the
+            // overlay is cleared and replayed every frame, so its pixels
+            // may differ even when the base is clean.
+            if self.overlay_canvas.has_drawn() {
+                items.push(rosace_compositor::FrameItem::Pixels(
+                    rosace_compositor::CompositorLayer::tracked(
+                        self.overlay_canvas.pixels(), phys_w, phys_h, true,
+                    ),
+                ));
+            }
+            presenter.present_frame(&items);
+        } else if let Some(surface) = &mut self.surface {
+            // Softbuffer fallback: no GPU, so ShaderFill content can't
+            // render. Drain quads so they don't accumulate; warn once.
+            let dropped = self.canvas.take_shader_quads();
+            let dropped_overlay = self.overlay_canvas.take_shader_quads();
+            if (!dropped.is_empty() || !dropped_overlay.is_empty())
+                && !self.shader_fallback_warned
+            {
+                self.shader_fallback_warned = true;
+                log::warn!(
+                    "rosace-platform: DrawCommand::ShaderFill content dropped — \
+                     GPU compositor unavailable (softbuffer fallback)",
+                );
+            }
+            let base_pixels = self.canvas.pixels();
+            let mut buffer = surface.buffer_mut().unwrap();
+
+            if self.overlay_canvas.has_drawn() {
+                // Overlay has content — Porter-Duff "over" blend.
+                let overlay_pixels = self.overlay_canvas.pixels();
+                for (i, pixel) in buffer.iter_mut().enumerate() {
+                    let bi = i * 4;
+                    let br  = base_pixels[bi]     as u32;
+                    let bg  = base_pixels[bi + 1] as u32;
+                    let bb  = base_pixels[bi + 2] as u32;
+                    let oa  = overlay_pixels[bi + 3] as u32;
+                    let or_ = overlay_pixels[bi]     as u32;
+                    let og  = overlay_pixels[bi + 1] as u32;
+                    let ob  = overlay_pixels[bi + 2] as u32;
+                    let inv = 255 - oa;
+                    let r = (or_ * oa + br * inv) / 255;
+                    let g = (og  * oa + bg * inv) / 255;
+                    let b = (ob  * oa + bb * inv) / 255;
+                    *pixel = (r << 16) | (g << 8) | b;
+                }
+            } else {
+                // No overlay — fast path: copy base pixels directly,
+                // avoiding O(pixels) multiply/divide every frame.
+                for (i, pixel) in buffer.iter_mut().enumerate() {
+                    let bi = i * 4;
+                    let r = base_pixels[bi]     as u32;
+                    let g = base_pixels[bi + 1] as u32;
+                    let b = base_pixels[bi + 2] as u32;
+                    *pixel = (r << 16) | (g << 8) | b;
+                }
+            }
+            buffer.present().unwrap();
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let duration = now.elapsed();
+            let dropped = duration.as_secs_f64() * 1000.0 > 16.667;
+            trace!(RosaceTrace::FrameEnd {
+                frame,
+                duration,
+                dropped,
+            });
+        }
     }
 }
 
@@ -349,6 +651,17 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             self.context = Some(context);
             self.surface = Some(surface);
         }
+        // Enable OS IME globally for this window (D116 Step 6) — not
+        // scoped to "only while a text field is focused": there is no
+        // existing channel for per-field enable/disable (would need the
+        // same engine->platform bridge `ime_cursor_area` uses, gated on
+        // focus, which is a real follow-up but not required for real
+        // CJK composition to work). Composing only actually ENGAGES the
+        // OS candidate window when the user types a composing sequence,
+        // so leaving it globally allowed is the same posture VS Code and
+        // most desktop editors take.
+        window.set_ime_allowed(true);
+
         self.presenter = presenter;
         if let Some(p) = self.presenter.as_mut() {
             // GPU-shapes mode (D109/Phase 27 Step 3): built-in shape
@@ -388,276 +701,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
-            WindowEvent::RedrawRequested => {
-                let window = self.window.as_ref().unwrap();
-                let scale = window.scale_factor() as f32;
-                let phys = physical_canvas_size(window);
-                let phys_w = phys.width;
-                let phys_h = phys.height;
-                if phys_w == 0 || phys_h == 0 {
-                    return;
-                }
-
-                if let Some(surface) = self.surface.as_mut() {
-                    surface
-                        .resize(
-                            NonZeroU32::new(phys_w).unwrap(),
-                            NonZeroU32::new(phys_h).unwrap(),
-                        )
-                        .unwrap();
-                }
-
-                // Keep the GPU surface at the PHYSICAL canvas resolution every
-                // frame. The presenter is initialised at the window's logical
-                // size, so without this the first frame(s) render a physical
-                // (Retina) canvas into a half-resolution surface and the OS
-                // upscales the result → blurry text until a Resized event
-                // happens to correct it. Syncing here guarantees a 1:1 map.
-                // A surface reconfigure discards its contents, so force a
-                // repaint+present this frame (never skip it via D089).
-                if let Some(presenter) = self.presenter.as_mut() {
-                    if presenter.surface_size() != (phys_w, phys_h) {
-                        presenter.resize(phys_w, phys_h);
-                        self.canvas.mark_frame_dirty();
-                    }
-                }
-
-                let now = Instant::now();
-                let dt = self.last_frame_time
-                    .map(|t| t.elapsed().as_secs_f32())
-                    .unwrap_or(1.0 / 60.0)
-                    .clamp(0.001, 0.1);
-                rosace_animate::set_frame_dt(dt);
-                self.last_frame_time = Some(now);
-
-                #[cfg(debug_assertions)]
-                let frame = self.frame_counter;
-                self.frame_counter += 1;
-
-                #[cfg(debug_assertions)]
-                trace!(RosaceTrace::FrameStart {
-                    frame,
-                    timestamp: now,
-                });
-
-                // Resize base + overlay canvases to match physical window size.
-                if self.canvas.width() != phys_w
-                    || self.canvas.height() != phys_h
-                    || (self.canvas.scale() - scale).abs() > 0.01
-                {
-                    // Recreation must carry the GPU-shapes flag over — a
-                    // resized window silently dropping to CPU shapes would
-                    // be an invisible mode flip (D109).
-                    let gpu_shapes = self.canvas.gpu_shapes();
-                    self.canvas         = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
-                    self.canvas.set_gpu_shapes(gpu_shapes);
-                    self.overlay_canvas = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
-                }
-
-                // Clear overlay to transparent before each frame (D078).
-                self.overlay_canvas.clear_transparent();
-
-                let events = std::mem::take(&mut self.pending_events);
-                (self.paint_fn)(&mut self.canvas, &mut self.overlay_canvas, &events);
-
-                // Present the frame — GPU multi-layer compositor (D076, D079),
-                // with softbuffer fallback that CPU-composites overlay on top.
-                if let Some(presenter) = &mut self.presenter {
-                    // Runtime shader registrations (D109) — anything queued
-                    // since startup compiles NOW, before this frame's present
-                    // could reference it. Startup registrations already
-                    // compiled in `resumed`.
-                    drain_shader_registrations(presenter);
-
-                    // Per-frame dirtiness drives the compositor's texture cache
-                    // (D089): a clean base layer reuses its persistent GPU
-                    // texture, and a frame where nothing changed skips the
-                    // present entirely. `take_frame_dirty` must run every frame
-                    // so the flag resets; the base only repaints (and re-marks)
-                    // when the frame loop actually redraws it.
-                    let base_dirty = self.canvas.take_frame_dirty();
-
-                    // Refresh the retained shader quads / frame items only on
-                    // painted frames (`play_picture` re-collects the full set
-                    // each paint — including painting to an empty set when
-                    // shader content disappeared). Clean frames keep the
-                    // retained set, same pattern as scroll layers below (D109).
-                    if base_dirty {
-                        if self.canvas.gpu_shapes() {
-                            self.frame_items = self.canvas.take_frame_items();
-                        } else {
-                            self.shader_quads = self.canvas.take_shader_quads();
-                        }
-                    }
-                    // Overlay shader content is not supported yet (the overlay
-                    // is replayed every frame; quads there would need their own
-                    // altitude in the item order) — drain so they can't
-                    // accumulate, loud once if anything shows up.
-                    let overlay_quads = self.overlay_canvas.take_shader_quads();
-                    if !overlay_quads.is_empty() && !self.shader_fallback_warned {
-                        self.shader_fallback_warned = true;
-                        log::warn!(
-                            "rosace-platform: {} ShaderFill command(s) recorded in the \
-                             OVERLAY pass are not supported yet and were dropped",
-                            overlay_quads.len(),
-                        );
-                    }
-
-                    // Refresh the retained scroll layers only when the frame
-                    // loop published (it repainted). `None` = clean frame →
-                    // keep the retained set so the layers persist unchanged.
-                    let refreshed = crate::scroll_layer::take_scroll_layers();
-                    let scroll_dirty = refreshed.is_some();
-                    if let Some(layers) = refreshed {
-                        self.scroll_layers = layers;
-                    }
-
-                    // Composite bottom-to-top: base, shader quads (base-content
-                    // altitude, D109 Step 2 — full per-command interleaving is
-                    // Phase 27 C1), scroll layers (each placed at its
-                    // viewport), then the overlay on top (D090). Scroll layers
-                    // re-upload only on a publish frame (scroll_dirty);
-                    // otherwise D089 reuses their persistent textures.
-                    let mut items: Vec<rosace_compositor::FrameItem<'_>> = Vec::new();
-                    if self.canvas.gpu_shapes() {
-                        // GPU-shapes mode (D109 Step 3, C1): the frame IS
-                        // the ordered item list — background quad, shape
-                        // quads, and CPU segments (text/blits) placed at
-                        // their bboxes, in command order. No full-frame
-                        // base buffer exists.
-                        for it in &self.frame_items {
-                            items.push(canvas_item_to_frame(it, base_dirty));
-                        }
-                    } else {
-                        items.push(rosace_compositor::FrameItem::Pixels(
-                            rosace_compositor::CompositorLayer::tracked(
-                                self.canvas.pixels(), phys_w, phys_h, base_dirty,
-                            ),
-                        ));
-                        for q in &self.shader_quads {
-                            items.push(rosace_compositor::FrameItem::Shader(
-                                rosace_compositor::ShaderQuad {
-                                    pipeline: q.pipeline_id,
-                                    rect:     q.rect,
-                                    uniforms: &q.uniforms,
-                                    clip:     q.clip,
-                                },
-                            ));
-                        }
-                    }
-                    for sl in &self.scroll_layers {
-                        // Live scroll offset from the non-reactive channel
-                        // (physical px). A wheel tick updates this without a
-                        // repaint, so a scroll-only frame is a uniform write
-                        // over the reused content texture (D090).
-                        let off = rosace_state::scroll_offset(sl.id);
-                        if !sl.items.is_empty() {
-                            // GPU-shapes scroll content (D109 C2): render
-                            // the items into the offscreen target on
-                            // publish frames, sample it at the live offset
-                            // every frame.
-                            if scroll_dirty {
-                                let sub: Vec<rosace_compositor::FrameItem<'_>> = sl.items
-                                    .iter()
-                                    .map(|it| canvas_item_to_frame(it, true))
-                                    .collect();
-                                presenter.render_offscreen(sl.id, sl.width, sl.height, &sub);
-                            }
-                            items.push(rosace_compositor::FrameItem::Offscreen(
-                                rosace_compositor::OffscreenRef {
-                                    key: sl.id,
-                                    dest: rosace_compositor::LayerRect {
-                                        x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
-                                    },
-                                    src_offset: (off[0] * scale, off[1] * scale),
-                                    dirty: scroll_dirty,
-                                },
-                            ));
-                        } else {
-                            items.push(rosace_compositor::FrameItem::Pixels(
-                                rosace_compositor::CompositorLayer::placed(
-                                    &sl.pixels, sl.width, sl.height,
-                                    rosace_compositor::LayerRect {
-                                        x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
-                                    },
-                                    (off[0] * scale, off[1] * scale),
-                                    scroll_dirty,
-                                ),
-                            ));
-                        }
-                    }
-                    // Skip the overlay layer entirely when nothing drew into it
-                    // this frame. When it did draw, treat it as dirty — the
-                    // overlay is cleared and replayed every frame, so its pixels
-                    // may differ even when the base is clean.
-                    if self.overlay_canvas.has_drawn() {
-                        items.push(rosace_compositor::FrameItem::Pixels(
-                            rosace_compositor::CompositorLayer::tracked(
-                                self.overlay_canvas.pixels(), phys_w, phys_h, true,
-                            ),
-                        ));
-                    }
-                    presenter.present_frame(&items);
-                } else if let Some(surface) = &mut self.surface {
-                    // Softbuffer fallback: no GPU, so ShaderFill content can't
-                    // render. Drain quads so they don't accumulate; warn once.
-                    let dropped = self.canvas.take_shader_quads();
-                    let dropped_overlay = self.overlay_canvas.take_shader_quads();
-                    if (!dropped.is_empty() || !dropped_overlay.is_empty())
-                        && !self.shader_fallback_warned
-                    {
-                        self.shader_fallback_warned = true;
-                        log::warn!(
-                            "rosace-platform: DrawCommand::ShaderFill content dropped — \
-                             GPU compositor unavailable (softbuffer fallback)",
-                        );
-                    }
-                    let base_pixels = self.canvas.pixels();
-                    let mut buffer = surface.buffer_mut().unwrap();
-
-                    if self.overlay_canvas.has_drawn() {
-                        // Overlay has content — Porter-Duff "over" blend.
-                        let overlay_pixels = self.overlay_canvas.pixels();
-                        for (i, pixel) in buffer.iter_mut().enumerate() {
-                            let bi = i * 4;
-                            let br  = base_pixels[bi]     as u32;
-                            let bg  = base_pixels[bi + 1] as u32;
-                            let bb  = base_pixels[bi + 2] as u32;
-                            let oa  = overlay_pixels[bi + 3] as u32;
-                            let or_ = overlay_pixels[bi]     as u32;
-                            let og  = overlay_pixels[bi + 1] as u32;
-                            let ob  = overlay_pixels[bi + 2] as u32;
-                            let inv = 255 - oa;
-                            let r = (or_ * oa + br * inv) / 255;
-                            let g = (og  * oa + bg * inv) / 255;
-                            let b = (ob  * oa + bb * inv) / 255;
-                            *pixel = (r << 16) | (g << 8) | b;
-                        }
-                    } else {
-                        // No overlay — fast path: copy base pixels directly,
-                        // avoiding O(pixels) multiply/divide every frame.
-                        for (i, pixel) in buffer.iter_mut().enumerate() {
-                            let bi = i * 4;
-                            let r = base_pixels[bi]     as u32;
-                            let g = base_pixels[bi + 1] as u32;
-                            let b = base_pixels[bi + 2] as u32;
-                            *pixel = (r << 16) | (g << 8) | b;
-                        }
-                    }
-                    buffer.present().unwrap();
-                }
-
-                #[cfg(debug_assertions)]
-                {
-                    let duration = now.elapsed();
-                    let dropped = duration.as_secs_f64() * 1000.0 > 16.667;
-                    trace!(RosaceTrace::FrameEnd {
-                        frame,
-                        duration,
-                        dropped,
-                    });
-                }
-            }
+            WindowEvent::RedrawRequested => self.redraw(),
 
             WindowEvent::Resized(size) => {
                 // On iOS, winit's event payload is the safe-area-reduced size;
@@ -678,6 +722,20 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     width: phys.width,
                     height: phys.height,
                 });
+                // Redraw SYNCHRONOUSLY here, not just via `request_redraw()`.
+                // During a native macOS live-resize drag, AppKit runs its own
+                // nested tracking runloop and just stretches the last
+                // presented GPU frame to fill the growing/shrinking window
+                // until the app actually submits a new one — `request_redraw`
+                // only *schedules* a `RedrawRequested` for the next winit
+                // event-loop turn, which can lag many resize ticks behind
+                // during that nested loop. The visible symptom (confirmed
+                // live) was exactly this: ghosted/duplicated stale content
+                // and uninitialized swapchain pixels bleeding through at the
+                // window edges while dragging. Drawing immediately, once per
+                // resize tick, keeps the presented frame in lockstep with the
+                // window frame the OS is already showing.
+                self.redraw();
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -812,11 +870,40 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 };
                 self.pending_events.push(ev);
 
-                if let (ElementState::Pressed, Some(text)) = (event.state, event.text) {
-                    for c in text.chars() {
-                        self.pending_events.push(InputEvent::Text { character: c });
+                // While an IME session is actively composing (D116 Step
+                // 6), suppress winit's own key->text resolution — the
+                // composed result arrives through `WindowEvent::Ime`
+                // instead, and pushing BOTH would double-insert (e.g. the
+                // raw romaji AND the composed kana).
+                if !self.ime_composing {
+                    if let (ElementState::Pressed, Some(text)) = (event.state, event.text) {
+                        for c in text.chars() {
+                            self.pending_events.push(InputEvent::Text { character: c });
+                        }
                     }
                 }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+
+            WindowEvent::Ime(ime) => {
+                let ev = match ime {
+                    Ime::Enabled => rosace_ime::ImeEvent::Enabled,
+                    Ime::Preedit(text, cursor_range) => {
+                        self.ime_composing = !text.is_empty();
+                        rosace_ime::ImeEvent::Preedit { text, cursor_range }
+                    }
+                    Ime::Commit(text) => {
+                        self.ime_composing = false;
+                        rosace_ime::ImeEvent::Commit(text)
+                    }
+                    Ime::Disabled => {
+                        self.ime_composing = false;
+                        rosace_ime::ImeEvent::Disabled
+                    }
+                };
+                self.pending_events.push(InputEvent::Ime(ev));
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }

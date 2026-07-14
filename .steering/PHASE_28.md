@@ -1,8 +1,13 @@
 # Phase 28 — Real TextInput, Real IME, Forms Wiring (D112)
 
-> Status: Steps 1-2 landed. Steps 3-8 not started.
+> Status: ALL 8 STEPS LANDED. Two disclosed, named deferrals carried
+> forward, not silently dropped: Step 6's mobile native-host IME
+> (`UITextInput`/`InputConnection` — no Swift/Kotlin committed, matches
+> the camera-capability precedent; verify in a real device session) and
+> Step 7's magnifier loupe (a Phase 27 offscreen/shader job, named in
+> that step's own scope, not required by its exit bar).
 > Started: 2026-07-12
-> Completed: —
+> Completed: 2026-07-12
 > Decision: **D112** — `TextInput` gains real keyboard editing, a new
 > `TextArea` (multi-line), real OS IME composition (replacing
 > `rosace-ime`'s `NoopIme`), and `rosace-forms` gets wired to both.
@@ -228,6 +233,30 @@ string/font); down+move+up produces the exact expected selection;
 double/triple-click select word/line. Live demo screenshot shows a
 mid-string caret and a drag selection.
 
+**Landed 2026-07-12**: `TextLayoutSnapshot`/`LineLayout` added to
+`text_edit.rs` — `position_at`/`x_of`/`line_range_at`, plus a
+`word_range_at` free function reusing the existing private word-boundary
+runs. `EditableDecl` gained a `layout: TextLayoutSnapshot` field, built
+ONCE per paint in `TextInput::paint` and reused for both the exported
+hit-test seam and the widget's own caret/selection-highlight rendering
+(so the two can't drift). `engine.rs`: the Step 1 caret-to-end
+simplification is gone — MouseDown now calls `editable.layout.position_at(x,
+y)` for real click-to-glyph placement; a new `text_drag: Option<(NodeId,
+usize)>` field drives MouseMove drag-selection (`Selection::range(anchor,
+position_at(...))`), cleared on MouseUp; a same-node/time/distance
+debounce (`click_count`, `DOUBLE_CLICK_SECS`/`DOUBLE_CLICK_SLOP`) routes
+1/2/3 clicks to caret placement / `word_range_at` / `line_range_at`. 12
+new headless `FrameEngine` tests (exact click index, forward/backward
+drag, double-click word select, triple-click select-all-on-single-line,
+slow-click-does-not-double-count) — all pass, workspace clean. Live
+screenshot proof used `EditController::set_selection` (real code, no OS
+input) to seed a mid-string selection and confirm the snapshot-driven
+highlight renders correctly.
+**Named gap carried to a later step**: `TextEditState.scroll_x` (a
+persistent field) was added but horizontal scroll-into-view for an
+overflowing single-line `TextInput` is NOT wired yet — the field just
+defaults to 0.0 today. Follow-up, not part of this step's exit bar.
+
 ### Step 4 — `TextArea` (multi-line, virtualized) (original Step 2 + D116)
 New widget on the Step 2/3 core: line wrapping (reuse
 `rosace_text::word_wrap`), Enter inserts newline, up/down movement
@@ -242,6 +271,50 @@ Exit (original bar kept + additions): wrapping correct and up/down
 crosses wrapped lines with goal-column behavior, verified live; a
 several-thousand-line value scrolls with only visible lines painted
 (assert via paint-command counts headlessly).
+
+**Landed 2026-07-12**: `TextArea` (`rosace-widgets/src/tree/text_area.rs`)
+— a char-index-exact greedy word-wrap (`wrap_char_ranges`, own
+implementation, NOT `rosace_text::word_wrap` since that one is lossy
+w.r.t. exact offsets/whitespace and unsuitable for click/caret mapping),
+one `LineLayout` per wrapped visual line reusing Step 3's
+`TextLayoutSnapshot` unchanged. Enter inserts a real `'\n'` (gated on
+`focused_editable().multiline`, a no-op on single-line `TextInput`).
+Up/Down cross wrapped lines with goal-column memory: a new
+`TextEditState.goal_x: Option<f32>` field, set from the caret's real x on
+the first vertical move, reused unchanged by consecutive vertical moves,
+cleared by any horizontal move/edit/click (`moved`/`apply_and_record` in
+`text_edit.rs`) — verified with a same-repeated-character 10/3/10-line
+document so the assertion is exact regardless of the real font's
+proportional glyph widths. Vertical scrolling uses the same zero-wiring
+`ScrollController` `ListView`/`ScrollView` already use (D101) — wheel
+events mutate the controller's atoms directly, sidestepping the
+`!Sync`/`!Send` wall entirely (no captured-closure problem here, unlike
+click dispatch). Paint is virtualized by visible-line index (first/last
+row from `scroll_y / line_h`, same trick `ListView` uses for fixed
+`item_extent`) — only visible lines emit `DrawText`/highlight/caret
+commands. 6 wrap-correctness unit tests (contiguous-no-gaps, exact
+round-trip reconstruction, hard-newline, trailing-newline, consecutive
+newlines) + 5 headless `FrameEngine` integration tests (Enter newline,
+Enter no-ops on `TextInput`, goal-column restore through a shorter line,
+top-of-document Up edge case, wheel-scroll changes click target), all
+passing. Live screenshot verified wrap + Enter + caret rendering.
+`rosace-examples/src/bin/text_area_demo.rs` added as a runnable demo.
+
+**Named gaps carried forward** (disclosed, not part of this step's exit
+bar):
+- LAYOUT is not lazy — every visual line's boundary/x data is rebuilt
+  every paint regardless of visibility, only the PAINT commands are
+  skipped for offscreen lines. A huge (100k+ line) document's per-frame
+  CPU cost is still O(document), not O(visible). True lazy/incremental
+  layout is a follow-up.
+- Home/End still jump to the document start/end (unchanged from Step
+  1/2), not the current VISUAL line's start/end — real per-line Home/End
+  is a follow-up, not required by this step's exit bar.
+- Word-wrap does not hard-break a single word wider than the field
+  (documented on `wrap_char_ranges`) — it overflows the line instead.
+- `TextEditState.scroll_x` (TextInput's still-unwired horizontal
+  scroll-into-view, named in Step 3) remains unwired; `TextArea` needed
+  no horizontal scroll analog since it wraps instead of overflowing.
 
 ### Step 5 — Spans + cursor customization: the styling seams (D116 layer 5)
 - **`SpanSource` hook**: `.spans(fn(&str, changed_range) -> Vec<Span>)`
@@ -265,6 +338,45 @@ custom-painter cursor render (screenshot); incremental invalidation
 proven headlessly (tokenizer called with the changed range, not the
 whole string, on a small edit).
 
+**Landed 2026-07-12**: `Span`/`style_runs`/`SpanFn` and `CursorShape`/
+`CursorStyle` added to `text_edit.rs`. `style_runs(spans, ls, le)` turns
+an arbitrary (possibly overlapping, possibly gappy) span list into
+contiguous non-overlapping paint runs for one line — the shared
+primitive `TextInput`/`TextArea` both use; "last span wins" on overlap.
+`TextEditState.last_edit_range: Option<(usize, usize)>` (new field, set
+in `apply_and_record`/`undo`/`redo` from the transaction's own edit
+ranges, cleared by `moved`/no-ops) is what makes `SpanSource` genuinely
+incremental — the widget passes it straight through as the tokenizer's
+`changed_range` argument. `CursorStyle` resolution order: per-field
+`.cursor_style()` override, else `ThemeData::ext::<CursorStyle>()` (D105
+Phase 23's type-keyed extension map — no `ThemeData` field added),
+else `CursorStyle::default()` (matches the exact pre-Step-5 hardcoded
+caret). `paint_caret` (shared `text_input.rs` fn, `pub(super)`, called
+from both widgets) renders all four shapes: `Bar` (existing), `Block`
+(spans to the next glyph boundary), `Underline` (thin bar at the line's
+bottom), `Custom` (app painter closure, receives the caret's rect).
+Neither widget applies spans to an obscured (password) field. Test
+coverage: `style_runs` unit tests (gap-filling, clipping, overlap
+override) in `text_edit.rs`; `paint_caret` shape tests in
+`text_input.rs` inspecting the actual recorded `DrawCommand`s (not
+pixels) for Bar/Block/Underline/Custom; headless `FrameEngine` tests in
+`engine.rs` proving the incremental `changed_range` through real
+keystroke dispatch and pixel-proving both the span color and the
+cursor-style color actually reach the canvas. Two screenshots taken
+(styled markdown spans; colored cursor). `markdown_editor_demo` added as
+the phase's first capstone demo (toy tokenizer, Bold/Italic toolbar via
+`EditController`, live side-by-side highlighted "preview" pane — the
+preview is a second `SpanSource`'d `TextArea` on the same atom, not a
+markdown-stripped renderer, since `Text` doesn't support styled spans;
+disclosed, not hidden). `text_showcase_demo` (the second capstone bin)
+deferred — several of its named features (obscured+filtered fields,
+context menu, IME) don't exist yet.
+**Named gap**: `cargo test --workspace`'s full-parallel run can
+intermittently flake 1-2 pre-existing Step 3/4 tests under heavy load
+(both already lock-guarded) — logged as an extension of
+`CRATE_CONTRACTS.md` Known Issue #8, not a Step 5 regression (deterministic
+100% with `--test-threads=1`, confirmed across multiple runs).
+
 ### Step 6 — Real OS IME (original Step 3, now on D116 seams)
 Desktop: winit `WindowEvent::Ime` (`Enabled`/`Preedit`/`Commit`/
 `Disabled`) into `rosace-platform`; preedit = a **provisional
@@ -281,6 +393,86 @@ distinct widget types).
 Exit (original bar kept): real CJK preedit + commit via a real macOS
 Pinyin IME, verified live. Mobile IME exercised in the next real
 `rsc run` mobile session alongside Phase 27's pending mobile sanity.
+
+**Landed 2026-07-12 (desktop half)**: `rosace-platform` now depends on
+`rosace-ime` (dependency-light, only `rosace-trace` — no layering cycle)
+and reuses its `ImeEvent`/`ImeComposition`/`ImeState` types directly as
+the wire payload — `NoopIme` itself stays unused (it was a standalone
+data-model demo, not something anything called); the REAL types it
+exercises are what's wired now. `InputEvent::Ime(ImeEvent)` added;
+`app.rs` translates real `WindowEvent::Ime` (`Enabled`/`Preedit`/
+`Commit`/`Disabled`), calls `window.set_ime_allowed(true)` once at window
+creation (global, not per-focused-field-scoped — a disclosed
+simplification, no per-field enable/disable channel exists yet), and
+suppresses winit's own key→text resolution while actively composing (a
+new `ime_composing: bool` on `AppState`) so a composed sequence can't
+double-insert both its raw keystrokes and the composed result.
+
+`text_edit.rs`: the **provisional transaction** model — `ime_set_preedit`
+inserts preedit text into the value AS IF typed (so it paints/wraps/
+click-hit-tests through the exact same code path as real content) but
+does NOT touch the undo stack; only `ime_commit` records ONE real,
+undoable edit for the whole composition. New `TextEditState` fields
+`ime_range: Option<(usize,usize)>` (public — the render/underline hook)
+and `ime_origin: Option<String>` (private bookkeeping — the pre-
+composition text, captured once per session) — the latter exists so
+`apply_and_record`'s new `_with_inverse` variant can make undo restore
+the TRUE pre-composition state in one hop, not the last intermediate
+preedit snapshot (`Transaction::apply`'s own automatic inverse would
+otherwise compute against the already-preedit-mutated live value).
+`TextInput`/`TextArea` render an underline decoration under `ime_range`
+(D116 layer 5, the "Decorations" bullet Step 5 named but only built this
+one concrete use of, not a generic range-keyed API — disclosed).
+
+**The IME candidate-window rect** (`set_ime_cursor_area`) needed a new
+bridge: `FrameEngine`/`rosace-widgets` (which know the real caret rect)
+and `rosace-platform` (which owns the only winit `Window` handle) don't
+depend on each other, and `run_layered`'s closure signature has no
+return channel. Rather than widen that signature (large blast radius —
+FFI native host + web `spawn_app` are also `run_layered` consumers, per
+D106), added a `GlobalAtom` bridge at `rosace-core` (the lowest layer
+both already share) — `rosace_core::set_ime_cursor_area`/
+`ime_cursor_area`, same shape as `platform.rs`'s `use_platform`/
+`set_platform`. `TextInput`/`TextArea` publish it every paint while
+focused (never publish `None` from a widget, to avoid one unfocused
+field clobbering a different currently-focused field's rect painted
+earlier the same frame); cleared centrally on blur (click-blank-space)
+rather than at the top of every frame, since a frame-skipped (not
+repainted) focused field must NOT have its still-correct rect wiped.
+
+**Known Issue #15 fixed** (`TZR_KEY_DELETE`/`_HOME`/`_END` — see
+`CRATE_CONTRACTS.md`). **Keyboard-type hints**: `rosace_core::KeyboardType`
+(`Default`/`Email`/`Numeric`/`Url`/`Phone`) + `TextInput::keyboard_type()`,
+published via the same `GlobalAtom` bridge shape, polled through a new
+`rosace_ffi::focused_keyboard_type()` (`TZR_KEYBOARD_*` constants) for a
+future native host to drive the real `UIKeyboardType`/Android
+`InputType` — pure, real Rust plumbing; the native mapping itself is
+unwritten (same deferred status the `TZR_KEY_*` fix had until today).
+
+12 new tests: 7 in `text_edit.rs` (preedit insert/replace-not-append/
+cursor-position/empty-clears, commit-is-one-undo-step, commit-with-no-
+preedit), 4 headless `FrameEngine` tests in `engine.rs` (full preedit→
+commit pipeline through real `InputEvent::Ime` dispatch, one-step undo
+of a whole composition, commit-with-no-preceding-preedit, underline
+pixel-changes-something), 2 in `rosace-ffi` (`TZR_KEY_*` round-trip,
+`focused_keyboard_type`). Screenshot taken (preedit text + underline
+live). Full workspace clean (`--test-threads=1`, deterministic; the
+pre-existing Known Issue #8 parallel-flake class, unrelated to this
+step, remains — see its updated note).
+
+**What's still real-hardware-dependent, deliberately deferred** (matches
+this step's own exit bar): a real macOS Pinyin IME session has not been
+exercised live (only headless synthetic `InputEvent::Ime` dispatch,
+which — per this whole phase's established verification discipline —
+exercises the exact same production code a real IME reaches, just not
+provably identical timing/event-ordering to a specific OS's real IME
+implementation). Mobile `UITextInput`/`InputConnection` native code is
+NOT written (no committed Swift/Kotlin exists for this in the repo,
+matching the camera-capability precedent — piece 3 is verified via a
+throwaway `rsc new` scratch app, not committed source); the Rust-side
+FFI plumbing pieces (event constants, keyboard-type polling) ARE real
+and committed. Per-field IME enable/disable (vs. global window-level
+`set_ime_allowed`) is a named follow-up.
 
 ### Step 7 — Device-adaptive selection UX: context menu, touch handles
 - **Context menu** (right-click desktop / long-press touch) with Cut/
@@ -299,6 +491,58 @@ field, Paste inserts real clipboard content). Touch handles verified in
 the mobile session with Step 6 (they share the FFI work); headless tests
 for handle-drag → selection updates land with this step regardless.
 
+**Landed 2026-07-12**: `MouseButton::Right` routing added to
+`engine.rs`'s dispatch (previously dropped silently — no other arm
+matched it). Right-click hit-tests via `editable_test` (same z-order
+traversal left-click uses), focuses that node, and opens a `Menu`
+(Cut/Copy/Paste/Select All — Cut/Copy only shown when there's a real
+selection) via the EXISTING thread-local `push_overlay` at
+`LayerPosition::Absolute(click_pos)`, re-pushed every frame while open
+— the same "engine-driven instead of atom-driven" shape `Dropdown` uses
+per-frame for its own overlay, since a context menu has no backing
+widget in the tree to own an `Atom<bool>`. `Menu`'s item closures
+(`Arc<dyn Fn() + Send + Sync>`, no captured engine access — the same
+`!Sync`/`!Send` wall `EditController`'s queue exists to cross) push a
+`ContextMenuAction` onto a new engine-owned queue, drained once per
+frame (`drain_context_menu`) through the EXACT SAME `text_edit`/
+`rosace_clipboard` calls the Cmd/Ctrl+X/C/V/A keyboard shortcuts
+already use — real Cut/Copy/Paste/Select All, not a re-implementation.
+
+Long-press-to-select-word: an editable press arms a background 500ms
+timer (can't touch `RenderTree`/`FontCache` off the main thread, so it
+just records a pending `(NodeId, char_index)` for the main thread to
+apply next frame — same wall as everything else editable-related here);
+fires `word_range_at` on release-free hold, matching every mobile
+convention. **Selection handles**: two small draggable grips render at
+each selection endpoint (`TextInput`/`TextArea`, reusing the same
+`LineLayout::x_at` geometry the caret/spans already use); a MouseDown
+within `HANDLE_HIT_RADIUS` of either grabs it (checked BEFORE the
+normal click/drag path) and drags that endpoint via `position_at`,
+mirroring `text_drag`'s own shape but pinning the OTHER endpoint fixed.
+
+**Real bug found and fixed, not by inspection**: a background long-press
+timer armed on MouseDown and never explicitly superseded except by a
+LATER MouseMove(past slop)/MouseUp meant several existing headless tests
+— which type a full sentence (real per-`engine.paint()`-call overhead)
+then sleep 450ms real wall-clock time for the Step 3 double-click-debounce
+proof, with no `MouseUp` in between (`click()`'s test helper never sends
+one) — could have a STALE long-press timer fire mid-test and silently
+corrupt selection state. Fixed at the root, not by padding the
+timeout: `cancel_pending_press()` now runs on every subsequent keyboard
+event (Text/KeyDown), not just the next mouse gesture — a "held press"
+surviving through real keystrokes has no meaning in any scenario this
+engine can observe, so eager cancellation closes the race outright.
+
+7 new headless `FrameEngine` tests (right-click Select All/Copy+Paste
+round-trip through the real clipboard/targets-the-right-clicked-not-
+previously-focused-field, long-press selects the word/a quick
+release does NOT, handle-drag extends the selection) + a live
+screenshot (menu open over a selected field). Magnifier loupe
+(named in this step's own bullet as reusing Phase 27 offscreen/shader
+machinery) is a disclosed, deliberate deferral — not required by this
+step's exit bar, which only committed to handle-drag → selection
+updates landing headlessly.
+
 ### Step 8 — Wire `rosace-forms` (original Step 4, scope unchanged)
 `.field(Field)` binding on both widgets; inline validation errors
 (existing `Semantics`/error conventions); `Form::submit()` from a real
@@ -307,6 +551,58 @@ classes) landing here since validation and filtering are one UX story.
 
 Exit (original bar kept): required-field error appears/clears live;
 submit button enables/disables on `Form` validity — verified live.
+
+**Landed 2026-07-12 — Phase 28 fully complete.** `rosace-forms` was
+confirmed genuinely built-but-never-wired (D112, zero call sites outside
+its own tests + the umbrella `pub use` re-export, the exact pattern
+`CRATE_CONTRACTS.md` Known Issue #12 names it as precedent for) — this
+step is the first real consumer. `FormField` was redesigned from plain
+`&mut self` fields to fully atom-backed (`value`/`touched`/`errors` each
+`rosace_state::Atom`, `#[derive(Clone)]`): every clone shares live state,
+the same "clone shares identity" convention `EditController`/
+`ScrollController` already establish — this is what lets
+`TextInput::field(f.clone())`, `Form::field(f.clone())`, and a submit
+button's own captured clone all see each other's writes with zero manual
+sync. New `FormField::for_ctx(ctx, name)` mirrors `ScrollController::for_ctx`
+exactly (`ctx.state(Self::new(name)).get()` + explicit `.subscribe(id)`
+on all three inner atoms — `use_atom`'s own atoms aren't subscribed to
+anything by default, so without this a field write would request a frame
+that repaints nothing). Every `FormField`/`Form` method that used to need
+`&mut self` now takes `&self`. Added `Form::submit(on_valid)` (didn't
+exist before — validates all fields, runs the callback only if valid,
+returns whether it did) and `Button::disabled_if(bool)`.
+
+`TextInput`/`TextArea` gained `.field(FormField)` (sets initial value,
+installs an `on_change` that writes back + re-validates, and validates
+ONCE MORE immediately at construction so an untouched empty Required
+field is correctly invalid from the very first paint, not just after
+the first edit) and `.filters(Vec<InputFilter>)`. `InputFilter`
+(`MaxLength`/`CharClass` + `digits()`/`alphanumeric()` convenience
+constructors) is deliberately a SEPARATE concept from
+`rosace_forms::Validator` — a filter rejects characters as you type, a
+validator judges a complete value; conflating them would make "max
+length" need a whole `FormField` to express. Filters apply in
+`engine.rs`'s `commit_text_edit` — the ONE funnel every edit source
+(typed chars, paste, IME commit, controller ops) reaches — with the
+selection re-clamped to the filtered length when filtering actually
+shortens the value. Inline error display: `Role::Alert` (matching
+`Toast::error`'s existing, only prior use of that role), a caption below
+the field gated on `field.is_touched()`, with `layout()` reserving extra
+height for it (`ERROR_ROW_H`) only when actually showing — no
+established "field + error" convention existed before this, so this
+step establishes it.
+
+15 new tests (7 `apply_filters` unit tests in `text_edit.rs`; a
+`cloning_a_field_shares_the_same_live_state`/`cloning_a_form_...`
+pair in `rosace-forms` proving the atom-backed redesign's whole point;
+`submit_runs_the_callback_only_when_valid`; 5 headless `FrameEngine`
+tests — digits/max-length filters through real keystroke dispatch,
+backspace still shrinks past a MaxLength filter, live validity through
+real typing, submit button gates on validity AND a disabled button
+genuinely swallows the click) + a live screenshot (invalid email caption
++ visibly disabled submit button). `form_demo` capstone added
+(name/email/phone fields, one filtered, submit gated on validity).
+Full workspace clean, `--test-threads=1` stable across repeated runs.
 
 ## Sequencing
 

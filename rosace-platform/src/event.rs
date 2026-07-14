@@ -10,6 +10,14 @@ pub enum InputEvent {
     /// Mouse scroll wheel / trackpad. `delta_y` < 0 = scroll up, > 0 = scroll
     /// down; `delta_x` < 0 = scroll left, > 0 = scroll right.
     Scroll        { x: f32, y: f32, delta_x: f32, delta_y: f32 },
+    /// A real OS IME session event (D116 Step 6) — CJK/complex-script
+    /// composition. Desktop: translated from winit's `WindowEvent::Ime`.
+    /// Reuses `rosace_ime::ImeEvent` as the wire payload rather than
+    /// re-declaring the same four variants here — `rosace-ime` is a
+    /// tiny, dependency-light crate (only `rosace-trace`) both this
+    /// crate and `rosace`'s dispatch layer can depend on without a
+    /// layering cycle.
+    Ime(rosace_ime::ImeEvent),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

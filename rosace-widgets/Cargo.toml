@@ -23,4 +23,5 @@ rosace-scroll = { path = "../rosace-scroll" }
 rosace-animate = { path = "../rosace-animate" }
 rosace-text   = { path = "../rosace-text" }
 rosace-theme  = { path = "../rosace-theme" }
+rosace-forms  = { path = "../rosace-forms" }
 tiny-skia      = "0.11"

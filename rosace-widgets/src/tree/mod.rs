@@ -61,6 +61,7 @@ pub mod stack;
 pub mod switch;
 pub mod tab;
 pub mod text;
+pub mod text_area;
 pub mod text_edit;
 pub mod text_input;
 pub mod toast;
@@ -111,7 +112,7 @@ pub use pointer::{AbsorbPointer, IgnorePointer};
 pub use pressable::{LongPressable, PressApi, Pressable};
 pub use progress_bar::ProgressBar;
 pub use rect_reader::RectReader;
-pub use render_tree::{NodeId, RenderTree, ScrollAxes, TreeNode};
+pub use render_tree::{HitHandler, NodeId, RenderTree, ScrollAxes, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
@@ -123,7 +124,11 @@ pub use stack::Stack;
 pub use switch::Switch;
 pub use tab::{Tab, TabBar};
 pub use text::{Text, TextAlign, FontWeight};
-pub use text_edit::{EditableDecl, TextEditState};
+pub use text_area::TextArea;
+pub use text_edit::{
+    CursorShape, CursorStyle, EditController, EditableDecl, InputFilter, Span, SpanFn,
+    TextEditState, TextLayoutSnapshot,
+};
 pub use text_input::TextInput;
 pub use tooltip::Tooltip;
 pub use transform_layer::TransformLayer;
@@ -512,9 +517,17 @@ impl<'a> PaintCtx<'a> {
     /// This widget's persistent cursor/selection state (D091) — read
     /// during paint to draw the caret/selection highlight. Mutated by the
     /// engine's key/click dispatch, never by the widget itself (`paint`
-    /// takes `&self`).
+    /// takes `&self`) — with one deliberate exception: the VIEW-state
+    /// field `scrolled_cursor`, written through [`Self::set_scrolled_cursor`].
     pub fn text_edit(&self) -> text_edit::TextEditState {
         self.tree.borrow().node(self.node).text_edit.clone()
+    }
+
+    /// Record the caret position scroll-into-view has chased (see
+    /// `TextEditState::scrolled_cursor`). View state, so paint-written —
+    /// the one sanctioned widget-side write into `text_edit`.
+    pub fn set_scrolled_cursor(&self, cursor: Option<usize>) {
+        self.tree.borrow_mut().node_mut(self.node).text_edit.scrolled_cursor = cursor;
     }
 
     /// Record `paint` into a standalone [`Picture`] at `rect`, returning it —

@@ -10,6 +10,7 @@ web-time           = "1"
 rosace-animate    = { path = "../rosace-animate" }
 rosace-compositor = { path = "../rosace-compositor" }
 rosace-core       = { path = "../rosace-core" }
+rosace-ime        = { path = "../rosace-ime" }
 rosace-render     = { path = "../rosace-render" }
 rosace-shader     = { path = "../rosace-shader" }
 rosace-state      = { path = "../rosace-state" }

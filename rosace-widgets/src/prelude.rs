@@ -11,6 +11,8 @@ pub use crate::{
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
     AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
     Positioned, Radio, Row, Scaffold, ScreenTransitionView, SegmentedControl, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,
-    Skeleton, Tab, TabBar, Wrap, Text, TextInput, Toast, ToastKind, Tooltip,
+    Skeleton, Tab, TabBar, Wrap, Text, TextArea, TextInput, Toast, ToastKind, Tooltip,
+    CursorShape, CursorStyle, EditController, InputFilter, Span,
     Image, ImageCache, ImageFit, ImageSource, ImageWidget,
 };
+pub use rosace_forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};

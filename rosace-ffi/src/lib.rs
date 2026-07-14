@@ -27,5 +27,5 @@ mod surface;
 pub use android::AndroidSurfaceHandle;
 pub use capability::{report_camera_result, request_camera, take_camera_request, CAMERA_PERMISSION};
 pub use engine::Engine;
-pub use event::TzrInputEventFfi;
+pub use event::{focused_keyboard_type, TzrInputEventFfi};
 pub use surface::RawSurface;

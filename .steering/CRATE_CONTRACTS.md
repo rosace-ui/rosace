@@ -189,6 +189,23 @@ silently baked into the contracts below, per the project's violation policy
    Step 2 itself hit and fixed in `rosace/src/engine.rs`'s new tests (a
    `static ... Mutex` guard around tests that mutate global state) — the
    same fix shape would apply here.
+   **Update 2026-07-12 (Phase 28 Step 5)**: the `ANIMATION_GLOBAL_TEST_LOCK`
+   mitigation in `rosace/src/engine.rs` reduces but no longer fully
+   eliminates cross-test flakiness now that the text-edit integration
+   suite has grown large — 2 of ~44 `rosace --lib` tests
+   (`a_slow_second_click_does_not_count_as_a_double_click`,
+   `mouse_drag_backwards_still_produces_the_correct_selection`, both
+   ALREADY holding the lock) intermittently fail under
+   `cargo test --workspace`'s full parallel load but pass 100% reliably
+   with `--test-threads=1` or in isolation. The lock only serializes
+   tests that take it against EACH OTHER — it doesn't protect them from
+   whatever other, unlocked, concurrently-running test/thread is also
+   touching the same process-global `rosace_state`/font-rasterization
+   state. A full fix needs either a workspace-wide "any test that builds
+   a `FrameEngine`" lock or (more likely the real fix) tracking down
+   which specific piece of shared global state isn't parallel-safe —
+   out of scope for a Step 5 styling feature; logged here rather than
+   silently accepted.
 9. **`ScrollPhysics::Bounce` (D108/Phase 26 Step 2) still jitters/oscillates
    on real macOS trackpad input — unresolved after multiple real-device
    debugging rounds, left as a known issue rather than silently shipped as
@@ -323,6 +340,14 @@ silently baked into the contracts below, per the project's violation policy
     a mobile host to verify against, risks getting it wrong twice. Step 3
     should add the three missing `TZR_KEY_*` constants as part of its own
     scope, not rediscover this gap live.
+    **Fixed 2026-07-12 (Phase 28 Step 6)**: `TZR_KEY_DELETE`(14)/`_HOME`(15)/
+    `_END`(16) added to `rosace-ffi/src/event.rs` + `include/tzr_engine.h`,
+    appended (not inserted alphabetically) so no existing host's already-
+    compiled constant values shift. Round-trip tested
+    (`key_down_delete_home_end_round_trip`). The real
+    `UITextInput`/`InputConnection` mobile IME capability itself (this
+    same Step 6's other mobile deliverable) remains unverified against a
+    real device — see `PHASE_28.md` Step 6 for what's real vs. deferred.
 
 **Fixed 2026-07-09, unrelated to #9/#10 above**: `rosace-animate::Spring::
 update` used a single semi-implicit-Euler step per call, unconditionally
@@ -685,12 +710,19 @@ gating.
 
 ---
 
-### rosace-forms  (Layer 5 — service)
+### rosace-forms  (Layer 5 — service, WIRED 2026-07-12)
 **Job**: Form state and validation — `Form`/`FormField` with composable
 `Validator`s.
 **Exports**: `Form`, `FormField`, `FieldError`, `Validator` (trait) +
 `Required`/`Email`/`MinLength`/`MaxLength`/`Range`/`Contains`.
-**Depends on**: `state`, `trace`.
+**Depends on**: `core` (added — `FormField::for_ctx` takes `&mut Context`),
+`state`, `trace`.
+**Wired 2026-07-12 (D116 Phase 28 Step 8)**: was the exact "built,
+never wired" pattern Known Issue #12 names this crate as precedent
+for — zero call sites outside its own tests before this. `FormField`
+redesigned atom-backed (was plain `&mut self` fields) so
+`rosace-widgets`'s new `TextInput::field()`/`TextArea::field()` bindings
+work correctly; real consumer now exists.
 
 ---
 
