@@ -1,8 +1,8 @@
 use std::sync::Arc;
-use rosace_core::types::{Point, Rect, Size};
+use rosace_core::types::{Point, Rect};
 use rosace_render::Color;
 use rosace_state::Atom;
-use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget};
+use super::{Widget, PaintCtx, BoxedWidget};
 use super::overlay::{
     FocusBehavior, InputBehavior, LayerPosition, OverlayEntry, ScrimConfig,
 };

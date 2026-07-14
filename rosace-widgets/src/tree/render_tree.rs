@@ -24,6 +24,10 @@ use super::TransformLayerEntry;
 
 pub type NodeId = usize;
 
+/// A resolved hit/scroll handler — invoked with the event's (x, y) in
+/// window-space logical pixels.
+pub type HitHandler = Arc<dyn Fn(f32, f32) + Send + Sync>;
+
 /// A click callback with its hit rect in window-space logical pixels.
 pub type HitRegion = (Rect, Arc<dyn Fn() + Send + Sync>);
 /// A positional click callback — receives the click point in window-space
@@ -240,7 +244,7 @@ impl RenderTree {
     /// Returns the topmost hit callback and whether it is POSITIONAL —
     /// positional hits become the active drag grab (streamed MouseMove
     /// positions until release); plain hits fire once.
-    pub fn hit_test(&self, x: f32, y: f32) -> Option<(Arc<dyn Fn(f32, f32) + Send + Sync>, bool)> {
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<(HitHandler, bool)> {
         self.hit_test_node(Self::ROOT, x, y)
     }
 
@@ -261,7 +265,7 @@ impl RenderTree {
         (x - vp.origin.x + off[0], y - vp.origin.y + off[1], false)
     }
 
-    fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<(Arc<dyn Fn(f32, f32) + Send + Sync>, bool)> {
+    fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<(HitHandler, bool)> {
         let n = &self.nodes[id];
         // Pointer interceptors (IgnorePointer / AbsorbPointer widgets):
         // 1 = subtree transparent to hits; 2 = consume everything in rect.
@@ -420,9 +424,9 @@ impl RenderTree {
     /// the delta; fall back to the innermost that handles the other axis.
     /// A horizontal carousel no longer intercepts a vertical page scroll.
     pub fn scroll_test(&self, x: f32, y: f32, dx: f32, dy: f32)
-        -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>>
+        -> Option<HitHandler>
     {
-        let mut candidates: Vec<(ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)> = Vec::new();
+        let mut candidates: Vec<(ScrollAxes, HitHandler)> = Vec::new();
         self.scroll_candidates(Self::ROOT, x, y, &mut candidates);
         select_scroll_handler(&candidates, dx, dy)
     }
@@ -432,7 +436,7 @@ impl RenderTree {
         id: NodeId,
         x: f32,
         y: f32,
-        out: &mut Vec<(ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)>,
+        out: &mut Vec<(ScrollAxes, HitHandler)>,
     ) {
         let n = &self.nodes[id];
         // Children first (topmost/innermost priority), later siblings first.
@@ -613,7 +617,7 @@ impl Default for RenderTree {
 /// first candidate handling the dominant delta axis, else first handling
 /// the other axis.
 pub fn select_scroll_handler(
-    candidates: &[(ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>)],
+    candidates: &[(ScrollAxes, HitHandler)],
     dx: f32,
     dy: f32,
 ) -> Option<Arc<dyn Fn(f32, f32) + Send + Sync>> {

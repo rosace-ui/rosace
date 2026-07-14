@@ -52,9 +52,10 @@ pub struct AppBarStyle {
     /// silently turn on for real apps.
     pub show_traffic_lights: bool,
     pub height: f32,
-    /// > 0 draws the bar's separating edge (today's flat bottom border);
-    /// `0.0` omits it. Not yet a real elevation/shadow effect — a coarser
-    /// "on/off" proxy for the proof, real elevation rendering is later work.
+    /// Values above `0.0` draw the bar's separating edge (today's flat
+    /// bottom border); `0.0` omits it. Not yet a real elevation/shadow
+    /// effect — a coarser "on/off" proxy for the proof, real elevation
+    /// rendering is later work.
     pub elevation: f32,
 }
 

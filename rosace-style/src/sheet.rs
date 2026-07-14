@@ -105,7 +105,7 @@ mod tests {
     fn sheet_rule_count() {
         let mut sheet = StyleSheet::new();
         for i in 0..5 {
-            sheet.add_rule(StyleRule::new(Selector::class(&format!("cls-{}", i))));
+            sheet.add_rule(StyleRule::new(Selector::class(format!("cls-{}", i))));
         }
         assert_eq!(sheet.rule_count(), 5);
     }

@@ -28,6 +28,8 @@ use rosace_ffi::AndroidSurfaceHandle;
 
 /// Trivial root — same reasoning as `ios_stub.rs`'s `StubRoot`: this stub
 /// only proves the ABI links and returns a handle, not visual correctness.
+// Constructed only inside the android cfg branch of the JNI init fn.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 struct StubRoot;
 
 impl Component for StubRoot {

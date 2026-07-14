@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn system_clipboard_default() {
-        let _cb = SystemClipboard::default();
+        let _cb = SystemClipboard;
     }
 
     #[test]

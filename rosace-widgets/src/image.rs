@@ -370,9 +370,9 @@ impl ImageCache {
         for &start in &[0usize, n / 2, n.saturating_sub(32)] {
             for &b in &bytes[start..(start + 32).min(n)] { eat(b); }
         }
-        if !self.by_bytes.contains_key(&h) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.by_bytes.entry(h) {
             let pixmap = tiny_skia::Pixmap::decode_png(bytes).ok()?;
-            self.by_bytes.insert(h, DecodedImage {
+            e.insert(DecodedImage {
                 width:  pixmap.width(),
                 height: pixmap.height(),
                 pixels: std::sync::Arc::new(pixmap.data().to_vec()),

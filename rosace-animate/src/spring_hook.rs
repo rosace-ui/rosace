@@ -195,9 +195,9 @@ mod tests {
 
     #[test]
     fn animated_get_reads_value() {
-        let atom = rosace_state::use_atom(3.14f32);
+        let atom = rosace_state::use_atom(1.25f32);
         let animated = Animated { value: atom.clone() };
-        assert!((animated.get() - 3.14).abs() < 1e-5);
+        assert!((animated.get() - 1.25).abs() < 1e-5);
         atom.set(2.71);
         assert!((animated.get() - 2.71).abs() < 1e-5);
     }

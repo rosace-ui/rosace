@@ -104,7 +104,7 @@ mod tests {
     use rosace_render::FontCache;
     use rosace_theme::built_in;
 
-    fn make_ctx(c: rosace_layout::Constraints) -> (FontCache, rosace_theme::ThemeData) {
+    fn make_ctx(_c: rosace_layout::Constraints) -> (FontCache, rosace_theme::ThemeData) {
         let font = FontCache::system_ui()
             .or_else(FontCache::system_mono)
             .expect("no system font");

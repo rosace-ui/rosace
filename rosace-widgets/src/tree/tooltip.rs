@@ -1,4 +1,4 @@
-use rosace_core::types::{Point, Rect, Size};
+use rosace_core::types::{Point, Size};
 use rosace_render::Color;
 
 use super::{Widget, Children, LayoutCtx, PaintCtx, BoxedWidget};

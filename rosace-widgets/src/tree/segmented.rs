@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
-use rosace_render::Color;
 use super::{Widget, LayoutCtx, PaintCtx};
 
 /// A one-of-N horizontal selector — segments in a rounded track, the selected

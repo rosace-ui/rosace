@@ -180,21 +180,16 @@ fn replace_between(content: &str, prefix: &str, suffix: &str, new_value: &str) -
     let mut result = String::with_capacity(content.len());
     let mut count = 0;
     let mut rest = content;
-    loop {
-        match rest.find(prefix) {
-            Some(start) => {
-                let after_prefix_idx = start + prefix.len();
-                let after_prefix = &rest[after_prefix_idx..];
-                match after_prefix.find(suffix) {
-                    Some(end) => {
-                        result.push_str(&rest[..after_prefix_idx]);
-                        result.push_str(new_value);
-                        result.push_str(suffix);
-                        rest = &after_prefix[end + suffix.len()..];
-                        count += 1;
-                    }
-                    None => break,
-                }
+    while let Some(start) = rest.find(prefix) {
+        let after_prefix_idx = start + prefix.len();
+        let after_prefix = &rest[after_prefix_idx..];
+        match after_prefix.find(suffix) {
+            Some(end) => {
+                result.push_str(&rest[..after_prefix_idx]);
+                result.push_str(new_value);
+                result.push_str(suffix);
+                rest = &after_prefix[end + suffix.len()..];
+                count += 1;
             }
             None => break,
         }
@@ -265,7 +260,7 @@ PRODUCT_BUNDLE_IDENTIFIER = "dev.rosace.old";"#;
         let dir = std::env::temp_dir().join(format!("tzr_bundleid_missing_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let missing = dir.join("nope.plist");
-        assert_eq!(update_plist_bundle_id(&missing, "x").unwrap(), false);
+        assert!(!update_plist_bundle_id(&missing, "x").unwrap());
         fs::remove_dir_all(&dir).ok();
     }
 }

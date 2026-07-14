@@ -1,6 +1,4 @@
 use rosace_core::types::{Point, Rect, Size};
-use rosace_layout::Constraints;
-use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h};
 
 /// Inset amounts on each edge (logical pixels).
 #[derive(Debug, Clone, Copy, Default)]

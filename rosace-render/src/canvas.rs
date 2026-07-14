@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tiny_skia::{FillRule, GradientStop, LinearGradient, Mask, Paint, PathBuilder, Pixmap, Shader, SpreadMode, Stroke, Transform};
+use tiny_skia::{FillRule, GradientStop, LinearGradient, Mask, Paint, PathBuilder, Pixmap, SpreadMode, Stroke, Transform};
 use rosace_core::types::{Point, Rect, Size};
 
 /// Cubic Bézier circle-approximation constant (4/3 · tan(π/8)).
@@ -506,6 +506,13 @@ impl SkiaCanvas {
 
     /// Grow the open segment's bbox (GPU mode) by a command's conservative
     /// physical-px bounds, clipped to the active clip.
+    ///
+    /// No caller since D109 moved images (the last CPU-rasterized command)
+    /// to GPU textured quads. Kept as the CPU-fallback seam: any future
+    /// canvas command without a GPU pipeline must call this before
+    /// rasterizing into the scratch pixmap, or `cut_segment` (still wired
+    /// in `push_builtin_quad`) will silently drop its pixels.
+    #[allow(dead_code)]
     fn grow_segment(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
         let (mut x0, mut y0, mut x1, mut y1) = (x0, y0, x1, y1);
         if let Some((cx, cy, cr, cb)) = self.clip {
@@ -943,9 +950,7 @@ impl SkiaCanvas {
             GradientStop::new(1.0, tiny_skia::Color::from_rgba8(to.r, to.g, to.b, to.a)),
         ];
         let Some(shader) = LinearGradient::new(p0, p1, stops, SpreadMode::Pad, Transform::identity()) else { return; };
-        let mut paint = Paint::default();
-        paint.shader = shader;
-        paint.anti_alias = true;
+        let paint = Paint { shader, anti_alias: true, ..Paint::default() };
         let mask = self.clip.and_then(|c| self.clip_masks.get(&c));
         let r = radius.min(w / 2.0).min(h / 2.0);
         if r < 0.5 {

@@ -25,6 +25,8 @@ use rosace_ffi::RawSurface;
 /// and returns a handle, not that a real UI paints correctly (that's
 /// exercised by the existing desktop examples via `App::launch`, which now
 /// shares this same `FrameEngine` internally).
+// Constructed only inside the ios/android cfg branch of `tzr_engine_init`.
+#[cfg_attr(not(any(target_os = "ios", target_os = "android")), allow(dead_code))]
 struct StubRoot;
 
 impl Component for StubRoot {
@@ -61,6 +63,11 @@ pub unsafe extern "C" fn tzr_engine_init(
 /// This stub only has a native surface kind on iOS/Android; on other host
 /// targets (used only to typecheck this file while iterating) `init` always
 /// fails closed rather than pretending to construct a surface.
+///
+/// # Safety
+/// No requirements — this fallback never dereferences `_surface_handle`
+/// and always returns null. `unsafe` only to keep the ABI signature
+/// identical to the real mobile variant above.
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[no_mangle]
 pub unsafe extern "C" fn tzr_engine_init(

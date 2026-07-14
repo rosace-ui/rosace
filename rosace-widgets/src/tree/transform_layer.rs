@@ -39,7 +39,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         // Viewport size is what we occupy in the parent layout.
         let unconstrained = Constraints::loose(ctx.constraints.max_width_f32(), f32::INFINITY);
-        let child_lctx = LayoutCtx::new(unconstrained, ctx.font, &ctx.theme);
+        let child_lctx = LayoutCtx::new(unconstrained, ctx.font, ctx.theme);
         let child_size = self.child.layout(&child_lctx);
         Size {
             width:  child_size.width,

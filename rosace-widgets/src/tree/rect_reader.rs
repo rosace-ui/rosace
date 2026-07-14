@@ -1,6 +1,6 @@
-use rosace_core::types::{Rect, Size};
+use rosace_core::types::Rect;
 use rosace_state::Atom;
-use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget};
+use super::{Widget, PaintCtx, BoxedWidget};
 
 /// Fires `atom.set(Some(ctx.rect))` after paint, surfacing the widget's
 /// window-pixel coordinates to user code without any widget modification.
@@ -38,7 +38,7 @@ impl Widget for RectReader {
 mod tests {
     use super::*;
     use rosace_core::types::{Point, Rect, Size};
-    use rosace_layout::Constraints;
+    
     use rosace_render::{FontCache, PictureRecorder};
     use rosace_state::use_atom;
     use rosace_theme::built_in;

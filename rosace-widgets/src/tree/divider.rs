@@ -28,6 +28,12 @@ impl Divider {
     pub fn indent(mut self, i: f32) -> Self { self.indent = i; self }
 }
 
+impl Default for Divider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Widget for Divider {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;

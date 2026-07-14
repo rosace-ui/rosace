@@ -77,11 +77,6 @@ impl ImageLoader {
         self.state.insert(url.into(), LoadState::Loaded(bytes));
     }
 
-    /// Inject a failed result directly (used in tests).
-    #[cfg(test)]
-    pub(crate) fn inject_failed(&mut self, url: impl Into<String>, error: impl Into<String>) {
-        self.state.insert(url.into(), LoadState::Failed(error.into()));
-    }
 }
 
 impl Default for ImageLoader { fn default() -> Self { Self::new() } }

@@ -5,6 +5,11 @@
 //!     --out-dir dist --target web
 //! then serve dist/ with an index.html that imports it.
 
+// This example is a `cdylib` (wasm-bindgen requirement), so a non-wasm
+// build has no entry point at all — `main`/`Counter` only exist off-wasm
+// so the file still typechecks during desktop iteration.
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+
 use rosace::prelude::*;
 
 struct Counter;

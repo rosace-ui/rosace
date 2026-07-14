@@ -28,8 +28,10 @@ use super::{Widget, LayoutCtx, PaintCtx};
 /// lands — Phase 20 Step 5.)
 ///
 /// [`DrawCommand::BlitRgba`]: rosace_render::DrawCommand::BlitRgba
+type PainterFn = Arc<dyn Fn(&mut PaintCtx, Size) + Send + Sync>;
+
 pub struct CustomPaint {
-    painter: Arc<dyn Fn(&mut PaintCtx, Size) + Send + Sync>,
+    painter: PainterFn,
     width: Option<f32>,
     height: Option<f32>,
 }

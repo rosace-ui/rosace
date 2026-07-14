@@ -54,7 +54,6 @@ mod tests {
         Home,
         Profile { user_id: u64 },
         Settings,
-        NotFound,
     }
     impl Route for AppScreen {}
 

@@ -107,7 +107,7 @@ impl OverlayEntry {
 // ── Thread-local registry ─────────────────────────────────────────────────────
 
 thread_local! {
-    static OVERLAY_ENTRIES: RefCell<Vec<OverlayEntry>> = RefCell::new(Vec::new());
+    static OVERLAY_ENTRIES: RefCell<Vec<OverlayEntry>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Push an overlay entry from within a widget's `paint()` call.

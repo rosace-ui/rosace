@@ -1,7 +1,6 @@
 use rosace_a11y::FocusNode;
-use rosace_core::types::Size;
 use rosace_render::{Color, DrawCommand};
-use super::{Widget, LayoutCtx, PaintCtx};
+use super::{Widget, PaintCtx};
 
 // ── WithFocus wrapper ─────────────────────────────────────────────────────────
 
