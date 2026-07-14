@@ -450,10 +450,12 @@ On limit: auto full rebuild, clear message, no silent failure
 ## PLATFORM
 
 ### D042 — App Lifecycle
-**Status**: LOCKED
+**Status**: LOCKED — IMPLEMENTED 2026-07-14 by D110/Phase 29 Step 1.
 **Decision**: GlobalAtom<LifecycleState> + use_app_lifecycle() hook.
 States: Active, Inactive, Background, Suspended.
-**Affects**: rosace-platform
+**Affects**: rosace-platform — superseded by D110's resolution: the real
+home is `rosace-core/src/app_lifecycle.rs` (rosace-platform is
+unreachable from component code; see D110/PHASE_29.md Step 1).
 
 ---
 
@@ -1289,7 +1291,7 @@ Also export a per-route `llms.txt`/plain-text summary from the same semantic tre
 ---
 
 ### D110 — App lifecycle + push notifications over the existing native-host FFI bridge (raised + scoped 2026-07-10 as Phase 29)
-**Status**: SCOPED, NOT STARTED — see `.steering/PHASE_29.md`.
+**Status**: Step 1 (lifecycle) LANDED + live-verified on the iOS Simulator 2026-07-14 — `LifecycleState`'s home resolved to `rosace-core/src/app_lifecycle.rs` (the `ime_hint.rs` bridge precedent; D042's "Affects: rosace-platform" was unreachable from component code), four `RSC_EVENT_LIFECYCLE_*` kinds over the bridge, `Engine::input` applies lifecycle immediately (background-safe atom write) since the display link is paused exactly when `Background` arrives. See `.steering/PHASE_29.md` Step 1 for full detail. Step 2 (push) not started.
 **Decision**: Add `LifecycleState` (D042: Active/Inactive/Background/Suspended) and push-notification registration/delivery as two more capabilities crossing the D106/Phase 24 native-host FFI bridge, following the exact three-piece shape Phase 24 Step 5 already proved with camera permission (request queue + result/state atom + host-side native call) — not a new architecture. iOS: real `AppDelegate`/`SceneDelegate` methods (`applicationDidBecomeActive`, `applicationDidEnterBackground`, `didRegisterForRemoteNotificationsWithDeviceToken`, `didReceiveRemoteNotification`) call into Rust over new FFI entry points. Android: `MainActivity.kt`'s `onResume`/`onPause`/`onStop` + `FirebaseMessagingService` do the same via JNI.
 **Reason**: Checked the actual code, not the plan-on-paper: `D042`'s `GlobalAtom<LifecycleState>`/`use_app_lifecycle()` has zero real implementation anywhere in the workspace (confirmed by grep — decision recorded, never built). `rosace-ffi/src/event.rs`'s FFI event kinds are only `MouseMove/Down/Up`, `KeyDown/Up`, `Text`, `WindowResized`, `Scroll` — no lifecycle event crosses the boundary at all. Push notifications were only ever named as an *example candidate* for Phase 24 Step 5's single proof; camera permission got built instead, so push notifications remain unbuilt. A framework being positioned to ship real apps needs both — background/resume state to pause expensive work (animation, network polling) and push notifications are baseline mobile-app requirements, not optional polish.
 **Sequencing**: after Phase 27 (GPU rendering) and Phase 28 (TextInput/IME) — see those phases' own docs; this is independent of both technically (touches `rosace-ffi`/native hosts, not rendering or text), but the queue stays GPU → TextInput/IME → this, per user sequencing decisions made the same day.

@@ -1,7 +1,7 @@
 # Phase 29 — App Lifecycle + Push Notifications (D110)
 
-> Status: Scoped, not started.
-> Started: —
+> Status: Step 1 LANDED + live-verified. Step 2 (push) not started.
+> Started: 2026-07-14
 > Completed: —
 > Decision: **D110** — wire real app lifecycle state (resume/pause/
 > background/suspend) and push-notification registration/delivery across
@@ -81,6 +81,47 @@ Exit: a real running app on-device (or simulator/emulator) backgrounds
 and resumes; a widget reading `LifecycleState` via `use_app_lifecycle()`
 observably re-renders with the correct state — proven live, not just
 compiled.
+
+**Landed 2026-07-14 (commits ea4b9aa + the D120 rename that immediately
+followed)**. Home resolved: `rosace-core/src/app_lifecycle.rs` (NOT
+`rosace-platform` as D042 originally said — platform is unreachable from
+component code; core is the lowest common layer both the FFI setter side
+and the component reader side already depend on, the exact `ime_hint.rs`
+precedent). `LifecycleState` (Active default/Inactive/Background/
+Suspended) + `use_app_lifecycle(ctx)` (reads AND explicitly subscribes
+the component — `GlobalAtom`s aren't auto-subscribed by hook machinery;
+`FormField::for_ctx` convention) + `app_lifecycle()` (non-subscribing
+read for engine/host/watcher-thread code) + `set_app_lifecycle()`. Atom
+id `0xFFF9` (next in the reserved-high-id ladder). FFI: four flat event
+kinds `RSC_EVENT_LIFECYCLE_ACTIVE/INACTIVE/BACKGROUND/SUSPENDED`
+(8/9/10/11) → `InputEvent::Lifecycle(LifecycleState)`;
+`FrameEngine`'s dispatch writes the atom. **Design point found while
+building, not in the plan**: `Engine::input` applies lifecycle events
+IMMEDIATELY as well as queueing them — iOS pauses the display link in
+background (and background Metal work is prohibited), so a purely
+frame-queued `Background` event would first be seen on RESUME, the exact
+opposite of "pause work while backgrounded". iOS template:
+`UIApplication` notification observers in `EngineViewController` (owns
+the engine handle — no AppDelegate/SceneDelegate plumbing). Android
+template: `onResume`/`onPause`/`onStop` → new `nativeLifecycle` JNI fn;
+no SUSPENDED on Android (no reliable pre-kill callback). Tests: core
+unit tests (default/round-trip/subscription-marks-dirty), FFI mapping
+round-trip, headless `FrameEngine` integration test asserting the idle
+frame does NOT rebuild (so the re-render assertion can't false-positive)
+and the event-carrying frame does.
+
+**Live exit-bar proof 2026-07-14, iOS Simulator (iPhone 15 Pro, 17.4)**:
+fresh `rsc new lifecycle_proof --platforms ios` scaffold (also the first
+end-to-end run of the D120-renamed `rsc_*` ABI), `rsc run --target ios`,
+app shows `use_app_lifecycle()` live; backgrounded via launching
+Settings, resumed via `simctl launch` (same pid — process survived);
+UI history renders **Active → Inactive → Background → Active**, recorded
+at SET time by an app-side watcher thread polling `app_lifecycle()`
+(itself the D110 "pause expensive work" pattern) — build-time logging
+alone would miss `Background`, since no frames run while backgrounded.
+Android half of the template compiles in codegen tests; live
+emulator verification folds into the next real Android device session
+(same discipline as Phase 24/28's device-deferred halves).
 
 ### Step 2 — Push-notification registration + foreground delivery
 Mirror `capability.rs`'s exact three-piece shape: `request_push_permission()`
