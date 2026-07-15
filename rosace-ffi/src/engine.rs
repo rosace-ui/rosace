@@ -43,6 +43,27 @@ impl Engine {
 
         rosace_theme::set_theme(theme);
 
+        // Persistence backend (D114/D121): mobile apps enter HERE, not
+        // `App::launch`, so the store installs here too. iOS: `$HOME` is
+        // the per-app sandbox container, so `Documents/rosace.sqlite`
+        // needs no app-name namespacing (and rides the user's device
+        // backups). Android: the files dir is only knowable from the JNI
+        // host (`context.getFilesDir()`) — plumbing that path through
+        // `nativeInit` is deferred alongside Known Issue #16 (Android is
+        // parked pre-rendering); until then persistent atoms behave as
+        // plain state there, same non-fatal degradation as a failed open.
+        #[cfg(target_os = "ios")]
+        if let Ok(home) = std::env::var("HOME") {
+            let dir = std::path::Path::new(&home).join("Documents");
+            let _ = std::fs::create_dir_all(&dir);
+            match rosace::storage::Storage::open(dir.join("rosace.sqlite")) {
+                Ok(store) => {
+                    rosace::core::set_persist_backend(Box::new(store));
+                }
+                Err(e) => eprintln!("rosace: persistence disabled ({e})"),
+            }
+        }
+
         let presenter = GpuPresenter::new(surface, width, height)?;
 
         let font = rosace_render::FontCache::system_ui()

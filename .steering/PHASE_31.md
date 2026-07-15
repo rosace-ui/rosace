@@ -67,7 +67,13 @@ unaffected). `App::launch` installs `rosace_storage::Storage` at the
 platform app-data dir (`persist_db_path`: macOS Application Support /
 `%APPDATA%` / XDG / iOS sandbox Documents; Android's files-dir needs
 the JNI host — named deferral alongside Known Issue #16). Open failure
-is NON-fatal (warning; app runs unpersisted). `reload`/`session` tiers:
+is NON-fatal (warning; app runs unpersisted). **Mobile entry wired
+2026-07-15 (user question caught the gap)**: mobile apps enter via
+`Engine::init` (D106 FFI), NOT `App::launch` — the backend now installs
+there too for iOS (`$HOME/Documents/rosace.sqlite`; the sandbox
+container IS the per-app namespace, and rides device backups); Android
+waits on a `getFilesDir()` path through `nativeInit`, deferred with
+#16. Live iOS verification folds into the next simulator session. `reload`/`session` tiers:
 documented no-ops by construction (D121). Live exit bar: `persist_demo`
 run three times with full process quits — screenshots show Launch #1 →
 #2 → #3 and a note string written by a previous process restored, real
