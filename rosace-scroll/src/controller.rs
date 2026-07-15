@@ -20,6 +20,8 @@ pub struct ScrollController {
     /// Absolute screen point of the last streamed drag position, `None`
     /// when not currently dragging.
     last_drag_point: Atom<Option<[f32; 2]>>,
+    /// The drag's DOWN point, kept until [`Self::DRAG_SLOP`] is exceeded.
+    drag_origin: Atom<Option<[f32; 2]>>,
     /// The real, currently-tracked drag/momentum velocity in px/s — computed
     /// from the actual offset delta each frame while dragging, never a
     /// fixed/assumed constant.
@@ -97,6 +99,7 @@ impl ScrollController {
             content_size: rosace_state::use_atom([0.0f32; 2]),
             viewport_size: rosace_state::use_atom([0.0f32; 2]),
             last_drag_point: rosace_state::use_atom(None),
+            drag_origin: rosace_state::use_atom(None),
             velocity: rosace_state::use_atom([0.0f32; 2]),
             last_offset_for_velocity: rosace_state::use_atom([0.0f32; 2]),
             was_pressed: rosace_state::use_atom(false),
@@ -154,22 +157,41 @@ impl ScrollController {
 
     // ── Drag-to-pan + momentum (D108/Phase 26 Step 2) ──────────────────────
 
-    /// Streamed absolute drag position → delta since the last call (0 on the
-    /// first call of a drag, since there's no prior point to diff against).
+    /// Drag slop (Phase 32 bug fix, user-reported): a press must travel
+    /// this many logical px from its DOWN point before drag-to-pan
+    /// engages. Without it, the 1-3 px of natural pointer jitter during a
+    /// plain click pans the view — visible whenever the click lands on
+    /// non-interactive content inside a scroll view (a hit falls through
+    /// to the viewport's positional drag region). 6 px matches the common
+    /// touch-slop convention (small enough that intentional drags feel
+    /// instant, large enough that clicks never pan).
+    pub const DRAG_SLOP: f32 = 6.0;
+
+    /// Streamed absolute drag position → delta since the last call.
+    /// Returns (0, 0) on the first call of a drag AND while the pointer
+    /// stays within [`Self::DRAG_SLOP`] of the down point — see its doc.
     /// Call `end_drag` on release so the next drag starts fresh.
     pub fn drag_delta(&self, x: f32, y: f32) -> (f32, f32) {
         let prev = self.last_drag_point.get();
         self.last_drag_point.set(Some([x, y]));
-        match prev {
-            Some([px, py]) => (x - px, y - py),
-            None => (0.0, 0.0),
+        let Some([px, py]) = prev else {
+            self.drag_origin.set(Some([x, y]));
+            return (0.0, 0.0);
+        };
+        if let Some([ox, oy]) = self.drag_origin.get() {
+            if (x - ox).hypot(y - oy) <= Self::DRAG_SLOP {
+                return (0.0, 0.0); // still a click, not a drag
+            }
+            self.drag_origin.set(None); // slop exceeded — drag is real
         }
+        (x - px, y - py)
     }
 
     /// Clears drag-position tracking — call on release so the next drag
     /// doesn't diff against a stale point.
     pub fn end_drag(&self) {
         self.last_drag_point.set(None);
+        self.drag_origin.set(None);
     }
 
     /// Recomputes `velocity` from the real offset delta since the last call,
@@ -454,6 +476,20 @@ mod tests {
         assert_eq!(c.drag_delta(100.0, 50.0), (0.0, 0.0));
         assert_eq!(c.drag_delta(110.0, 45.0), (10.0, -5.0));
         assert_eq!(c.drag_delta(90.0, 45.0), (-20.0, 0.0));
+    }
+
+    #[test]
+    fn click_jitter_within_slop_never_pans() {
+        // The user-reported Phase 32 bug: a plain click's 1-3px pointer
+        // jitter must not move the view.
+        let c = ScrollController::new();
+        assert_eq!(c.drag_delta(100.0, 100.0), (0.0, 0.0)); // down
+        assert_eq!(c.drag_delta(102.0, 101.0), (0.0, 0.0)); // jitter
+        assert_eq!(c.drag_delta(99.0, 100.0), (0.0, 0.0));  // jitter back
+        // A real drag past the slop engages, diffing from the last point.
+        assert_eq!(c.drag_delta(120.0, 100.0), (21.0, 0.0));
+        // And keeps streaming normally afterwards.
+        assert_eq!(c.drag_delta(125.0, 104.0), (5.0, 4.0));
     }
 
     #[test]

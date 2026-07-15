@@ -75,17 +75,23 @@ impl Widget for Checkbox {
                 };
                 ctx.fill_rect(dash, Color::rgba(230, 232, 245, (255.0 * t) as u8));
             } else {
-                let ink = Color::rgba(230, 232, 245, (255.0 * t) as u8);
-                let tick1 = Rect {
-                    origin: Point { x: box_rect.origin.x + self.box_size * 0.2, y: box_rect.origin.y + self.box_size * 0.5 },
-                    size: Size { width: self.box_size * 0.25, height: self.box_size * 0.1 },
-                };
-                let tick2 = Rect {
-                    origin: Point { x: box_rect.origin.x + self.box_size * 0.4, y: box_rect.origin.y + self.box_size * 0.3 },
-                    size: Size { width: self.box_size * 0.1, height: self.box_size * 0.35 },
-                };
-                ctx.fill_rect(tick1, ink);
-                ctx.fill_rect(tick2, ink);
+                let ink = Color::rgba(255, 255, 255, (255.0 * t) as u8);
+                // A real angled checkmark, drawn as the ✓ glyph (crisp at
+                // any size via the glyph pipeline). The previous version
+                // approximated it with two axis-aligned rects, which read
+                // as a broken "L" (user-reported, Phase 32 bug list).
+                let px = self.box_size * 0.85;
+                let tw = ctx.font.measure_text("\u{2713}", px);
+                let lh = ctx.font.line_height(px);
+                ctx.draw_text_at(
+                    "\u{2713}",
+                    Point {
+                        x: box_rect.origin.x + (self.box_size - tw) / 2.0,
+                        y: box_rect.origin.y + (self.box_size - lh) / 2.0,
+                    },
+                    ink,
+                    px,
+                );
             }
         }
 

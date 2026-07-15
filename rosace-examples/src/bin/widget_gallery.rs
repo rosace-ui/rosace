@@ -23,6 +23,8 @@ impl Component for Gallery {
         let search = ctx.state(String::new());
         let snack_open = ctx.state(false);
         let fab_count = ctx.state(0i32);
+        let slider_val = ctx.state(0.4f32);
+        let typed = ctx.state(String::new());
 
         let mut col = Column::new()
             .padding(EdgeInsets::all(20.0))
@@ -76,7 +78,10 @@ impl Component for Gallery {
                         let s = switch_on.clone();
                         move |v| s.set(v)
                     }))
-                    .child(Slider::new(0.4).width(140.0))
+                    .child(Slider::new(slider_val.get()).width(140.0).on_change({
+                        let s = slider_val.clone();
+                        move |v| s.set(v)
+                    }))
                     .child(
                         SegmentedControl::new(vec!["Day", "Week", "Month"], seg.get()).on_change({
                             let s = seg.clone();
@@ -98,7 +103,10 @@ impl Component for Gallery {
             .child(
                 Row::new()
                     .spacing(14.0)
-                    .child(TextInput::new().placeholder("plain input").width(170.0))
+                    .child(TextInput::new().value(typed.get()).placeholder("plain input").width(170.0).on_change({
+                        let t = typed.clone();
+                        move |v| t.set(v)
+                    }))
                     .child(
                         SearchBar::new()
                             .value(search.get())
