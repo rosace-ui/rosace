@@ -15,7 +15,7 @@ pub use tree::{LongPressable, PressApi, Pressable};
 pub use tree::BoxedWidget;
 pub use tree::WidgetApp;
 pub use tree::AppBar;
-pub use tree::{BottomNavItem, BottomNavigationBar, FloatingActionButton};
+pub use tree::{BottomNavItem, BottomNavigationBar, FloatingActionButton, SearchBar, Snackbar};
 pub use tree::Avatar;
 pub use tree::Badge;
 pub use tree::Button;
