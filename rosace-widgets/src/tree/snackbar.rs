@@ -63,6 +63,21 @@ impl Snackbar {
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
     pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
 
+    /// Present as a floating overlay pinned bottom-center, above ALL
+    /// content (the Scaffold-level surface the platform convention
+    /// demands — a snackbar is never an inline child of where it was
+    /// declared). Call while your open-atom is true; same per-frame
+    /// re-push convention as `Drawer::emit`. Clicks outside it pass
+    /// through; the action button still receives its own hits.
+    pub fn emit(self) {
+        use super::overlay::{push_overlay, InputBehavior, FocusBehavior, LayerPosition, OverlayEntry};
+        push_overlay(
+            OverlayEntry::new(LayerPosition::BottomCenter, self)
+                .input(InputBehavior::PassThrough)
+                .focus(FocusBehavior::Inert),
+        );
+    }
+
     /// Open the snackbar and auto-dismiss after `secs` seconds — same
     /// timer model as [`super::Toast::show`].
     pub fn show(open: &Atom<bool>, secs: f32) {

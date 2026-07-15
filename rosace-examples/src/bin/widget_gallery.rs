@@ -26,7 +26,7 @@ impl Component for Gallery {
         let slider_val = ctx.state(0.4f32);
         let typed = ctx.state(String::new());
 
-        let mut col = Column::new()
+        let col = Column::new()
             .padding(EdgeInsets::all(20.0))
             .spacing(10.0)
             // ── Buttons ────────────────────────────────────────────
@@ -163,7 +163,8 @@ impl Component for Gallery {
             );
 
         if snack_open.get() {
-            col = col.child(Snackbar::new("Item archived").action("UNDO", || {}));
+            // Overlay-presented: floats bottom-center above everything.
+            Snackbar::new("Item archived").action("UNDO", || {}).emit();
         }
 
         // Bottom navigation showcased in its natural Scaffold slot.
