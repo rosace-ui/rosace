@@ -144,12 +144,11 @@ impl App {
             }
         }
 
-        // Prefer a system UI/mono font; fall back to the embedded DejaVu Sans
-        // when none is found (always the case on web/wasm) so text always
-        // renders on every platform.
-        let font = rosace_render::FontCache::system_ui()
-            .or_else(rosace_render::FontCache::system_mono)
-            .unwrap_or_else(rosace_render::FontCache::embedded);
+        // The bundled Inter face (Phase 32, user-decided): one pleasant,
+        // screen-tuned font with real weight contrast on EVERY platform,
+        // instead of whatever the OS ships. `FontCache::system_ui()`
+        // remains available for apps that want the native look.
+        let font = rosace_render::FontCache::bundled();
         // Platform resolution (D105 Phase 23 Step 1): forced override, else
         // the real detected platform. Themes::resolve (Step 2) reads this to
         // pick the active theme; widgets never see the platform directly.

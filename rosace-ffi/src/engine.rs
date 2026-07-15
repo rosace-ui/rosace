@@ -66,9 +66,8 @@ impl Engine {
 
         let presenter = GpuPresenter::new(surface, width, height)?;
 
-        let font = rosace_render::FontCache::system_ui()
-            .or_else(rosace_render::FontCache::system_mono)
-            .unwrap_or_else(rosace_render::FontCache::embedded);
+        // Bundled Inter — the same default face as `App::launch` (Phase 32).
+        let font = rosace_render::FontCache::bundled();
 
         Some(Box::new(Engine {
             frame_engine: rosace::FrameEngine::new(root, font),

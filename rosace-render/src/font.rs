@@ -114,6 +114,29 @@ impl FontCache {
         Self::from_bytes(DEJAVU_SANS)
     }
 
+    /// The DEFAULT app font (Phase 32, user-decided): bundled Inter (SIL
+    /// OFL — `assets/fonts/inter/LICENSE-OFL.txt`), the same pleasant,
+    /// screen-tuned face on EVERY platform with clearly differentiable
+    /// weights — Regular for body, real Bold (700) for emphasis. Replaces
+    /// "whatever the OS ships" as the default (`system_ui()` remains
+    /// available as an opt-in); also replaces the short-lived
+    /// Medium-by-default experiment, which read slightly bold.
+    ///
+    /// Italic faces (`Inter-Italic`/`Inter-BoldItalic`) are bundled
+    /// alongside but not yet wired — the text pipeline has no italic
+    /// axis yet (tracked in `PHASE_32.md`).
+    pub fn bundled() -> Self {
+        const INTER_REGULAR: &[u8] =
+            include_bytes!("../../assets/fonts/inter/Inter-Regular.ttf");
+        const INTER_BOLD: &[u8] =
+            include_bytes!("../../assets/fonts/inter/Inter-Bold.ttf");
+        let regular = Font::from_bytes(INTER_REGULAR, FontSettings::default())
+            .expect("bundled Inter Regular is valid");
+        let bold = Font::from_bytes(INTER_BOLD, FontSettings::default())
+            .expect("bundled Inter Bold is valid");
+        Self::build(regular, Some(bold))
+    }
+
     fn load_first(paths: &[&str]) -> Option<Font> {
         for path in paths {
             if let Ok(bytes) = std::fs::read(path) {
@@ -156,15 +179,6 @@ impl FontCache {
             if n.contains("heavy") || n.contains("black") { return Some(1); }
             None
         } else {
-            // Medium (~500) outranks Regular (~400) as the UI face
-            // (Phase 32, user-reported "text is very thin"): this
-            // renderer has no CoreText-style stem darkening, so a true
-            // Regular at 13-15px on dark backgrounds reads underweight —
-            // and pre-D117 the framework accidentally rendered
-            // everything at Bold, so Medium is also the closest honest
-            // match to the look every prior screenshot was judged
-            // against. Real Bold (700) still contrasts clearly.
-            if n.ends_with("medium") && !n.contains("extra") { return Some(4); }
             if n.ends_with("regular") || n == "regular" { return Some(3); }
             if !n.contains("bold") && !n.contains("black") && !n.contains("heavy")
                 && !n.contains("light") && !n.contains("thin") && !n.contains("medium")
