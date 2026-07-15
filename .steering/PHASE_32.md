@@ -1,7 +1,15 @@
 # Phase 32 — Widget Expansion, Extensible Icons, Rich Text/Emoji (D115)
 
-> Status: Scoped, not started.
-> Started: —
+> Status: Step 1 IN PROGRESS (started 2026-07-15). Landed so far:
+> BottomNavigationBar, FloatingActionButton, SearchBar, Snackbar — all
+> theme-token defaults + D094 builders, layout tests, live-proven
+> (bottom_nav_demo + the new widget_gallery catalog bin, which shows
+> every major existing widget with a minimal customization example).
+> Remaining Step 1 queue: Grid staggered/bento, Table, InteractiveViewer,
+> Dialog/Drawer/Sheet variants, Carousel/PageView, Stepper, RatingBar,
+> DatePicker/TimePicker, DataTable, then the customization sweep over
+> the EXISTING set. Steps 2-4 not started.
+> Started: 2026-07-15
 > Completed: —
 > Decision: **D115** — add the widgets a typical real app needs and
 > doesn't have today; replace `Icon`'s closed hardcoded-enum system
