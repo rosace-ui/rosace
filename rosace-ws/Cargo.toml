@@ -7,4 +7,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+rosace-core  = { path = "../rosace-core" }
+rosace-state = { path = "../rosace-state" }
 rosace-trace = { path = "../rosace-trace" }
+
+# D113/Phase 30 Step 3: real RFC 6455 via tungstenite (sync crate, no
+# tokio); rustls for wss. Target-gated — std::net-based, wasm gets the
+# documented named-gap error instead (see src/client.rs).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }

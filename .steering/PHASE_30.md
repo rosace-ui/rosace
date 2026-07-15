@@ -1,8 +1,13 @@
 # Phase 30 — Real Networking: Sync HTTP/WebSocket, Not Hand-Rolled TLS (D113)
 
-> Status: Steps 1-2 LANDED + live-verified. Steps 3-4 not started.
+> Status: ALL 4 STEPS LANDED + live-verified. PHASE COMPLETE. Named
+> deferrals carried in-step: web (wasm) networking backends
+> (fetch()/browser-WebSocket/navigator.onLine — documented named-gap
+> errors today, never panics) and the mobile native-host
+> use_network_status halves (NWPathMonitor/ConnectivityManager over the
+> D106 bridge — the set_network_status seam exists; device session).
 > Started: 2026-07-14
-> Completed: —
+> Completed: 2026-07-15
 > Decision: **D113** — `rosace-net` gains a general HTTP client on
 > `ureq` (sync, `rustls`-based); `rosace-ws` moves from a hand-rolled
 > RFC 6455 handshake to `tungstenite` (sync). `D012`'s decided-but-
@@ -101,10 +106,45 @@ Swap the hand-rolled handshake for `tungstenite` (sync crate, no tokio). `use_we
 
 Exit: a real running app maintains a live WebSocket connection to a real server, receives and displays real messages, verified live.
 
+**Landed 2026-07-15.** `WsClient` rewritten on `tungstenite 0.26`
+(sync, `rustls-tls-webpki-roots` — `wss://` works) with the public API
+unchanged (`connect`/`send`/non-blocking `recv`/`close`/`is_closed`);
+the hand-rolled `frame.rs`/`handshake.rs`/`stream.rs` are DELETED.
+Handshake runs blocking, then the stream flips to non-blocking so
+per-frame `recv` never stalls. New `hook.rs`: `use_websocket(ctx, url)
+-> WsHandle { state: WsState (Connecting/Open{messages}/Closed), send() }`
+— same worker-writes-atom no-polling design as `use_query`, same
+`on_unmount` alive-flag cleanup (worker closes the connection within one
+30ms tick), bounded 50-message display buffer, thread-safe clonable
+sender usable from `on_press`. Test: a REAL local `tungstenite::accept`
+echo server — connect → Open, send → echo lands in hook state, unmount →
+the SERVER observes the connection end (not UI inference). Live exit
+bar: `ws_demo` held a live `wss://ws.postman-echo.com/raw` connection,
+one message/second, screenshot shows OPEN with 7 echoes streamed.
+
 ### Step 4 — `use_network_status` hook
 Platform connectivity detection (desktop: attempt-based/OS API; mobile: real capability via the D106 FFI bridge, same shape as camera/lifecycle).
 
 Exit: a real running app observably reacts to the network being disabled/re-enabled on a real device or OS-level toggle.
+
+**Landed 2026-07-15.** `rosace-net/src/network_status.rs`:
+`NetworkStatus` (Unknown/Online/Offline) in a `GlobalAtom` (`0xFFF5`),
+`use_network_status(ctx)` (subscribes + lazily starts ONE process-wide
+prober thread), `set_network_status()` — the D106 mobile-host seam
+(a host report suppresses the prober; the NWPathMonitor/
+ConnectivityManager native halves are a named device-session deferral;
+the iOS Simulator shares the Mac's network so the prober is already
+correct there). Prober: TCP connect attempts (no payload) to
+1.1.1.1:443 + 8.8.8.8:53 every 4s, 3s timeout — two providers so one
+outage isn't read as offline; attempt-based per this step's own scope
+(per-OS reachability APIs are a later refinement). Deduped writes —
+subscribers re-render only on real transitions. wasm: stays `Unknown`,
+no thread (documented; `navigator.onLine` is the future web backend).
+Live exit bar: `net_status_demo` + a real `networksetup
+-setairportpower en0 off/on` cycle — screenshots show ONLINE → OFFLINE
+("no probe target reachable", Wi-Fi dead in the menu bar) → ONLINE, and
+the user independently watched it react live ("I'm checking and it is
+working").
 
 ## Sequencing
 

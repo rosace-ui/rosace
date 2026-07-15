@@ -1,6 +1,5 @@
-//! WebSocket client for ROSACE — no async runtime, no tungstenite.
-//!
-//! Uses `std::net::TcpStream` with a hand-rolled RFC 6455 handshake.
+//! WebSocket client for ROSACE — `tungstenite`-backed (sync, no async
+//! runtime) since D113/Phase 30 Step 3; `wss://` works via `rustls`.
 //! `WsClient::recv()` is non-blocking via `set_nonblocking(true)` —
 //! safe to call each frame without blocking the render loop.
 //!
@@ -21,12 +20,10 @@
 
 pub mod client;
 pub mod error;
-pub mod frame;
-pub mod handshake;
+pub mod hook;
 pub mod message;
-pub mod stream;
 
 pub use client::WsClient;
+pub use hook::{use_websocket, WsHandle, WsState};
 pub use error::WsError;
 pub use message::WsMessage;
-pub use stream::{WsState, WsStream};
