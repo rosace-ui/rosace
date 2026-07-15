@@ -38,6 +38,10 @@ impl Widget for Switch {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        if self.on_change.is_none() {
+            // Interactive-by-identity (Phase 32): always absorb the click.
+            ctx.on_press(|| {});
+        }
         if let Some(f) = &self.on_change {
             let f = f.clone();
             let next = !self.on;

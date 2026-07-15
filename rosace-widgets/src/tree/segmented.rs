@@ -65,6 +65,10 @@ impl Widget for SegmentedControl {
                     .label(label)
                     .value(if i == self.selected { "selected" } else { "not selected" }),
             );
+            if self.on_change.is_none() {
+                // Interactive-by-identity (Phase 32): absorb unwired taps.
+                child.register_hit(std::sync::Arc::new(|| {}));
+            }
             if let Some(cb) = &self.on_change {
                 let cb = cb.clone();
                 let idx = i;

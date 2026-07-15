@@ -51,6 +51,12 @@ impl Widget for Slider {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        if self.on_change.is_none() {
+            // Interactive-by-identity (Phase 32): an unwired slider still
+            // owns its press region (absorbs, does nothing) so a click on
+            // the track never pans the scroll view behind it.
+            ctx.on_press_at(|_, _| {});
+        }
         if let Some(f) = &self.on_change {
             let f = f.clone();
             let (min, max) = (self.min, self.max);

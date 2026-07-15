@@ -283,6 +283,16 @@ impl FrameEngine {
         let (on_change, controller) = {
             let mut tree = self.render_tree.borrow_mut();
             tree.node_mut(node_id).text_edit = new_state;
+            // Also update the DECLARED value in place (Phase 32 bug fix,
+            // found via the ScrollView typing repro): `focused_editable`
+            // reads `EditableDecl.value`, which paint only refreshes on
+            // the NEXT frame — so the second of two keystrokes processed
+            // in one frame (fast typing, IME bursts, batched events) was
+            // diffing against the stale value and DROPPING the first
+            // character ("h","i" instead of "h","hi").
+            if let Some(e) = tree.node_mut(node_id).editable.as_mut() {
+                e.value = new_value.clone();
+            }
             let editable = tree.node(node_id).editable.as_ref();
             let on_change = if new_value != old_value {
                 editable.map(|e| e.on_change.clone())
@@ -2113,6 +2123,52 @@ mod tests {
                 })
                 .into_element()
         }
+    }
+
+    /// Phase 32 user-reported repro: the widget_gallery's TextInput sits
+    /// inside a ScrollView and typed text never appeared.
+    struct ScrolledTextInput {
+        captured: Arc<OnceLock<rosace_state::Atom<String>>>,
+    }
+    impl Component for ScrolledTextInput {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let name: rosace_state::Atom<String> = ctx.state(String::new());
+            let _ = self.captured.set(name.clone());
+            let input = TextInput::new()
+                .value(name.get())
+                .width(170.0)
+                .on_change({
+                    let name = name.clone();
+                    move |v| name.set(v)
+                });
+            rosace_widgets::tree::ScrollView::new(
+                rosace_widgets::tree::Column::new()
+                    .child(input)
+                    .child(rosace_widgets::tree::Spacer::gap(170.0, 800.0)),
+            )
+            .into_element()
+        }
+    }
+
+    #[test]
+    fn typing_into_a_text_input_inside_a_scroll_view_updates_its_value() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured = Arc::new(OnceLock::new());
+        let mut engine = FrameEngine::new(
+            Box::new(ScrolledTextInput { captured: captured.clone() }),
+            rosace_render::FontCache::embedded(),
+        );
+        let mut canvas = SkiaCanvas::new(300, 400);
+        let mut overlay = SkiaCanvas::new(300, 400);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        engine.paint(&mut canvas, &mut overlay, &[click(50.0, 18.0)]);
+        // Both chars in ONE frame — the batched-keystroke case that used
+        // to drop the first character (see commit_text_edit's fix note).
+        engine.paint(&mut canvas, &mut overlay, &[text('h'), text('i')]);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let value = captured.get().expect("atom captured").get();
+        assert_eq!(value, "hi", "typed text must reach the app atom through a ScrollView");
     }
 
     fn headless_text_input_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas, Arc<OnceLock<rosace_state::Atom<String>>>) {

@@ -48,10 +48,14 @@ impl Widget for Checkbox {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        if let Some(f) = &self.on_change {
-            let f = f.clone();
-            let next = !self.checked;
-            ctx.on_press(move || f(next));
+        // Interactive-by-identity (Phase 32): always absorb the click.
+        match &self.on_change {
+            Some(f) => {
+                let f = f.clone();
+                let next = !self.checked;
+                ctx.on_press(move || f(next));
+            }
+            None => ctx.on_press(|| {}),
         }
         ctx.semantics(super::Semantics::new(rosace_core::Role::Checkbox)
             .value(if self.checked { "checked" } else { "unchecked" }));

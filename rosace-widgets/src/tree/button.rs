@@ -122,10 +122,14 @@ impl Widget for Button {
         let ty = ((r.size.height - line_h) / 2.0).max(0.0);
         ctx.text(&self.label, tx, ty, fg, self.font_size);
 
-        // Register hit target so clicks fire the callback.
-        if let Some(cb) = &self.on_press {
-            if !self.disabled {
-                ctx.register_hit(Arc::clone(cb));
+        // Interactive-by-identity (Phase 32, user directive): a Button
+        // ALWAYS owns its hit region, wired or not — a click on it must
+        // never fall through to whatever positional region (drag-to-pan)
+        // sits behind it. Unwired = absorb, do nothing.
+        if !self.disabled {
+            match &self.on_press {
+                Some(cb) => ctx.register_hit(Arc::clone(cb)),
+                None => ctx.register_hit(Arc::new(|| {})),
             }
         }
     }
