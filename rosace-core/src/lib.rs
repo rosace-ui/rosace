@@ -8,6 +8,7 @@ pub mod error;
 pub mod error_boundary;
 pub mod ime_hint;
 pub mod lifecycle;
+pub mod persist;
 pub mod platform;
 pub mod render_object;
 pub mod safe_area;
@@ -24,6 +25,7 @@ pub use element::{Element, NativeElement, ComponentElement, TextElement, WidgetP
 pub use error::{RosaceError, RosaceResult};
 pub use error_boundary::ErrorBoundary;
 pub use ime_hint::{ime_cursor_area, keyboard_type, set_ime_cursor_area, set_keyboard_type, KeyboardType};
+pub use persist::{persist_backend, set_persist_backend, PersistBackend, PersistValue};
 pub use platform::{use_platform, set_platform, Platform};
 pub use render_object::{AxisBound, Canvas, Constraints, RenderObject};
 pub use safe_area::{use_safe_area, set_safe_area, SafeArea};

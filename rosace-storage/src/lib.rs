@@ -166,3 +166,18 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 }
+
+// ── D121: the persist-backend bridge ────────────────────────────────────
+// `rosace-core` owns the trait (so core/state stay SQLite-free); this is
+// the real implementation `App::launch` installs.
+impl rosace_core::PersistBackend for Storage {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+        Storage::get(self, key)
+    }
+    fn set(&self, key: &str, value: &[u8]) -> Result<(), String> {
+        Storage::set(self, key, value)
+    }
+    fn delete(&self, key: &str) -> Result<(), String> {
+        Storage::delete(self, key)
+    }
+}

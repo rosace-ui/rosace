@@ -33,6 +33,48 @@ impl Context {
         hook_state(self.component_id, idx, default)
     }
 
+    /// D008's `permanent` tier, on the hook model (D114/D121): like
+    /// [`Context::state`], but the FIRST initialization reads `key` from
+    /// the installed persist backend (falling back to `default` if the
+    /// key is absent or its bytes are stale), and every later `set`
+    /// writes through — the value survives a full app restart.
+    ///
+    /// `key` is app-global: two components using the same key share the
+    /// same stored value (by design — it's a storage key, not a hook
+    /// slot). With no backend installed (headless tests, or before
+    /// `App::launch`) this behaves exactly like plain [`Context::state`].
+    ///
+    /// Uses the atom's single `on_change` slot for the write-through —
+    /// see `Atom::set_on_change`'s doc.
+    pub fn state_permanent<T>(&mut self, key: &str, default: T) -> Atom<T>
+    where
+        T: crate::persist::PersistValue + Clone + Send + Sync + 'static,
+    {
+        let wired = self.state(false);
+        let initial = if wired.get() {
+            default // atom already exists; hook_state ignores this value
+        } else {
+            match crate::persist::persist_backend().and_then(|b| b.get(key).ok().flatten()) {
+                Some(bytes) => T::from_persist_bytes(&bytes).unwrap_or(default),
+                None => default,
+            }
+        };
+        let atom = self.state(initial);
+        if !wired.get() {
+            wired.set(true);
+            if crate::persist::persist_backend().is_some() {
+                let key = key.to_string();
+                let value_atom = atom.clone();
+                atom.set_on_change(move |_, _| {
+                    if let Some(backend) = crate::persist::persist_backend() {
+                        let _ = backend.set(&key, &value_atom.get().to_persist_bytes());
+                    }
+                });
+            }
+        }
+        atom
+    }
+
     /// Registers a cleanup function that runs when this component unmounts.
     ///
     /// Stored in the persistent [`rosace_state::cleanup_store`] keyed by

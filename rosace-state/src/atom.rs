@@ -211,13 +211,15 @@ impl<T: 'static> Atom<T> {
         guard.subscribers.retain(|&id| id != component_id);
     }
 
-    /// Sets the callback invoked after each value change.
+    /// Sets the callback invoked after each value change (outside the
+    /// value lock — reading the atom from inside the callback is safe).
     ///
     /// Only one callback can be registered at a time; calling this again
-    /// replaces the previous one.  Used internally by the refresh engine;
-    /// currently exercised only from tests until the engine integration lands.
-    #[allow(dead_code)]
-    pub(crate) fn set_on_change(
+    /// replaces the previous one. Public since D121: the persistence
+    /// write-through (`Context::state_permanent`) claims this slot for
+    /// its atoms — don't also register on a persistent atom or you'll
+    /// silently disable its persistence.
+    pub fn set_on_change(
         &self,
         f: impl Fn(AtomId, Vec<ComponentId>) + Send + Sync + 'static,
     ) {

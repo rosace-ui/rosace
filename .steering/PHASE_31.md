@@ -1,8 +1,12 @@
 # Phase 31 — Real Persistence: `#[persist]` Backed by `rusqlite` (D114)
 
-> Status: Step 1 LANDED. Steps 2-3 not started.
+> Status: Steps 1-2 LANDED + live-verified. Step 3 (encrypted) WAITS
+> by its own rule — Phase 29 landed without a secure-storage capability,
+> and this phase forbids a plaintext fallback for data marked encrypted;
+> it unblocks when the Keychain/Keystore capability is added to the
+> D106 bridge (same shape as camera/lifecycle/push).
 > Started: 2026-07-15
-> Completed: —
+> Completed: 2026-07-15 (Steps 1-2; Step 3 gated as scoped)
 > Decision: **D114** — implement `D008`'s `#[persist(reload/session/
 > permanent/encrypted)]` for real. `reload`/`session` stay in-process;
 > `permanent` writes to embedded `rusqlite`; `encrypted` (secure
@@ -46,6 +50,28 @@ localStorage/IndexedDB is the tracked future backend.
 The `#[persist]` macro (`rosace-macros`) generates code that reads from `rosace-storage` on atom initialization and writes on every change, for atoms marked `permanent`. `reload`/`session` tiers stay in-process (an in-memory map surviving hot-reload/backgrounding, not hitting `rosace-storage` at all — cheaper, and correct per D008's own tiering: only `permanent` needs to survive a full process restart).
 
 Exit: a real running app sets a `#[persist(permanent)]` atom's value, the app is fully quit and relaunched, and the value is observably restored — verified live, not just unit-tested.
+
+**Landed 2026-07-15 (via D121 — read it first: persist re-homed onto
+the HOOK model, not D008's field-attribute world, which has zero real
+call sites).** `rosace-core/src/persist.rs`: `PersistBackend` trait +
+first-install-wins global slot (`set_persist_backend`) so core/state
+stay SQLite-free, and `PersistValue` (bytes round-trip; primitives +
+`String` + `Vec<u8>`; stale bytes decode to `None` → default, never
+panic; serde blanket impl = named deferral). `Context::state_permanent
+(key, default)`: first init reads the backend (key absent/stale →
+default), every later `set` writes through via `Atom::set_on_change`
+(made `pub`; the slot was test-only — a persistent atom's slot is now
+CLAIMED, documented). Keys are app-global by design (storage keys, not
+hook slots). No backend installed = plain `ctx.state` (headless tests
+unaffected). `App::launch` installs `rosace_storage::Storage` at the
+platform app-data dir (`persist_db_path`: macOS Application Support /
+`%APPDATA%` / XDG / iOS sandbox Documents; Android's files-dir needs
+the JNI host — named deferral alongside Known Issue #16). Open failure
+is NON-fatal (warning; app runs unpersisted). `reload`/`session` tiers:
+documented no-ops by construction (D121). Live exit bar: `persist_demo`
+run three times with full process quits — screenshots show Launch #1 →
+#2 → #3 and a note string written by a previous process restored, real
+file at `~/Library/Application Support/Persist_Demo/rosace.sqlite`.
 
 ### Step 3 — `#[persist(permanent, encrypted)]` routes to the Phase 29 capability
 Once Phase 29's FFI bridge has a secure-storage capability (Keychain/Keystore), wire the `encrypted` tier to call it instead of `rosace-storage`. If Phase 29 hasn't landed yet when this step is reached, this step waits — no plaintext fallback silently used for data marked `encrypted` (a real footgun: better to fail loudly/not compile than silently store secrets in plaintext SQLite).

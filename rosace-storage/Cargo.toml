@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+rosace-core  = { path = "../rosace-core" }
 rosace-trace = { path = "../rosace-trace" }
 
 # D114/Phase 31 Step 1: real on-disk persistence. `bundled` compiles

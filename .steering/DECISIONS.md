@@ -124,7 +124,7 @@ Each decision has:
 ---
 
 ### D008 — Atom Persistence
-**Status**: LOCKED
+**Status**: LOCKED — `permanent` tier IMPLEMENTED 2026-07-15 by D114/D121 (Phase 31) as `ctx.state_permanent(key, default)`; `reload`/`session` are documented no-ops by construction until D102 hot-reload exists; `encrypted` gated on a future D106 secure-storage capability (no plaintext fallback). See D121 for the hook-model re-homing.
 **Question**: Does atom state survive hot reload, backgrounding, restart?
 **Decision**: Opt-in per atom. Three levels:
 - #[persist(reload)] — survives hot reload
@@ -1413,6 +1413,15 @@ Also export a per-route `llms.txt`/plain-text summary from the same semantic tre
 **Historical text is NOT rewritten**: decision entries D106–D119 and phase docs keep their `TZR_*` references — they accurately describe what landed at the time; this entry is the rename record.
 **Affects**: `rosace-ffi` (header + all symbol/type/constant names), `rosace-cli` (generated Swift/Kotlin/Rust templates, internal fn names), `rosace-examples` (demo_app ffi, stubs), doc comments across `rosace-core`/`rosace-platform`/`rosace`.
 **Relates to**: D106 (the FFI bridge being renamed), D110 (the phase this interrupted — its lifecycle constants shipped under `RSC_` from the first commit that reaches a generated app).
+
+---
+
+### D121 — `#[persist]` re-homed onto the hook model: `ctx.state_permanent(key, default)` (decided 2026-07-15, Phase 31 Step 2)
+
+**Status**: LANDED with Phase 31 Step 2.
+**Decision**: D008's persistence tiers are implemented on the API apps actually use — the `ctx.state(..)` hook model — not the `#[state]` field-attribute world D008 assumed (that macro predates the hook model and has zero real call sites; building `#[persist]` on it would be the exact built-but-never-wired antipattern the roadmap audit keeps finding). Concretely: `Context::state_permanent(key, default)` = a `ctx.state` whose first initialization reads `key` from the installed persist backend and whose every later `set` writes through (via `Atom`'s single `on_change` slot, now claimed by persistence — it was test-only before). A `PersistBackend` trait + global install slot lives in `rosace-core` (`set_persist_backend`), so core/state stay SQLite-free; `rosace-storage` implements the trait and `App::launch` installs it pointed at the platform app-data dir. Values implement a small `PersistValue` (to/from bytes) trait — impls for the primitives + `String` + `Vec<u8>`; a serde-based general impl is a named deferral (new dependency = its own decision, not smuggled in here). The `reload`/`session` tiers are documented no-ops today by construction (atoms already live for the whole process; hot reload doesn't exist yet — D102), NOT silently claimed implemented. `#[persist(...)]` attribute syntax remains reserved as future sugar if the field-macro world returns.
+**Affects**: `rosace-core` (persist.rs, `Context::state_permanent`), `rosace-state` (`Atom::set_on_change` made `pub`), `rosace-storage` (backend impl), `rosace` (`App::launch` installs the backend).
+**Relates to**: D008 (the tiers), D114/Phase 31 (the phase), D102 (hot reload, which the `reload` tier waits on).
 
 ---
 

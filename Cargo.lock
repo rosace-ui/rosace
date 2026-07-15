@@ -2210,6 +2210,7 @@ dependencies = [
  "rosace-shader",
  "rosace-shaping",
  "rosace-state",
+ "rosace-storage",
  "rosace-style",
  "rosace-test-utils",
  "rosace-text",
@@ -2493,6 +2494,7 @@ dependencies = [
 name = "rosace-storage"
 version = "0.1.0"
 dependencies = [
+ "rosace-core",
  "rosace-trace",
  "rusqlite",
 ]

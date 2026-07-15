@@ -52,6 +52,7 @@ rosace-shader   = { path = "../rosace-shader" }
 rosace-shaping  = { path = "../rosace-shaping" }
 rosace-style    = { path = "../rosace-style" }
 rosace-i18n     = { path = "../rosace-i18n" }
+rosace-storage = { path = "../rosace-storage" }
 rosace-net      = { path = "../rosace-net" }
 rosace-ws       = { path = "../rosace-ws" }
 rosace-clipboard = { path = "../rosace-clipboard" }

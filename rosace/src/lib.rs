@@ -125,6 +125,25 @@ impl App {
             TRACING_BUS.add_subscriber(Arc::new(ConsoleSubscriber::with_filter(filter)));
         }
 
+        // ── Persistence backend (D114/D121, Phase 31 Step 2) ────────────
+        //
+        // Installed before the first build so `ctx.state_permanent` finds
+        // it on initial hook creation. Failure to open the store is
+        // NON-fatal by design: the app still runs, persistent atoms just
+        // behave like plain state (a warning names the path).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match persist_db_path(&self.title) {
+                Ok(path) => match rosace_storage::Storage::open(&path) {
+                    Ok(store) => {
+                        rosace_core::set_persist_backend(Box::new(store));
+                    }
+                    Err(e) => eprintln!("rosace: persistence disabled ({e})"),
+                },
+                Err(e) => eprintln!("rosace: persistence disabled ({e})"),
+            }
+        }
+
         // Prefer a system UI/mono font; fall back to the embedded DejaVu Sans
         // when none is found (always the case on web/wasm) so text always
         // renders on every platform.
@@ -175,6 +194,44 @@ impl App {
 
 impl Default for App {
     fn default() -> Self { Self::new() }
+}
+
+/// The platform app-data path for the persist store (D114/D121):
+/// `~/Library/Application Support/<app>` on macOS, `%APPDATA%\<app>` on
+/// Windows, `$XDG_DATA_HOME|~/.local/share/<app>` on Linux, and the
+/// sandbox `$HOME/Documents` on iOS (per-app by construction). The app
+/// title is sanitized to a filesystem-safe directory name. Android's
+/// files dir must come from the JNI host — a named deferral alongside
+/// Known Issue #16 (Android is parked).
+#[cfg(not(target_arch = "wasm32"))]
+fn persist_db_path(app_title: &str) -> Result<std::path::PathBuf, String> {
+    let app_dir_name: String = app_title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let home = std::env::var("HOME").map_err(|_| "no HOME env var".to_string());
+    #[cfg(target_os = "macos")]
+    let base = home.map(|h| std::path::PathBuf::from(h).join("Library/Application Support"))?;
+    #[cfg(target_os = "windows")]
+    let base = std::env::var("APPDATA")
+        .map(std::path::PathBuf::from)
+        .map_err(|_| "no APPDATA env var".to_string())?;
+    #[cfg(target_os = "linux")]
+    let base = match std::env::var("XDG_DATA_HOME") {
+        Ok(x) => std::path::PathBuf::from(x),
+        Err(_) => std::path::PathBuf::from(home?).join(".local/share"),
+    };
+    #[cfg(target_os = "ios")]
+    let base = std::path::PathBuf::from(home?).join("Documents");
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios")))]
+    let base = {
+        let _ = home;
+        return Err("no app-data dir convention for this platform yet".to_string());
+    };
+
+    let dir = base.join(app_dir_name);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {}", dir.display(), e))?;
+    Ok(dir.join("rosace.sqlite"))
 }
 
 // ── Element walker ────────────────────────────────────────────────────────────
