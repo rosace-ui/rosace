@@ -30,8 +30,30 @@ And: zero emoji/color-glyph support exists anywhere (no COLR/bitmap-glyph handli
 
 ## Steps
 
-### Step 1 — New widgets: the missing list
-`FloatingActionButton`, `BottomNavigationBar`, `Stepper`, `SearchBar`, `RatingBar`, `Snackbar`, `DatePicker`/`TimePicker`, `Carousel`/`PageView`, `DataTable` (rendering only, per Out of Scope). Each follows `WIDGET_AUTHORING_GUIDE.md`'s taxonomy (Leaf/single-child/multi-child) and is built against Phase 27's GPU-native `DrawCommand` set — new shape needs (e.g. `DatePicker`'s calendar grid, `RatingBar`'s star shapes) should go through Phase 27's shader-based built-ins where they fit the existing vocabulary, or extend it, rather than reaching for CPU `tiny-skia` calls that Phase 27 is actively removing.
+### Step 1 — New widgets: the missing list (EXPANDED 2026-07-15, user-directed)
+Original list: `FloatingActionButton`, `BottomNavigationBar`, `Stepper`, `SearchBar`, `RatingBar`, `Snackbar`, `DatePicker`/`TimePicker`, `Carousel`/`PageView`, `DataTable` (rendering only, per Out of Scope). Each follows `WIDGET_AUTHORING_GUIDE.md`'s taxonomy (Leaf/single-child/multi-child) and is built against Phase 27's GPU-native `DrawCommand` set — new shape needs (e.g. `DatePicker`'s calendar grid, `RatingBar`'s star shapes) should go through Phase 27's shader-based built-ins where they fit the existing vocabulary, or extend it, rather than reaching for CPU `tiny-skia` calls that Phase 27 is actively removing.
+
+**User-directed additions (2026-07-15)**:
+- **`Table`** — a LAYOUT table (column sizing, row alignment), distinct
+  from `DataTable` (which is the data-grid rendering on top).
+- **`InteractiveViewer`** — a large 2D plane with unbounded pan (and
+  zoom) driven by a gesture controller; Flutter-`InteractiveViewer`-like.
+  Builds on the existing 2D scroll + `TransformLayer` machinery.
+- **`Grid` modes** — `staggered` (masonry: items keep their own heights,
+  packed into shortest column) and `bento` (items span rows/cols on a
+  fixed lattice) in addition to today's uniform grid.
+- **Overlay variants** — `Dialog` gains modal (default, barrier blocks)
+  / non-modal (background stays interactive) / full-page presentation.
+- **`Drawer`/`Sheet` upgrades** — full-screen variant, scrollable
+  content, and the same customization vocabulary as everything else.
+- **Universal customization sweep** — every widget exposes the D094
+  builder vocabulary where it applies (`.background()`, `.color()`,
+  `.border(color, width)`, `.radius()`, shape, `.padding()`, …): an
+  audit pass over the EXISTING set, not just the new widgets, so nothing
+  ships as a hardcoded-style black box.
+- **Naming note**: `nav_rail` KEPT — `NavigationRail` is Material's own
+  standard name for the vertical tablet/desktop nav strip; renaming
+  would only reduce recognizability.
 
 Exit: each widget compiles, has unit tests for layout, and is exercised in a real running app (extend `demo_app`, the kept showcase from Phase 26) — screenshotted, not just compiled.
 
