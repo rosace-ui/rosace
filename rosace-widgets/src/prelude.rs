@@ -5,7 +5,7 @@
 pub use crate::{
     Widget, Alignment, PaintCtx, BoxedWidget, WidgetApp,
     TextAlign, FontWeight,
-    AppBar, Avatar, Badge, Button, ButtonVariant,
+    AppBar, Avatar, Badge, BottomNavItem, BottomNavigationBar, Button, ButtonVariant, FloatingActionButton,
     Card, Checkbox, Chip, Column, Container, CustomPaint,
     AspectRatio, BoxShape, CircularProgress, Dropdown, Drawer, Expander, Dialog, Divider, EdgeInsets, Grid, Expanded, Hero, HeroApi, Icon, IconKind,
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
