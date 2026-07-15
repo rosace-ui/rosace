@@ -607,6 +607,10 @@ pub mod shaping   { pub use rosace_shaping::*; }
 pub mod style     { pub use rosace_style::*; }
 pub mod i18n      { pub use rosace_i18n::*; }
 pub mod net       { pub use rosace_net::*; }
+/// Direct access to the on-disk key-value store (D114) — for data that
+/// is not atom-shaped (caches, blobs). Persistent ATOMS should prefer
+/// ctx.state_permanent, which reads/writes this same store.
+pub mod storage   { pub use rosace_storage::*; }
 pub mod clipboard { pub use rosace_clipboard::*; }
 pub mod platform  { pub use rosace_platform::*; }
 pub mod media     { pub use rosace_media::*; }
