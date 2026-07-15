@@ -1,7 +1,7 @@
 # Phase 31 — Real Persistence: `#[persist]` Backed by `rusqlite` (D114)
 
-> Status: Scoped, not started.
-> Started: —
+> Status: Step 1 LANDED. Steps 2-3 not started.
+> Started: 2026-07-15
 > Completed: —
 > Decision: **D114** — implement `D008`'s `#[persist(reload/session/
 > permanent/encrypted)]` for real. `reload`/`session` stay in-process;
@@ -28,6 +28,19 @@
 New thin crate `rosace-storage` (Layer 5) rather than pulling a SQL dependency directly into `rosace-state` — keeps `rosace-state`'s existing dependency footprint (`trace` only) unchanged for apps that never persist anything. `rosace-storage` exports a minimal key-value-over-SQLite store (`get`/`set`/`delete` by string key, serialized value as bytes) — not a general query API, per Out of Scope.
 
 Exit: a standalone test writes and reads back a value through `rosace-storage`'s API against a real on-disk SQLite file, confirms it survives closing and reopening the connection (proving real persistence, not just in-memory).
+
+**Landed 2026-07-15.** New crate `rosace-storage` (deps: trace only +
+target-gated `rusqlite 0.32` with `bundled` — same SQLite version on
+every platform, no system-lib drift; iOS/Android link it directly, no
+Swift/Kotlin layer, same principle as D113's sockets-direct networking).
+`Storage::open(path)` (creates `kv(key TEXT PRIMARY KEY, value BLOB)`),
+`get`/`set` (upsert)/`delete`, `&self` methods over an internal
+`Mutex<Connection>` so any thread can write. Exit bar met by
+`value_survives_close_and_reopen` (real on-disk file, connection fully
+dropped between write and read) + round-trip/overwrite/binary tests.
+**Wasm story resolved as the named-gap option** (D113's convention):
+compiles on wasm32 (verified), every call returns a documented `Err`;
+localStorage/IndexedDB is the tracked future backend.
 
 ### Step 2 — Wire `#[persist(permanent)]` for real
 The `#[persist]` macro (`rosace-macros`) generates code that reads from `rosace-storage` on atom initialization and writes on every change, for atoms marked `permanent`. `reload`/`session` tiers stay in-process (an in-memory map surviving hot-reload/backgrounding, not hitting `rosace-storage` at all — cheaper, and correct per D008's own tiering: only `permanent` needs to survive a full process restart).
