@@ -1,14 +1,23 @@
 # Phase 32 — Widget Expansion, Extensible Icons, Rich Text/Emoji (D115)
 
-> Status: Step 1 IN PROGRESS (started 2026-07-15). Landed so far:
-> BottomNavigationBar, FloatingActionButton, SearchBar, Snackbar — all
-> theme-token defaults + D094 builders, layout tests, live-proven
-> (bottom_nav_demo + the new widget_gallery catalog bin, which shows
-> every major existing widget with a minimal customization example).
-> Remaining Step 1 queue: Grid staggered/bento, Table, InteractiveViewer,
-> Dialog/Drawer/Sheet variants, Carousel/PageView, Stepper, RatingBar,
-> DatePicker/TimePicker, DataTable, then the customization sweep over
-> the EXISTING set. Steps 2-4 not started.
+> Status: Step 1 MOSTLY LANDED + Step 2 LANDED (code-complete
+> 2026-07-16, via three parallel worktree agents + parent merge).
+> Landed: BottomNavigationBar, FloatingActionButton, SearchBar,
+> Snackbar (overlay-presented), Grid staggered/bento, Table,
+> Carousel/PageView, Stepper, RatingBar, Dialog modal/non-modal/
+> full-page, Drawer full-screen (+ scrim-tap fix), Sheet
+> detents/full-screen/scrollable — all theme-token defaults + D094
+> builders + unit tests (144 in rosace-widgets). Step 2 icon system:
+> Material Symbols font (Apache 2.0, bundled) through a new
+> FontCache::set_icon_face seam — icons ride the ordinary glyph
+> path/GPU atlas; register_icon()/Icon::named()/Icon::glyph() =
+> the extensibility exit bar; all 27 IconKinds remapped to real
+> Material codepoints. LIVE VISUAL VERIFICATION PENDING (display was
+> locked during the merge session) — gallery updated with minimal
+> examples of everything; verify next windowed session.
+> Remaining Step 1: InteractiveViewer, DatePicker/TimePicker,
+> DataTable, customization sweep of the older widgets. Steps 3-4
+> (RichText, emoji) + italic axis not started.
 > Started: 2026-07-15
 > Completed: —
 > Decision: **D115** — add the widgets a typical real app needs and
