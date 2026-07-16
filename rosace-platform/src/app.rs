@@ -115,6 +115,8 @@ impl PlatformWindow {
             cursor_y: 0.0,
             mouse_down: false,
             last_frame_time: None,
+            #[cfg(debug_assertions)]
+            resize_test_phase: 0,
             scroll_layers: Vec::new(),
             shader_quads: Vec::new(),
             frame_items: Vec::new(),
@@ -158,6 +160,10 @@ struct AppState<F> {
     // then, so drags stream without paying for idle mouse movement.
     mouse_down: bool,
     last_frame_time: Option<Instant>,
+    /// Debug resize-oscillator phase (see about_to_wait); unused unless
+    /// ROSACE_RESIZE_TEST is set.
+    #[cfg(debug_assertions)]
+    resize_test_phase: u32,
     // Retained scroll layers (D090) — refreshed when the frame loop publishes,
     // reused across clean frames so they persist without a re-upload.
     scroll_layers: Vec<crate::scroll_layer::ScrollLayer>,
@@ -663,6 +669,12 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         window.set_ime_allowed(true);
 
         self.presenter = presenter;
+        // Must run AFTER the presenter exists — wgpu attaches its
+        // CAMetalLayer to the view at surface creation, not window
+        // creation (learned the hard way: tuning the bare view's
+        // NSViewBackingLayer aborts on the Metal-only selector).
+        #[cfg(target_os = "macos")]
+        tune_metal_layer_for_live_resize(&window);
         if let Some(p) = self.presenter.as_mut() {
             // GPU-shapes mode (D109/Phase 27 Step 3): built-in shape
             // commands render as SDF pipelines on the BASE canvas only —
@@ -916,9 +928,89 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
     /// Called after all pending events are processed. Only redraws if an atom
     /// change requested a frame (e.g. from a background animation timer).
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Debug-only resize oscillator (Phase 32 flicker hunt): drives a
+        // real Resized tick every frame so live-resize artifacts can be
+        // reproduced and frame-captured without a human dragging the
+        // window. Never active unless ROSACE_RESIZE_TEST is set.
+        #[cfg(debug_assertions)]
+        if std::env::var("ROSACE_RESIZE_TEST").is_ok() {
+            if let Some(w) = &self.window {
+                self.resize_test_phase = self.resize_test_phase.wrapping_add(1);
+                let wobble = ((self.resize_test_phase as f32) * 0.35).sin() * 60.0;
+                let _ = w.request_inner_size(winit::dpi::LogicalSize::new(
+                    760.0 + wobble,
+                    860.0 + wobble * 0.6,
+                ));
+                w.request_redraw();
+            }
+        }
         if rosace_state::take_frame_requested() {
             if let Some(w) = &self.window {
                 w.request_redraw();
+            }
+        }
+    }
+}
+
+
+/// Phase 32 resize-flicker fix (user-reported: "text moving ~2px up and
+/// down" during a live-resize drag; reproduced via frame capture — the OS
+/// was showing a SCALED copy of the previous frame between our presents).
+/// Two CAMetalLayer adjustments AppKit respects while it stretches window
+/// content during the drag's nested runloop:
+/// - `contentsGravity = top-left`: the interim (previous) frame stays
+///   pixel-anchored at the top-left instead of being scaled to the new
+///   window size — content never appears to shift/minify between ticks.
+/// - `presentsWithTransaction = true`: asks Core Animation to fold the
+///   drawable present into the resize transaction (wgpu's Metal backend
+///   may consult its own cached flag when presenting, so this half is
+///   best-effort; the gravity fix alone removes the visible scaling).
+///
+/// Applied to the view's layer AND its CAMetalLayer sublayers — wgpu
+/// attaches its layer either way depending on the view's setup.
+#[cfg(target_os = "macos")]
+fn tune_metal_layer_for_live_resize(window: &winit::window::Window) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else { return };
+    let RawWindowHandle::AppKit(ak) = handle.as_raw() else { return };
+    let ns_view = ak.ns_view.as_ptr() as *mut AnyObject;
+
+    unsafe fn tune(layer: *mut AnyObject) {
+        if layer.is_null() {
+            return;
+        }
+        // objc2 ABORTS on an unrecognized selector — gate every send.
+        // `contentsGravity` exists on every CALayer;
+        // `presentsWithTransaction` only on CAMetalLayer.
+        unsafe {
+            let sel = objc2::sel!(setContentsGravity:);
+            let responds: bool = msg_send![&*layer, respondsToSelector: sel];
+            if responds {
+                let gravity = objc2_foundation::NSString::from_str("top-left");
+                let _: () = msg_send![&*layer, setContentsGravity: &*gravity];
+            }
+            let sel = objc2::sel!(setPresentsWithTransaction:);
+            let responds: bool = msg_send![&*layer, respondsToSelector: sel];
+            if responds {
+                let _: () = msg_send![&*layer, setPresentsWithTransaction: true];
+            }
+        }
+    }
+
+    unsafe {
+        let layer: *mut AnyObject = msg_send![&*ns_view, layer];
+        tune(layer);
+        if !layer.is_null() {
+            let sublayers: *mut AnyObject = msg_send![&*layer, sublayers];
+            if !sublayers.is_null() {
+                let count: usize = msg_send![&*sublayers, count];
+                for i in 0..count {
+                    let sub: *mut AnyObject = msg_send![&*sublayers, objectAtIndex: i];
+                    tune(sub);
+                }
             }
         }
     }

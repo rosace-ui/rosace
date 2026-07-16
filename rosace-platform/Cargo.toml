@@ -53,3 +53,10 @@ features = [
     # attach_shadow if none exists, e.g. `rsc dev` without a build step).
     "ShadowRoot", "ShadowRootInit", "ShadowRootMode",
 ]
+
+# Phase 32 resize-flicker fix: tune the CAMetalLayer AppKit shows during a
+# live-resize drag (contentsGravity/presentsWithTransaction). objc2 is
+# already in the tree via winit — no new transitive weight.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }

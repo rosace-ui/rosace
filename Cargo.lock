@@ -2423,6 +2423,8 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "log",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
  "rosace-animate",
  "rosace-compositor",
  "rosace-core",
