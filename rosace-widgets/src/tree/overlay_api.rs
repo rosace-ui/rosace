@@ -144,11 +144,10 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                 }
 
                 OverlayKind::Tooltip => {
-                    let pos = Point {
-                        x: anchor.origin.x + anchor.size.width,
-                        y: anchor.origin.y,
-                    };
-                    OverlayEntry::new(LayerPosition::Absolute(pos), content)
+                    // Centered just above the hovered widget (user-reported:
+                    // the old right-edge Absolute position drifted far from
+                    // the anchor).
+                    OverlayEntry::new(LayerPosition::AboveCentered(anchor), content)
                         .input(InputBehavior::PassThrough)
                         .focus(FocusBehavior::Inert)
                 }

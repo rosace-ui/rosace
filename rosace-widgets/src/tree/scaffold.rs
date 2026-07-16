@@ -129,6 +129,7 @@ impl Widget for Scaffold {
 
         // Paint bottom bar
         if let Some(bb) = &self.bottom_bar {
+            super::set_bottom_overlay_inset(bottom_h);
             bb.paint(&mut ctx.child(Rect {
                 origin: Point { x: total.origin.x, y: total.origin.y + total.size.height - bottom_h },
                 size: Size { width: total.size.width, height: bottom_h },

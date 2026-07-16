@@ -92,13 +92,18 @@ impl Snackbar {
 
 impl Widget for Snackbar {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
+        // A snackbar is a BAR, not a pill (user-reported: intrinsic width
+        // read as a Toast): fill the available width minus margins,
+        // capped for very wide windows, never narrower than its content.
         let text_w = ctx.font.measure_text(&self.message, self.font_size);
         let action_w = self
             .action_label
             .as_ref()
             .map(|a| GAP + ctx.font.measure_text(a, self.font_size))
             .unwrap_or(0.0);
-        let w = (PAD_H * 2.0 + text_w + action_w).min(ctx.constraints.max_width_f32());
+        let content_w = PAD_H * 2.0 + text_w + action_w;
+        let avail = ctx.constraints.max_width_f32();
+        let w = (avail - 32.0).min(560.0).max(content_w).min(avail);
         Size { width: w, height: self.height }
     }
 
@@ -151,15 +156,23 @@ mod tests {
     use rosace_layout::Constraints;
 
     #[test]
-    fn snackbar_width_grows_with_action_but_respects_constraints() {
+    fn snackbar_is_a_bar_filling_available_width_within_margins() {
         let font = rosace_render::FontCache::embedded();
         let theme = rosace_theme::built_in::dark_theme();
         let ctx = LayoutCtx::new(Constraints::loose(500.0, 400.0), &font, &theme);
 
+        // Bar shape (user-corrected from the earlier pill/toast look):
+        // fills the available width minus margins, action or not.
         let plain = Snackbar::new("Saved").layout(&ctx);
         let with_action = Snackbar::new("Saved").action("UNDO", || {}).layout(&ctx);
-        assert!(with_action.width > plain.width, "action must add width");
+        assert_eq!(plain.width, 468.0);
+        assert_eq!(with_action.width, plain.width);
 
+        // Capped on very wide windows...
+        let wide = LayoutCtx::new(Constraints::loose(2000.0, 400.0), &font, &theme);
+        assert_eq!(Snackbar::new("Saved").layout(&wide).width, 560.0);
+
+        // ...and never wider than a narrow constraint.
         let narrow = LayoutCtx::new(Constraints::loose(120.0, 400.0), &font, &theme);
         assert!(Snackbar::new("A very long message that cannot fit").layout(&narrow).width <= 120.0);
     }

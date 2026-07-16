@@ -180,6 +180,19 @@ thread_local! {
 /// (CircularProgress spinner, Skeleton shimmer) call this each paint.
 pub fn request_animation() { ANIM_REQUEST.with(|a| a.set(true)); }
 
+thread_local! {
+    static BOTTOM_OVERLAY_INSET: Cell<f32> = const { Cell::new(0.0) };
+}
+
+/// Height reserved at the window's bottom edge by chrome (the Scaffold's
+/// bottom bar) — bottom-anchored overlays (Snackbar/Toast) float ABOVE
+/// it, per platform convention. Declared fresh each frame by Scaffold's
+/// paint; the engine reads it during the overlay pass and resets it.
+pub fn set_bottom_overlay_inset(px: f32) { BOTTOM_OVERLAY_INSET.with(|v| v.set(px)); }
+
+/// Engine-side read+reset (once per frame, in the overlay pass).
+pub fn take_bottom_overlay_inset() -> f32 { BOTTOM_OVERLAY_INSET.with(|v| v.replace(0.0)) }
+
 /// Frame loop: did any widget request continuous animation this frame?
 pub fn take_animation_request() -> bool { ANIM_REQUEST.with(|a| a.replace(false)) }
 

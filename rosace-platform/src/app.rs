@@ -725,6 +725,15 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 let phys = self.window.as_ref().map(|w| physical_canvas_size(w)).unwrap_or(size);
                 if let Some(presenter) = &mut self.presenter {
                     presenter.resize(phys.width, phys.height);
+                    // Re-apply the live-resize layer tuning EVERY tick —
+                    // wgpu's surface reconfigure (inside resize/present)
+                    // can reset CAMetalLayer properties, which silently
+                    // undid the one-time tuning from `resumed` and brought
+                    // the stretched-frame flicker back mid-drag.
+                    #[cfg(target_os = "macos")]
+                    if let Some(w) = &self.window {
+                        tune_metal_layer_for_live_resize(w);
+                    }
                 }
                 #[cfg(target_os = "ios")]
                 if let Some(w) = &self.window {

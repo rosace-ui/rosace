@@ -32,6 +32,10 @@ pub enum LayerPosition {
     BottomAnchored,
     /// Horizontally centered, floating 24px above the bottom edge (toasts).
     BottomCenter,
+    /// Centered horizontally over the anchor rect, floating just above it
+    /// (tooltips). The anchor is in the ATTACHING widget's coordinate
+    /// space — the engine remaps it to window space and clamps on-screen.
+    AboveCentered(rosace_core::types::Rect),
     /// Fills the entire window.
     Fill,
 }

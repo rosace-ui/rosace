@@ -734,6 +734,7 @@ impl FrameEngine {
         // per-entry tree whose regions become an OverlayRoute for
         // structural input routing (D092) — no scrim hit strips.
         let legacy_overlays = drain_overlays();
+        let bottom_inset = rosace_widgets::tree::take_bottom_overlay_inset();
         let build_overlays = &self.build_overlays;
         let mut overlay_routes: Vec<OverlayRoute> = Vec::new();
         {
@@ -776,6 +777,16 @@ impl FrameEngine {
                             Some(node) => tree_ref.content_to_screen(node, *p),
                             None => *p,
                         },
+                        LayerPosition::AboveCentered(anchor) => {
+                            let top_left = match owner_node {
+                                Some(node) => tree_ref.content_to_screen(node, anchor.origin),
+                                None => anchor.origin,
+                            };
+                            Point {
+                                x: top_left.x + (anchor.size.width - widget_size.width) / 2.0,
+                                y: top_left.y - widget_size.height - 8.0,
+                            }
+                        }
                         LayerPosition::Centered => Point {
                             x: ((win_w - widget_size.width) / 2.0).max(0.0),
                             y: ((win_h - widget_size.height) / 2.0).max(0.0),
@@ -786,7 +797,10 @@ impl FrameEngine {
                         },
                         LayerPosition::BottomCenter => Point {
                             x: ((win_w - widget_size.width) / 2.0).max(0.0),
-                            y: (win_h - widget_size.height - 24.0).max(0.0),
+                            // Float above the Scaffold's bottom bar, not
+                            // over it (user-reported: the snackbar sat on
+                            // top of the bottom navigation).
+                            y: (win_h - widget_size.height - 16.0 - bottom_inset).max(0.0),
                         },
                         LayerPosition::Fill => Point { x: 0.0, y: 0.0 },
                     };
