@@ -756,7 +756,7 @@ impl GpuPresenter {
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode:   caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);
 
@@ -1940,10 +1940,7 @@ impl GpuPresenter {
         if layers_unchanged && quads_unchanged && offscreen_unchanged && glyphs_unchanged
             && images_unchanged && backdrops_unchanged
         {
-            log::debug!(
-                "compositor: skip present ({} layers + {} quads + {} offscreen + {} glyph batches + {} images unchanged)",
-                pixel_layers.len(), quads.len(), offs.len(), glyph_batches.len(), images.len(),
-            );
+            log::debug!("compositor: skip present (frame unchanged)");
             return;
         }
 

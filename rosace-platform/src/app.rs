@@ -663,12 +663,6 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         window.set_ime_allowed(true);
 
         self.presenter = presenter;
-        // Must run AFTER the presenter exists — wgpu attaches its
-        // CAMetalLayer to the view at surface creation, not window
-        // creation (learned the hard way: tuning the bare view's
-        // NSViewBackingLayer aborts on the Metal-only selector).
-        #[cfg(target_os = "macos")]
-        tune_metal_layer_for_live_resize(&window);
         if let Some(p) = self.presenter.as_mut() {
             // GPU-shapes mode (D109/Phase 27 Step 3): built-in shape
             // commands render as SDF pipelines on the BASE canvas only —
@@ -719,15 +713,6 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 let phys = self.window.as_ref().map(|w| physical_canvas_size(w)).unwrap_or(size);
                 if let Some(presenter) = &mut self.presenter {
                     presenter.resize(phys.width, phys.height);
-                    // Re-apply the live-resize layer tuning EVERY tick —
-                    // wgpu's surface reconfigure (inside resize/present)
-                    // can reset CAMetalLayer properties, which silently
-                    // undid the one-time tuning from `resumed` and brought
-                    // the stretched-frame flicker back mid-drag.
-                    #[cfg(target_os = "macos")]
-                    if let Some(w) = &self.window {
-                        tune_metal_layer_for_live_resize(w);
-                    }
                 }
                 #[cfg(target_os = "ios")]
                 if let Some(w) = &self.window {
@@ -750,10 +735,14 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 // window edges while dragging. Drawing immediately, once per
                 // resize tick, keeps the presented frame in lockstep with the
                 // window frame the OS is already showing.
+                // The synchronous redraw already presents THIS tick's frame,
+                // in lockstep with the window geometry the OS is showing.
+                // We deliberately do NOT also `request_redraw()`: that would
+                // schedule a second, identical present one loop-turn later,
+                // which (with the surface's single-frame latency) only lags
+                // behind the drag and lets the OS stretch a stale frame in
+                // between — the confirmed source of the resize jitter.
                 self.redraw();
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
             }
 
             WindowEvent::CursorMoved { position, .. } => {
@@ -939,69 +928,6 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
     }
 }
 
-
-/// Phase 32 resize-flicker fix (user-reported: "text moving ~2px up and
-/// down" during a live-resize drag; reproduced via frame capture — the OS
-/// was showing a SCALED copy of the previous frame between our presents).
-/// Two CAMetalLayer adjustments AppKit respects while it stretches window
-/// content during the drag's nested runloop:
-/// - `contentsGravity = top-left`: the interim (previous) frame stays
-///   pixel-anchored at the top-left instead of being scaled to the new
-///   window size — content never appears to shift/minify between ticks.
-/// - `presentsWithTransaction = true`: asks Core Animation to fold the
-///   drawable present into the resize transaction (wgpu's Metal backend
-///   may consult its own cached flag when presenting, so this half is
-///   best-effort; the gravity fix alone removes the visible scaling).
-///
-/// Applied to the view's layer AND its CAMetalLayer sublayers — wgpu
-/// attaches its layer either way depending on the view's setup.
-#[cfg(target_os = "macos")]
-fn tune_metal_layer_for_live_resize(window: &winit::window::Window) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    let Ok(handle) = window.window_handle() else { return };
-    let RawWindowHandle::AppKit(ak) = handle.as_raw() else { return };
-    let ns_view = ak.ns_view.as_ptr() as *mut AnyObject;
-
-    unsafe fn tune(layer: *mut AnyObject) {
-        if layer.is_null() {
-            return;
-        }
-        // objc2 ABORTS on an unrecognized selector — gate every send.
-        //
-        // ONLY contentsGravity is set. presentsWithTransaction was tried
-        // and REVERTED (user-reported: seconds-long startup hang + dead
-        // input once it actually stuck): wgpu's Metal present path isn't
-        // transaction-driven, so the layer blocks the main thread waiting
-        // on drawables. The gravity pin alone is display-side and safe —
-        // it stops AppKit SCALING the interim frame during a drag.
-        unsafe {
-            let sel = objc2::sel!(setContentsGravity:);
-            let responds: bool = msg_send![&*layer, respondsToSelector: sel];
-            if responds {
-                let gravity = objc2_foundation::NSString::from_str("top-left");
-                let _: () = msg_send![&*layer, setContentsGravity: &*gravity];
-            }
-        }
-    }
-
-    unsafe {
-        let layer: *mut AnyObject = msg_send![&*ns_view, layer];
-        tune(layer);
-        if !layer.is_null() {
-            let sublayers: *mut AnyObject = msg_send![&*layer, sublayers];
-            if !sublayers.is_null() {
-                let count: usize = msg_send![&*sublayers, count];
-                for i in 0..count {
-                    let sub: *mut AnyObject = msg_send![&*sublayers, objectAtIndex: i];
-                    tune(sub);
-                }
-            }
-        }
-    }
-}
 
 /// The physical size our canvas/presenter should use. On every platform but
 /// iOS this is just `window.inner_size()`. On iOS we need the TRUE full-screen
