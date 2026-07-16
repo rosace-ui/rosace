@@ -115,8 +115,6 @@ impl PlatformWindow {
             cursor_y: 0.0,
             mouse_down: false,
             last_frame_time: None,
-            #[cfg(debug_assertions)]
-            resize_test_phase: 0,
             scroll_layers: Vec::new(),
             shader_quads: Vec::new(),
             frame_items: Vec::new(),
@@ -160,10 +158,6 @@ struct AppState<F> {
     // then, so drags stream without paying for idle mouse movement.
     mouse_down: bool,
     last_frame_time: Option<Instant>,
-    /// Debug resize-oscillator phase (see about_to_wait); unused unless
-    /// ROSACE_RESIZE_TEST is set.
-    #[cfg(debug_assertions)]
-    resize_test_phase: u32,
     // Retained scroll layers (D090) — refreshed when the frame loop publishes,
     // reused across clean frames so they persist without a re-upload.
     scroll_layers: Vec<crate::scroll_layer::ScrollLayer>,
@@ -937,22 +931,6 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
     /// Called after all pending events are processed. Only redraws if an atom
     /// change requested a frame (e.g. from a background animation timer).
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // Debug-only resize oscillator (Phase 32 flicker hunt): drives a
-        // real Resized tick every frame so live-resize artifacts can be
-        // reproduced and frame-captured without a human dragging the
-        // window. Never active unless ROSACE_RESIZE_TEST is set.
-        #[cfg(debug_assertions)]
-        if std::env::var("ROSACE_RESIZE_TEST").is_ok() {
-            if let Some(w) = &self.window {
-                self.resize_test_phase = self.resize_test_phase.wrapping_add(1);
-                let wobble = ((self.resize_test_phase as f32) * 0.35).sin() * 60.0;
-                let _ = w.request_inner_size(winit::dpi::LogicalSize::new(
-                    760.0 + wobble,
-                    860.0 + wobble * 0.6,
-                ));
-                w.request_redraw();
-            }
-        }
         if rosace_state::take_frame_requested() {
             if let Some(w) = &self.window {
                 w.request_redraw();

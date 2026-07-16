@@ -71,6 +71,6 @@ pub use tree::TextArea;
 pub use tree::{CursorShape, CursorStyle, EditController, InputFilter, Span, SpanFn, TextLayoutSnapshot};
 pub use rosace_forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
 pub use tree::Image;
-pub use tree::Tooltip;
+pub use tree::{Tooltip, TooltipStyle, WidgetExt};
 
 pub use image::{DecodedImage, ImageCache, ImageFit, ImageSource, ImageWidget};

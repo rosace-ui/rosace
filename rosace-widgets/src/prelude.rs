@@ -12,7 +12,7 @@ pub use crate::{
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
     AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
     Positioned, Radio, Row, Scaffold, ScreenTransitionView, SegmentedControl, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,
-    Skeleton, Tab, TabBar, Wrap, Text, TextArea, TextInput, Toast, ToastKind, Tooltip,
+    Skeleton, Tab, TabBar, Wrap, Text, TextArea, TextInput, Toast, ToastKind, Tooltip, TooltipStyle, WidgetExt,
     CursorShape, CursorStyle, EditController, InputFilter, Span,
     Image, ImageCache, ImageFit, ImageSource, ImageWidget,
 };

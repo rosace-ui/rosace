@@ -71,8 +71,10 @@ impl<W: Widget + 'static> WithOverlay<W> {
         self.push(OverlayKind::Dialog, open, content)
     }
 
-    /// Attach a tooltip overlay to this widget.
-    pub fn tooltip(self, content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
+    /// Attach a CUSTOM-body tooltip overlay to this widget (content-aware:
+    /// the closure builds any widget, not just a text label). The everyday
+    /// string tooltip is the ergonomic [`super::WidgetExt::tooltip`].
+    pub fn rich_tooltip(self, content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
         // Tooltip uses a permanent-true open atom — visibility is controlled by hover (Phase 14)
         let open = rosace_state::use_atom(true);
         self.push(OverlayKind::Tooltip, open, content)
@@ -203,9 +205,9 @@ pub trait OverlayApi: Widget + Sized + Send + Sync + 'static {
         WithOverlay::new(self).dialog(open, content)
     }
 
-    fn tooltip(self,
+    fn rich_tooltip(self,
                content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> WithOverlay<Self> {
-        WithOverlay::new(self).tooltip(content)
+        WithOverlay::new(self).rich_tooltip(content)
     }
 
     fn toast(self, open: Atom<bool>,

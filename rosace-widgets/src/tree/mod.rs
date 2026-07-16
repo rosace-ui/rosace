@@ -146,7 +146,7 @@ pub use text_edit::{
     TextEditState, TextLayoutSnapshot,
 };
 pub use text_input::TextInput;
-pub use tooltip::Tooltip;
+pub use tooltip::{Tooltip, TooltipStyle, WidgetExt};
 pub use transform_layer::TransformLayer;
 
 use std::rc::Rc;

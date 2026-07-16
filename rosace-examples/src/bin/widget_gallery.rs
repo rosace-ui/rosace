@@ -245,7 +245,7 @@ impl Component for Gallery {
                         let o = snack_open.clone();
                         move || Snackbar::show(&o, 2.5)
                     }))
-                    .child(Tooltip::new("hover me", Text::new("hover me (tooltip)"))),
+                    .child(Text::new("hover me (tooltip)").tooltip("hover me")),
             );
 
         if dlg_modal.get() {

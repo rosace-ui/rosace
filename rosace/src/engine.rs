@@ -3076,6 +3076,8 @@ mod tests {
         }
     }
 
+    // ── Tooltip position inside a scroll layer (Phase 32 bug fix) ────────
+
     // ── Build-time overlay emission (Phase 32 bug fix) ───────────────────
 
     /// The gallery pattern: a snackbar/dialog emitted from `build()` while
