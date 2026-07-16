@@ -992,19 +992,19 @@ fn tune_metal_layer_for_live_resize(window: &winit::window::Window) {
             return;
         }
         // objc2 ABORTS on an unrecognized selector — gate every send.
-        // `contentsGravity` exists on every CALayer;
-        // `presentsWithTransaction` only on CAMetalLayer.
+        //
+        // ONLY contentsGravity is set. presentsWithTransaction was tried
+        // and REVERTED (user-reported: seconds-long startup hang + dead
+        // input once it actually stuck): wgpu's Metal present path isn't
+        // transaction-driven, so the layer blocks the main thread waiting
+        // on drawables. The gravity pin alone is display-side and safe —
+        // it stops AppKit SCALING the interim frame during a drag.
         unsafe {
             let sel = objc2::sel!(setContentsGravity:);
             let responds: bool = msg_send![&*layer, respondsToSelector: sel];
             if responds {
                 let gravity = objc2_foundation::NSString::from_str("top-left");
                 let _: () = msg_send![&*layer, setContentsGravity: &*gravity];
-            }
-            let sel = objc2::sel!(setPresentsWithTransaction:);
-            let responds: bool = msg_send![&*layer, respondsToSelector: sel];
-            if responds {
-                let _: () = msg_send![&*layer, setPresentsWithTransaction: true];
             }
         }
     }
