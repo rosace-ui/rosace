@@ -105,12 +105,23 @@ impl App {
 
     /// Builder variant — use when you need to configure title/size/theme first.
     pub fn launch<C: rosace_core::Component>(self, root: C) {
-        // ── Wire ConsoleSubscriber so trace events appear in the terminal ──
+        // ── Observability foundation (D123/O1) ─────────────────────────
         //
-        // Opt-in via ROSACE_TRACE=all|state|network|perf. Printing every
-        // trace event to stderr costs more than the entire render pass —
-        // AtomRead fires on every atom.get() during paint — so the default
-        // is no console subscriber at all.
+        // The always-on flight recorder: a bounded ring buffer capturing
+        // the last N MEANINGFUL trace events (high-frequency ones —
+        // AtomRead/FrameStart/PaintRegion — are excluded by construction,
+        // so this is safe to leave on in every debug build without the
+        // per-frame spam that hung an earlier attempt). DevTools reads it
+        // via `rosace_trace::flight_recorder()`. Compiles out of release
+        // with the rest of the trace system.
+        #[cfg(debug_assertions)]
+        rosace_trace::install_flight_recorder(2000);
+
+        // Opt-in console streaming via ROSACE_TRACE=state|network|perf|all.
+        // Even `all` excludes high-frequency events unless ROSACE_TRACE_
+        // VERBOSE is also set — printing AtomRead on every atom.get() costs
+        // more than the whole render pass and is the exact firehose that
+        // made the naive version unusable.
         #[cfg(debug_assertions)]
         if let Ok(filter) = std::env::var("ROSACE_TRACE") {
             use std::sync::Arc;
@@ -122,7 +133,10 @@ impl App {
                 "perf"    => ConsoleFilter::Performance,
                 _         => ConsoleFilter::All,
             };
-            TRACING_BUS.add_subscriber(Arc::new(ConsoleSubscriber::with_filter(filter)));
+            let verbose = std::env::var("ROSACE_TRACE_VERBOSE").is_ok();
+            TRACING_BUS.add_subscriber(Arc::new(
+                ConsoleSubscriber::with_filter(filter).high_frequency(verbose),
+            ));
         }
 
         // ── Persistence backend (D114/D121, Phase 31 Step 2) ────────────

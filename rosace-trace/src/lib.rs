@@ -3,7 +3,8 @@ pub mod event;
 pub mod subscribers;
 
 pub use bus::{TraceSubscriber, TracingBus, TRACING_BUS};
-pub use event::RosaceTrace;
+pub use event::{RosaceTrace, TraceCategory};
+pub use subscribers::{flight_recorder, install_flight_recorder};
 
 #[cfg(test)]
 mod tests {
@@ -99,5 +100,42 @@ mod tests {
         }
 
         assert_eq!(buf.len(), 10);
+    }
+}
+
+#[cfg(test)]
+mod flight_recorder_tests {
+    use crate::event::{AtomId, ComponentId, RosaceTrace, TraceValue};
+    use crate::subscribers::ring_buffer::RingBufferSubscriber;
+    use std::sync::Arc;
+
+    /// The O1 exit bar (D123): a flight recorder built on the high-frequency
+    /// filter captures meaningful events and NEVER the per-frame firehose
+    /// that hung the earlier attempt.
+    #[test]
+    fn flight_recorder_keeps_meaningful_events_and_drops_the_firehose() {
+        let rec = Arc::new(RingBufferSubscriber::filtered(100, |e| !e.is_high_frequency()));
+        let bus = crate::bus::TracingBus::new();
+        bus.add_subscriber(rec.clone());
+
+        // Simulate a frame's worth of noise + two meaningful events.
+        for _ in 0..500 {
+            bus.emit(RosaceTrace::AtomRead { atom: AtomId(1), component: ComponentId(1) });
+            bus.emit(RosaceTrace::FrameStart { frame: 0, timestamp: std::time::Instant::now() });
+            bus.emit(RosaceTrace::FrameEnd {
+                frame: 0, duration: std::time::Duration::from_millis(1), dropped: false,
+            });
+        }
+        bus.emit(RosaceTrace::AtomWrite {
+            atom: AtomId(2), old: TraceValue::Opaque, new: TraceValue::Opaque,
+            by: ComponentId(3), location: crate::location!(),
+        });
+        bus.emit(RosaceTrace::ComponentMount {
+            id: ComponentId(4), name: "Widget", location: crate::location!(),
+        });
+
+        let snap = rec.snapshot();
+        assert_eq!(snap.len(), 2, "1500 high-frequency events must be dropped; only the 2 meaningful ones kept");
+        assert!(snap.iter().all(|e| !e.is_high_frequency()));
     }
 }

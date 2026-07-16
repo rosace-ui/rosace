@@ -211,3 +211,113 @@ pub enum RosaceTrace {
         wgsl_len: usize,
     },
 }
+
+/// Coarse grouping of trace events for filtered sinks (D123/O1). A DevTools
+/// panel or the console subscriber picks the categories it cares about
+/// instead of drowning in everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TraceCategory {
+    /// Atom reads/writes — reactive state flow.
+    State,
+    /// Component mount/unmount/rebuild.
+    Lifecycle,
+    /// Layout passes.
+    Layout,
+    /// Frame boundaries (per-frame — high frequency).
+    Frame,
+    /// Paint regions (per-frame — high frequency).
+    Render,
+    /// Navigation / route changes.
+    Route,
+    /// HTTP / WebSocket request lifecycle.
+    Network,
+    /// FFI boundary crossings.
+    Ffi,
+    /// Gesture recognition.
+    Gesture,
+    /// GPU shader registration.
+    Shader,
+}
+
+impl RosaceTrace {
+    /// The event's category — for filtered sinks (D123/O1).
+    pub fn category(&self) -> TraceCategory {
+        match self {
+            RosaceTrace::ComponentMount { .. }
+            | RosaceTrace::ComponentUnmount { .. }
+            | RosaceTrace::ComponentRebuild { .. } => TraceCategory::Lifecycle,
+            RosaceTrace::AtomRead { .. } | RosaceTrace::AtomWrite { .. } => TraceCategory::State,
+            RosaceTrace::LayoutStart { .. } | RosaceTrace::LayoutEnd { .. } => TraceCategory::Layout,
+            RosaceTrace::FrameStart { .. } | RosaceTrace::FrameEnd { .. } => TraceCategory::Frame,
+            RosaceTrace::PaintRegion { .. } => TraceCategory::Render,
+            RosaceTrace::RouteChange { .. } => TraceCategory::Route,
+            RosaceTrace::RequestStart { .. } | RosaceTrace::RequestEnd { .. } => TraceCategory::Network,
+            RosaceTrace::FfiCall { .. } | RosaceTrace::FfiError { .. } => TraceCategory::Ffi,
+            RosaceTrace::GestureReceived { .. } => TraceCategory::Gesture,
+            RosaceTrace::ShaderRegister { .. } => TraceCategory::Shader,
+        }
+    }
+
+    /// True for events that fire once (or more) EVERY frame — the ones that
+    /// turned a naive console subscriber into a per-frame firehose and hung
+    /// the app (D123/O1). No visible sink or the default flight recorder
+    /// should ever accept these; they exist for opt-in deep profiling only.
+    ///
+    /// `AtomRead` is included because it fires on every `atom.get()` during
+    /// paint — the single loudest event in the system.
+    pub fn is_high_frequency(&self) -> bool {
+        matches!(
+            self,
+            RosaceTrace::AtomRead { .. }
+                | RosaceTrace::FrameStart { .. }
+                | RosaceTrace::FrameEnd { .. }
+                | RosaceTrace::PaintRegion { .. }
+                | RosaceTrace::LayoutStart { .. }
+                | RosaceTrace::LayoutEnd { .. }
+        )
+    }
+}
+
+#[cfg(test)]
+mod category_tests {
+    use super::*;
+
+    #[test]
+    fn atom_read_is_high_frequency_state() {
+        let e = RosaceTrace::AtomRead {
+            atom: AtomId(1),
+            component: ComponentId(1),
+        };
+        assert_eq!(e.category(), TraceCategory::State);
+        assert!(e.is_high_frequency(), "AtomRead is the loudest event — must be high-frequency");
+    }
+
+    #[test]
+    fn atom_write_is_state_but_not_high_frequency() {
+        let e = RosaceTrace::AtomWrite {
+            atom: AtomId(1),
+            old: TraceValue::Opaque,
+            new: TraceValue::Opaque,
+            by: ComponentId(1),
+            location: crate::location!(),
+        };
+        assert_eq!(e.category(), TraceCategory::State);
+        assert!(!e.is_high_frequency(), "a state CHANGE is meaningful, not per-frame noise");
+    }
+
+    #[test]
+    fn frame_and_paint_events_are_high_frequency() {
+        let frame = RosaceTrace::FrameStart { frame: 0, timestamp: std::time::Instant::now() };
+        assert!(frame.is_high_frequency());
+        assert_eq!(frame.category(), TraceCategory::Frame);
+    }
+
+    #[test]
+    fn network_and_lifecycle_are_meaningful() {
+        let mount = RosaceTrace::ComponentMount {
+            id: ComponentId(1), name: "X", location: crate::location!(),
+        };
+        assert_eq!(mount.category(), TraceCategory::Lifecycle);
+        assert!(!mount.is_high_frequency());
+    }
+}

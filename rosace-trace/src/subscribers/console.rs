@@ -33,6 +33,11 @@ pub enum ConsoleFilter {
 pub struct ConsoleSubscriber {
     filter: ConsoleFilter,
     event_count: AtomicUsize,
+    /// When false (default), high-frequency events (AtomRead/FrameStart/…)
+    /// are never printed — the firehose that made the naive console
+    /// subscriber unusable (D123/O1). `Performance` mode still needs frame
+    /// events, so this is only enforced OUTSIDE that filter unless opted in.
+    include_high_frequency: bool,
 }
 
 impl ConsoleSubscriber {
@@ -41,6 +46,7 @@ impl ConsoleSubscriber {
         Self {
             filter: ConsoleFilter::All,
             event_count: AtomicUsize::new(0),
+            include_high_frequency: false,
         }
     }
 
@@ -49,7 +55,16 @@ impl ConsoleSubscriber {
         Self {
             filter,
             event_count: AtomicUsize::new(0),
+            include_high_frequency: false,
         }
+    }
+
+    /// Opt into printing high-frequency events (AtomRead/FrameStart/…) —
+    /// off by default (D123/O1). Only enable for deep, short-lived
+    /// profiling; leaving it on floods the terminal every frame.
+    pub fn high_frequency(mut self, on: bool) -> Self {
+        self.include_high_frequency = on;
+        self
     }
 
     /// Returns the total number of events received (regardless of filter).
@@ -58,6 +73,16 @@ impl ConsoleSubscriber {
     }
 
     fn should_print(&self, event: &RosaceTrace) -> bool {
+        // The governing rule (D123/O1): high-frequency events never reach a
+        // visible sink unless explicitly opted in — EXCEPT under the
+        // Performance filter, which exists specifically to watch frame
+        // timing and would be pointless without them.
+        if event.is_high_frequency()
+            && !self.include_high_frequency
+            && !matches!(self.filter, ConsoleFilter::Performance)
+        {
+            return false;
+        }
         match &self.filter {
             ConsoleFilter::All => true,
             ConsoleFilter::State => {

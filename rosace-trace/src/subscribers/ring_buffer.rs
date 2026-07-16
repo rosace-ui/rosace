@@ -4,6 +4,10 @@ use std::sync::{Arc, Mutex};
 use crate::bus::TraceSubscriber;
 use crate::event::RosaceTrace;
 
+/// Predicate deciding whether an event is recorded. See
+/// [`RingBufferSubscriber::filtered`].
+type EventFilter = Arc<dyn Fn(&RosaceTrace) -> bool + Send + Sync>;
+
 /// Retains the last `capacity` trace events in a circular buffer.
 ///
 /// Used for time-travel debugging — the dev tools can read the buffer to replay
@@ -13,6 +17,9 @@ use crate::event::RosaceTrace;
 pub struct RingBufferSubscriber {
     buffer: Arc<Mutex<VecDeque<RosaceTrace>>>,
     capacity: usize,
+    /// When set, only events for which this returns true are retained
+    /// (D123/O1 — the flight recorder excludes high-frequency events).
+    filter: Option<EventFilter>,
 }
 
 impl RingBufferSubscriber {
@@ -21,6 +28,21 @@ impl RingBufferSubscriber {
         Self {
             buffer: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
             capacity,
+            filter: None,
+        }
+    }
+
+    /// A ring buffer that only records events passing `filter` — the basis
+    /// of the always-on flight recorder, which excludes high-frequency
+    /// events so it never becomes a per-frame firehose (D123/O1).
+    pub fn filtered(
+        capacity: usize,
+        filter: impl Fn(&RosaceTrace) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            buffer: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
+            capacity,
+            filter: Some(Arc::new(filter)),
         }
     }
 
@@ -59,6 +81,11 @@ impl RingBufferSubscriber {
 
 impl TraceSubscriber for RingBufferSubscriber {
     fn on_trace(&self, event: &RosaceTrace) {
+        if let Some(f) = &self.filter {
+            if !f(event) {
+                return;
+            }
+        }
         let mut buf = self
             .buffer
             .lock()
