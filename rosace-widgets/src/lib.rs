@@ -28,7 +28,7 @@ pub use tree::{BoxShape, Container};
 pub use tree::{AspectRatio, CircularProgress, Grid, Positioned, Skeleton, Wrap};
 pub use tree::{Dropdown, Drawer, Expander, Radio, SegmentedControl};
 pub use tree::CustomPaint;
-pub use tree::Dialog;
+pub use tree::{Dialog, DialogPresentation};
 pub use tree::Divider;
 pub use tree::EdgeInsets;
 pub use tree::Expanded;
