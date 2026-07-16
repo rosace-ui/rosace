@@ -95,7 +95,7 @@ pub use drawer::Drawer;
 pub use positioned::Positioned;
 pub use wrap::Wrap;
 pub use custom_paint::CustomPaint;
-pub use dialog::Dialog;
+pub use dialog::{Dialog, DialogPresentation};
 pub use menu::Menu;
 pub use sheet::Sheet;
 pub use toast::{Toast, ToastKind};
