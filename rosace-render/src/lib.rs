@@ -11,6 +11,12 @@ pub mod gpu_shapes;
 pub mod image;
 pub mod picture;
 
+/// Re-exported so higher layers can parse fonts for
+/// [`font::FontCache::set_icon_face`] without their own fontdue dependency
+/// (fontdue types are already part of this crate's public API via
+/// [`font::CachedGlyph`]).
+pub use fontdue;
+
 pub use canvas::{Color, ShaderQuadCmd, SkiaCanvas};
 pub use draw_command::DrawCommand;
 pub use font::{FontCache, FontWeight};

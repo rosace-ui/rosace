@@ -25,11 +25,12 @@ impl FontWeight {
     }
 }
 
-/// Which face a glyph resolved to: primary regular/bold, or a Unicode
-/// fallback face by index.
+/// Which face a glyph resolved to: primary regular/bold, the registered
+/// icon face, or a Unicode fallback face by index.
 type FaceKey = u8;
 const FACE_REGULAR: FaceKey = 0;
 const FACE_BOLD: FaceKey = 1;
+const FACE_ICON: FaceKey = 2;
 const FACE_FALLBACK_BASE: FaceKey = 128;
 
 type GlyphKey = (FaceKey, char, u32); // (face, char, px.to_bits())
@@ -48,6 +49,12 @@ pub struct FontCache {
     /// Real bold face when the platform provides one; None → bold renders
     /// with the regular face (as before).
     bold: Option<Font>,
+    /// In-memory icon face (D115/Phase 32 Step 2) — registered once by the
+    /// widget layer, consulted when the primary faces miss a codepoint and
+    /// BEFORE the disk fallback chain: icon fonts live in the Private Use
+    /// Area, where system fallback faces (Apple Symbols et al.) carry their
+    /// own unrelated glyphs.
+    icon: RefCell<Option<Arc<Font>>>,
     /// Unicode fallback faces, loaded lazily on the first glyph miss —
     /// Arial Unicode alone is ~20 MB, so we don't parse it until a CJK or
     /// symbol codepoint actually appears.
@@ -89,6 +96,7 @@ impl FontCache {
         Self {
             font,
             bold,
+            icon: RefCell::new(None),
             fallbacks: RefCell::new(
                 FALLBACK_PATHS.iter().map(|p| Fallback::Untried(p)).collect(),
             ),
@@ -266,6 +274,33 @@ impl FontCache {
         Some(Self::build(regular, None))
     }
 
+    // ── Icon face (D115/Phase 32 Step 2) ─────────────────────────────────
+
+    /// Install an in-memory icon face — glyphs the primary faces miss route
+    /// to it before the disk fallback chain, so icon-font codepoints (PUA)
+    /// flow through the ordinary text path: physical-px rasterization,
+    /// glyph cache, and the GPU glyph atlas, with zero new draw commands.
+    ///
+    /// Idempotent: the first registration wins; later calls are no-ops.
+    /// Registration clears the route cache so codepoints resolved earlier
+    /// (as tofu) re-route to the new face.
+    pub fn set_icon_face(&self, font: Arc<Font>) {
+        {
+            let mut slot = self.icon.borrow_mut();
+            if slot.is_some() {
+                return;
+            }
+            *slot = Some(font);
+        }
+        self.route_cache.borrow_mut().clear();
+    }
+
+    /// True once an icon face is installed — lets callers skip
+    /// re-registration on every paint.
+    pub fn has_icon_face(&self) -> bool {
+        self.icon.borrow().is_some()
+    }
+
     // ── Face routing (Unicode fallback, D-text) ──────────────────────────
 
     /// Resolve which face renders `c` at `weight`: bold face when requested
@@ -282,6 +317,13 @@ impl FontCache {
             FACE_BOLD
         } else if self.font.lookup_glyph_index(c) != 0 {
             FACE_REGULAR
+        } else if self
+            .icon
+            .borrow()
+            .as_ref()
+            .is_some_and(|f| f.lookup_glyph_index(c) != 0)
+        {
+            FACE_ICON
         } else {
             let mut found = FACE_REGULAR; // tofu in the primary face
             let mut fallbacks = self.fallbacks.borrow_mut();
@@ -314,6 +356,11 @@ impl FontCache {
         if face == FACE_BOLD {
             if let Some(b) = &self.bold {
                 return f(b);
+            }
+        } else if face == FACE_ICON {
+            let icon = self.icon.borrow();
+            if let Some(i) = icon.as_ref() {
+                return f(i);
             }
         } else if face >= FACE_FALLBACK_BASE {
             let fallbacks = self.fallbacks.borrow();

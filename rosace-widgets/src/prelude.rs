@@ -8,7 +8,7 @@ pub use crate::{
     AppBar, Avatar, Badge, BottomNavItem, BottomNavigationBar, Button, ButtonVariant, FloatingActionButton, SearchBar, Snackbar,
     Carousel, PageView, RatingBar, Stepper, Table, TableColumn,
     Card, Checkbox, Chip, Column, Container, CustomPaint,
-    AspectRatio, BoxShape, CircularProgress, Dropdown, Drawer, Expander, Dialog, DialogPresentation, Divider, EdgeInsets, Grid, Expanded, Hero, HeroApi, Icon, IconKind,
+    AspectRatio, BoxShape, CircularProgress, Dropdown, Drawer, Expander, Dialog, DialogPresentation, Divider, EdgeInsets, Grid, Expanded, Hero, HeroApi, Icon, IconKind, register_icon, resolve_icon,
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
     AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
     Positioned, Radio, Row, Scaffold, ScreenTransitionView, SegmentedControl, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,

@@ -24,6 +24,11 @@ impl Component for Gallery {
         let snack_open = ctx.state(false);
         let fab_count = ctx.state(0i32);
         let slider_val = ctx.state(0.4f32);
+        let stepper_val = ctx.state(3i64);
+        let rating = ctx.state(3.0f32);
+        let page = ctx.state(0usize);
+        let dlg_modal = ctx.state(false);
+        let dlg_nonmodal = ctx.state(false);
         let typed = ctx.state(String::new());
 
         let col = Column::new()
@@ -150,6 +155,87 @@ impl Component for Gallery {
                     }).collect()),
             )
             .child(Expander::new("Expander — click to toggle", expanded.clone(), Text::new("expanded body content")))
+            // ── New in this sweep: Stepper, RatingBar, Table ───────
+            .child(section("Stepper, RatingBar"))
+            .child(
+                Row::new()
+                    .spacing(16.0)
+                    .child(Stepper::new(stepper_val.get()).min(0).max(10).on_change({
+                        let v = stepper_val.clone();
+                        move |n| v.set(n)
+                    }))
+                    .child(RatingBar::new(rating.get()).on_change({
+                        let r = rating.clone();
+                        move |v| r.set(v)
+                    })),
+            )
+            .child(section("Table — fixed + flex columns, zebra rows"))
+            .child(
+                Table::new()
+                    .column(TableColumn::fixed(90.0))
+                    .column(TableColumn::flex(1.0))
+                    .column(TableColumn::fixed(60.0))
+                    .cell_padding(6.0)
+                    .divider(1.0)
+                    .row(vec![
+                        Box::new(Text::new("Name").weight(FontWeight::Bold)) as BoxedWidget,
+                        Box::new(Text::new("Description").weight(FontWeight::Bold)),
+                        Box::new(Text::new("Qty").weight(FontWeight::Bold)),
+                    ])
+                    .row(vec![
+                        Box::new(Text::new("Widget")) as BoxedWidget,
+                        Box::new(Text::new("A flexible middle column that takes leftover width")),
+                        Box::new(Text::new("42")),
+                    ])
+                    .row(vec![
+                        Box::new(Text::new("Gadget")) as BoxedWidget,
+                        Box::new(Text::new("Second zebra row")),
+                        Box::new(Text::new("7")),
+                    ]),
+            )
+            .child(section("Grid — staggered (masonry)"))
+            .child(
+                Grid::new(3)
+                    .staggered()
+                    .spacing(6.0)
+                    .children((0..6).map(|i| {
+                        Box::new(
+                            Container::new()
+                                .child(Text::new(format!("item {i}")).size(11.0))
+                                .background(Color::rgb(26 + i as u8 * 6, 30, 54))
+                                .radius(6.0)
+                                .padding(EdgeInsets::all(6.0 + (i % 3) as f32 * 8.0)),
+                        ) as BoxedWidget
+                    }).collect()),
+            )
+            .child(section("Carousel — drag horizontally, snaps to pages"))
+            .child(
+                Carousel::new()
+                    .height(90.0)
+                    .page(page.clone())
+                    .children((0..4).map(|i| {
+                        Box::new(
+                            Container::new()
+                                .child(Text::title(format!("Page {}", i + 1)))
+                                .background(Color::rgb(30 + i as u8 * 10, 34, 66))
+                                .radius(10.0)
+                                .padding(EdgeInsets::all(24.0)),
+                        ) as BoxedWidget
+                    }).collect()),
+            )
+            .child(section("Dialog variants"))
+            .child(
+                Row::new()
+                    .spacing(10.0)
+                    .child(Button::new("Modal").width(90.0).on_press({
+                        let o = dlg_modal.clone();
+                        move || o.set(true)
+                    }))
+                    .child(Button::new("Non-modal").width(110.0).on_press({
+                        let o = dlg_nonmodal.clone();
+                        move || o.set(true)
+                    })),
+            )
             // ── Feedback ───────────────────────────────────────────
             .child(section("Snackbar (press to show), Tooltip"))
             .child(
@@ -162,6 +248,17 @@ impl Component for Gallery {
                     .child(Tooltip::new("hover me", Text::new("hover me (tooltip)"))),
             );
 
+        if dlg_modal.get() {
+            Dialog::new("Modal dialog")
+                .message("Blocks the background; tap the scrim or Escape to dismiss.")
+                .emit(&dlg_modal);
+        }
+        if dlg_nonmodal.get() {
+            Dialog::new("Non-modal")
+                .message("Background stays interactive.")
+                .non_modal()
+                .emit(&dlg_nonmodal);
+        }
         if snack_open.get() {
             // Overlay-presented: floats bottom-center above everything.
             Snackbar::new("Item archived").action("UNDO", || {}).emit();

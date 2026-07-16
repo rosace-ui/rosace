@@ -36,6 +36,7 @@ pub use tree::Expanded;
 pub use tree::{Hero, HeroApi};
 pub use tree::Icon;
 pub use tree::IconKind;
+pub use tree::{register_icon, resolve_icon};
 pub use tree::ListTile;
 pub use tree::ListView;
 pub use tree::Menu;

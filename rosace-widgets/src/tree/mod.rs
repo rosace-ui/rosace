@@ -105,7 +105,7 @@ pub use sheet::Sheet;
 pub use toast::{Toast, ToastKind};
 pub use divider::Divider;
 pub use focus_api::{FocusApi, WithFocus};
-pub use icon::{Icon, IconKind};
+pub use icon::{register_icon, resolve_icon, Icon, IconKind};
 pub use image::Image;
 pub use list_tile::ListTile;
 pub use list_view::ListView;
