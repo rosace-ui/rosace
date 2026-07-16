@@ -756,7 +756,7 @@ impl GpuPresenter {
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode:   caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 1,
+            desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
 

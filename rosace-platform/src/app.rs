@@ -735,14 +735,10 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 // window edges while dragging. Drawing immediately, once per
                 // resize tick, keeps the presented frame in lockstep with the
                 // window frame the OS is already showing.
-                // The synchronous redraw already presents THIS tick's frame,
-                // in lockstep with the window geometry the OS is showing.
-                // We deliberately do NOT also `request_redraw()`: that would
-                // schedule a second, identical present one loop-turn later,
-                // which (with the surface's single-frame latency) only lags
-                // behind the drag and lets the OS stretch a stale frame in
-                // between — the confirmed source of the resize jitter.
                 self.redraw();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
             }
 
             WindowEvent::CursorMoved { position, .. } => {

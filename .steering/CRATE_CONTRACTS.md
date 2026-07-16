@@ -376,6 +376,45 @@ silently baked into the contracts below, per the project's violation policy
     project doesn't write (`rsc new` should emit `local.properties`
     from the detected SDK path — unfixed, noted here).
 
+17. **Live-window-resize flicker on macOS desktop — the OS scales/shifts a
+    stale GPU frame during the reconfigure→present gap (wgpu + CAMetalLayer
+    limitation, NOT our rendering)** — user-reported + frame-captured
+    2026-07-16. Rigorously root-caused: instrumentation proved our pipeline
+    renders CORRECTLY at every single frame during resize — physical size,
+    canvas-logical size, and GPU-surface size all agree each frame (no
+    rounding oscillation), the D089 skip-present never fires during resize,
+    and softbuffer is only the null fallback (no two-surface conflict). The
+    artifact lives entirely in the gap between when AppKit resizes the
+    window and when wgpu's next frame is presented: Core Animation displays
+    the PREVIOUS drawable in that gap, positioned per `CAMetalLayer.
+    contentsGravity`. Default `resize` gravity SCALES the old frame to the
+    new bounds → the whole UI visibly zooms (frame 1 of the user's capture
+    is ~7% larger than frame 2). Confirmed diagnostic signature: (a)
+    aggressive drag = worse (bigger size delta per present gap); (b)
+    right/bottom-edge drag = terrible, left/top-edge = barely visible
+    (right-edge keeps the window origin fixed so the scaled stale frame is
+    maximally visible against our top-left-anchored content; left-edge
+    moves the origin and the window server slides the stale frame along
+    smoothly). Attempts and why each failed: `contentsGravity = topLeft`
+    stops the scaling but SHOOK (re-applied per-frame → implicit
+    CoreAnimation animation on every set; a set-once-with-CATransaction-
+    disabled variant was hypothesized but not tried per the "don't keep
+    poking flags" call); `presentsWithTransaction = true` is the ONLY true
+    fix (makes the resize + present atomic) but wgpu's Metal present path
+    isn't transaction-driven, so setting it blocks the main thread (seconds
+    hang + dead input). This is a documented, fundamental wgpu-on-macOS
+    live-resize limitation (winit/wgpu examples exhibit it) — the real
+    fixes are heavy: patch/vendor wgpu-hal for presentsWithTransaction, or
+    replace the Metal present path with a custom synchronous one (what Zed
+    did — it wrote its own Metal renderer specifically to avoid wgpu here).
+    DECISION (user, 2026-07-16): mark as known, do NOT keep patching flags;
+    revisit as a scoped engine task when a real app ships on macOS desktop
+    or when wgpu adds upstream support. Cosmetic + transient (only while
+    actively edge-dragging; the settled result is always crisp). All
+    speculative fix attempts (layer-gravity objc code, present-latency
+    tweaks, instrumentation) were reverted — the code is back to the
+    verified-good D118 state.
+
 **Fixed 2026-07-09, unrelated to #9/#10 above**: `rosace-animate::Spring::
 update` used a single semi-implicit-Euler step per call, unconditionally
 stable only below a step-size threshold — a real wall-clock `dt` near
