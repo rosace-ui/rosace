@@ -793,7 +793,9 @@ impl FrameEngine {
                         },
                         LayerPosition::BottomAnchored => Point {
                             x: 0.0,
-                            y: (win_h - widget_size.height).max(0.0),
+                            // Docked above the Scaffold's bottom bar when
+                            // present (Android snackbar convention).
+                            y: (win_h - widget_size.height - bottom_inset).max(0.0),
                         },
                         LayerPosition::BottomCenter => Point {
                             x: ((win_w - widget_size.width) / 2.0).max(0.0),

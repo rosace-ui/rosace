@@ -762,6 +762,36 @@ mod tests {
     }
 
     #[test]
+    fn content_to_screen_inverts_the_scroll_layer_remap() {
+        // Same fixture shape as hit_test_maps_through_scroll_layer_offset:
+        // viewport at (50,50), scrolled 200 down. A content point at
+        // (0, 240) must map to screen (50, 90) — the exact inverse of the
+        // hit-test's screen→content mapping (Phase 32 tooltip-position fix).
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let tl = t.slot(RenderTree::ROOT, true);
+        t.node_mut(tl).transforms.push(TransformLayerEntry {
+            picture: rosace_render::PictureRecorder::new().finish(),
+            child_size: Size { width: 100.0, height: 1000.0 },
+            viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        let child = t.slot(tl, true);
+        t.finalize();
+        rosace_state::set_scroll_offset(tl as u64, [0.0, 200.0]);
+
+        let p = t.content_to_screen(child, rosace_core::types::Point { x: 0.0, y: 240.0 });
+        assert_eq!((p.x, p.y), (50.0, 90.0), "content→screen must invert child_coords");
+
+        // A node OUTSIDE any layer maps through unchanged.
+        let plain = t.content_to_screen(tl, rosace_core::types::Point { x: 7.0, y: 9.0 });
+        assert_eq!((plain.x, plain.y), (7.0, 9.0));
+
+        rosace_state::clear_scroll_offset(tl as u64);
+    }
+
+    #[test]
     fn hit_test_maps_through_scroll_layer_offset() {
         use std::sync::atomic::{AtomicBool, Ordering};
         // A transform node with a 100×100 viewport at (50,50), scrolled 200px

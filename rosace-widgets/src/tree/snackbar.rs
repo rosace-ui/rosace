@@ -42,7 +42,7 @@ impl Snackbar {
             background: None,
             text_color: None,
             action_color: None,
-            radius: 8.0,
+            radius: 0.0,
             font_size: 13.0,
         }
     }
@@ -71,8 +71,12 @@ impl Snackbar {
     /// through; the action button still receives its own hits.
     pub fn emit(self) {
         use super::overlay::{push_overlay, InputBehavior, FocusBehavior, LayerPosition, OverlayEntry};
+        // Android-convention docked bar (user-specified): full width,
+        // flush with the Scaffold's bottom — the engine raises
+        // BottomAnchored overlays above the bottom nav bar when one is
+        // present (bottom-overlay-inset channel).
         push_overlay(
-            OverlayEntry::new(LayerPosition::BottomCenter, self)
+            OverlayEntry::new(LayerPosition::BottomAnchored, self)
                 .input(InputBehavior::PassThrough)
                 .focus(FocusBehavior::Inert),
         );
@@ -103,7 +107,8 @@ impl Widget for Snackbar {
             .unwrap_or(0.0);
         let content_w = PAD_H * 2.0 + text_w + action_w;
         let avail = ctx.constraints.max_width_f32();
-        let w = (avail - 32.0).min(560.0).max(content_w).min(avail);
+        // Android-style docked bar: edge-to-edge full width.
+        let w = avail.max(content_w.min(avail));
         Size { width: w, height: self.height }
     }
 
@@ -161,18 +166,13 @@ mod tests {
         let theme = rosace_theme::built_in::dark_theme();
         let ctx = LayoutCtx::new(Constraints::loose(500.0, 400.0), &font, &theme);
 
-        // Bar shape (user-corrected from the earlier pill/toast look):
-        // fills the available width minus margins, action or not.
+        // Android-convention docked bar (user-specified): edge-to-edge
+        // full width regardless of content or action.
         let plain = Snackbar::new("Saved").layout(&ctx);
         let with_action = Snackbar::new("Saved").action("UNDO", || {}).layout(&ctx);
-        assert_eq!(plain.width, 468.0);
+        assert_eq!(plain.width, 500.0);
         assert_eq!(with_action.width, plain.width);
 
-        // Capped on very wide windows...
-        let wide = LayoutCtx::new(Constraints::loose(2000.0, 400.0), &font, &theme);
-        assert_eq!(Snackbar::new("Saved").layout(&wide).width, 560.0);
-
-        // ...and never wider than a narrow constraint.
         let narrow = LayoutCtx::new(Constraints::loose(120.0, 400.0), &font, &theme);
         assert!(Snackbar::new("A very long message that cannot fit").layout(&narrow).width <= 120.0);
     }
