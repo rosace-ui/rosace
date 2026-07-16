@@ -575,6 +575,47 @@ impl RenderTree {
     }
 
     /// All overlay entries in tree order (insertion order = z-order, D058).
+    /// Map a point expressed in `target`'s CONTENT space to window/screen
+    /// space, applying the inverse of every transform-host remap on the
+    /// path from the root (each is a pure translation: + viewport origin
+    /// − scroll offset). Phase 32 bug fix (user-reported): an overlay
+    /// anchored by a widget inside a GPU scroll layer (e.g. a Tooltip's
+    /// `Absolute` position) carried content coords into the window-space
+    /// overlay pass and rendered far from its anchor.
+    pub fn content_to_screen(&self, target: NodeId, p: rosace_core::types::Point) -> rosace_core::types::Point {
+        let mut path = Vec::new();
+        if !self.path_to(Self::ROOT, target, &mut path) {
+            return p;
+        }
+        let mut out = p;
+        for &id in &path {
+            if id == target {
+                continue; // a host remaps its CHILDREN, not itself
+            }
+            let n = &self.nodes[id];
+            if let Some(entry) = n.transforms.first() {
+                let off = rosace_state::scroll_offset(id as u64);
+                out.x = out.x + entry.viewport_rect.origin.x - off[0];
+                out.y = out.y + entry.viewport_rect.origin.y - off[1];
+            }
+        }
+        out
+    }
+
+    fn path_to(&self, cur: NodeId, target: NodeId, path: &mut Vec<NodeId>) -> bool {
+        path.push(cur);
+        if cur == target {
+            return true;
+        }
+        for &child in &self.nodes[cur].children {
+            if self.path_to(child, target, path) {
+                return true;
+            }
+        }
+        path.pop();
+        false
+    }
+
     pub fn overlay_ids(&self) -> Vec<(NodeId, usize)> {
         let mut out = Vec::new();
         self.overlay_ids_node(Self::ROOT, &mut out);

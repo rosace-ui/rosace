@@ -100,6 +100,10 @@ pub struct FrameEngine {
     // ── Reconciler state — persists across frames ──────────────────────
     prev_mounted: HashSet<u64>,
     element_cache: HashMap<u64, rosace_core::Element>,
+    /// Overlays emitted during BUILD (`Dialog::emit`/`Snackbar::emit`) —
+    /// kept until the next rebuild so they survive cache-hit frames (see
+    /// the clear-before-build comment in `paint`).
+    build_overlays: Vec<rosace_widgets::tree::OverlayEntry>,
     render_tree: Rc<RefCell<rosace_widgets::tree::RenderTree>>,
 
     // ── Focus + input state ─────────────────────────────────────────────
@@ -178,6 +182,7 @@ impl FrameEngine {
             font,
             prev_mounted: HashSet::new(),
             element_cache: HashMap::new(),
+            build_overlays: Vec::new(),
             render_tree: Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
             focus_manager: rosace_a11y::FocusManager::new(),
             shift_held: false,
@@ -515,17 +520,27 @@ impl FrameEngine {
         let root_component_id = rosace_core::types::ComponentId(0);
         let root_is_dirty = global_dirty || dirty_ids.contains(&root_component_id);
 
+        // ── Clear overlay registry BEFORE build ─────────────────────────
+        // Build-time emitters (`Dialog::emit`/`Snackbar::emit` called from
+        // a component's `build()`) push into the registry during the build
+        // below; clearing after it wiped them before they ever painted
+        // (user-reported: the gallery's Modal/Non-modal/Snackbar buttons
+        // did nothing). Their entries are then MOVED into
+        // `self.build_overlays`, which persists across cache-hit frames —
+        // build only runs when dirty, so per-frame draining alone would
+        // make a dialog vanish on the first clean frame. Paint-time
+        // pushers (Dropdown, Menu, Drawer) still drain per-frame below.
+        clear_overlays();
+
         let element = if root_is_dirty || !self.element_cache.contains_key(&0) {
             let mut ctx = rosace_core::Context::new(root_component_id);
             let el = root.build(&mut ctx);
             self.element_cache.insert(0, el.clone());
+            self.build_overlays = drain_overlays();
             el
         } else {
             self.element_cache.get(&0).unwrap().clone()
         };
-
-        // ── Clear overlay registry from prior frame ─────────────────────
-        clear_overlays();
 
         // ── Read active theme each frame so set_theme() takes effect ────
         // Widgets call set_theme() from button callbacks; the change is
@@ -719,6 +734,7 @@ impl FrameEngine {
         // per-entry tree whose regions become an OverlayRoute for
         // structural input routing (D092) — no scrim hit strips.
         let legacy_overlays = drain_overlays();
+        let build_overlays = &self.build_overlays;
         let mut overlay_routes: Vec<OverlayRoute> = Vec::new();
         {
             use rosace_core::types::{Point, Rect, Size};
@@ -726,14 +742,19 @@ impl FrameEngine {
             let tree_ref = self.render_tree.borrow();
             let overlay_ids = tree_ref.overlay_ids();
 
-            if !overlay_ids.is_empty() || !legacy_overlays.is_empty() {
+            if !overlay_ids.is_empty() || !legacy_overlays.is_empty() || !build_overlays.is_empty() {
                 let mut ov_recorder = rosace_render::PictureRecorder::new();
 
+                // Tree-attached entries carry their owning node so
+                // content-space Absolute anchors can be remapped to
+                // window space (Phase 32 tooltip-position fix); build/
+                // legacy entries are window-space already.
                 let entries = overlay_ids.iter()
-                    .map(|&(n, i)| &tree_ref.node(n).overlays[i])
-                    .chain(legacy_overlays.iter());
+                    .map(|&(n, i)| (Some(n), &tree_ref.node(n).overlays[i]))
+                    .chain(build_overlays.iter().map(|e| (None, e)))
+                    .chain(legacy_overlays.iter().map(|e| (None, e)));
 
-                for entry in entries {
+                for (owner_node, entry) in entries {
                     if let Some(scrim) = &entry.scrim {
                         let scrim_rect = Rect {
                             origin: Point { x: 0.0, y: 0.0 },
@@ -751,7 +772,10 @@ impl FrameEngine {
                     );
                     let widget_size = entry.widget.layout(&lctx);
                     let origin = match &entry.position {
-                        LayerPosition::Absolute(p) => *p,
+                        LayerPosition::Absolute(p) => match owner_node {
+                            Some(node) => tree_ref.content_to_screen(node, *p),
+                            None => *p,
+                        },
                         LayerPosition::Centered => Point {
                             x: ((win_w - widget_size.width) / 2.0).max(0.0),
                             y: ((win_h - widget_size.height) / 2.0).max(0.0),
@@ -3034,6 +3058,55 @@ mod tests {
             engine.paint(&mut canvas, &mut overlay, &[]);
             println!("PROBE frame {i}: {:?}", scroll_offset(&engine));
         }
+    }
+
+    // ── Build-time overlay emission (Phase 32 bug fix) ───────────────────
+
+    /// The gallery pattern: a snackbar/dialog emitted from `build()` while
+    /// an atom is open.
+    struct BuildEmitsSnackbar {
+        captured: Arc<OnceLock<rosace_state::Atom<bool>>>,
+    }
+    impl Component for BuildEmitsSnackbar {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let open = ctx.state(false);
+            let _ = self.captured.set(open.clone());
+            if open.get() {
+                rosace_widgets::tree::Snackbar::new("saved").emit();
+            }
+            Element::text("body")
+        }
+    }
+
+    #[test]
+    fn a_snackbar_emitted_from_build_paints_and_survives_cache_hit_frames() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured = Arc::new(OnceLock::new());
+        let mut engine = FrameEngine::new(
+            Box::new(BuildEmitsSnackbar { captured: captured.clone() }),
+            rosace_render::FontCache::embedded(),
+        );
+        let mut canvas = SkiaCanvas::new(300, 200);
+        let mut overlay = SkiaCanvas::new(300, 200);
+
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert!(!overlay.has_drawn(), "closed: no overlay content");
+
+        captured.get().unwrap().set(true);
+        overlay.clear_transparent();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert!(overlay.has_drawn(), "open (dirty frame): the build-emitted snackbar must paint");
+
+        // A cache-hit frame (nothing dirty) must KEEP showing it — build
+        // doesn't rerun, so the engine's persisted build_overlays carry it.
+        overlay.clear_transparent();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert!(overlay.has_drawn(), "open (cache-hit frame): the snackbar must persist");
+
+        captured.get().unwrap().set(false);
+        overlay.clear_transparent();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert!(!overlay.has_drawn(), "closed again: the snackbar must disappear");
     }
 
     // ── App lifecycle (D042/D110, Phase 29 Step 1) ────────────────────────

@@ -146,6 +146,24 @@ impl Widget for Carousel {
             }
         });
 
+        // Trackpad two-finger swipe (Phase 32 bug fix, user-reported):
+        // register as an X-axis scroll target so horizontal wheel deltas
+        // route HERE (the render tree's axis-aware routing sends the
+        // dominant-vertical gesture to the outer ScrollView and the
+        // dominant-horizontal one to us — a carousel no longer loses the
+        // gesture to the page scroll behind it). Deltas accumulate into
+        // the same drag offset the pointer path uses; the release
+        // equivalent is the controller's wheel-idle grace (there is no
+        // MouseUp in a wheel gesture), handled below.
+        let wheel_ctrl = ctrl.clone();
+        ctx.register_scroll_target(r, super::ScrollAxes::X, std::sync::Arc::new(move |dx, _dy| {
+            let o = wheel_ctrl.offset.get();
+            // Natural-scroll convention: content follows the fingers, the
+            // same negation the pointer drag already applies.
+            wheel_ctrl.offset.set([o[0] - dx, o[1]]);
+            wheel_ctrl.mark_wheel_active();
+        }));
+
         if n == 0 {
             return;
         }
@@ -162,6 +180,25 @@ impl Widget for Carousel {
             ctrl.end_drag();
         }
         ctrl.set_was_pressed(is_pressed);
+
+        // Wheel-gesture release: once the trackpad goes quiet past the
+        // grace window, snap exactly like a pointer release would.
+        if !is_pressed {
+            let dt = rosace_animate::frame_dt().max(0.0001);
+            ctrl.advance_wheel_idle(dt);
+            let dx = ctrl.offset.get()[0];
+            if dx != 0.0 {
+                if !ctrl.wheel_recently_active() {
+                    cur = snap_page(cur, dx, n, SWIPE_THRESHOLD);
+                    self.set_page(&ctrl, cur);
+                    ctrl.offset.set([0.0, ctrl.offset.get()[1]]);
+                    ctrl.end_drag();
+                } else {
+                    // Keep frames coming while the gesture settles.
+                    super::request_animation();
+                }
+            }
+        }
 
         ctx.semantics(
             super::Semantics::new(rosace_core::Role::List)
