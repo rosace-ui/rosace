@@ -6,6 +6,7 @@ pub use crate::{
     Widget, Alignment, PaintCtx, BoxedWidget, WidgetApp,
     TextAlign, FontWeight,
     AppBar, Avatar, Badge, BottomNavItem, BottomNavigationBar, Button, ButtonVariant, FloatingActionButton, SearchBar, Snackbar,
+    Carousel, PageView, RatingBar, Stepper, Table, TableColumn,
     Card, Checkbox, Chip, Column, Container, CustomPaint,
     AspectRatio, BoxShape, CircularProgress, Dropdown, Drawer, Expander, Dialog, DialogPresentation, Divider, EdgeInsets, Grid, Expanded, Hero, HeroApi, Icon, IconKind,
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
