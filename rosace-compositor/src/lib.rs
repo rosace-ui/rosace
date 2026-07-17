@@ -710,8 +710,23 @@ impl GpuPresenter {
             + Sync
             + 'static,
     {
+        // Backend selection. On Android, PREFER Vulkan and exclude GL: the
+        // OpenGL-ES path (both on the emulator's ES translator and some real
+        // drivers) fails window-surface creation with `create_window_surface:
+        // BadAlloc` → `Surface::configure: Invalid surface` — the exact crash
+        // that made Android non-functional since the D109 GPU migration
+        // (root-caused via logcat, Known Issue #16). Vulkan is guaranteed on
+        // Android 7+ (our minSdk 24) and is the platform's recommended GPU
+        // API; on the emulator it resolves to SwiftShader (CPU, but it
+        // WORKS), on real devices to the real GPU. Every other platform keeps
+        // all backends.
+        #[cfg(target_os = "android")]
+        let backends = wgpu::Backends::VULKAN;
+        #[cfg(not(target_os = "android"))]
+        let backends = wgpu::Backends::all();
+
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends,
             ..Default::default()
         });
 
@@ -758,7 +773,18 @@ impl GpuPresenter {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
+        // Configure inside an error scope so an invalid surface RETURNS None
+        // (caller falls back / reports) instead of the default uncaptured
+        // handler ABORTING the process. `surface.configure` doesn't return a
+        // Result, so this scope is the only way to catch a bad-surface
+        // validation error — which is exactly how the Android GL failure
+        // used to kill the app (Known Issue #16).
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
         surface.configure(&device, &config);
+        if let Some(err) = pollster::block_on(device.pop_error_scope()) {
+            log::error!("rosace-compositor: surface configure failed: {err}");
+            return None;
+        }
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label:  Some("compositor"),

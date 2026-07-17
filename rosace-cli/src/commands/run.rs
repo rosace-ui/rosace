@@ -620,6 +620,7 @@ fn run_android(app: &App, device: &str) -> Result<(), String> {
     if !Path::new("android").exists() {
         return Err("android/ not found — scaffold with `rsc new --platforms android`".into());
     }
+    ensure_android_local_properties()?;
     println!("Building '{}' for Android (Gradle assembleDebug)...", app.name);
     let ok = Command::new("./gradlew")
         .args(["assembleDebug"])
@@ -668,6 +669,44 @@ fn run_android(app: &App, device: &str) -> Result<(), String> {
     let mut launch_args = adb_target;
     launch_args.extend(["shell", "am", "start", "-n", &activity]);
     run_checked("adb", &launch_args, "adb shell am start")
+}
+
+/// Gradle needs to know where the Android SDK lives. It reads that from
+/// `android/local.properties` (`sdk.dir=...`) or the `ANDROID_HOME` /
+/// `ANDROID_SDK_ROOT` env vars. `local.properties` is machine-specific (it
+/// holds an absolute path) so it's never committed / scaffolded by `rsc new`
+/// — we generate it on demand here from whatever SDK we can detect, so a
+/// fresh clone builds without the user hand-writing it. If it already exists
+/// we leave it alone (the user may have pointed it somewhere deliberately).
+fn ensure_android_local_properties() -> Result<(), String> {
+    let lp = Path::new("android/local.properties");
+    if lp.exists() {
+        return Ok(());
+    }
+    let sdk = std::env::var("ANDROID_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("ANDROID_SDK_ROOT").ok().filter(|s| !s.is_empty()))
+        .or_else(|| {
+            // Conventional default install locations, so a machine with
+            // Android Studio's defaults works even with no env vars set.
+            let home = std::env::var("HOME").ok()?;
+            [
+                format!("{home}/Library/Android/sdk"), // macOS
+                format!("{home}/Android/Sdk"),         // Linux
+            ]
+            .into_iter()
+            .find(|cand| Path::new(cand).exists())
+        })
+        .ok_or_else(|| {
+            "Android SDK not found — set ANDROID_HOME (or ANDROID_SDK_ROOT) to your SDK path, \
+             or create android/local.properties with `sdk.dir=/path/to/sdk`."
+                .to_string()
+        })?;
+    std::fs::write(lp, format!("sdk.dir={sdk}\n"))
+        .map_err(|e| format!("writing android/local.properties: {e}"))?;
+    println!("  Wrote android/local.properties (sdk.dir={sdk})");
+    Ok(())
 }
 
 fn run_checked(cmd: &str, args: &[&str], what: &str) -> Result<(), String> {

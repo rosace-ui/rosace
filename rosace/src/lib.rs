@@ -218,33 +218,45 @@ impl Default for App {
 /// Known Issue #16 (Android is parked).
 #[cfg(not(target_arch = "wasm32"))]
 fn persist_db_path(app_title: &str) -> Result<std::path::PathBuf, String> {
-    let app_dir_name: String = app_title
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
-    let home = std::env::var("HOME").map_err(|_| "no HOME env var".to_string());
-    #[cfg(target_os = "macos")]
-    let base = home.map(|h| std::path::PathBuf::from(h).join("Library/Application Support"))?;
-    #[cfg(target_os = "windows")]
-    let base = std::env::var("APPDATA")
-        .map(std::path::PathBuf::from)
-        .map_err(|_| "no APPDATA env var".to_string())?;
-    #[cfg(target_os = "linux")]
-    let base = match std::env::var("XDG_DATA_HOME") {
-        Ok(x) => std::path::PathBuf::from(x),
-        Err(_) => std::path::PathBuf::from(home?).join(".local/share"),
-    };
-    #[cfg(target_os = "ios")]
-    let base = std::path::PathBuf::from(home?).join("Documents");
+    // Android (and any other non-desktop target): the app-data dir must come
+    // from the host (JNI `context.getFilesDir()`), not an env var —
+    // persistence on those platforms installs its backend host-side, not
+    // through this desktop helper. Bail before touching the desktop-only
+    // locals so they aren't computed-then-unused on those builds.
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios")))]
-    let base = {
-        let _ = home;
+    {
+        let _ = app_title;
         return Err("no app-data dir convention for this platform yet".to_string());
-    };
+    }
 
-    let dir = base.join(app_dir_name);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {}", dir.display(), e))?;
-    Ok(dir.join("rosace.sqlite"))
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))]
+    {
+        let app_dir_name: String = app_title
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let home = std::env::var("HOME").map_err(|_| "no HOME env var".to_string());
+        #[cfg(target_os = "macos")]
+        let base = home.map(|h| std::path::PathBuf::from(h).join("Library/Application Support"))?;
+        #[cfg(target_os = "windows")]
+        let base = {
+            let _ = home;
+            std::env::var("APPDATA")
+                .map(std::path::PathBuf::from)
+                .map_err(|_| "no APPDATA env var".to_string())?
+        };
+        #[cfg(target_os = "linux")]
+        let base = match std::env::var("XDG_DATA_HOME") {
+            Ok(x) => std::path::PathBuf::from(x),
+            Err(_) => std::path::PathBuf::from(home?).join(".local/share"),
+        };
+        #[cfg(target_os = "ios")]
+        let base = std::path::PathBuf::from(home?).join("Documents");
+
+        let dir = base.join(app_dir_name);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {}", dir.display(), e))?;
+        Ok(dir.join("rosace.sqlite"))
+    }
 }
 
 // ── Element walker ────────────────────────────────────────────────────────────

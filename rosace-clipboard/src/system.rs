@@ -1,4 +1,9 @@
+// The CLI-tool clipboard is desktop-only (pbcopy/xclip); on other targets
+// (Android, iOS, …) these std imports would be unused, so gate them to the
+// platforms whose impls actually use them.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::io::Write;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::{Command, Stdio};
 use crate::provider::{ClipboardError, ClipboardProvider};
 

@@ -1165,7 +1165,18 @@ tasks.register("cargoBuildAndroid") {{
             else -> "windows-x86_64"
         }}
         val minSdk = 24
-        val linker = "$ndkHome/toolchains/llvm/prebuilt/$hostTag/bin/aarch64-linux-android$minSdk-clang"
+        val toolchainBin = "$ndkHome/toolchains/llvm/prebuilt/$hostTag/bin"
+        val linker = "$toolchainBin/aarch64-linux-android$minSdk-clang"
+        // C/C++ compiler + archiver for the target. REQUIRED: several Rust
+        // deps compile C — `ring` (rustls TLS, via networking), `rusqlite`'s
+        // bundled SQLite (persistence), `ndk-sys`. Without these env vars the
+        // `cc` crate looks for a bare `aarch64-linux-android-clang` (no API
+        // level) that the NDK doesn't ship, and the build fails. (Phase 24's
+        // Android build predated all the C-compiling deps, so the original
+        // template only set the linker — this is the fix for that gap.)
+        val cc = "$toolchainBin/aarch64-linux-android$minSdk-clang"
+        val cxx = "$toolchainBin/aarch64-linux-android$minSdk-clang++"
+        val ar = "$toolchainBin/llvm-ar"
         // Plain ProcessBuilder, not Gradle's exec DSL block — that's a
         // Project extension function not reliably reachable from inside a
         // registered task's doLast across Gradle/Kotlin-DSL versions
@@ -1175,7 +1186,14 @@ tasks.register("cargoBuildAndroid") {{
             "cargo", "build", "--lib", "--target", rustTriple, "--release"
         )
         processBuilder.directory(rootProject.projectDir.parentFile)
-        processBuilder.environment()["CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"] = linker
+        val env = processBuilder.environment()
+        env["CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"] = linker
+        env["CC_aarch64-linux-android"] = cc
+        env["CXX_aarch64-linux-android"] = cxx
+        env["AR_aarch64-linux-android"] = ar
+        // `cc`/`cmake` crates and NDK tooling also consult these.
+        env["ANDROID_NDK_ROOT"] = ndkHome
+        env["PATH"] = "$toolchainBin${{File.pathSeparator}}${{env["PATH"] ?: ""}}"
         processBuilder.inheritIO()
         val exitCode = processBuilder.start().waitFor()
         if (exitCode != 0) {{
@@ -2257,6 +2275,35 @@ extern "C" fn android_main(_app: *mut std::ffi::c_void) {
 
     let android = format!(
         r#"
+// Android discards a process's stderr, so a Rust panic normally vanishes
+// with no trace in `adb logcat` — the app just dies. Route panics to logcat
+// (`liblog`) as FATAL so they're visible. Installed once, idempotently, from
+// nativeInit before any engine work runs.
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+extern "C" {{
+    fn __android_log_write(
+        prio: std::os::raw::c_int,
+        tag: *const std::os::raw::c_char,
+        text: *const std::os::raw::c_char,
+    ) -> std::os::raw::c_int;
+}}
+
+#[cfg(target_os = "android")]
+fn install_panic_logcat() {{
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {{
+        std::panic::set_hook(Box::new(|info| {{
+            let tag = std::ffi::CString::new("rosace").unwrap();
+            let text = std::ffi::CString::new(format!("{{info}}"))
+                .unwrap_or_else(|_| std::ffi::CString::new("panic (unprintable message)").unwrap());
+            // ANDROID_LOG_FATAL = 7
+            unsafe {{ __android_log_write(7, tag.as_ptr(), text.as_ptr()); }}
+        }}));
+    }});
+}}
+
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_{jni_prefix}_nativeInit(
@@ -2267,6 +2314,7 @@ pub extern "system" fn Java_{jni_prefix}_nativeInit(
     height: jni::sys::jint,
     scale: jni::sys::jfloat,
 ) -> jni::sys::jlong {{
+    install_panic_logcat();
     let raw_env = env.get_raw();
     let Some(handle) = (unsafe {{ AndroidSurfaceHandle::from_jni(raw_env, &surface) }}) else {{
         return 0;

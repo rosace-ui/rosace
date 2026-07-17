@@ -349,32 +349,47 @@ silently baked into the contracts below, per the project's violation policy
     same Step 6's other mobile deliverable) remains unverified against a
     real device — see `PHASE_28.md` Step 6 for what's real vs. deferred.
 
-16. **Android rendering is broken since the D109 GPU migration — wgpu
-    `Surface::configure` panics `Invalid surface` on the emulator**
-    (found 2026-07-14 while live-verifying Phase 29 Step 1's Android
-    lifecycle half on a fresh Android-34 arm64 emulator). Phase 24's
-    APK verification predates Phase 27/D109 — the Android path has never
-    actually run since the compositor became wgpu-GPU-based. The app
-    launches, `nativeInit` succeeds, then aborts within seconds with
-    `wgpu error: Validation Error / In Surface::configure / Invalid
-    surface` (SIGABRT — a Rust panic crossing the JNI `extern "C"`
-    boundary becomes abort, and the panic text goes to stderr, which
-    Android DROPS: it was only recoverable by installing a
-    panic-to-file hook in `nativeInit`; a permanent
-    logcat/file panic hook in the generated `ffi.rs` is part of the
-    fix's scope). Needs its own debugging session: suspects are the
-    `surfaceChanged`→`nativeResize` reconfigure against the
-    `ANativeWindow`, emulator gfxstream-Vulkan specifics, and
-    swapchain-size/scale mismatches. May behave differently on real
-    hardware. Two REAL fixes already landed from the same session
-    (commit pending): the generated cdylib carried an undefined
-    `android_main` symbol (winit's android-native-activity glue) that
-    made `System.loadLibrary` throw `UnsatisfiedLinkError` on modern
-    NDK/dlopen — fixed with a documented never-called stub in the
-    generated `ffi.rs` + `demo_app`; and `rsc run --target android`
-    requires `ANDROID_HOME`/`local.properties`, which the generated
-    project doesn't write (`rsc new` should emit `local.properties`
-    from the detected SDK path — unfixed, noted here).
+16. **[FIXED 2026-07-17] Android rendering was broken since the D109 GPU
+    migration — the app aborted with wgpu `Surface::configure: Invalid
+    surface` on the emulator.** Found 2026-07-14 (live-verifying Phase 29
+    Step 1's Android lifecycle on a fresh Android-34 arm64 emulator); Phase
+    24's APK verification predated Phase 27/D109, so the Android path had
+    never actually run since the compositor became wgpu-GPU-based. ROOT
+    CAUSE (reproduced via logcat with a temporary android_logger): wgpu's
+    `request_adapter` with `PowerPreference::HighPerformance` picked the
+    emulator's **OpenGL-ES translator** (an IntegratedGpu) over Vulkan
+    (SwiftShader, reported as Cpu). The GL/EGL path then failed
+    `create_window_surface: BadAlloc`, surfacing as the
+    `Surface::configure: Invalid surface` validation error, which — as a
+    Rust panic crossing the JNI `extern "C"` boundary — became a SIGABRT
+    whose panic text went to stderr, which Android DROPS. THREE real fixes
+    landed together (this commit):
+    - `rosace-compositor`: force `wgpu::Backends::VULKAN` on Android only
+      (guaranteed on Android 7+/minSdk 24, the platform-recommended GPU
+      API; emulator → SwiftShader which WORKS, device → real GPU). Every
+      other platform keeps `Backends::all()`. Plus a
+      `push_error_scope`/`pop_error_scope(Validation)` around
+      `surface.configure` so a bad surface RETURNS `None` (graceful
+      fallback/report) instead of the default handler ABORTING the process.
+    - `rsc new` gradle template (`cargoBuildAndroid`): now exports
+      `CC_/CXX_/AR_<target>`, `ANDROID_NDK_ROOT`, and prepends the NDK
+      toolchain `bin` to `PATH`. Phase 24's build predated the C-compiling
+      deps `ring` (rustls, Phase 30) and `rusqlite` (persistence) — they
+      failed because `cc` looked for an unversioned
+      `aarch64-linux-android-clang` the NDK doesn't ship.
+    - `rsc run --target android`: writes `android/local.properties`
+      (`sdk.dir=…`) from a detected SDK (`ANDROID_HOME`/`ANDROID_SDK_ROOT`,
+      else the conventional macOS/Linux install path) if absent, so a
+      fresh clone builds without the user hand-writing it. A permanent
+      panic-to-logcat hook (`liblog` `__android_log_write` FATAL) is
+      installed idempotently in the generated `ffi.rs`'s `nativeInit`.
+    Also from an earlier session: the generated cdylib carried an undefined
+    `android_main` symbol (winit's native-activity glue) that made
+    `System.loadLibrary` throw `UnsatisfiedLinkError` on modern NDK/dlopen
+    — fixed with a documented never-called stub. VERIFIED: fresh `rsc new`
+    project cross-compiles clean for `aarch64-linux-android` (warning-free)
+    and the lifecycle proof app renders live on the emulator. Not yet
+    verified on real hardware.
 
 17. **Live-window-resize flicker on macOS desktop — the OS scales/shifts a
     stale GPU frame during the reconfigure→present gap (wgpu + CAMetalLayer
