@@ -415,20 +415,54 @@ silently baked into the contracts below, per the project's violation policy
     CoreAnimation animation on every set; a set-once-with-CATransaction-
     disabled variant was hypothesized but not tried per the "don't keep
     poking flags" call); `presentsWithTransaction = true` is the ONLY true
-    fix (makes the resize + present atomic) but wgpu's Metal present path
-    isn't transaction-driven, so setting it blocks the main thread (seconds
-    hang + dead input). This is a documented, fundamental wgpu-on-macOS
-    live-resize limitation (winit/wgpu examples exhibit it) — the real
-    fixes are heavy: patch/vendor wgpu-hal for presentsWithTransaction, or
-    replace the Metal present path with a custom synchronous one (what Zed
-    did — it wrote its own Metal renderer specifically to avoid wgpu here).
+    fix (makes the resize + present atomic) but setting it directly on the
+    layer blocked the main thread (seconds hang + dead input).
     DECISION (user, 2026-07-16): mark as known, do NOT keep patching flags;
-    revisit as a scoped engine task when a real app ships on macOS desktop
-    or when wgpu adds upstream support. Cosmetic + transient (only while
+    revisit as a scoped engine task. Cosmetic + transient (only while
     actively edge-dragging; the settled result is always crisp). All
     speculative fix attempts (layer-gravity objc code, present-latency
     tweaks, instrumentation) were reverted — the code is back to the
     verified-good D118 state.
+
+    **UPDATE 2026-07-17 — FIXABLE, proven recipe exists (analysis session,
+    verified against sources + our dependency tree).** The earlier "wgpu
+    doesn't support presentsWithTransaction" conclusion was WRONG:
+    - This is exactly how Flutter's macOS embedder is glitch-free:
+      `presentsWithTransaction` (present inside the CA transaction:
+      commit → waitUntilScheduled → drawable.present(), so new bounds +
+      new pixels land atomically) + `FlutterResizeSynchronizer` (platform
+      thread blocks during live resize until a right-sized frame exists).
+      flutter/flutter#64755, flutter/engine#21525.
+    - wgpu-hal (incl. our v24) HAS `Surface::present_with_transaction` and
+      when set its Metal `present()` does the exact Flutter dance — the
+      field's own doc says "Useful for UI-intensive applications that are
+      sensitive to window resizing."
+    - egui SHIPS this fix, on by default (`egui-wgpu` feature
+      `macos-window-resize-jitter-fix`, from emilk/egui#903) — production
+      proof on our exact stack (wgpu + winit + Metal). Their recipe:
+      toggle it ONLY during live resize via
+      `surface.as_hal::<Metal>()` → `render_layer().lock()
+      .setPresentsWithTransaction(resizing)` + reconfigure, restore after;
+      AND raise `desired_maximum_frame_latency` to >= 2 while resizing
+      (transaction presentation HOLDS a drawable — starving the pool).
+    - WHY OUR 2026-07-16 ATTEMPT HUNG (both now understood): (a) we set
+      the layer flag behind wgpu's back, but hal stamps its OWN flag into
+      each frame at acquire and RESETS the layer property on every
+      reconfigure → hal presented async while the layer was in transaction
+      mode; (b) we didn't raise frame latency → drawable starvation.
+    - THE ONE CATCH: wgpu-hal 24 (ours) has no `render_layer()` accessor —
+      the flag exists but isn't reachable through `as_hal`'s immutable
+      ref. Fix therefore = upgrade wgpu 24 → 25/26 first, then port egui's
+      toggle (winit 0.30 already provides the live-resize signals).
+    - SCOPED PLAN (do as its own step, NOT mid-phase — the upgrade touches
+      every platform): (1) wgpu 26 upgrade in rosace-compositor (API churn
+      is mechanical); (2) re-verify the full platform matrix, ESPECIALLY
+      Android's Backends::VULKAN fix (#16) on the emulator; (3) add a
+      macOS-only live-resize toggle to GpuPresenter (egui's recipe,
+      no-op elsewhere); (4) wire winit live-resize start/end; (5) live-
+      verify with real window-edge dragging. Known trade-off: present is
+      synchronous on the main thread only while dragging (Flutter/egui
+      both accept this; invisible in practice).
 
 **Fixed 2026-07-09, unrelated to #9/#10 above**: `rosace-animate::Spring::
 update` used a single semi-implicit-Euler step per call, unconditionally
