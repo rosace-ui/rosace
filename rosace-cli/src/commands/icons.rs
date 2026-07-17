@@ -1,9 +1,10 @@
 //! App icon generation for `rsc new` (D104/D106 scaffolding).
 //!
-//! The framework's default app icon (`assets/icon/rosace_icon_tiles.svg`)
-//! is bundled into the `rsc` binary at compile time and rasterized into
-//! every platform's required icon format at `rsc new` time — no manual
-//! asset work, no filesystem lookup outside the generated project.
+//! The framework's default app icon (the aurora brand mark,
+//! `assets/rosace/rosace-mark-aurora.svg`) is bundled into the `rsc` binary
+//! at compile time and rasterized into every platform's required icon format
+//! at `rsc new` time — no manual asset work, no filesystem lookup outside the
+//! generated project.
 //!
 //! `.ico` (Windows) and `.icns` (macOS) are simple tag/length/data table
 //! formats — hand-written here rather than pulling in extra crates for
@@ -18,23 +19,30 @@ use resvg::{tiny_skia, usvg};
 
 use super::new::Platform;
 
-/// The framework's default app icon, embedded at compile time.
-const ICON_SVG: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/icon/rosace_icon_tiles.svg"));
+/// The framework's default app icon: the rosace brand MARK (aurora variant),
+/// embedded at compile time. This SVG is a transparent-background mark (the
+/// diamond rosette, no backdrop) — see `assets/rosace/rosace-mark-aurora.svg`.
+/// Flat icon formats rasterize it over `ICON_BACKGROUND_COLOR`; the Android
+/// adaptive-icon foreground layer uses it as-is (transparent), which is
+/// exactly what that layer wants (the system composites its own background
+/// under it and independently masks/zooms/parallaxes the foreground).
+const MARK_SVG: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/rosace/rosace-mark-aurora.svg"));
 
-/// The same icon with the background rect removed (transparent) — Android
-/// adaptive icons composite a separate background (a flat color, below)
-/// under a foreground layer that the system independently masks/zooms/
-/// parallaxes; baking a background into the foreground defeats that.
-const ICON_SVG_FOREGROUND: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../assets/icon/rosace_icon_tiles_foreground.svg"
-));
+/// The app-icon background. The aurora mark is designed on white (see the
+/// reference render `assets/rosace/rosace-icon-aurora-1024.png`), so flat
+/// icons get an opaque white backdrop — iOS and both app stores reject icons
+/// with transparency. Reused as the Android adaptive-icon background color so
+/// the flat and adaptive icons stay visually identical.
+const ICON_BACKGROUND_COLOR: &str = "#FFFFFF";
 
-/// The bundled icon's background fill (`assets/icon/rosace_icon_tiles.svg`'s
-/// `rect`), reused as the Android adaptive icon's background color resource
-/// so the two layers stay visually consistent with the flattened icon.
-const ICON_BACKGROUND_COLOR: &str = "#071019";
+/// `ICON_BACKGROUND_COLOR` parsed into a tiny-skia color, so the rasterized
+/// backdrop and the Android `ic_launcher_background` XML never drift.
+fn icon_bg_color() -> tiny_skia::Color {
+    let hex = ICON_BACKGROUND_COLOR.trim_start_matches('#');
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(255);
+    tiny_skia::Color::from_rgba8(byte(0), byte(2), byte(4), 255)
+}
 
 /// Rasterizes `svg` to a square PNG of `size` x `size` pixels.
 fn render_svg_png(svg: &[u8], size: u32) -> Result<Vec<u8>, String> {
@@ -52,9 +60,25 @@ fn render_svg_png(svg: &[u8], size: u32) -> Result<Vec<u8>, String> {
     pixmap.encode_png().map_err(|e| format!("failed to encode {size}x{size} PNG: {e}"))
 }
 
-/// Rasterizes the bundled (background-included) icon to a square PNG.
+/// Rasterizes the flat app icon (mark composited over the opaque
+/// `ICON_BACKGROUND_COLOR` backdrop) to a square PNG — every platform except
+/// the Android adaptive-icon foreground uses this. The backdrop is filled
+/// first because flat icons must not be transparent (iOS / App Store /
+/// Play Store all reject alpha).
 fn render_png(size: u32) -> Result<Vec<u8>, String> {
-    render_svg_png(ICON_SVG, size)
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_data(MARK_SVG, &opt)
+        .map_err(|e| format!("failed to parse bundled mark SVG: {e}"))?;
+    let src = tree.size();
+    let mut pixmap = tiny_skia::Pixmap::new(size, size)
+        .ok_or_else(|| format!("invalid icon size {size}"))?;
+    pixmap.fill(icon_bg_color());
+    let transform = tiny_skia::Transform::from_scale(
+        size as f32 / src.width(),
+        size as f32 / src.height(),
+    );
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    pixmap.encode_png().map_err(|e| format!("failed to encode {size}x{size} PNG: {e}"))
 }
 
 fn write_png(path: impl AsRef<Path>, size: u32) -> Result<(), String> {
@@ -184,10 +208,10 @@ fn write_ios_icon(app_dir: &Path) -> Result<(), String> {
 /// Android: legacy (pre-API-26) `mipmap-*` launcher icons at every standard
 /// density — the OS applies its own mask/shape — PLUS real adaptive icons
 /// (API 26+): a flat-color background (`ICON_BACKGROUND_COLOR`, the same
-/// color the flattened icon's own background rect uses) composited under a
-/// transparent-background foreground layer (`ICON_SVG_FOREGROUND`) that the
-/// system independently masks, zooms, and parallaxes. Both are written so
-/// the app looks right on every Android version, old and new.
+/// backdrop the flat icon is composited over) under a transparent-background
+/// foreground layer (the bare `MARK_SVG`) that the system independently
+/// masks, zooms, and parallaxes. Both are written so the app looks right on
+/// every Android version, old and new.
 fn write_android_icons(app_dir: &Path) -> Result<(), String> {
     // Legacy square launcher icon, one raster per density.
     const DENSITIES: &[(&str, u32)] = &[
@@ -220,7 +244,7 @@ fn write_android_icons(app_dir: &Path) -> Result<(), String> {
     for (dir_name, size) in ADAPTIVE_DENSITIES {
         let dir = res_dir.join(dir_name);
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        write_svg_png(dir.join("ic_launcher_foreground.png"), ICON_SVG_FOREGROUND, *size)?;
+        write_svg_png(dir.join("ic_launcher_foreground.png"), MARK_SVG, *size)?;
     }
 
     let values_dir = res_dir.join("values");
@@ -411,24 +435,22 @@ mod tests {
         assert!(res.join("values/ic_launcher_background.xml").exists());
         assert!(res.join("mipmap-xxxhdpi/ic_launcher_foreground.png").exists());
 
-        // Adaptive foreground layer must be transparent where the diamond
-        // cluster doesn't cover — that's the whole point of splitting it
-        // from the background. Legacy ic_launcher.png must NOT be (it's the
-        // flattened icon with the background rect baked in).
+        // Adaptive foreground layer must be transparent where the mark
+        // doesn't cover — that's the whole point of splitting it from the
+        // background (the system composites its own background under it).
+        // The corner is well outside the centered rosette, so it's transparent.
         let fg_bytes = fs::read(res.join("mipmap-mdpi/ic_launcher_foreground.png")).unwrap();
         let fg = tiny_skia::Pixmap::decode_png(&fg_bytes).unwrap();
         let corner = fg.pixel(0, 0).unwrap();
         assert_eq!(corner.alpha(), 0, "foreground corner should be transparent");
 
-        // The bundled icon's background rect has rounded corners (rx=114 on
-        // a 512 canvas), so (0,0) is transparent on the legacy icon too —
-        // sample the center instead, which is always inside the rounded
-        // rect regardless of icon size.
+        // Legacy ic_launcher.png is the flat icon: the mark composited over an
+        // opaque full-bleed backdrop, so EVERY pixel is opaque — including the
+        // corner, unlike the transparent adaptive foreground above.
         let legacy_bytes = fs::read(res.join("mipmap-mdpi/ic_launcher.png")).unwrap();
         let legacy = tiny_skia::Pixmap::decode_png(&legacy_bytes).unwrap();
-        let (cx, cy) = (legacy.width() / 2, legacy.height() / 2);
-        let legacy_center = legacy.pixel(cx, cy).unwrap();
-        assert_eq!(legacy_center.alpha(), 255, "legacy icon center should be opaque");
+        let corner = legacy.pixel(0, 0).unwrap();
+        assert_eq!(corner.alpha(), 255, "legacy icon corner should be opaque (full-bleed backdrop)");
 
         let bg_xml = fs::read_to_string(res.join("values/ic_launcher_background.xml")).unwrap();
         assert!(bg_xml.contains(ICON_BACKGROUND_COLOR));
