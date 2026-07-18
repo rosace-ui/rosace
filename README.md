@@ -1,14 +1,14 @@
 <div align="center">
-  <img src="assets/rosace/rosace-logo-aurora.png" alt="Rosace" width="420"/>
+  <img src="assets/animations/rosace-breathe-wordmark-anim.svg" alt="Rosace" width="420"/>
 
   <p><em>Fast by nature. Beautiful by design.</em></p>
 
   <p><strong>The UI framework Rust deserved from day one.</strong></p>
 
-  ![Status](https://img.shields.io/badge/status-work%20in%20progress-orange)
-  ![Phase](https://img.shields.io/badge/phase-1%20foundation-yellow)
+  ![Status](https://img.shields.io/badge/status-active-brightgreen)
+  ![Phase](https://img.shields.io/badge/phase-28%20(TextInput%2FIME%2FForms)-blue)
   ![Language](https://img.shields.io/badge/language-Rust-orange?logo=rust)
-  ![License](https://img.shields.io/badge/license-proprietary-red)
+  ![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-green)
 
 </div>
 
@@ -119,37 +119,108 @@ three worked, compiling examples
 
 | Crate | Description |
 |---|---|
+| **Core** | |
+| `rosace` | Main entry point, app launcher |
 | `rosace-macros` | Proc-macros: `#[component]`, `#[state]`, `view!{}` |
-| `rosace-trace` | `RosaceTrace` event bus, ring buffer, subscribers |
 | `rosace-core` | Component model, element tree, lifecycle hooks |
+| **State & Reactivity** | |
 | `rosace-state` | `Atom<T>`, `use_atom()`, `GlobalAtom`, batched updates |
+| **Layout & Rendering** | |
 | `rosace-layout` | Flexure engine: Column, Row, Stack, Flex, Grid, Wrap, SizedBox, AspectRatio |
-| `rosace-render` | tiny-skia render pipeline, dirty regions, layer compositor, `FontCache` |
-| `rosace-widgets` | Built-in widget library |
-| `rosace-platform` | Windowing abstraction (winit + softbuffer) |
-| `rosace-cli` | `rsc` command-line tool |
-| `rosace-examples` | Example applications |
+| `rosace-render` | GPU/CPU hybrid render (wgpu shaders + tiny-skia fallback), dirty regions, compositor |
+| `rosace-compositor` | Metal/GL layer compositing, sRGB gamma, buffer management |
+| `rosace-shader` | Shader registry, SDF pipelines for shapes, glyph atlas |
+| `rosace-shaping` | Text shaping (HarfBuzz seam) — *deferred integration* |
+| `rosace-bidi` | Bidirectional text layout |
+| `rosace-scroll` | Scroll layer, momentum, overscroll |
+| **Text & Input** | |
+| `rosace-text` | TextInput, TextArea, clipboard, OS IME |
+| `rosace-ime` | Native input method engine integration |
+| `rosace-forms` | Form widgets, validation, submission |
+| **Widgets** | |
+| `rosace-widgets` | 40+ built-in widgets: Button, Card, Dialog, Dropdown, etc. |
+| `rosace-a11y` | Accessibility tree, roles, focus management, semantic HTML |
+| **Animation & Interaction** | |
+| `rosace-anim` | Animation primitives, Tween, Timeline, easing |
+| `rosace-animate` | High-level animation API |
+| `rosace-anim-nav` | Route transitions, stack navigation |
+| `rosace-gesture` | Touch gestures, scroll, drag, pinch |
+| **Navigation** | |
+| `rosace-nav` | Navigator, Router, route stack |
+| `rosace-nav-anim` | Animated route transitions |
+| **Styling & Theme** | |
+| `rosace-style` | CSS-like styling, selectors |
+| `rosace-theme` | Platform themes (Material, Cupertino), token system |
+| **Platform & FFI** | |
+| `rosace-platform` | Windowing (winit + softbuffer), platform events |
+| `rosace-ffi` | Native FFI bindings (camera, lifecycle, etc.) |
+| **DevTools & Debugging** | |
+| `rosace-trace` | Event bus, ring buffer, flight recorder |
+| `rosace-devtools` | In-app DevTools for debugging |
+| `rosace-hot-reload` | Hot module reloading (planned: dylib swap architecture) |
+| **Persistence & Networking** | |
+| `rosace-storage` | SQLite-backed persistence, `#[persist]` macro |
+| `rosace-net` | HTTP/WebSocket client, `use_query`, `use_websocket` |
+| `rosace-ws` | WebSocket connection management |
+| `rosace-clipboard` | Clipboard read/write |
+| `rosace-media` | Image/video playback, camera access |
+| **Web & I18n** | |
+| `rosace-web-seo` | Semantic HTML shadow tree for web SEO |
+| `rosace-i18n` | Internationalization, translation strings |
+| **Testing & Utils** | |
+| `rosace-test-utils` | Snapshot testing, component interaction testing |
+| **CLI** | |
+| `rosace-cli` | `rsc` command-line tool: new, dev, build, analyze, snapshot |
+| `rosace-examples` | Example applications & demos |
 
 ---
 
-## Phase 1 Progress
+## Development Phases
 
-Goal: a working desktop app at 60fps with state, layout, render, tracing, animation, accessibility, and a full developer CLI.
+**Current**: Phase 28 ✓ (TextInput, IME, Forms)  
+**Next**: Phase 29 (App Lifecycle, Push Notifications)
 
-- [x] Reactive state — `Atom<T>`, `use_atom()`, `GlobalAtom`, batched updates
-- [x] Layout engine — Column, Row, Stack, Flex, Grid, Wrap, SizedBox, AspectRatio
-- [x] Render pipeline — tiny-skia, dirty regions, layer compositor
-- [x] Font rendering — fontdue `FontCache` + `draw_text()` with correct glyph placement
-- [x] Lifecycle hooks — `on_mount`, `on_update`, `on_unmount`
-- [x] `ErrorBoundary` with panic catching
-- [x] `RosaceTrace` event bus with ring buffer
-- [x] Animation — `Tween`, `AnimationController`, `Timeline`, easing curves
-- [x] Accessibility — semantic tree, roles, focus management
-- [x] Test harness — component-level snapshot and interaction testing
-- [x] Proc-macros — `#[component]`, `#[state]`
-- [x] `rsc` CLI — `new`, `dev`, `build`, `analyze`, `snapshot`
-- [ ] Phase 2 — web/WASM target
-- [ ] Phase 3 — mobile (iOS / Android)
+### Phase 1–26 — Foundation ✓
+- ✓ Reactive state (`Atom<T>`, batched updates)
+- ✓ Layout engine (Flexure)
+- ✓ Render pipeline (tiny-skia → GPU hybrid)
+- ✓ Font rendering (desktop OS fonts + system fallbacks)
+- ✓ Lifecycle hooks, ErrorBoundary, semantic accessibility
+- ✓ Animation system (Tweens, Timelines, easing)
+- ✓ Test harness (snapshot & interaction testing)
+- ✓ `rsc` CLI (new, dev, build, analyze, snapshot)
+- ✓ 40+ built-in widgets
+- ✓ Platform abstraction (macOS, Windows, Linux native windows)
+- ✓ Theme system (Material 3 + Cupertino)
+- ✓ Event tracing & flight recorder
+
+### Phase 27 — GPU-Native Rendering ✓
+- ✓ wgpu shader pipelines for shapes (SDF renderers)
+- ✓ Glyph atlas caching for text
+- ✓ 36× lower CPU per frame
+- ✓ Backdrop blur, glassmorphism
+- ⧖ ShaderPaint widget (deferred), web GPU presenter
+
+### Phase 28 — TextInput, IME, Forms ✓
+- ✓ Real keyboard editing (click, drag, multi-click, selection)
+- ✓ TextInput + TextArea widgets
+- ✓ Desktop OS IME (macOS, Windows, Linux)
+- ✓ Context menu, selection handles
+- ✓ `rosace-forms` wired to real widgets
+- ⧖ Mobile native IME (Step 6), magnifier loupe (Step 7)
+
+### Phase 29–32 — Upcoming
+- **Phase 29**: App lifecycle, push notifications (APNs, FCM)
+- **Phase 30**: Real networking (HTTP, WebSocket, `use_query` hooks)
+- **Phase 31**: Persistence tiers (session, permanent, encrypted Keychain/Keystore)
+- **Phase 32**: Widget expansion (FloatingActionButton, DatePicker, etc.), extensible Icon, rich text/emoji
+
+### Multi-Platform Status
+- ✓ Desktop (macOS, Windows, Linux)
+- ✓ Web (WASM + semantic SEO tree)
+- ⧖ iOS (real native host + Xcode build working)
+- ⧖ Android (real native host + Gradle/APK working)
+- ⧖ Mobile UI polish & performance tuning (Phase 26+)
 
 ---
 
