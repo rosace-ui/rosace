@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/animations/rosace-breathe-wordmark-anim.svg" alt="Rosace" width="420"/>
+  <img src="assets/rosace/rosace-logo-aurora.svg" alt="Rosace" width="420"/>
 
   <p><em>Fast by nature. Beautiful by design.</em></p>
 
@@ -8,7 +8,7 @@
   ![Status](https://img.shields.io/badge/status-active-brightgreen)
   ![Phase](https://img.shields.io/badge/phase-28%20(TextInput%2FIME%2FForms)-blue)
   ![Language](https://img.shields.io/badge/language-Rust-orange?logo=rust)
-  ![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-green)
+  ![License](https://img.shields.io/badge/license-proprietary-red)
 
 </div>
 
