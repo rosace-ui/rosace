@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-115 -115 230 230" width="512" height="512">
+<defs><linearGradient id="a0" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#00EEFF"/><stop offset="1" stop-color="#0077cc"/></linearGradient>
+<linearGradient id="a1" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#33B4FF"/><stop offset="1" stop-color="#1a5fc4"/></linearGradient>
+<linearGradient id="a2" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#7A7BFF"/><stop offset="1" stop-color="#3d3dbb"/></linearGradient>
+<linearGradient id="a3" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#B865FF"/><stop offset="1" stop-color="#6b2fb0"/></linearGradient>
+<linearGradient id="a4" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#E85CE0"/><stop offset="1" stop-color="#9426a0"/></linearGradient></defs>
+<style>
+.petal{animation:sh 3.2s ease-in-out infinite}
+.p0{animation-delay:0.0s}.p1{animation-delay:0.15s}.p2{animation-delay:0.3s}.p3{animation-delay:0.45s}.p4{animation-delay:0.6s}.p5{animation-delay:0.75s}.p6{animation-delay:0.9s}.p7{animation-delay:1.05s}
+.dot{animation:cp 3.2s ease-in-out infinite}
+@keyframes sh{0%,100%{opacity:1}12%{opacity:.45}24%{opacity:1}}
+@keyframes cp{0%,100%{r:5}12%{r:7}24%{r:5}}</style>
+<g><g transform="rotate(0)"><g class="petal p0"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a0)"/></g></g>
+<g transform="rotate(45)"><g class="petal p1"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a1)"/></g></g>
+<g transform="rotate(90)"><g class="petal p2"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a2)"/></g></g>
+<g transform="rotate(135)"><g class="petal p3"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a3)"/></g></g>
+<g transform="rotate(180)"><g class="petal p4"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a4)"/></g></g>
+<g transform="rotate(225)"><g class="petal p5"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a3)"/></g></g>
+<g transform="rotate(270)"><g class="petal p6"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a2)"/></g></g>
+<g transform="rotate(315)"><g class="petal p7"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a1)"/></g></g></g>
+<g opacity="0.8"><g transform="rotate(22.5)"><g class="inner-petal"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#33B4FF" opacity="0.5"/></g></g>
+<g transform="rotate(67.5)"><g class="inner-petal"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#7A7BFF" opacity="0.5"/></g></g>
+<g transform="rotate(112.5)"><g class="inner-petal"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#B865FF" opacity="0.5"/></g></g>
+<g transform="rotate(157.5)"><g class="inner-petal"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#E85CE0" opacity="0.5"/></g></g>
+<g transform="rotate(202.5)"><g class="inner-petal"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#E85CE0" opacity="0.5"/></g></g>
+<g transform="rotate(247.5)"><g class="inner-petal"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#B865FF" opacity="0.5"/></g></g>
+<g transform="rotate(292.5)"><g class="inner-petal"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#7A7BFF" opacity="0.5"/></g></g>
+<g transform="rotate(337.5)"><g class="inner-petal"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#33B4FF" opacity="0.5"/></g></g></g>
+<g><circle r="13" fill="#04070c" stroke="#B865FF" stroke-width="1.8"/><circle class="dot" r="5" fill="#E8D5FF"/></g>
+</svg>

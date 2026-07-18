@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-115 -115 230 230" width="512" height="512">
+<defs><linearGradient id="a0" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#00EEFF"/><stop offset="1" stop-color="#0077cc"/></linearGradient>
+<linearGradient id="a1" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#33B4FF"/><stop offset="1" stop-color="#1a5fc4"/></linearGradient>
+<linearGradient id="a2" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#7A7BFF"/><stop offset="1" stop-color="#3d3dbb"/></linearGradient>
+<linearGradient id="a3" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#B865FF"/><stop offset="1" stop-color="#6b2fb0"/></linearGradient>
+<linearGradient id="a4" x1="0" y1="-1" x2="0" y2="0"><stop offset="0" stop-color="#E85CE0"/><stop offset="1" stop-color="#9426a0"/></linearGradient></defs>
+<style>
+.petal,.inner-petal{transform-box:fill-box;transform-origin:center 89px;opacity:0;animation:pi .8s cubic-bezier(.2,.9,.25,1.2) forwards}
+.inner-petal{transform-origin:center 55px;animation:ii .7s cubic-bezier(.2,.9,.3,1.15) forwards}
+.core{transform-box:fill-box;transform-origin:center center;opacity:0;animation:ci .6s cubic-bezier(.3,1.4,.4,1) .78s forwards}
+@keyframes pi{from{opacity:0;transform:scale(.2) rotate(-28deg)}60%{opacity:1}to{opacity:1;transform:none}}
+@keyframes ii{from{opacity:0;transform:scale(.1)}to{opacity:1;transform:none}}
+@keyframes ci{from{opacity:0;transform:scale(0)}to{opacity:1;transform:none}}</style>
+<g><g transform="rotate(0)"><g class="petal p0" style="animation-delay:0.0s"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a0)"/></g></g>
+<g transform="rotate(45)"><g class="petal p1" style="animation-delay:0.09s"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a1)"/></g></g>
+<g transform="rotate(90)"><g class="petal p2" style="animation-delay:0.18s"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a2)"/></g></g>
+<g transform="rotate(135)"><g class="petal p3" style="animation-delay:0.27s"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a3)"/></g></g>
+<g transform="rotate(180)"><g class="petal p4" style="animation-delay:0.36s"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a4)"/></g></g>
+<g transform="rotate(225)"><g class="petal p5" style="animation-delay:0.45s"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a3)"/></g></g>
+<g transform="rotate(270)"><g class="petal p6" style="animation-delay:0.54s"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a2)"/></g></g>
+<g transform="rotate(315)"><g class="petal p7" style="animation-delay:0.63s"><polygon points="0,-89 21,-55 0,-21 -21,-55" fill="url(#a1)"/></g></g></g>
+<g opacity="0.8"><g transform="rotate(22.5)"><g class="inner-petal" style="animation-delay:0.5s"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#33B4FF" opacity="0.5"/></g></g>
+<g transform="rotate(67.5)"><g class="inner-petal" style="animation-delay:0.56s"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#7A7BFF" opacity="0.5"/></g></g>
+<g transform="rotate(112.5)"><g class="inner-petal" style="animation-delay:0.62s"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#B865FF" opacity="0.5"/></g></g>
+<g transform="rotate(157.5)"><g class="inner-petal" style="animation-delay:0.68s"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#E85CE0" opacity="0.5"/></g></g>
+<g transform="rotate(202.5)"><g class="inner-petal" style="animation-delay:0.74s"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#E85CE0" opacity="0.5"/></g></g>
+<g transform="rotate(247.5)"><g class="inner-petal" style="animation-delay:0.8s"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#B865FF" opacity="0.5"/></g></g>
+<g transform="rotate(292.5)"><g class="inner-petal" style="animation-delay:0.86s"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#7A7BFF" opacity="0.5"/></g></g>
+<g transform="rotate(337.5)"><g class="inner-petal" style="animation-delay:0.92s"><polygon points="0,-55 13,-34 0,-13 -13,-34" fill="#33B4FF" opacity="0.5"/></g></g></g>
+<g class="core"><circle r="13" fill="#04070c" stroke="#B865FF" stroke-width="1.8"/><circle r="5" fill="#E8D5FF"/></g>
+</svg>

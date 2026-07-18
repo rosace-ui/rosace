@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/rosace/rosace-logo-aurora.svg" alt="Rosace" width="420"/>
+  <img src="assets/rosace/rosace-logo-aurora.png" alt="Rosace" width="420"/>
 
   <p><em>Fast by nature. Beautiful by design.</em></p>
 
@@ -9,6 +9,7 @@
   ![Phase](https://img.shields.io/badge/phase-1%20foundation-yellow)
   ![Language](https://img.shields.io/badge/language-Rust-orange?logo=rust)
   ![License](https://img.shields.io/badge/license-proprietary-red)
+
 </div>
 
 ---
@@ -187,5 +188,5 @@ This source code is provided for viewing and personal exploration only. You may 
 ---
 
 <div align="center">
-  <sub>Built in Rust. Designed with intent. Reviewed by hand.</sub>
+  <sub>Built in Rust  🦀 Designed with intent 🦀 Reviewed by hand</sub>
 </div>

@@ -47,5 +47,5 @@
   <circle r="13" fill="#04070c" stroke="#B865FF" stroke-width="1.8" filter="url(#glowv)"/>
   <circle r="5" fill="#E8D5FF"/>
 </g>
-  <text x="500" y="1000" text-anchor="middle" font-family="Josefin Sans SemiBold" font-size="118" letter-spacing="46" fill="url(#wordgrad)" dx="23">ROSACE</text>
+  <text x="500" y="900" text-anchor="middle" font-family="Josefin Sans SemiBold" font-size="100" letter-spacing="60" fill="url(#wordgrad)" dx="23">ROSACE</text>
 </svg>
