@@ -115,6 +115,22 @@ three worked, compiling examples
 
 ---
 
+## Gallery
+
+The framework supports a rich set of UI components and effects. Here are some examples of what Rosace can build:
+
+### Glassmorphism & Modern Effects
+![Liquid Glass Example](assets/examples/liquid_glass.png)
+
+### Widget Gallery
+A comprehensive showcase of built-in widgets in action:
+
+![Widget Gallery 1](assets/examples/widget_gallery_1.png)
+![Widget Gallery 2](assets/examples/widget_gallery_2.png)
+![Widget Gallery 3](assets/examples/widget_gallery_3.png)
+
+---
+
 ## Crate Overview
 
 | Crate | Description |
