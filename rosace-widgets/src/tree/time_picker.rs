@@ -171,15 +171,19 @@ impl Widget for TimePicker {
         let angle = ctx.animate_channel(0, self.target_angle(), 0.0);
         let (tx, ty) = on_circle(cx, cy, num_r, angle);
 
-        // Hand as a beaded line (no line primitive) from centre to the thumb.
-        let beads = 26;
-        for i in 2..=beads {
-            let t = i as f32 / beads as f32;
-            let bx = cx + (tx - cx) * t;
-            let by = cy + (ty - cy) * t;
-            ctx.fill_circle(Point { x: bx, y: by }, 1.6, hand_c);
+        // Hand: a SOLID line drawn as densely-overlapping circles (there is no
+        // line primitive). Step < radius so it reads as one continuous stroke,
+        // not dots. Stops short of the thumb so it doesn't overdraw the number.
+        let hand_len = ((tx - cx).powi(2) + (ty - cy).powi(2)).sqrt().max(1.0);
+        let stroke_r = 2.2;
+        let steps = (hand_len / (stroke_r * 0.7)).ceil() as i32;
+        let start = (10.0 / hand_len).clamp(0.0, 1.0); // leave the hub
+        let end = ((hand_len - 16.0) / hand_len).clamp(0.0, 1.0); // stop at thumb
+        for i in 0..=steps {
+            let t = start + (end - start) * (i as f32 / steps as f32);
+            ctx.fill_circle(Point { x: cx + (tx - cx) * t, y: cy + (ty - cy) * t }, stroke_r, hand_c);
         }
-        ctx.fill_circle(Point { x: cx, y: cy }, 4.0, hand_c);          // centre hub
+        ctx.fill_circle(Point { x: cx, y: cy }, 4.5, hand_c);          // centre hub
         ctx.fill_circle(Point { x: tx, y: ty }, 18.0, thumb_c);        // thumb disc
 
         // Numbers around the ring.
