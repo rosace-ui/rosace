@@ -16,6 +16,10 @@
 //! never lazily on first paint (the Impeller lesson, see PHASE_27.md).
 
 pub mod builtin;
+pub mod material;
+pub mod materials;
+
+pub use material::ShaderMaterial;
 
 use std::sync::Mutex;
 
@@ -85,15 +89,30 @@ pub enum BlendMode {
 pub struct ShaderSpec {
     pub wgsl_source: String,
     pub blend: BlendMode,
+    /// Declares that this pipeline samples the scene behind its fill rect
+    /// (D124 Phase 33 Step 4 — the glass enabler). When set, the compositor
+    /// binds an extra texture + sampler (the captured behind-rect content,
+    /// unblurred) alongside the usual quad-placement + user uniforms, and a
+    /// `rosace_sample_backdrop(uv)` WGSL helper the fragment shader can call
+    /// to read it. Forces the frame into scene-texture mode (same machinery
+    /// `BackdropBlur` already uses) — costs nothing on frames that don't
+    /// draw one of these.
+    pub wants_backdrop: bool,
 }
 
 impl ShaderSpec {
     pub fn new(wgsl_source: impl Into<String>) -> Self {
-        Self { wgsl_source: wgsl_source.into(), blend: BlendMode::Alpha }
+        Self { wgsl_source: wgsl_source.into(), blend: BlendMode::Alpha, wants_backdrop: false }
     }
 
     pub fn blend(mut self, blend: BlendMode) -> Self {
         self.blend = blend;
+        self
+    }
+
+    /// Mark this pipeline as backdrop-sampling (see [`Self::wants_backdrop`]).
+    pub fn with_backdrop(mut self) -> Self {
+        self.wants_backdrop = true;
         self
     }
 }
@@ -222,6 +241,12 @@ mod tests {
         assert_eq!(bytes.len(), 64);
         assert_eq!(&bytes[0..4], &1.0f32.to_le_bytes());
         assert_eq!(&bytes[60..64], &2.0f32.to_le_bytes());
+    }
+
+    #[test]
+    fn with_backdrop_sets_the_flag_and_defaults_to_false() {
+        assert!(!ShaderSpec::new("// a").wants_backdrop);
+        assert!(ShaderSpec::new("// a").with_backdrop().wants_backdrop);
     }
 
     // ── Registry queue behavior ─────────────────────────────────────────

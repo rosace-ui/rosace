@@ -35,6 +35,10 @@ impl Slider {
         self
     }
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
+    pub fn height(mut self, h: f32) -> Self { self.height = h; self }
+    pub fn track_color(mut self, c: Color) -> Self { self.track_color = c; self }
+    pub fn fill_color(mut self, c: Color) -> Self { self.fill_color = c; self }
+    pub fn thumb_color(mut self, c: Color) -> Self { self.thumb_color = c; self }
 
     /// Called with the new value (in `min..max`) when the track is clicked.
     /// (Continuous dragging lands with gesture/move events.)
@@ -89,5 +93,26 @@ impl Widget for Slider {
             Point { x: r.origin.x + fill_w, y: cy },
             8.0, self.thumb_color,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_layout::Constraints;
+
+    #[test]
+    fn customization_builders_do_not_change_layout_size() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
+        let base = Slider::new(0.5);
+        let customized = Slider::new(0.5)
+            .height(30.0)
+            .track_color(Color::rgb(10, 10, 10))
+            .fill_color(Color::rgb(255, 0, 0))
+            .thumb_color(Color::rgb(255, 255, 255));
+        assert_eq!(base.layout(&ctx).width, customized.layout(&ctx).width);
+        assert_eq!(customized.layout(&ctx).height, 30.0);
     }
 }

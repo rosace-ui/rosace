@@ -72,6 +72,111 @@ fn handle_anchor(layout: &text_edit::TextLayoutSnapshot, char_idx: usize) -> Opt
     Some((line.x_at(char_idx), line.y + line.height))
 }
 
+/// Draw the DevTools element-inspector chrome (D123/O2) into the overlay
+/// recorder: a hover outline, a selected-node outline + tint, and a
+/// bottom-left panel with the selected node's size/rect/constraints/
+/// semantics readout. All geometry + text come from `rosace_devtools`
+/// (unit-tested off a headless snapshot); this fn is only the drawing.
+fn draw_dev_inspector(
+    rec: &mut rosace_render::PictureRecorder,
+    snapshot: &[rosace_widgets::tree::InspectNode],
+    dev: &rosace_devtools::ElementInspector,
+    cursor: (f32, f32),
+    win_w: f32,
+    win_h: f32,
+    font: &rosace_render::FontCache,
+) {
+    use rosace_core::types::{Point, Rect, Size};
+    use rosace_render::{Color, DrawCommand, FontWeight};
+
+    let accent = Color::rgb(80, 200, 255);
+
+    let outline = |rec: &mut rosace_render::PictureRecorder, r: (f32, f32, f32, f32), color: Color, w: f32| {
+        rec.push(DrawCommand::StrokeRect {
+            rect: Rect { origin: Point { x: r.0, y: r.1 }, size: Size { width: r.2, height: r.3 } },
+            color,
+            width: w,
+        });
+    };
+
+    // Hover outline (thin) — only when it isn't the selected node.
+    if let Some(h) = dev.hover {
+        if dev.selected != Some(h) {
+            if let Some(r) = rosace_devtools::node_rect(snapshot, h) {
+                outline(rec, r, Color::rgba(80, 200, 255, 150), 1.0);
+            }
+        }
+    }
+
+    // Selected outline (thick) + faint fill.
+    if let Some(s) = dev.selected {
+        if let Some(r) = rosace_devtools::node_rect(snapshot, s) {
+            rec.push(DrawCommand::FillRect {
+                rect: Rect { origin: Point { x: r.0, y: r.1 }, size: Size { width: r.2, height: r.3 } },
+                color: Color::rgba(80, 200, 255, 32),
+            });
+            outline(rec, r, accent, 2.0);
+        }
+    }
+
+    // Panel — the selected node's readout, else a hint.
+    let px = 12.0;
+    let lh = font.line_height(px);
+    let pad = 10.0;
+    let lines: Vec<String> = match dev.selected.and_then(|s| rosace_devtools::panel_lines(snapshot, s)) {
+        Some(l) => l,
+        None => vec![
+            "DevTools inspector".to_string(),
+            "hover to highlight · click to select".to_string(),
+            "Esc to deselect · F12 to close".to_string(),
+        ],
+    };
+    let text_w = lines.iter()
+        .map(|l| font.measure_text(l, px))
+        .fold(0.0f32, f32::max);
+    let panel_w = text_w + pad * 2.0;
+    let panel_h = lines.len() as f32 * lh + pad * 2.0;
+    // Bottom-left, clamped inside the window.
+    let panel_x = 12.0f32.min((win_w - panel_w - 4.0).max(0.0));
+    let panel_y = (win_h - panel_h - 12.0).max(0.0);
+    let _ = cursor; // panel is corner-docked, not cursor-tracking (stable to read)
+
+    rec.push(DrawCommand::FillRRect {
+        rect: Rect { origin: Point { x: panel_x, y: panel_y }, size: Size { width: panel_w, height: panel_h } },
+        radius: 8.0,
+        color: Color::rgba(18, 22, 28, 240),
+    });
+    rec.push(DrawCommand::StrokeRRect {
+        rect: Rect { origin: Point { x: panel_x, y: panel_y }, size: Size { width: panel_w, height: panel_h } },
+        radius: 8.0,
+        color: Color::rgba(80, 200, 255, 120),
+        width: 1.0,
+    });
+    for (i, line) in lines.iter().enumerate() {
+        // First line (the widget type) in the accent color + bold.
+        let (color, weight) = if i == 0 {
+            (accent, FontWeight::Bold)
+        } else {
+            (Color::rgb(210, 218, 226), FontWeight::Regular)
+        };
+        rec.push(DrawCommand::DrawText {
+            text: line.clone(),
+            origin: Point { x: panel_x + pad, y: panel_y + pad + i as f32 * lh },
+            color,
+            px,
+            weight,
+        });
+    }
+}
+
+/// Whether the DevTools FAB is shown — dev builds only (never ships in
+/// release). A tap on it opens the DevTools panel; no keyboard needed, so it
+/// works on mobile too.
+fn devtools_fab_enabled() -> bool {
+    cfg!(debug_assertions)
+}
+
+
 fn command_for_key(key: rosace_platform::Key, shift: bool, word_mod: bool) -> Option<text_edit::Command> {
     use rosace_platform::Key;
     use text_edit::Command::*;
@@ -170,6 +275,28 @@ pub struct FrameEngine {
     /// own `anchor`). `MouseMove` updates the dragged endpoint via
     /// `position_at`; `MouseUp` clears it.
     handle_drag: Option<(NodeId, bool, usize)>,
+    /// Overlay dispatch routes RETAINED across engine-skipped frames
+    /// (2026-07-19): with the GPU animation loop presenting every frame,
+    /// a paint-time overlay (Dropdown menu) exists in the per-frame
+    /// registry only on frames its OWNER repainted — clean frames must
+    /// keep the previous routes (and the overlay canvas's previous
+    /// pixels) or an open menu flickers out one present after it opens.
+    overlay_routes: Vec<OverlayRoute>,
+    /// DevTools element inspector (D123/O2). F12 toggles it; while on,
+    /// hovering highlights the widget under the cursor and clicking selects
+    /// it (both via `RenderTree::pick`), and a panel shows the selected
+    /// node's size/rect/constraints/semantics. Debug-only chrome drawn on
+    /// the overlay layer above everything; app input is intercepted while
+    /// it's enabled.
+    dev: rosace_devtools::ElementInspector,
+    /// DevTools trace/network activity panel (D123/O5). Rendered inside the
+    /// FAB-opened DevTools panel; read-only, never intercepts app input.
+    /// Reads the flight recorder to format the DevTools panel's rows (the panel
+    /// itself is a widget overlay; see `rosace_devtools::devtools_overlay`).
+    trace_panel: rosace_devtools::TracePanel,
+    /// Last cursor position (logical px) — the inspector reads it to place
+    /// its panel and to re-`pick` on toggle without waiting for a move.
+    cursor: (f32, f32),
 }
 
 impl FrameEngine {
@@ -202,7 +329,66 @@ impl FrameEngine {
             context_menu_actions: Arc::new(std::sync::Mutex::new(Vec::new())),
             pending_long_press_select: Arc::new(std::sync::Mutex::new(None)),
             handle_drag: None,
+            overlay_routes: Vec::new(),
+            // `ROSACE_DEVTOOLS=1` boots the element inspector already open —
+            // handy when the thing you want to inspect is on the very first
+            // frame, or when a window manager eats the F12 toggle.
+            dev: {
+                let mut d = rosace_devtools::ElementInspector::new();
+                if std::env::var_os("ROSACE_DEVTOOLS").is_some() {
+                    d.enabled = true;
+                    // Boot the DevTools panel open too.
+                    rosace_devtools::DEVTOOLS_OPEN.set(true);
+                }
+                d
+            },
+            trace_panel: rosace_devtools::TracePanel::new(),
+            cursor: (0.0, 0.0),
         }
+    }
+
+    /// Swap the root component for a freshly-loaded one (Tier 2 dylib
+    /// hot-reload). **Every object that may hold a handler from the OUTGOING
+    /// module** — the element tree, the render tree (its hit/scroll/zoom/focus
+    /// callbacks), captured drag closures, build/overlay routes, context-menu
+    /// actions — is dropped HERE, while the old `Library` is still loaded, so
+    /// their `Arc<dyn Fn>` drop-glue (whose code lives in that module) runs
+    /// against valid memory. The dev host calls this AFTER loading the new
+    /// module but BEFORE dropping the old `Library`; if any of these caches
+    /// survived into the post-unload world, invoking or even *dropping* one
+    /// would jump into freed code → a silent segfault (the exact crash Tier-2
+    /// reload hit before this cleared them).
+    ///
+    /// After the wipe every component is marked dirty, so the next `paint`
+    /// rebuilds from the NEW root with fresh closures. State atoms live in the
+    /// shared runtime dylib keyed by `ComponentId`, so a same-shaped tree keeps
+    /// its state across the swap.
+    pub fn set_root(&mut self, root: Box<dyn Component>) {
+        // Replace the root first — the old `Box<dyn Component>`'s drop glue also
+        // lives in the outgoing module, and the old lib is still loaded now.
+        self.root = root;
+
+        // Drop everything that can retain a module closure.
+        self.element_cache.clear();
+        self.build_overlays.clear();
+        self.overlay_routes.clear();
+        *self.render_tree.borrow_mut() = rosace_widgets::tree::RenderTree::new();
+        self.active_drag = None;
+        self.text_drag = None;
+        self.handle_drag = None;
+        self.press_origin = None;
+        self.lp_cancel = None;
+        self.last_click_node = None;
+        self.context_menu = None;
+        if let Ok(mut actions) = self.context_menu_actions.lock() {
+            actions.clear();
+        }
+        if let Ok(mut pend) = self.pending_long_press_select.lock() {
+            *pend = None;
+        }
+
+        rosace_state::reset_to_global_dirty();
+        rosace_state::request_frame();
     }
 
     /// The current semantic (accessibility/SEO) tree, derived from the
@@ -736,14 +922,34 @@ impl FrameEngine {
         let legacy_overlays = drain_overlays();
         let bottom_inset = rosace_widgets::tree::take_bottom_overlay_inset();
         let build_overlays = &self.build_overlays;
+        // DevTools overlay (dev builds): a real widget tree (FAB + tabbed panel)
+        // injected as a normal overlay, so it's laid out, painted, hit-tested,
+        // and damage-tracked exactly like any dialog/dropdown — no hand-drawn
+        // chrome. Content comes from the always-on flight recorder.
+        let devtools_entry = if devtools_fab_enabled() {
+            let events = rosace_trace::flight_recorder().map(|r| r.snapshot()).unwrap_or_default();
+            let rows = self.trace_panel.rows_for(&events, rosace_devtools::DEVTOOLS_TAB.get(), 200);
+            Some(rosace_devtools::devtools_overlay(rows))
+        } else {
+            None
+        };
         let mut overlay_routes: Vec<OverlayRoute> = Vec::new();
+        let mut overlay_pass_ran = false;
         {
             use rosace_core::types::{Point, Rect, Size};
 
             let tree_ref = self.render_tree.borrow();
             let overlay_ids = tree_ref.overlay_ids();
 
-            if !overlay_ids.is_empty() || !legacy_overlays.is_empty() || !build_overlays.is_empty() {
+            if !overlay_ids.is_empty() || !legacy_overlays.is_empty() || !build_overlays.is_empty()
+                || self.dev.enabled
+                || self.trace_panel.enabled
+                || devtools_fab_enabled()
+            {
+                overlay_pass_ran = true;
+                // The engine owns the overlay clear (2026-07-19): fresh
+                // entries repaint the canvas from scratch this frame.
+                overlay_canvas.clear_transparent();
                 let mut ov_recorder = rosace_render::PictureRecorder::new();
 
                 // Tree-attached entries carry their owning node so
@@ -753,7 +959,8 @@ impl FrameEngine {
                 let entries = overlay_ids.iter()
                     .map(|&(n, i)| (Some(n), &tree_ref.node(n).overlays[i]))
                     .chain(build_overlays.iter().map(|e| (None, e)))
-                    .chain(legacy_overlays.iter().map(|e| (None, e)));
+                    .chain(legacy_overlays.iter().map(|e| (None, e)))
+                    .chain(devtools_entry.iter().map(|e| (None, e)));
 
                 for (owner_node, entry) in entries {
                     if let Some(scrim) = &entry.scrim {
@@ -767,9 +974,19 @@ impl FrameEngine {
                         });
                     }
 
-                    let loose_c = rosace_layout::Constraints::loose(win_w, win_h);
+                    // A `Fill` overlay must be laid out TIGHT to the window so
+                    // its content (e.g. the DevTools FAB `Positioned` bottom-
+                    // right) resolves against the full window, not against its
+                    // own collapsed content size. Loose constraints let a Stack
+                    // shrink to its child — which put the FAB's hit region at
+                    // the top-left over app content and stole clicks (live bug).
+                    let layout_c = if matches!(entry.position, LayerPosition::Fill) {
+                        rosace_layout::Constraints::tight(win_w, win_h)
+                    } else {
+                        rosace_layout::Constraints::loose(win_w, win_h)
+                    };
                     let lctx = rosace_widgets::tree::LayoutCtx::new(
-                        loose_c, font, &current_theme,
+                        layout_c, font, &current_theme,
                     );
                     let widget_size = entry.widget.layout(&lctx);
                     let origin = match &entry.position {
@@ -840,11 +1057,50 @@ impl FrameEngine {
                     });
                 }
 
+                // ── DevTools inspector chrome (D123/O2) ──────────────────
+                // Drawn LAST, above app overlays. Reads the same read-only
+                // `inspect()` snapshot the picker uses, so what it outlines
+                // is exactly what `pick` selected.
+                if self.dev.enabled {
+                    let snapshot = tree_ref.inspect();
+                    draw_dev_inspector(
+                        &mut ov_recorder, &snapshot, &self.dev, self.cursor,
+                        win_w, win_h, font,
+                    );
+                }
+
+                // (The DevTools FAB + panel are now a real widget overlay,
+                // injected above via `devtools_entry` and rendered through the
+                // normal overlay pipeline — no hand-drawn chrome here.)
+
                 // Play overlay picture into the dedicated overlay canvas (D078).
                 let ov_picture = ov_recorder.finish();
                 overlay_canvas.play_picture(&ov_picture, font);
             }
         }
+        // Retained-overlay update (2026-07-19, see `overlay_routes` field):
+        // a frame that ran the pass replaces routes; a CONTENT-CHANGED
+        // frame (an atom write — e.g. the dropdown's `open` flipping
+        // false) whose widgets declared no overlays clears the leftovers;
+        // every other frame — engine-skipped animated presents, resize
+        // and hover frames whose picture-cache replay never re-runs the
+        // owner's paint — keeps pixels + routes so an open menu survives.
+        // (Keyed on `content_changed`, NOT `needs_paint`: startup/resize
+        // frames repaint from cached pictures without re-running widget
+        // paint, so a paint-time `push_overlay` can't recur there — found
+        // live as the dropdown flickering out one present after opening.
+        // Known honest gap: an atom write that repaints an UNRELATED
+        // subtree while a menu is open also clears it — acceptable until
+        // overlays are tree-retained like every other declaration.)
+        if overlay_pass_ran {
+            self.overlay_routes = overlay_routes;
+        } else if content_changed {
+            self.overlay_routes.clear();
+            if overlay_canvas.has_drawn() {
+                overlay_canvas.clear_transparent();
+            }
+        }
+        let overlay_routes = self.overlay_routes.clone();
 
         // ── TransformLayer pass (D088/D090) ─────────────────────────────
         // Each entry's content is rendered ONCE into its own content-
@@ -861,14 +1117,36 @@ impl FrameEngine {
             let tree_ref = self.render_tree.borrow();
             for (n, i) in tree_ref.transform_ids() {
                 let entry = &tree_ref.node(n).transforms[i];
-                let vp = entry.viewport_rect;
+                let mut vp = entry.viewport_rect;
+                // `viewport_rect` is in the transform's PARENT's coordinate
+                // space — for a top-level transform (e.g. the page's own
+                // ScrollView, parented directly under root) that space IS
+                // screen space, but for a NESTED transform (e.g.
+                // InteractiveViewer placed inside a scrolling page) it is
+                // the outer scroll view's CONTENT-LOCAL space, which can be
+                // arbitrarily far from the real on-screen position (bug
+                // found live: InteractiveViewer nested in widget_gallery's
+                // page ScrollView rendered its content and hit-tested its
+                // scroll target at the wrong screen location — content
+                // invisible, buttons apparently clipped, wheel/drag events
+                // captured by the outer page scroll instead). Resolve
+                // through the SAME ancestor-composing walk `content_to_screen`
+                // already provides for overlay positioning (D092's original
+                // tooltip-position fix) — one shared piece of math for both
+                // problems, not a second bespoke one.
+                vp.origin = tree_ref.content_to_screen(n, vp.origin);
 
                 // Content texture = child natural size at physical
                 // resolution, capped. Pixmap starts transparent, so
                 // areas the content does not cover reveal the base.
-                let cw = ((entry.child_size.width  * scale).ceil() as u32).clamp(1, MAX_TL_DIM);
-                let ch = ((entry.child_size.height * scale).ceil() as u32).clamp(1, MAX_TL_DIM);
-                let mut content = rosace_render::SkiaCanvas::new_hidpi(cw, ch, scale);
+                // `entry.zoom` (InteractiveViewer, Phase 32) rasterizes the
+                // SAME logical picture at a higher physical resolution —
+                // real GPU-crisp magnification, reusing the exact mechanism
+                // that already gives HiDPI displays sharp text/shapes.
+                let content_scale = scale * entry.zoom;
+                let cw = ((entry.child_size.width  * content_scale).ceil() as u32).clamp(1, MAX_TL_DIM);
+                let ch = ((entry.child_size.height * content_scale).ceil() as u32).clamp(1, MAX_TL_DIM);
+                let mut content = rosace_render::SkiaCanvas::new_hidpi(cw, ch, content_scale);
                 // GPU-shapes mode propagates to scroll content (D109 C2):
                 // shapes become quads, text becomes segments, and the
                 // compositor renders them into the offscreen scroll
@@ -890,6 +1168,7 @@ impl FrameEngine {
                         vp.origin.x * scale, vp.origin.y * scale,
                         vp.size.width * scale, vp.size.height * scale,
                     ),
+                    zoom: entry.zoom,
                     items,
                 });
             }
@@ -920,6 +1199,67 @@ impl FrameEngine {
         // Anything unclaimed goes to the render-tree walk, where later
         // siblings (painted on top) win structurally.
         for event in events {
+            // ── DevTools element inspector interception (D123/O2) ────────
+            // F12 toggles it regardless of state; while enabled it OWNS the
+            // pointer — hover highlights, click selects, Escape steps back
+            // out — and the event never reaches the app. `pick` considers
+            // EVERY painted node (not just interactive ones), so a plain
+            // Container/Text is selectable.
+            // (DevTools FAB/tab taps are handled by the widget overlay's own
+            // hit regions now — no manual rect math here.)
+            match event {
+                rosace_platform::InputEvent::KeyDown { key: rosace_platform::Key::F12 } => {
+                    self.dev.toggle();
+                    self.forced_repaint = true;
+                    rosace_state::request_frame();
+                    continue;
+                }
+                // F11 toggles the DevTools trace/network activity panel (D123/O5).
+                rosace_platform::InputEvent::KeyDown { key: rosace_platform::Key::F11 } => {
+                    self.trace_panel.toggle();
+                    self.forced_repaint = true;
+                    rosace_state::request_frame();
+                    continue;
+                }
+                _ if self.dev.enabled => {
+                    match event {
+                        rosace_platform::InputEvent::MouseMove { x, y } => {
+                            self.cursor = (*x, *y);
+                            let hit = self.render_tree.borrow().pick(*x, *y);
+                            if self.dev.set_hover(hit) {
+                                self.forced_repaint = true;
+                                rosace_state::request_frame();
+                            }
+                            continue;
+                        }
+                        rosace_platform::InputEvent::MouseDown {
+                            x, y, button: rosace_platform::MouseButton::Left
+                        } => {
+                            self.cursor = (*x, *y);
+                            let hit = self.render_tree.borrow().pick(*x, *y);
+                            self.dev.select(hit);
+                            self.forced_repaint = true;
+                            rosace_state::request_frame();
+                            continue;
+                        }
+                        rosace_platform::InputEvent::KeyDown { key: rosace_platform::Key::Escape } => {
+                            self.dev.on_escape();
+                            self.forced_repaint = true;
+                            rosace_state::request_frame();
+                            continue;
+                        }
+                        // Swallow every other input while inspecting so the
+                        // app underneath stays frozen for measurement.
+                        rosace_platform::InputEvent::MouseUp { .. }
+                        | rosace_platform::InputEvent::MouseDown { .. }
+                        | rosace_platform::InputEvent::KeyDown { .. }
+                        | rosace_platform::InputEvent::KeyUp { .. }
+                        | rosace_platform::InputEvent::Scroll { .. } => continue,
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
             match event {
                 rosace_platform::InputEvent::MouseDown {
                     x, y, button: rosace_platform::MouseButton::Left
@@ -945,10 +1285,12 @@ impl FrameEngine {
                             handled = true;
                             break;
                         }
-                        if rect_contains(&route.rect, *x, *y) {
-                            handled = true; // overlay surface absorbs
-                            break;
-                        }
+                        if rect_contains(&route.rect, *x, *y)
+                            && route.input == rosace_widgets::tree::InputBehavior::Block
+                        {
+                            handled = true; // a MODAL overlay's surface absorbs;
+                            break;          // PassThrough (e.g. the DevTools FAB
+                        }                   // overlay) must let misses fall through
                         if let Some(on_tap) = &route.on_tap {
                             on_tap();
                             handled = true;
@@ -970,8 +1312,34 @@ impl FrameEngine {
                             if let Some((s, e)) = state.selection_range() {
                                 let tree = self.render_tree.borrow();
                                 if let Some(editable) = tree.node(node_id).editable.as_ref() {
-                                    let hit = [(s, false), (e, true)].into_iter().find(|&(idx, _)| {
-                                        handle_anchor(&editable.layout, idx)
+                                    // Glass selection (theme SelectionStyle,
+                                    // single-line fields): the visible grips
+                                    // hang at the magnified pill's edges, not
+                                    // at the raw endpoints — grab THERE, via
+                                    // the SAME `glass_lens` geometry the
+                                    // widget paints with, so visuals and
+                                    // anchors can never drift.
+                                    let glass_style = (!editable.multiline)
+                                        .then(|| rosace_theme::use_theme().ext::<rosace_widgets::SelectionStyle>().cloned())
+                                        .flatten()
+                                        .filter(|st| st.kind == rosace_widgets::SelectionKind::Glass);
+                                    let glass = glass_style.and_then(|st| {
+                                        let line = editable.layout.lines.first()?;
+                                        let x0 = editable.layout.x_of(s)?;
+                                        let x1 = editable.layout.x_of(e)?;
+                                        Some(st.glass_lens(x0, x1, line.y, line.height))
+                                    });
+                                    let anchor = |idx: usize, is_head: bool| -> Option<(f32, f32)> {
+                                        match &glass {
+                                            Some(g) => Some((
+                                                if is_head { g.bar_x.1 } else { g.bar_x.0 },
+                                                g.grip_y,
+                                            )),
+                                            None => handle_anchor(&editable.layout, idx),
+                                        }
+                                    };
+                                    let hit = [(s, false), (e, true)].into_iter().find(|&(idx, is_head)| {
+                                        anchor(idx, is_head)
                                             .is_some_and(|(hx, hy)| {
                                                 (hx - *x).powi(2) + (hy - *y).powi(2)
                                                     <= HANDLE_HIT_RADIUS.powi(2)
@@ -1265,6 +1633,11 @@ impl FrameEngine {
                         if let Some(cb) = cb {
                             cb(*delta_x, *delta_y);
                         }
+                    }
+                }
+                rosace_platform::InputEvent::Pinch { x, y, delta } => {
+                    if let Some(cb) = self.render_tree.borrow().zoom_test(*x, *y) {
+                        cb(*delta);
                     }
                 }
                 rosace_platform::InputEvent::KeyDown {

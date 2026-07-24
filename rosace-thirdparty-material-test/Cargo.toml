@@ -1,0 +1,16 @@
+[package]
+name = "rosace-thirdparty-material-test"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rosace = { path = "../rosace" }
+
+# Test-only: constructing a real PaintCtx in a unit test needs these
+# lower-level types directly. The WIDGET/PIPELINE/MATERIALKEY code above
+# (the actual extensibility proof) depends on nothing but `rosace`.
+[dev-dependencies]
+rosace-render = { path = "../rosace-render" }
+rosace-theme  = { path = "../rosace-theme" }

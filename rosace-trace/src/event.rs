@@ -13,6 +13,42 @@ pub struct AtomId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RequestId(pub u64);
 
+/// Severity of a user-facing log record (`info!`/`warn!`/… macros). Ordered
+/// most-severe → least, so a max-level filter is a simple `<=` on the `u8`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum LogLevel {
+    Error = 0,
+    Warn = 1,
+    Info = 2,
+    Debug = 3,
+    Trace = 4,
+}
+
+impl LogLevel {
+    /// Uppercase 5-char label used in console/DevTools output.
+    pub fn label(self) -> &'static str {
+        match self {
+            LogLevel::Error => "ERROR",
+            LogLevel::Warn => "WARN ",
+            LogLevel::Info => "INFO ",
+            LogLevel::Debug => "DEBUG",
+            LogLevel::Trace => "TRACE",
+        }
+    }
+
+    /// ANSI color code for a colored terminal sink (bright red/yellow/… by level).
+    pub fn ansi(self) -> &'static str {
+        match self {
+            LogLevel::Error => "\x1b[1;31m", // bold red
+            LogLevel::Warn => "\x1b[33m",    // yellow
+            LogLevel::Info => "\x1b[32m",    // green
+            LogLevel::Debug => "\x1b[36m",   // cyan
+            LogLevel::Trace => "\x1b[2;37m", // dim grey
+        }
+    }
+}
+
 /// Source location captured at a trace emit site.
 #[derive(Debug, Clone)]
 pub struct Location {
@@ -210,6 +246,18 @@ pub enum RosaceTrace {
         pipeline: u64,
         wgsl_len: usize,
     },
+    /// A user-facing log record from the `info!`/`warn!`/`error!`/`debug!`/
+    /// `log!` macros. Unlike the structured events above (debug-only), logs
+    /// flow in release too, subject to the global level filter — so the same
+    /// interceptor bus carries framework traces AND app logs to every sink
+    /// (colored console, DevTools panel, a browser-tools socket, third parties).
+    Log {
+        level: LogLevel,
+        /// The emitting module path (`module_path!()`).
+        target: &'static str,
+        message: String,
+        timestamp: Instant,
+    },
 }
 
 /// Coarse grouping of trace events for filtered sinks (D123/O1). A DevTools
@@ -237,6 +285,8 @@ pub enum TraceCategory {
     Gesture,
     /// GPU shader registration.
     Shader,
+    /// User-facing log records (`info!`/`warn!`/…).
+    Log,
 }
 
 impl RosaceTrace {
@@ -255,6 +305,7 @@ impl RosaceTrace {
             RosaceTrace::FfiCall { .. } | RosaceTrace::FfiError { .. } => TraceCategory::Ffi,
             RosaceTrace::GestureReceived { .. } => TraceCategory::Gesture,
             RosaceTrace::ShaderRegister { .. } => TraceCategory::Shader,
+            RosaceTrace::Log { .. } => TraceCategory::Log,
         }
     }
 

@@ -1,6 +1,30 @@
 # Observability & DevTools Track (O1–O7) — D123
 
-> Status: O1 foundation landing 2026-07-16. O2–O7 scoped, not started.
+> Status: O1 COMPLETE 2026-07-18 (flight recorder landed 2026-07-16;
+> Perfetto/Chrome trace JSON export — the missing exit-bar piece — added
+> 2026-07-18, `rosace_trace::to_chrome_trace_json` /
+> `RingBufferSubscriber::export_perfetto_json`, unit-tested).
+> O2 COMPLETE 2026-07-19: the full in-app element inspector.
+>   - Read-only seam: `RenderTree::inspect()` (plain-data `InspectNode` per
+>     node) + `RenderTree::pick(x,y)` (deepest node under a point).
+>   - `PaintCtx::child` now records every painted widget node's world-space
+>     `cached_rect` (previously only element/cache-boundary nodes had one,
+>     so the picker could only select the coarse Scaffold) — the fix that
+>     made fine-grained per-widget selection work.
+>   - Pure logic in `rosace-devtools::element_inspector`: `ElementInspector`
+>     (enabled/hover/selected + toggle/set_hover/select/on_escape),
+>     `node_rect`, `panel_lines` (Flutter-style W×H / rect / constraints /
+>     role readout; name falls back to semantic role, size to the rect when
+>     tag/cached_size absent — the widget-node case). 40 unit tests.
+>   - Engine wiring (`rosace/src/engine.rs`): `Key::F12` toggles; while on,
+>     the inspector OWNS the pointer (hover→pick→highlight, click→pick→
+>     select, Esc→deselect-then-close), app input frozen; chrome (hover
+>     outline, selected outline+tint, corner panel) drawn on the overlay
+>     layer above everything via `draw_dev_inspector`. `ROSACE_DEVTOOLS=1`
+>     boots it already open (WM-eats-F12 fallback / first-frame inspect).
+>   - Live-verified: highlight box hugs the picked `TextInput` exactly,
+>     panel reads `TextInput "Your name" / size 300 × 40 / rect / editable`.
+> O3–O7 scoped, not started.
 > A SEPARATE track from the feature roadmap (Phases 1–32). Its own
 > numbering (O1…O7) because it's cross-cutting infrastructure, not a
 > linear feature phase.
@@ -29,6 +53,59 @@ structurally — not by remembering to be careful.
 - **Unified capability/extension API** + **embedding entry point** — the
   other two core "give-out" gaps. Not required for read-only tooling;
   scoped as follow-on once the tooling shows which seams matter.
+
+## Architecture direction: an EXTERNAL DevTools tool (decided 2026-07-19, build later)
+
+**Decision (user, 2026-07-19):** the mature observability experience is an
+**external visualization tool**, NOT one big in-app overlay. Reasoning: the
+scope is broad — live tracing, networking, and data inspection *and
+modification* — and cramming all of that into an on-device (especially
+mobile) canvas overlay is the wrong call. The in-app F12 element inspector
+(O2) stays as a lightweight on-device convenience; the heavy multi-panel
+experience targets an external tool. This mirrors how the mature frameworks
+do it (Flutter DevTools over the VM-service protocol, React DevTools over a
+bridge): the app exposes its observability data over a transport, an
+external app/web page visualizes it and sends mutations back.
+
+**Key insight (user): "all are there, just to wire and output them."** The
+DATA already exists as tested structures — the remaining work is a wire +
+serialization + external viewer, not new instrumentation:
+- **Tracing** — `rosace-trace` flight recorder (O1) + `to_chrome_trace_json`
+  already produce the event stream and a Perfetto-loadable export.
+- **Element/layout** — `RenderTree::inspect()` returns plain-data
+  `InspectNode`s (JSON-ready) already.
+- **State (atoms)** — `AtomWrite` events carry `by: ComponentId` causality;
+  `rosace-devtools::AtomInspector` already snapshots atom values (unwired).
+- **Networking** — `RosaceTrace::{RequestStart, RequestEnd}` already record
+  method/url/status/duration/cache/size.
+
+**What the external tool actually needs (the wiring, later):**
+1. A **serialization layer** — one JSON (or compact binary) schema unifying
+   trace events + inspect snapshots + atom state + network log.
+2. A **transport** — a local socket / WebSocket the app opens in debug
+   builds (`rosace-ws` already exists), streaming the above out and
+   accepting **mutation commands** back (set-atom, later set-prop).
+3. An **external viewer** — a separate app or web page (Perfetto covers the
+   trace flamegraph for free; the rest is a custom panel set) that connects,
+   visualizes, and issues mutations.
+4. A **mutation channel** on the app side — atom writes are already the
+   reactive control, so "modify data from the tool" is a set-atom-by-id
+   command; static-prop editing waits on hot reload (D102), same gate as O6.
+
+**Not now.** Recorded so O3–O5 build toward emitting-over-the-wire rather
+than only painting in-canvas, and so the transport/schema is designed once.
+
+**Re: reusing Flutter DevTools (evaluated 2026-07-19, rejected as a whole).**
+Flutter DevTools is NOT a generic viewer that "picks up a file" — it attaches
+to a live app over the **Dart VM Service Protocol** (JSON-RPC/WebSocket:
+`getVM`/`getIsolate`/`getVMTimeline`/…) and reasons about Dart isolates/heap.
+Repurposing its widget-inspector/state/network panels would mean impersonating
+a Dart VM — large, brittle, semantically wrong. So the external tool is OUR
+own. HOWEVER the tracing half IS a real standard: Flutter's timeline uses the
+**Chrome Trace Event Format**, the same one Perfetto/`chrome://tracing` read —
+exactly what O1's `to_chrome_trace_json` already emits. So: trace timeline →
+Chrome-format file → **Perfetto** (drag-drop, framework-agnostic, the right
+target); widget/state/network → our own wire+viewer.
 
 ## Phases
 
@@ -134,3 +211,48 @@ is standalone (can be done any time after Known Issue #13's fix).
 Purely additive. No existing widget, component, or trace API changes
 behavior. DevTools is debug-only (the flight recorder compiles out of
 release with the rest of the trace system); the golden crate is opt-in.
+
+## UX REDESIGN 2026-07-23 (user) — FAB + tabbed panel, not hotkeys
+O2's "hotkey-toggled overlay" is superseded: mobile has no keyboard, so use a
+small **FAB** (Next.js/Turbopack-style corner button) → tap opens ONE
+alpha/translucent panel with **TABS** (Elements · Network · Logs · Traces),
+built with ROSACE's own widgets (matures the widget system). No separate
+F11/F12 keys — everything lives in tabs. Same model for a future web inspect.
+Wire to external (Chrome) via the trace bus later.
+
+Progress:
+- Phase 1 — Tab widgets DONE (tree/tab.rs TabBar made interactive + theme-defaulted
+  + animated sliding underline; tree/tabs.rs TabView + Tabs). Meets widget recipe.
+- Phase 2 — DevTools FAB: IN PROGRESS (engine-drawn overlay chrome, touch+click).
+- Phase 3 — Tabbed DevTools panel using the tab widgets + trace_panel (O5) content.
+- Phase 4 — External/Chrome sink off the trace bus.
+
+### Phases 2-3 LANDED 2026-07-23 (compiles + tests green; live-verify pending)
+- Phase 2 — DevTools FAB: engine draws a bottom-right accent circle (`</>` glyph,
+  `×` when open) as dev-only chrome (`devtools_fab_enabled()`=cfg!(debug_assertions),
+  never in release). Tap (MouseDown, touch+mouse) hit-tested in the engine input
+  loop BEFORE app input → toggles `devtools_open`. `draw_devtools_fab` + `devtools_fab_rect`.
+- Phase 3 — Tabbed panel: `draw_devtools_panel` (translucent bg + tab bar with accent
+  underline + content rows, newest-on-top) top-right; tabs = `DEVTOOLS_TABS` [All, Logs,
+  Network] from rosace-devtools::trace_panel. `TracePanel::rows_for(snapshot, tab, max)`
+  filters by category per tab. Tab taps hit-tested in engine input loop → `devtools_tab`.
+  Overlay pass runs in debug builds so the FAB is always visible (cost: overlay redraw
+  each debug frame — optimize later via retained-overlay).
+- HONEST SCOPE: the panel is drawn with raw DrawCommands (structured like TabBar), NOT
+  yet through the full widget pipeline (real `Tabs` widget in the render tree). Rendering
+  DevTools via actual widgets + overlay hit-testing = the "mature widget system" follow-up.
+  F11/F12 still exist as extra shortcuts (fold into tabs later). LIVE-VERIFIED 2026-07-23 (screenshot): FAB (× when open) bottom-right, translucent panel top-right with All·Logs·Network tabs (All underlined accent), rows show NET →/← + LOG ERROR/WARN/INFO newest-on-top from the bus. ROSACE_DEVTOOLS=1 boots panel open. Element inspector (F12) also visible = future Elements tab.
+
+### WIDGET-BASED DevTools LANDED 2026-07-24 (the mature rewrite)
+Per user ("it's an overlay → it's a widget → already tracked; don't over-engineer"): DevTools rebuilt as REAL widgets injected as a normal OverlayEntry — NOT raw engine chrome. `rosace-devtools/src/devtools_ui.rs`: `devtools_overlay(rows) -> OverlayEntry(LayerPosition::Fill, Stack{ Positioned FAB bottom-right, if open Positioned panel top-right })`. FAB = `FloatingActionButton` widget (own elevation shadow + press anim). Panel = `Container` + `Column`{ `TabBar`(All/Logs/Network, interactive+animated) + `ScrollView`(Text rows) }. State = GlobalAtoms `DEVTOOLS_OPEN`/`DEVTOOLS_TAB` (AtomId 9101/9102); FAB/tab on_press set atom + reset_to_global_dirty+request_frame. Engine injects it each paint (debug) by chaining `devtools_entry` into the overlay iteration (same path as build_overlays/context-menu) → laid out, painted, HIT-TESTED, damage-tracked like any overlay. REMOVED all raw chrome: draw_devtools_fab/panel, devtools_fab_rect/panel_rect, manual hit-testing, engine fields devtools_open/tab/pressed_at. Kept devtools_fab_enabled()=cfg!(debug_assertions). ROSACE_DEVTOOLS=1 sets DEVTOOLS_OPEN atom. Compiles; LIVE-VERIFIED render (screenshot): FAB w/ real shadow bottom-right, panel top-right (All tab underlined, NET/LOG rows). Fixes prior complaints (shadow/centering/lag/selection) BY CONSTRUCTION via the widget system. rosace-devtools gained rosace-render dep. POSSIBLE NIT to verify: tab bar may show only "All" prominent — check TabBar lays all 3 evenly. NEXT: wire into rsc new scaffold (app root wraps with it in debug), fold F12 inspector in as "Elements" tab, delete devtools_demo throwaway.
+
+### EXTERNAL WEB DEVTOOLS + IDE integration — PLAN 2026-07-24 (user request)
+Goal: an external DevTools web tool (for browser + VS Code/RustRover webview) that shows network/logs/traces/elements for a running app (desktop OR mobile). Reuse, don't impersonate Chrome CDP (rejected D123). Reuse Perfetto for the trace timeline (to_chrome_trace_json EXISTS). Build a lightweight custom web tool for the rest.
+ARCHITECTURE (rides the trace bus — same interceptor as the in-app overlay + logging):
+  1. Serialize `RosaceTrace` to JSON via serde — THE prerequisite (serde currently deferred on the event enum). Also makes SDUI/descriptor-wire real (see hot-reload memory).
+  2. `WebSocketSink` = a `TraceSubscriber` that streams JSON events. WS server already hand-rolled in rsc-cli/src/commands/hot_ws.rs (SHA1/base64/RFC6455) — reuse it. New `rsc devtools` command serves it + the web page.
+  3. Web page = ONE self-contained HTML/JS file, connects to the WS, renders Network·Logs·Traces·Elements panels (same panels as the in-app overlay). Perfetto link for the flamegraph.
+  4. IDE = thin VS Code + RustRover extensions = a webview pointing at the page + WS URL. Or just open in a browser.
+MOBILE: stream the device's events over the EXISTING hot-reload socket transport (adb forward / devicectl) to the desktop web tool — the real mobile-debugging story (Flipper/React-Native-DevTools/Chrome-remote-debug model). The in-app overlay is the on-device quick glance.
+IN-APP DEVTOOLS ON MOBILE (current state): works because it's a widget overlay (renders+hit-tests via the FFI engine pipeline on device; FAB is a tap target; trace bus + flight recorder run on mobile). NEEDS: responsive panel (full-screen/bottom-sheet on narrow screens vs the 440px desktop panel), FAB must respect safe-area insets (notch/home-bar), small-screen ergonomics. NOT yet done/verified on device.
+SEQUENCING: serde-on-events → WebSocketSink → web page → `rsc devtools` → IDE webviews. Mobile responsive-overlay is a parallel small task.

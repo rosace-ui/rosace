@@ -31,6 +31,15 @@ use rosace_platform::PlatformWindow;
 use rosace_widgets::tree::WidgetBox;
 
 mod engine;
+/// Tier-2 dylib hot-reload host (D102) — dev-only, native-only.
+#[cfg(all(feature = "rsc-hot", not(target_arch = "wasm32")))]
+pub mod dev_host;
+
+/// Dev-only hot-reload driver (Tier 1). Present only under `rsc-hot`. Public so
+/// the mobile FFI host (`rosace-ffi`) can start the socket transport in its own
+/// init path (mobile apps don't go through `App::launch`).
+#[cfg(feature = "rsc-hot")]
+pub mod dev_reload;
 pub use engine::FrameEngine;
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -117,6 +126,13 @@ impl App {
         #[cfg(debug_assertions)]
         rosace_trace::install_flight_recorder(2000);
 
+        // Logging: colored console sink + level from ROSACE_LOG. `info!`/`warn!`/
+        // … flow through the trace bus, so DevTools and any other subscriber see
+        // them too. On by default (works in release, gated by the level filter).
+        rosace_trace::install_log_console();
+        #[cfg(not(target_arch = "wasm32"))]
+        rosace_trace::init_from_env();
+
         // Opt-in console streaming via ROSACE_TRACE=state|network|perf|all.
         // Even `all` excludes high-frequency events unless ROSACE_TRACE_
         // VERBOSE is also set — printing AtomRead on every atom.get() costs
@@ -185,6 +201,18 @@ impl App {
         // winit-backed loop — a future native-host FFI boundary reuses it
         // without duplicating this code.
         let mut engine = FrameEngine::new(Box::new(root), font);
+
+        // Dev hot reload (Tier 1): watch src/ and swap `view!` shapes live.
+        // Desktop uses a filesystem watcher; web is driven by a WebSocket
+        // (wired separately). Compiled out unless `rsc dev` set `rsc-hot`.
+        // Desktop watches the filesystem; mobile listens on a socket the dev
+        // machine pushes to (via adb/devicectl); web connects a WebSocket.
+        #[cfg(all(feature = "rsc-hot", any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        dev_reload::spawn_dev_watcher();
+        #[cfg(all(feature = "rsc-hot", any(target_os = "android", target_os = "ios")))]
+        dev_reload::serve_hot_reload_socket(dev_reload::DEFAULT_HOT_RELOAD_PORT);
+        #[cfg(all(feature = "rsc-hot", target_arch = "wasm32"))]
+        dev_reload::connect_hot_reload_socket();
 
         PlatformWindow::new()
             .title(self.title)
@@ -501,6 +529,7 @@ impl AppBarNavExt for AppBar {
 
 /// Flattened dispatch data for one overlay entry (D092). Built by the overlay
 /// pass each frame from the entry's per-entry render tree.
+#[derive(Clone)]
 struct OverlayRoute {
     rect: rosace_core::types::Rect,
     input: rosace_widgets::tree::InputBehavior,
@@ -581,6 +610,9 @@ pub use rosace_widgets::{
     Slider, Spacer, Stack, Switch,
     Tab, TabBar, Text, TextArea, TextInput, Toast, ToastKind, Tooltip,
     CursorShape, CursorStyle, EditController, InputFilter, Span,
+    ShaderPaint, MaterialKey, resolve_material, ContainerMaterial, CardMaterial,
+    DialogMaterial, SheetMaterial, DrawerMaterial, AppBarMaterial, BottomNavMaterial,
+    SelectionKind, SelectionStyle,
 };
 
 // Forms (D116 Phase 28 Step 8)
@@ -595,6 +627,10 @@ pub use rosace_theme::built_in::{dark_theme, light_theme, material, cupertino};
 
 // Platform (D105)
 pub use rosace_core::Platform;
+
+// Cross-platform asset loading (A6): `rosace::asset::{resolve, bytes, set_root}`,
+// plus `ImageWidget::asset` / `FontCache::from_asset` built on it.
+pub use rosace_core::asset;
 
 // Keyboard-type hint (D116 Phase 28 Step 6)
 pub use rosace_core::KeyboardType;
@@ -614,7 +650,7 @@ pub mod theme     { pub use rosace_theme::*; }
 pub mod layout    { pub use rosace_layout::*; }
 pub mod render    { pub use rosace_render::*; }
 pub mod core      { pub use rosace_core::*; }
-pub mod state     { pub use rosace_state::*; }
+pub mod state     { pub use rosace_state::*; pub use rosace_trace::event::AtomId; }
 pub mod animate   { pub use rosace_animate::*; }
 pub mod anim      { pub use rosace_anim::*; }
 pub mod scroll    { pub use rosace_scroll::*; }
@@ -650,6 +686,11 @@ pub mod test_utils { pub use rosace_test_utils::*; }
 
 pub mod prelude {
     pub use crate::App;
+    /// The declarative `view!` macro (D103) — the hot-reload authoring surface.
+    pub use rosace_macros::view;
+    /// Logging macros → the trace bus → colored console + DevTools + any sink.
+    pub use rosace_trace::{debug, error, info, log, log_trace, warn};
+    pub use rosace_trace::{set_max_level, LogLevel};
     pub use rosace_core::{Component, Context, Element};
     pub use rosace_platform::{InputEvent, MouseButton, Key};
     pub use rosace_widgets::prelude::*;
@@ -672,4 +713,16 @@ pub mod prelude {
     pub use rosace_layout::{Constraints, CrossAxisAlignment, MainAxisAlignment};
     pub use rosace_state::Atom;
     pub use rosace_scroll::ScrollController;
+    /// `RichText`/`TextSpan`/`TextStyle` (Phase 32 Step 3) build the mixed-style
+    /// paragraphs `Text::rich(...)` renders. These carry `rosace_theme::Color`
+    /// (0..1 float channels) internally, NOT the prelude's own `Color` above
+    /// (`rosace_render`'s 0-255 u8 channels) — use `rosace::theme::Color` for
+    /// span colors, converted automatically at paint time.
+    pub use rosace_text::{RichText, TextSpan, TextStyle};
+    /// Custom shader materials (Phase 33/D124). `ShaderPaint` comes from the
+    /// widgets prelude above; `ShaderMaterial` + the starter library
+    /// (`gradient`/`noise`/`glow` + `register_starter_materials`) live under
+    /// `rosace::shader` — re-exported here for the common case.
+    pub use rosace_shader::ShaderMaterial;
+    pub use rosace_shader::materials;
 }

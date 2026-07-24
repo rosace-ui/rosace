@@ -2,7 +2,9 @@ use std::sync::Arc;
 use rosace_core::types::Size;
 use rosace_state::Atom;
 use rosace_render::Color;
+use rosace_shader::ShaderMaterial;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget};
+use super::material::{resolve_material, DrawerMaterial};
 use super::overlay::{OverlayEntry, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig, push_overlay};
 
 /// A slide-in side panel. Attach to any widget's paint via `.drawer(open, ..)`
@@ -18,6 +20,7 @@ pub struct Drawer {
     full_screen: bool,
     background: Option<Color>,
     scrim_color: Color,
+    material: Option<ShaderMaterial>,
     panel: Arc<dyn Fn() -> BoxedWidget + Send + Sync>,
 }
 
@@ -29,6 +32,7 @@ impl Drawer {
             full_screen: false,
             background: None,
             scrim_color: Color::rgba(0, 0, 0, 120),
+            material: None,
             panel: Arc::new(panel),
         }
     }
@@ -45,6 +49,9 @@ impl Drawer {
     /// Scrim (barrier) color over the content behind the panel — defaults
     /// to black at ~47% opacity.
     pub fn scrim_color(mut self, c: Color) -> Self { self.scrim_color = c; self }
+    /// Per-instance shader material — replaces the panel fill when
+    /// resolved. Beats the theme's `DrawerMaterial` default (D124 Step 5).
+    pub fn material(mut self, m: ShaderMaterial) -> Self { self.material = Some(m); self }
 
     /// Emit the drawer overlay if open. Call from a host widget's paint (the
     /// Scaffold does this) — the drawer has no visual of its own when closed.
@@ -57,6 +64,7 @@ impl Drawer {
                 width: self.width,
                 full_screen: self.full_screen,
                 background: self.background,
+                material: self.material.clone(),
                 panel,
             })
                 .input(InputBehavior::Block)
@@ -70,6 +78,7 @@ struct DrawerPanel {
     width: f32,
     full_screen: bool,
     background: Option<Color>,
+    material: Option<ShaderMaterial>,
     panel: BoxedWidget,
 }
 
@@ -88,7 +97,20 @@ impl Widget for DrawerPanel {
     fn paint(&self, ctx: &mut PaintCtx) {
         let bg = self.background.unwrap_or_else(|| ctx.tc(ctx.theme.colors.surface));
         let r = ctx.rect;
-        ctx.fill_rect(r, bg);
+        // With a material, only paint a fallback it EXPLICITLY carries — an
+        // unconditional base fill is what a backdrop-sampling glass material
+        // would sample instead of the content behind the panel (same rule
+        // as Container/Card).
+        let material = resolve_material::<DrawerMaterial>(&ctx.theme, self.material.as_ref());
+        match &material {
+            Some(m) => {
+                if let Some(fallback) = m.fallback {
+                    ctx.fill_rect(r, fallback);
+                }
+                ctx.shader_fill(r, m.pipeline, m.uniforms.clone());
+            }
+            None => ctx.fill_rect(r, bg),
+        }
         self.panel.paint(&mut ctx.child(r));
     }
 }
@@ -106,6 +128,27 @@ mod tests {
         let mut entries = drain_overlays();
         assert_eq!(entries.len(), 1);
         entries.pop().unwrap()
+    }
+
+    #[test]
+    fn instance_material_paints_a_shader_fill() {
+        let open = rosace_state::use_atom(true);
+        let m = ShaderMaterial::new(rosace_shader::PipelineId::user(0x4002), vec![0u8; 16]);
+        let drawer = Drawer::new(open, || Box::new(Spacer::new(0.0))).material(m);
+        let entry = emit_one(&drawer);
+
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let mut recorder = rosace_render::PictureRecorder::new();
+        let tree = std::rc::Rc::new(std::cell::RefCell::new(super::super::render_tree::RenderTree::new()));
+        let rect = rosace_core::types::Rect {
+            origin: rosace_core::types::Point { x: 0.0, y: 0.0 },
+            size: Size { width: 280.0, height: 600.0 },
+        };
+        let mut ctx = PaintCtx::root(&mut recorder, rect, &font, theme, tree);
+        entry.widget.paint(&mut ctx);
+        let picture = recorder.finish();
+        assert!(picture.commands.iter().any(|c| matches!(c, rosace_render::DrawCommand::ShaderFill { .. })));
     }
 
     #[test]

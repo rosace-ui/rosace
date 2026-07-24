@@ -39,7 +39,9 @@ impl RebuildRunner {
         }
     }
 
-    fn rebuild(&self) -> Result<(), String> {
+    /// Rebuild once. Public so a supervisor (e.g. `rsc dev`) can drive its
+    /// own build→relaunch loop instead of the fire-and-forget [`Self::run_loop`].
+    pub fn rebuild(&self) -> Result<(), String> {
         let mut cmd = Command::new("cargo");
         match self.target {
             RebuildTarget::Desktop => {

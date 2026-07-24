@@ -2,6 +2,7 @@
 members = [
     "rosace",
     "rosace-macros",
+    "rosace-view-syntax",
     "rosace-style",
     "rosace-trace",
     "rosace-core",
@@ -11,7 +12,7 @@ members = [
     "rosace-theme",
     "rosace-widgets",
     "rosace-cli",
-    "rosace-examples",
+    "rosace-asset-codegen",
     "rosace-platform",
     "rosace-anim",
     "rosace-animate",
@@ -38,6 +39,7 @@ members = [
     "rosace-compositor",
     "rosace-ffi",
     "rosace-web-seo",
+    "rosace-thirdparty-material-test",
 ]
 resolver = "2"
 

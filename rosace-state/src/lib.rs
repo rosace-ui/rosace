@@ -17,6 +17,7 @@ pub mod cleanup_store;
 pub mod dirty_set;
 pub mod frame_scheduler;
 pub mod global_atom;
+pub mod pan_momentum;
 pub mod refresh_engine;
 pub mod scroll_offset;
 pub mod state_store;
@@ -29,6 +30,7 @@ pub use dirty_set::{mark_dirty, is_global_dirty, take_dirty_components, reset_to
 pub use frame_scheduler::{register_wakeup, request_frame, take_frame_requested};
 pub use global_atom::GlobalAtom;
 pub use refresh_engine::RefreshEngine;
+pub use pan_momentum::{drag_last, set_drag_last, pan_velocity, set_pan_velocity, clear_pan_momentum};
 pub use scroll_offset::{scroll_offset, set_scroll_offset, scroll_offset_by, clear_scroll_offset};
 pub use state_store::{hook_state, clear_component};
 

@@ -206,6 +206,10 @@ pub struct ShaderQuadCmd {
     pub uniforms: Vec<u8>,
     /// (x, y, w, h) in physical pixels; `None` = unclipped.
     pub clip: Option<(f32, f32, f32, f32)>,
+    /// See [`crate::DrawCommand::ShaderFill`]: when true, the platform
+    /// patches the first 4 uniform bytes with a live clock each present
+    /// (D109 maturity) — animation without CPU repaint.
+    pub animate_time: bool,
 }
 
 /// A pre-blurred shadow coverage mask (single channel).
@@ -218,7 +222,7 @@ struct ShadowMask {
 }
 
 /// An RGBA color value.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     /// Red channel (0–255).
     pub r: u8,
@@ -539,7 +543,7 @@ impl SkiaCanvas {
     ) {
         self.cut_segment();
         self.pending_frame_items.push(CanvasFrameItem::Shader(ShaderQuadCmd {
-            pipeline_id, rect: quad, uniforms, clip: widget_clip,
+            pipeline_id, rect: quad, uniforms, clip: widget_clip, animate_time: false,
         }));
     }
 
@@ -607,6 +611,7 @@ impl SkiaCanvas {
                 rect: quad,
                 uniforms,
                 clip: None,
+                animate_time: false,
             }));
             self.has_drawn = true;
             return;
@@ -770,8 +775,37 @@ impl SkiaCanvas {
         let dst = self.pixmap.data_mut();
 
         for pg in &placed {
-            let (metrics, bitmap) = (&pg.glyph.0, &pg.glyph.1);
             let (gx, gy) = (pg.x, pg.y);
+
+            // Color-emoji glyph (Phase 32 Step 4): premultiplied RGBA
+            // source-over blend, ignoring the requested TEXT color entirely
+            // (emoji carry their own color) — the same premul-over-premul
+            // math `blit_rgba` uses for the `Image` widget, inlined here
+            // since this loop already holds the exclusive `dst` slice.
+            if let Some(cg) = &pg.color_rgba {
+                for row in 0..cg.height {
+                    let py = gy + row as i32;
+                    if py < clip_y0 || py >= clip_y1 { continue; }
+                    let row_base = (py * canvas_w) as usize * 4;
+                    let src_row = (row * cg.width) as usize * 4;
+                    for col in 0..cg.width {
+                        let px_xi = gx + col as i32;
+                        if px_xi < clip_x0 || px_xi >= clip_x1 { continue; }
+                        let si = src_row + col as usize * 4;
+                        let src_a = cg.rgba[si + 3] as u32;
+                        if src_a == 0 { continue; }
+                        let di = row_base + px_xi as usize * 4;
+                        let inv = 255 - src_a;
+                        dst[di]     = (cg.rgba[si]     as u32 + d255(dst[di]     as u32 * inv)) as u8;
+                        dst[di + 1] = (cg.rgba[si + 1] as u32 + d255(dst[di + 1] as u32 * inv)) as u8;
+                        dst[di + 2] = (cg.rgba[si + 2] as u32 + d255(dst[di + 2] as u32 * inv)) as u8;
+                        dst[di + 3] = (src_a + d255(dst[di + 3] as u32 * inv)) as u8;
+                    }
+                }
+                continue;
+            }
+
+            let (metrics, bitmap) = (&pg.glyph.0, &pg.glyph.1);
 
             for row in 0..metrics.height {
                 let py = gy + row as i32;
@@ -1179,7 +1213,16 @@ impl SkiaCanvas {
                             font, text, o.x, o.y, pxp, *weight,
                         );
                         let rgba = color.rgba_bytes();
-                        let quads = placed.into_iter().map(|pg| GlyphQuad {
+                        // Color-emoji glyphs (Phase 32 Step 4) don't belong in
+                        // the coverage-atlas Glyphs batch at all — split them
+                        // out and push each as its own image quad, reusing
+                        // the SAME `CanvasFrameItem::Image` kind `BlitRgba`
+                        // already uses (content-keyed, cached, zero
+                        // re-upload once seen), rather than adding a second
+                        // atlas page.
+                        let (color_glyphs, plain): (Vec<_>, Vec<_>) =
+                            placed.into_iter().partition(|pg| pg.color_rgba.is_some());
+                        let quads = plain.into_iter().map(|pg| GlyphQuad {
                             key: pg.key,
                             x: pg.x as f32,
                             y: pg.y as f32,
@@ -1201,6 +1244,18 @@ impl SkiaCanvas {
                                     clip: widget_clip,
                                 });
                             }
+                        }
+                        for pg in color_glyphs {
+                            let cg = pg.color_rgba.unwrap();
+                            self.pending_frame_items.push(CanvasFrameItem::Image {
+                                key: (pg.key << 1) | 1, // distinct namespace from blit_key's content hash
+                                pixels: ImagePixels(std::sync::Arc::clone(&cg.rgba)),
+                                src_w: cg.width,
+                                src_h: cg.height,
+                                dest: (pg.x as f32, pg.y as f32, cg.width as f32, cg.height as f32),
+                                opacity: 1.0,
+                                clip: widget_clip,
+                            });
                         }
                     } else {
                         self.draw_text_weighted(text, o, *color, font, pxp, *weight);
@@ -1245,20 +1300,28 @@ impl SkiaCanvas {
                         self.fill_rrect(r, *radius * s, Color { r: tint.r, g: tint.g, b: tint.b, a });
                     }
                 }
-                DrawCommand::ShaderFill { pipeline_id, rect, uniforms } => {
+                DrawCommand::ShaderFill { pipeline_id, rect, uniforms, animate_time } => {
                     // No CPU rasterization by design — collect for the GPU
                     // compositor. Always collected, even on a damage-clipped
                     // replay: quads re-render in full every present.
                     let r = sr(*rect);
                     let quad = (r.origin.x, r.origin.y, r.size.width, r.size.height);
                     if self.gpu_shapes {
-                        self.push_builtin_quad(*pipeline_id, quad, uniforms.clone(), widget_clip);
+                        self.cut_segment();
+                        self.pending_frame_items.push(CanvasFrameItem::Shader(ShaderQuadCmd {
+                            pipeline_id: *pipeline_id,
+                            rect: quad,
+                            uniforms: uniforms.clone(),
+                            clip: widget_clip,
+                            animate_time: *animate_time,
+                        }));
                     } else {
                         self.pending_shader_quads.push(ShaderQuadCmd {
                             pipeline_id: *pipeline_id,
                             rect: quad,
                             uniforms: uniforms.clone(),
                             clip: widget_clip,
+                            animate_time: *animate_time,
                         });
                     }
                 }

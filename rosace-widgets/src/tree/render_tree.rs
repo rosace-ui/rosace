@@ -53,6 +53,12 @@ impl ScrollAxes {
 /// axes it handles.
 pub type ScrollRegion = (Rect, ScrollAxes, Arc<dyn Fn(f32, f32) + Send + Sync>);
 
+/// A registered pinch-to-zoom region (`InteractiveViewer`, Phase 32) — the
+/// callback receives the gesture's `delta` (winit's `PinchGesture::delta`:
+/// positive = magnify, negative = shrink; NOT a multiplier, an increment —
+/// callers typically do `zoom *= 1.0 + delta`).
+pub type ZoomRegion = (Rect, Arc<dyn Fn(f32) + Send + Sync>);
+
 /// One render-tree node. Declared data is cleared when the node is repainted
 /// (`begin`) and persists untouched otherwise.
 #[derive(Default)]
@@ -67,6 +73,7 @@ pub struct TreeNode {
     pub hits:       Vec<HitRegion>,
     pub hits_at:    Vec<HitRegionAt>,
     pub scrolls:    Vec<ScrollRegion>,
+    pub zooms:      Vec<ZoomRegion>,
     pub focus:      Vec<rosace_a11y::FocusNode>,
     pub overlays:   Vec<OverlayEntry>,
     pub transforms: Vec<TransformLayerEntry>,
@@ -167,6 +174,7 @@ impl RenderTree {
         n.hits.clear();
         n.hits_at.clear();
         n.scrolls.clear();
+        n.zooms.clear();
         n.focus.clear();
         n.overlays.clear();
         n.transforms.clear();
@@ -262,7 +270,11 @@ impl RenderTree {
             return (x, y, true);
         }
         let off = rosace_state::scroll_offset(id as u64);
-        (x - vp.origin.x + off[0], y - vp.origin.y + off[1], false)
+        // `offset` lives in content-native (unzoomed) pixels — a screen
+        // delta maps to a SMALLER content delta at higher zoom (the view is
+        // magnified), matching InteractiveViewer's pan-by-drag divisor.
+        let z = entry.zoom;
+        ((x - vp.origin.x) / z + off[0], (y - vp.origin.y) / z + off[1], false)
     }
 
     fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<(HitHandler, bool)> {
@@ -302,9 +314,10 @@ impl RenderTree {
                     let wrapped: Arc<dyn Fn(f32, f32) + Send + Sync> = match n.transforms.first() {
                         Some(entry) => {
                             let vp = entry.viewport_rect;
+                            let z = entry.zoom;
                             Arc::new(move |sx: f32, sy: f32| {
                                 let off = rosace_state::scroll_offset(id as u64);
-                                cb(sx - vp.origin.x + off[0], sy - vp.origin.y + off[1]);
+                                cb((sx - vp.origin.x) / z + off[0], (sy - vp.origin.y) / z + off[1]);
                             })
                         }
                         None => cb,
@@ -439,15 +452,55 @@ impl RenderTree {
         out: &mut Vec<(ScrollAxes, HitHandler)>,
     ) {
         let n = &self.nodes[id];
-        // Children first (topmost/innermost priority), later siblings first.
-        for &child in n.children.iter().rev() {
-            self.scroll_candidates(child, x, y, out);
+        // Descend in the CHILD's coordinate space when this node hosts a
+        // transform (D090/D092) — bug found live: a scrollable widget
+        // (InteractiveViewer) nested inside another scroll view (a normal
+        // scrolling page) registers its own scroll target in that OUTER
+        // view's content-local space, not real screen space; recursing with
+        // the raw, unremapped (x, y) meant its rect could never match a real
+        // cursor position, so scroll silently fell through to the outer
+        // page every time. `hit_test_node` already gets this right via
+        // `child_coords` for clicks — mirror it here for wheel/trackpad too.
+        let (cx, cy, clipped) = self.child_coords(n, id, x, y);
+        if !clipped {
+            // Children first (topmost/innermost priority), later siblings first.
+            for &child in n.children.iter().rev() {
+                self.scroll_candidates(child, cx, cy, out);
+            }
         }
         for (rect, axes, cb) in n.scrolls.iter().rev() {
             if contains(rect, x, y) {
                 out.push((*axes, cb.clone()));
             }
         }
+    }
+
+    /// Innermost registered zoom region under `(x, y)` (trackpad pinch,
+    /// `InteractiveViewer`) — same innermost-first, later-sibling-first
+    /// priority as `scroll_test`, but with no axis-selection step (a pinch
+    /// gesture has no "axis", just one delta).
+    pub fn zoom_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn(f32) + Send + Sync>> {
+        self.zoom_candidate(Self::ROOT, x, y)
+    }
+
+    fn zoom_candidate(&self, id: NodeId, x: f32, y: f32) -> Option<Arc<dyn Fn(f32) + Send + Sync>> {
+        let n = &self.nodes[id];
+        // Same nested-transform remap as `scroll_candidates` — see its
+        // comment for the bug this fixes.
+        let (cx, cy, clipped) = self.child_coords(n, id, x, y);
+        if !clipped {
+            for &child in n.children.iter().rev() {
+                if let Some(cb) = self.zoom_candidate(child, cx, cy) {
+                    return Some(cb);
+                }
+            }
+        }
+        for (rect, cb) in n.zooms.iter().rev() {
+            if contains(rect, x, y) {
+                return Some(cb.clone());
+            }
+        }
+        None
     }
 
     /// All hit regions in tree (paint) order — used by the overlay pass to
@@ -595,8 +648,9 @@ impl RenderTree {
             let n = &self.nodes[id];
             if let Some(entry) = n.transforms.first() {
                 let off = rosace_state::scroll_offset(id as u64);
-                out.x = out.x + entry.viewport_rect.origin.x - off[0];
-                out.y = out.y + entry.viewport_rect.origin.y - off[1];
+                // Inverse of child_coords' `(screen - vp.origin)/zoom + offset`.
+                out.x = (out.x - off[0]) * entry.zoom + entry.viewport_rect.origin.x;
+                out.y = (out.y - off[1]) * entry.zoom + entry.viewport_rect.origin.y;
             }
         }
         out
@@ -648,6 +702,104 @@ impl RenderTree {
             self.transform_ids_node(child, out);
         }
     }
+
+    /// Read-only snapshot of the live tree (D123/O2) — plain data, safe to
+    /// hand to a DevTools overlay: no callbacks, no `Arc<dyn Fn>`, nothing
+    /// that could be invoked or mutated through it. "Live" means reachable
+    /// from the root through `children` as of the last `finalize()` — an
+    /// arena slot orphaned by a removed widget is not included, even though
+    /// its `TreeNode` still physically exists until the slot is reused.
+    ///
+    /// Additive and non-invasive: reads fields every node already carries,
+    /// touches nothing about how painting/hit-testing/layout work.
+    pub fn inspect(&self) -> Vec<InspectNode> {
+        let mut out = Vec::new();
+        self.inspect_node(Self::ROOT, None, &mut out);
+        out
+    }
+
+    fn inspect_node(&self, id: NodeId, parent: Option<NodeId>, out: &mut Vec<InspectNode>) {
+        let n = &self.nodes[id];
+        out.push(InspectNode {
+            id,
+            parent,
+            children: n.children.clone(),
+            tag: n.tag,
+            rect: n.cached_rect,
+            size: n.cached_size,
+            constraints: n.last_constraints,
+            semantics: n.semantics.iter()
+                .map(|s| (s.role.clone(), s.label.clone()))
+                .collect(),
+            hit_count: n.hits.len() + n.hits_at.len() + n.long_hits.len(),
+            scroll_count: n.scrolls.len(),
+            overlay_count: n.overlays.len(),
+            has_editable: n.editable.is_some(),
+            hovered: n.hovered,
+            pressed: n.pressed,
+        });
+        for &child in &n.children {
+            self.inspect_node(child, Some(id), out);
+        }
+    }
+
+    /// The node whose `rect` contains `(x, y)` and is deepest (most
+    /// specific) in the tree — the element-picker hit target (D123/O2).
+    /// Unlike [`Self::hover_test`]/[`Self::hit_test`], this considers EVERY
+    /// node's paint rect, not just ones that declared an interactive
+    /// region — a plain `Container`/`Text` is pickable too. Ties (same
+    /// depth) go to the one painted later (topmost in z-order), mirroring
+    /// every other hit-order convention in this file.
+    pub fn pick(&self, x: f32, y: f32) -> Option<NodeId> {
+        let snapshot = self.inspect();
+        let by_id: std::collections::HashMap<NodeId, &InspectNode> =
+            snapshot.iter().map(|n| (n.id, n)).collect();
+
+        fn depth(by_id: &std::collections::HashMap<NodeId, &InspectNode>, mut id: NodeId) -> u32 {
+            let mut d = 0;
+            while let Some(p) = by_id.get(&id).and_then(|n| n.parent) {
+                d += 1;
+                id = p;
+            }
+            d
+        }
+
+        let mut best: Option<(NodeId, u32)> = None;
+        for n in &snapshot {
+            let Some(r) = n.rect else { continue; };
+            if !contains(&r, x, y) { continue; }
+            let d = depth(&by_id, n.id);
+            match best {
+                Some((_, bd)) if bd > d => {}
+                Some((bid, bd)) if bd == d && bid > n.id => {}
+                _ => best = Some((n.id, d)),
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+}
+
+/// One node in an [`RenderTree::inspect`] snapshot — plain data only.
+#[derive(Clone, Debug)]
+pub struct InspectNode {
+    pub id: NodeId,
+    pub parent: Option<NodeId>,
+    pub children: Vec<NodeId>,
+    /// Widget type name (`std::any::type_name`-derived tag already tracked
+    /// per node for the picture cache).
+    pub tag: &'static str,
+    pub rect: Option<Rect>,
+    pub size: Option<Size>,
+    pub constraints: Option<Constraints>,
+    /// This node's own declared semantics (role, label) — usually 0 or 1
+    /// entries; a few widgets (e.g. a labeled group) declare more than one.
+    pub semantics: Vec<(rosace_core::Role, Option<String>)>,
+    pub hit_count: usize,
+    pub scroll_count: usize,
+    pub overlay_count: usize,
+    pub has_editable: bool,
+    pub hovered: bool,
+    pub pressed: bool,
 }
 
 impl Default for RenderTree {
@@ -774,6 +926,7 @@ mod tests {
             picture: rosace_render::PictureRecorder::new().finish(),
             child_size: Size { width: 100.0, height: 1000.0 },
             viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
+            zoom: 1.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
@@ -803,6 +956,7 @@ mod tests {
             picture: rosace_render::PictureRecorder::new().finish(),
             child_size: Size { width: 100.0, height: 1000.0 },
             viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
+            zoom: 1.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
@@ -846,6 +1000,7 @@ mod tests {
             picture: rosace_render::PictureRecorder::new().finish(),
             child_size: Size { width: 100.0, height: 1000.0 },
             viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
+            zoom: 1.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
         });
@@ -947,5 +1102,87 @@ mod tests {
         t.finalize();
 
         assert!(t.hit_test(25.0, 5.0).is_none(), "removed child left a ghost hit");
+    }
+
+    #[test]
+    fn inspect_reports_parent_child_rect_and_tag() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let a = t.slot(RenderTree::ROOT, true);
+        t.node_mut(a).tag = "Container";
+        t.node_mut(a).cached_rect = Some(rect(0.0, 0.0, 100.0, 50.0));
+        t.node_mut(a).cached_size = Some(Size { width: 100.0, height: 50.0 });
+        t.finalize();
+
+        let snap = t.inspect();
+        assert_eq!(snap.len(), 2, "root + one child");
+        let root = snap.iter().find(|n| n.id == RenderTree::ROOT).unwrap();
+        assert_eq!(root.parent, None);
+        assert_eq!(root.children, vec![a]);
+
+        let child = snap.iter().find(|n| n.id == a).unwrap();
+        assert_eq!(child.parent, Some(RenderTree::ROOT));
+        assert_eq!(child.tag, "Container");
+        assert_eq!(child.rect.map(|r| (r.origin.x, r.size.width)), Some((0.0, 100.0)));
+        assert_eq!(child.size, Some(Size { width: 100.0, height: 50.0 }));
+    }
+
+    #[test]
+    fn inspect_omits_nodes_dropped_by_finalize() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let a = t.slot(RenderTree::ROOT, true);
+        let _b = t.slot(RenderTree::ROOT, true);
+        t.finalize();
+        assert_eq!(t.inspect().len(), 3, "root + a + b");
+
+        // Next frame only paints `a` — `b`'s slot is dropped by finalize.
+        t.start_frame();
+        let _a2 = t.slot(RenderTree::ROOT, true);
+        t.finalize();
+
+        let snap = t.inspect();
+        assert_eq!(snap.len(), 2, "root + a only — the orphaned slot must not appear");
+        assert!(snap.iter().any(|n| n.id == a));
+    }
+
+    #[test]
+    fn inspect_surfaces_semantics_and_interaction_flags() {
+        use rosace_core::Role;
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let btn = t.slot(RenderTree::ROOT, true);
+        t.node_mut(btn).semantics.push(super::super::Semantics::new(Role::Button).label("Save"));
+        t.node_mut(btn).hits.push((rect(0.0, 0.0, 10.0, 10.0), Arc::new(|| {})));
+        t.node_mut(btn).hovered = true;
+        t.finalize();
+
+        let snap = t.inspect();
+        let node = snap.iter().find(|n| n.id == btn).unwrap();
+        assert_eq!(node.semantics, vec![(Role::Button, Some("Save".to_string()))]);
+        assert_eq!(node.hit_count, 1);
+        assert!(node.hovered);
+        assert!(!node.pressed);
+    }
+
+    #[test]
+    fn pick_finds_the_deepest_node_containing_the_point() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        t.node_mut(RenderTree::ROOT).cached_rect = Some(rect(0.0, 0.0, 200.0, 200.0));
+        let outer = t.slot(RenderTree::ROOT, true);
+        t.node_mut(outer).cached_rect = Some(rect(0.0, 0.0, 100.0, 100.0));
+        let inner = t.slot(outer, true);
+        t.node_mut(inner).cached_rect = Some(rect(10.0, 10.0, 30.0, 30.0));
+        t.finalize();
+
+        // Inside the inner rect: must pick the deepest (most specific) node.
+        assert_eq!(t.pick(15.0, 15.0), Some(inner));
+        // Inside outer but outside inner: picks outer.
+        assert_eq!(t.pick(50.0, 50.0), Some(outer));
+        // Inside root but outside everything else: picks root.
+        assert_eq!(t.pick(150.0, 150.0), Some(RenderTree::ROOT));
+        // Outside all rects: nothing.
+        assert_eq!(t.pick(-5.0, -5.0), None);
     }
 }

@@ -1,8 +1,10 @@
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::{Color, DrawCommand};
+use rosace_shader::ShaderMaterial;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h};
 use super::padding::EdgeInsets;
+use super::material::{resolve_material, ContainerMaterial};
 
 /// Box shape (D095 — a circle is a Container, not a CircleWidget).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -39,6 +41,7 @@ pub struct Container {
     pub min_height: f32,
     pub clip: bool,
     pub align: Option<super::Alignment>,
+    pub material: Option<ShaderMaterial>,
     pub child: Option<BoxedWidget>,
 }
 
@@ -61,6 +64,7 @@ impl Container {
             min_height: 0.0,
             clip: false,
             align: None,
+            material: None,
             child: None,
         }
     }
@@ -96,6 +100,11 @@ impl Container {
     pub fn size(mut self, w: f32, h: f32) -> Self { self.width = Some(w); self.height = Some(h); self }
     pub fn min_size(mut self, w: f32, h: f32) -> Self { self.min_width = w; self.min_height = h; self }
     pub fn child(mut self, w: impl Widget + 'static) -> Self { self.child = Some(Box::new(w)); self }
+    /// Per-instance shader material — replaces the background fill (gradient/
+    /// solid) when resolved. Beats the theme's `ContainerMaterial` default.
+    /// Corners are drawn square under the shader (no rounded-clip primitive
+    /// yet, D124 Step 4+); border/shadow/child/radius are unaffected.
+    pub fn material(mut self, m: ShaderMaterial) -> Self { self.material = Some(m); self }
 }
 
 impl Default for Container {
@@ -151,8 +160,16 @@ impl Widget for Container {
             ctx.fill_shadow_rrect(rect, radius, self.shadow_color, self.shadow_blur);
         }
 
-        // Background — gradient wins over solid.
-        if let Some((from, to, vertical)) = self.gradient {
+        // Background — material (instance, else theme default) wins over
+        // gradient/solid; gradient wins over solid.
+        let material = resolve_material::<ContainerMaterial>(&ctx.theme, self.material.as_ref());
+        if let Some(m) = material {
+            if let Some(fallback) = m.fallback {
+                if radius > 0.5 { ctx.fill_rrect(rect, radius, fallback); }
+                else { ctx.fill_rect(rect, fallback); }
+            }
+            ctx.shader_fill(rect, m.pipeline, m.uniforms);
+        } else if let Some((from, to, vertical)) = self.gradient {
             ctx.fill_gradient(rect, radius, from, to, vertical);
         } else if let Some(bg) = self.background {
             if radius > 0.5 { ctx.fill_rrect(rect, radius, bg); }
@@ -194,4 +211,46 @@ impl Widget for Container {
 /// rounded corners but aren't `Container`).
 pub(super) fn draw_rounded_rect_pub(ctx: &mut PaintCtx, rect: Rect, color: Color, radius: f32) {
     ctx.fill_rrect(rect, radius, color);
+}
+
+#[cfg(test)]
+mod material_cascade_tests {
+    use super::*;
+    use rosace_shader::PipelineId;
+
+    fn mat(id: u64) -> ShaderMaterial {
+        ShaderMaterial::new(PipelineId::user(0x2000 + id), vec![id as u8])
+    }
+
+    fn paint_and_check(container: Container, theme: rosace_theme::ThemeData) -> bool {
+        let font = rosace_render::FontCache::embedded();
+        let mut recorder = rosace_render::PictureRecorder::new();
+        let tree = std::rc::Rc::new(std::cell::RefCell::new(super::super::render_tree::RenderTree::new()));
+        let rect = Rect {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size { width: 100.0, height: 100.0 },
+        };
+        let mut ctx = PaintCtx::root(&mut recorder, rect, &font, theme, tree);
+        container.paint(&mut ctx);
+        let picture = recorder.finish();
+        picture.commands.iter().any(|c| matches!(c, DrawCommand::ShaderFill { .. }))
+    }
+
+    #[test]
+    fn instance_material_paints_shader_fill() {
+        let theme = rosace_theme::built_in::dark_theme();
+        assert!(paint_and_check(Container::new().material(mat(1)), theme));
+    }
+
+    #[test]
+    fn theme_material_used_when_no_instance() {
+        let theme = rosace_theme::built_in::dark_theme().with_ext(super::super::material::ContainerMaterial(mat(2)));
+        assert!(paint_and_check(Container::new(), theme));
+    }
+
+    #[test]
+    fn no_material_renders_as_before() {
+        let theme = rosace_theme::built_in::dark_theme();
+        assert!(!paint_and_check(Container::new().background(Color::rgb(10, 10, 10)), theme));
+    }
 }

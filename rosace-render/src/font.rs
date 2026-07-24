@@ -34,6 +34,7 @@ const FACE_ICON: FaceKey = 2;
 const FACE_FALLBACK_BASE: FaceKey = 128;
 
 type GlyphKey = (FaceKey, char, u32); // (face, char, px.to_bits())
+type ColorGlyphKey = (char, u32); // (char, px.to_bits())
 
 /// Shared rasterized glyph: metrics + coverage bitmap.
 pub type CachedGlyph = Arc<(fontdue::Metrics, Vec<u8>)>;
@@ -42,6 +43,65 @@ enum Fallback {
     Untried(&'static str),
     Missing,
     Loaded(Font),
+}
+
+/// Color-emoji fallback face (Phase 32 Step 4, D115): raw bytes retained
+/// (unlike the plain-text `Fallback` above, which discards them once
+/// `fontdue::Font` parses them) — `fontdue` only rasterizes vector
+/// OUTLINES, but color emoji glyphs live in a bitmap table (`sbix` on
+/// macOS: literally an embedded PNG per glyph per size, "up to the caller
+/// to decode" per `ttf-parser`'s own doc comment), so decoding needs
+/// `ttf_parser::Face` directly, re-parsed from these bytes on each lookup
+/// (parsing itself is cheap — no re-reading the outline tables fontdue
+/// already indexed).
+enum EmojiFallback {
+    Untried,
+    Missing,
+    Loaded(Arc<Vec<u8>>),
+}
+
+/// One decoded color glyph: real advance width (font units, ttf_parser's
+/// own metric — NOT approximated from bitmap size) + a premultiplied RGBA8
+/// bitmap (`tiny_skia::Pixmap::decode_png`'s own convention — the SAME one
+/// `rosace-render::image`'s `Image` widget already decodes PNGs with, so
+/// this reuses an already-consistent pixel-format contract, not a new one)
+/// at whatever `sbix` strike size `glyph_raster_image` picked (nearest
+/// available, not rescaled to the exact requested px — a named
+/// simplification; see `color_glyph_rgba`'s doc).
+pub struct ColorGlyph {
+    pub advance: f32,
+    pub width: u32,
+    pub height: u32,
+    /// `Arc`, not a plain `Vec` — matches `rosace_render::canvas::ImagePixels`
+    /// (the `Image` widget's own blit-source wrapper), so the GPU-shapes path
+    /// clones a refcount instead of the pixel bytes every repaint frame.
+    pub rgba: Arc<Vec<u8>>,
+}
+
+/// Emoji fallback candidates per platform, in priority order — mirrors
+/// `FALLBACK_PATHS`'s own per-platform-paths convention. Only macOS is
+/// covered today (Apple Color Emoji, `sbix`); Windows (Segoe UI Emoji,
+/// COLR/CPAL — a different table `ttf-parser` also supports via
+/// `paint_color_glyph`, not wired here) and Linux (Noto Color Emoji, CBDT)
+/// are a named, honest gap, not silently assumed to work.
+const EMOJI_FALLBACK_PATHS: &[&str] = &[
+    "/System/Library/Fonts/Apple Color Emoji.ttc",
+];
+
+/// Common emoji Unicode blocks — used to decide whether a character should
+/// even ATTEMPT the color-glyph path (most text never does, so this check
+/// must be cheap and must not itself trigger loading the emoji font).
+/// Deliberately covers the well-known blocks, not a byte-for-byte match of
+/// Unicode's own emoji-data.txt (that table also includes plain digits/`#`
+/// as "emoji-capable" via keycap sequences — out of scope for this pass).
+fn is_emoji_codepoint(c: char) -> bool {
+    matches!(c as u32,
+        0x1F300..=0x1FAFF // Misc Symbols&Pictographs, Emoticons, Transport, Supplemental Symbols&Pictographs, Symbols&Pictographs Ext-A
+        | 0x2600..=0x27BF // Misc Symbols, Dingbats
+        | 0x2190..=0x21FF // Arrows (subset render as emoji with presentation)
+        | 0x2B00..=0x2BFF // Misc Symbols and Arrows
+        | 0x1F1E6..=0x1F1FF // Regional indicators (flags)
+    )
 }
 
 pub struct FontCache {
@@ -63,6 +123,14 @@ pub struct FontCache {
     route_cache: RefCell<HashMap<(char, bool), FaceKey>>,
     glyph_cache: RefCell<HashMap<GlyphKey, CachedGlyph>>,
     metrics_cache: RefCell<HashMap<GlyphKey, f32>>,
+    /// Color-emoji fallback face (Phase 32 Step 4) — raw bytes, loaded
+    /// lazily on the first emoji-range character (same "don't pay for it
+    /// until needed" principle as `fallbacks` above).
+    emoji: RefCell<EmojiFallback>,
+    /// Decoded color glyphs, keyed like `glyph_cache` — PNG decode is real
+    /// work (unlike a cached fontdue rasterize, which is already cheap),
+    /// so this cache matters more, not less.
+    color_glyph_cache: RefCell<HashMap<ColorGlyphKey, Option<Arc<ColorGlyph>>>>,
 }
 
 /// Unicode fallback candidates per platform. Order = priority. Coverage:
@@ -103,6 +171,8 @@ impl FontCache {
             route_cache: RefCell::new(HashMap::new()),
             glyph_cache: RefCell::new(HashMap::new()),
             metrics_cache: RefCell::new(HashMap::new()),
+            emoji: RefCell::new(EmojiFallback::Untried),
+            color_glyph_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -110,6 +180,21 @@ impl FontCache {
         let font = Font::from_bytes(bytes, FontSettings::default())
             .expect("invalid font bytes");
         Self::build(font, None)
+    }
+
+    /// Load a font from a bundled **asset** by logical name — resolved
+    /// per-platform via [`rosace_core::asset`] (dev: `assets/<name>`; mobile:
+    /// the app bundle). Returns `None` if the asset is missing or not a valid
+    /// font, so callers can fall back to [`default`](Self::default)/[`embedded`].
+    ///
+    /// ```ignore
+    /// let brand = FontCache::from_asset("fonts/Brand.ttf")
+    ///     .unwrap_or_else(FontCache::default);
+    /// ```
+    pub fn from_asset(name: impl rosace_core::asset::AssetRef) -> Option<Self> {
+        let bytes = rosace_core::asset::bytes(name)?;
+        let font = Font::from_bytes(bytes.as_slice(), FontSettings::default()).ok()?;
+        Some(Self::build(font, None))
     }
 
     /// A fallback font compiled into the binary — DejaVu Sans (permissive
@@ -401,6 +486,74 @@ impl FontCache {
         (glyph.0, glyph.1.clone())
     }
 
+    /// Lazily load the color-emoji fallback face's raw bytes (first
+    /// emoji-range character only — same principle as `fallbacks`).
+    fn emoji_bytes(&self) -> Option<Arc<Vec<u8>>> {
+        {
+            match &*self.emoji.borrow() {
+                EmojiFallback::Loaded(b) => return Some(Arc::clone(b)),
+                EmojiFallback::Missing => return None,
+                EmojiFallback::Untried => {}
+            }
+        }
+        let found = EMOJI_FALLBACK_PATHS.iter()
+            .find_map(|p| std::fs::read(p).ok())
+            .map(Arc::new);
+        *self.emoji.borrow_mut() = match &found {
+            Some(b) => EmojiFallback::Loaded(Arc::clone(b)),
+            None => EmojiFallback::Missing,
+        };
+        found
+    }
+
+    /// Real color glyph for `c` at `px`, if `c` is in an emoji range AND the
+    /// emoji fallback face actually has a color bitmap for it (`sbix` only
+    /// today — see `EMOJI_FALLBACK_PATHS`'s doc for the Windows/Linux gap).
+    /// `None` for anything else, including a plain character that happens
+    /// to fail this lookup — callers fall through to the normal fontdue path.
+    pub fn color_glyph_rgba(&self, c: char, px: f32) -> Option<Arc<ColorGlyph>> {
+        if !is_emoji_codepoint(c) { return None; }
+
+        let cache_key = (c, px.to_bits());
+        if let Some(hit) = self.color_glyph_cache.borrow().get(&cache_key) {
+            return hit.clone();
+        }
+
+        let result = (|| {
+            let bytes = self.emoji_bytes()?;
+            let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
+            let gid = face.glyph_index(c)?;
+            // NOT `face.is_color_glyph(gid)` — that method checks ONLY the
+            // `COLR`/`CPAL` layered-vector table (confirmed by reading
+            // ttf-parser's own source: `self.tables().colr...`), never
+            // `sbix`. Apple Color Emoji uses `sbix` exclusively, so that
+            // gate was always false here and this function always bailed —
+            // a real bug caught only by noticing the LIVE app rendered tofu
+            // boxes for real emoji despite an isolated unit test "passing"
+            // (its own graceful-skip-if-font-missing branch silently
+            // absorbed the same bug as a false "not installed" negative,
+            // instead of catching it — a real lesson, not just a fix).
+            // `glyph_raster_image` returning `Some` IS already proof this
+            // glyph has a real color bitmap; no separate gate is needed.
+            let img = face.glyph_raster_image(gid, px.round().clamp(1.0, u16::MAX as f32) as u16)?;
+            if img.format != ttf_parser::RasterImageFormat::PNG { return None; }
+            let pixmap = tiny_skia::Pixmap::decode_png(img.data).ok()?;
+            let units_per_em = face.units_per_em() as f32;
+            let advance = face.glyph_hor_advance(gid)
+                .map(|a| a as f32 / units_per_em * px)
+                .unwrap_or(pixmap.width() as f32);
+            Some(Arc::new(ColorGlyph {
+                advance,
+                width: pixmap.width(),
+                height: pixmap.height(),
+                rgba: Arc::new(pixmap.data().to_vec()),
+            }))
+        })();
+
+        self.color_glyph_cache.borrow_mut().insert(cache_key, result.clone());
+        result
+    }
+
     /// Kerning between `left` and `right` at `px`/`weight`. Zero when the
     /// pair spans different faces (fallback boundaries have no kern data).
     pub fn kern_weighted(&self, left: char, right: char, px: f32, weight: FontWeight) -> f32 {
@@ -483,6 +636,15 @@ pub struct PlacedGlyph {
     /// Face routing is deterministic per `(char, bold)`, so this fully
     /// identifies the rasterization without exposing `FaceKey`.
     pub key: u64,
+    /// `Some` for a color-emoji glyph (Phase 32 Step 4) — `glyph` above is
+    /// then a cheap zero-size placeholder (never read) and consumers must
+    /// blit this RGBA bitmap directly instead of using `glyph`'s coverage
+    /// mask. Reuses the same premultiplied-RGBA-quad pipeline
+    /// `DrawCommand::BlitRgba` (the `Image` widget) already established in
+    /// both the CPU and GPU-shapes paths, rather than adding a second
+    /// coverage-atlas page — real color rendering with no new render
+    /// primitive.
+    pub color_rgba: Option<Arc<ColorGlyph>>,
 }
 
 /// The one glyph-placement walk (kerning, baseline, bearing) shared by the
@@ -507,10 +669,35 @@ pub fn layout_glyphs(
     let bold = weight.wants_bold() as u64;
 
     for ch in text.chars() {
+        // Variation selectors (U+FE00-U+FE0F, e.g. the "emoji presentation"
+        // VS-16 that commonly follows a symbol like U+2600 SUN to request
+        // its color form — as in "☀️" — real bug found live: this demo's
+        // own "☀️ sunny" text rendered a stray tofu box for the selector
+        // itself, since it has no visible glyph in ANY face and wasn't
+        // being recognized as a zero-width modifier). Invisible by
+        // definition — skip entirely, no glyph lookup, no cursor advance.
+        if matches!(ch as u32, 0xFE00..=0xFE0F) {
+            continue; // invisible modifier — `prev` stays the last REAL glyph for correct kerning after it
+        }
         if let Some(p) = prev {
             cursor_x += font.kern_weighted(p, ch, px, weight);
         }
         prev = Some(ch);
+
+        // Color-emoji check first: a real emoji codepoint should never fall
+        // through to fontdue's outline rasterizer (the primary UI font has
+        // no glyph for it at all, or — worse — a plain monochrome fallback
+        // shape that isn't the real emoji).
+        if let Some(cg) = font.color_glyph_rgba(ch, px) {
+            let gx = cursor_x.round() as i32;
+            let gy = base_y - cg.height as i32; // bottom-aligned to baseline, left-aligned to cursor
+            let key = ((px.to_bits() as u64) << 32) | ((ch as u64) << 1) | bold | (1 << 63);
+            let placeholder: CachedGlyph = Arc::new((fontdue::Metrics::default(), Vec::new()));
+            let advance = cg.advance;
+            out.push(PlacedGlyph { glyph: placeholder, x: gx, y: gy, key, color_rgba: Some(cg) });
+            cursor_x += advance;
+            continue;
+        }
 
         let glyph = font.glyph_weighted(ch, px, weight);
         let advance = glyph.0.advance_width;
@@ -518,9 +705,103 @@ pub fn layout_glyphs(
             let gx = cursor_x.round() as i32 + glyph.0.xmin;
             let gy = base_y - glyph.0.ymin - glyph.0.height as i32;
             let key = ((px.to_bits() as u64) << 32) | ((ch as u64) << 1) | bold;
-            out.push(PlacedGlyph { glyph, x: gx, y: gy, key });
+            out.push(PlacedGlyph { glyph, x: gx, y: gy, key, color_rgba: None });
         }
         cursor_x += advance;
     }
     out
+}
+
+#[cfg(test)]
+mod color_glyph_tests {
+    use super::*;
+
+    #[test]
+    fn is_emoji_codepoint_covers_common_emoji_but_not_plain_text() {
+        assert!(is_emoji_codepoint('😀')); // U+1F600, Emoticons block
+        assert!(is_emoji_codepoint('🎉')); // U+1F389, Misc Symbols & Pictographs
+        assert!(is_emoji_codepoint('☀'));  // U+2600, Misc Symbols
+        assert!(!is_emoji_codepoint('a'));
+        assert!(!is_emoji_codepoint('#'));
+        assert!(!is_emoji_codepoint(' '));
+    }
+
+    /// Real integration test, not a mock: decodes an ACTUAL emoji glyph from
+    /// whatever color-emoji font this machine has installed (this repo's
+    /// dev machines are macOS, where `/System/Library/Fonts/Apple Color
+    /// Emoji.ttc` is always present) — the exit bar this Phase 32 Step 4
+    /// task is actually held to ("a real running app renders a string
+    /// containing at least one emoji correctly, real color").
+    ///
+    /// The skip path checks the font FILE's existence directly, separately
+    /// from whether decode succeeded — a lesson from a real bug this test
+    /// almost hid: an earlier version skipped whenever `color_glyph_rgba`
+    /// returned `None`, which is EXACTLY what it did (every time) while a
+    /// real bug (`is_color_glyph` checking the wrong table) was silently
+    /// swallowing every lookup on this very machine, where the font
+    /// genuinely IS installed. A skip must only fire for the environment
+    /// gap it claims to be about, or it stops being a skip and becomes a
+    /// blindfold.
+    #[test]
+    fn color_glyph_rgba_decodes_a_real_emoji_on_this_machine() {
+        if EMOJI_FALLBACK_PATHS.iter().all(|p| !std::path::Path::new(p).exists()) {
+            eprintln!("no color-emoji font file on this machine — skipping (not a failure)");
+            return;
+        }
+        let font = FontCache::embedded();
+        let cg = font.color_glyph_rgba('😀', 32.0)
+            .expect("font file exists but color_glyph_rgba returned None — a real bug, not an environment gap");
+        assert!(cg.width > 0 && cg.height > 0, "decoded bitmap must have real dimensions");
+        assert_eq!(cg.rgba.len(), (cg.width * cg.height * 4) as usize, "RGBA8 buffer must match width*height*4");
+        assert!(cg.advance > 0.0, "a real emoji must have a positive advance width");
+        // At least one non-transparent, non-black pixel — a real decoded
+        // photo/icon, not an all-zero buffer silently accepted as "success".
+        let has_real_color = cg.rgba.chunks_exact(4).any(|p| p[3] > 0 && (p[0] > 20 || p[1] > 20 || p[2] > 20));
+        assert!(has_real_color, "decoded emoji must contain real non-black visible pixels");
+    }
+
+    #[test]
+    fn color_glyph_rgba_returns_none_for_plain_text() {
+        let font = FontCache::embedded();
+        assert!(font.color_glyph_rgba('a', 16.0).is_none());
+    }
+
+    #[test]
+    fn layout_glyphs_places_a_real_emoji_with_color_rgba_set() {
+        // px=16.0 deliberately: the exact size that exposed the
+        // `is_color_glyph` bug live (the earlier isolated test used 32.0,
+        // which happens to be an exact sbix strike — this one must NOT
+        // rely on that coincidence, since the real app renders at 16/24px).
+        if EMOJI_FALLBACK_PATHS.iter().all(|p| !std::path::Path::new(p).exists()) {
+            eprintln!("no color-emoji font file on this machine — skipping (not a failure)");
+            return;
+        }
+        let font = FontCache::embedded();
+        let placed = layout_glyphs(&font, "hi 😀 there", 0.0, 0.0, 16.0, FontWeight::Regular);
+        let pg = placed.iter().find(|pg| pg.color_rgba.is_some())
+            .expect("font file exists but no placed glyph had color_rgba set — a real bug, not an environment gap");
+        let cg = pg.color_rgba.as_ref().unwrap();
+        assert!(cg.width > 0 && cg.height > 0);
+        // Regardless of emoji decode availability, the surrounding plain
+        // text must still be placed normally.
+        assert!(placed.iter().any(|pg| pg.color_rgba.is_none()), "plain characters must still be placed");
+    }
+
+    #[test]
+    fn variation_selector_16_produces_no_placed_glyph() {
+        // Real bug found live: "☀️" (U+2600 SUN + U+FE0F VARIATION
+        // SELECTOR-16, requesting the emoji/color presentation) rendered a
+        // stray tofu box for the selector itself — it has no visible glyph
+        // in any face and wasn't recognized as a zero-width modifier.
+        // A bare selector with nothing else in the string must place NOTHING.
+        let font = FontCache::embedded();
+        let placed = layout_glyphs(&font, "\u{FE0F}", 0.0, 0.0, 16.0, FontWeight::Regular);
+        assert!(placed.is_empty(), "a lone variation selector must never produce a placed glyph");
+
+        // "☀️" must place AT MOST one glyph (the sun itself, color or
+        // monochrome depending on font availability) — never two, which
+        // would mean the selector also got its own tofu-box glyph.
+        let placed = layout_glyphs(&font, "\u{2600}\u{FE0F}", 0.0, 0.0, 16.0, FontWeight::Regular);
+        assert!(placed.len() <= 1, "the selector must not add a second placed glyph, got {}", placed.len());
+    }
 }

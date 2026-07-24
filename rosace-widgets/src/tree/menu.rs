@@ -27,6 +27,8 @@ pub struct Menu {
     pub row_height: f32,
     pub font_size: f32,
     pub radius: f32,
+    background: Option<Color>,
+    color: Option<Color>,
 }
 
 impl Menu {
@@ -36,12 +38,19 @@ impl Menu {
             min_width: 180.0,
             row_height: 34.0,
             font_size: 13.0,
-            radius: 8.0,
+            radius: 14.0,
+            background: None,
+            color: None,
         }
     }
 
     pub fn min_width(mut self, w: f32) -> Self { self.min_width = w; self }
     pub fn row_height(mut self, h: f32) -> Self { self.row_height = h; self }
+    pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
+    /// Menu surface fill color (theme's `surface` if unset).
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    /// Item label color (theme's `on_surface` if unset).
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
 
     /// Append a pressable row. The callback fires on click; close the menu
     /// yourself by setting the `open` atom false inside it.
@@ -69,11 +78,27 @@ impl Widget for Menu {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        let (bg, fg, outline) = {
+            let t = &ctx.theme.colors;
+            // Default panel is TRANSLUCENT (the overlay pass alpha-blends
+            // over the app) with a hairline border — a popup reads as part
+            // of the scene instead of an opaque slab punched over it
+            // (found live: the dropdown menu broke the liquid-glass app's
+            // whole look). Real backdrop-glass popups need overlay-pass
+            // shader-quad support — named, not built. An explicit
+            // `.background()` opts out entirely.
+            let default_bg = {
+                let s = ctx.tc(t.surface);
+                Color { r: s.r, g: s.g, b: s.b, a: 216 }
+            };
+            (self.background.unwrap_or(default_bg),
+             self.color.unwrap_or_else(|| ctx.tc(t.on_surface)),
+             ctx.tc(t.outline))
+        };
         let r = ctx.rect;
         ctx.fill_shadow_rrect(r, self.radius, Color::rgba(0, 0, 0, 90), 10.0);
-        draw_rounded_rect_pub(ctx, r, ctx.tc(ctx.theme.colors.surface), self.radius);
-
-        let fg = ctx.tc(ctx.theme.colors.on_surface);
+        draw_rounded_rect_pub(ctx, r, bg, self.radius);
+        ctx.stroke_rrect(r, self.radius, Color { a: 120, ..outline }, 1.0);
         let line_h = ctx.font.line_height(self.font_size);
 
         for (i, (label, cb)) in self.items.iter().enumerate() {
@@ -96,5 +121,25 @@ impl Widget for Menu {
             // so the hit rect is clip-aware.
             ctx.child(row).register_hit(Arc::clone(cb));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_layout::Constraints;
+
+    #[test]
+    fn customization_builders_do_not_change_layout_size() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
+        let base = Menu::new().item("Item one", || {});
+        let customized = Menu::new()
+            .background(Color::rgb(20, 20, 20))
+            .color(Color::rgb(255, 255, 255))
+            .radius(2.0)
+            .item("Item one", || {});
+        assert_eq!(base.layout(&ctx), customized.layout(&ctx));
     }
 }

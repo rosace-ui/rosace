@@ -1,10 +1,13 @@
 pub mod bus;
 pub mod event;
+pub mod log;
 pub mod subscribers;
 
 pub use bus::{TraceSubscriber, TracingBus, TRACING_BUS};
-pub use event::{RosaceTrace, TraceCategory};
-pub use subscribers::{flight_recorder, install_flight_recorder};
+pub use event::{LogLevel, RosaceTrace, TraceCategory};
+pub use log::{init_from_env, max_level, set_max_level};
+pub use subscribers::{flight_recorder, install_flight_recorder, install_log_console};
+pub use subscribers::perfetto::to_chrome_trace_json;
 
 #[cfg(test)]
 mod tests {

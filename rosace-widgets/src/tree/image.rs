@@ -18,6 +18,14 @@ impl Image {
         Self { inner: ImageWidgetImpl::new().file(path).fit(ImageFit::Contain) }
     }
 
+    /// Create an image from a bundled **asset** by logical name — resolved
+    /// per-platform via [`rosace_core::asset`] (dev: `assets/<name>`; mobile:
+    /// the app bundle). Portable across platforms and hot-reloads under
+    /// `rsc dev`. Prefer this over [`file`](Self::file) for shipped images.
+    pub fn asset(name: impl rosace_core::asset::AssetRef) -> Self {
+        Self { inner: ImageWidgetImpl::new().asset(name).fit(ImageFit::Contain) }
+    }
+
     /// Create an image from raw PNG bytes.
     pub fn bytes(data: Vec<u8>) -> Self {
         Self { inner: ImageWidgetImpl::new().bytes(data).fit(ImageFit::Contain) }

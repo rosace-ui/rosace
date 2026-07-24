@@ -1,0 +1,17 @@
+[package]
+name = "rosace-view-syntax"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The SINGLE `view!` grammar, shared by the compile-time proc-macro and the
+# runtime hot-reload parser so they can never disagree (D103). Not a proc-macro
+# crate — a normal lib over syn/proc-macro2, usable at runtime.
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+# `span-locations` lets the runtime file scanner read each `view!`'s line/column
+# from the token spans (the fallback backend used outside a proc-macro).
+proc-macro2 = { version = "1", features = ["span-locations"] }

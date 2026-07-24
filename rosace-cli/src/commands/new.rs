@@ -280,10 +280,18 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
     // ── Core project files ─────────────────────────────────────────────────
     write(dir.join("Cargo.toml"), &cargo_toml(name, &crate_name, &framework, &opts))?;
     write(dir.join("rsc.toml"), &rsc_toml(name, &bundle_id, &opts))?;
-    write(dir.join(".gitignore"), "/target\n/dist\n*.app\n")?;
+    write(
+        dir.join(".gitignore"),
+        "# Rust build\n/target\n/dist\n*.app\n\n# macOS\n.DS_Store\n\n# Mobile build outputs\n/android/**/build/\n/android/.gradle/\n/ios/build/\n**/xcuserdata/\n",
+    )?;
     write(dir.join("README.md"), &readme(name, &opts))?;
+    // Assets dir (declared in rsc.toml [assets]); .gitkeep so the empty dir is
+    // committable in the pushable sample.
+    fs::create_dir_all(dir.join("assets")).map_err(|e| format!("cannot create assets dir: {e}"))?;
+    write(dir.join("assets").join(".gitkeep"), "")?;
 
     // ── Structured source ──────────────────────────────────────────────────
+    write(dir.join("build.rs"), BUILD_RS)?;
     write(dir.join("src").join("main.rs"), &main_rs(&crate_name))?;
     write(dir.join("src").join("lib.rs"), &lib_rs(name, &opts))?;
     write(dir.join("src").join("app.rs"), &app_rs(name))?;
@@ -454,6 +462,19 @@ fn write(path: impl AsRef<Path>, content: &str) -> Result<(), String> {
 
 // ── Templates ────────────────────────────────────────────────────────────────
 
+/// A dependency line for a framework crate. When the framework checkout exists
+/// on the machine running `rsc` (dev / dogfooding) → a `path` dep so the app
+/// builds against local crates with no publish. Otherwise (an installed /
+/// published `rsc`) → a crates.io version dep pinned to `rsc`'s own version, so
+/// a distributed `rsc` produces buildable apps on any machine.
+fn framework_dep(crate_name: &str, framework: &str) -> String {
+    if Path::new(framework).join(crate_name).join("Cargo.toml").exists() {
+        format!("{crate_name} = {{ path = \"{framework}/{crate_name}\" }}")
+    } else {
+        format!("{crate_name} = \"{}\"", env!("CARGO_PKG_VERSION"))
+    }
+}
+
 fn cargo_toml(name: &str, crate_name: &str, framework: &str, opts: &NewOptions) -> String {
     // Empty [workspace] table detaches the app from any parent Cargo workspace
     // (so it builds even when generated inside the framework checkout).
@@ -468,8 +489,12 @@ fn cargo_toml(name: &str, crate_name: &str, framework: &str, opts: &NewOptions) 
     // at once; unused ones are simply never built.
     let native_bridge = opts.platforms.contains(&Platform::Ios) || opts.platforms.contains(&Platform::Android);
     let crate_type = if native_bridge { r#"["cdylib", "staticlib", "rlib"]"# } else { r#"["cdylib", "rlib"]"# };
+    let rosace_dep = framework_dep("rosace", framework);
+    // Build-time asset codegen: `build.rs` scans `assets/` → a typed `assets`
+    // module of `Asset` handles. A build-dependency so it never ships in the app.
+    let asset_codegen_dep = framework_dep("rosace-asset-codegen", framework);
     let rosace_ffi_dep = if native_bridge {
-        format!("rosace-ffi = {{ path = \"{framework}/rosace-ffi\" }}\n")
+        format!("{}\n", framework_dep("rosace-ffi", framework))
     } else {
         String::new()
     };
@@ -494,7 +519,7 @@ fn cargo_toml(name: &str, crate_name: &str, framework: &str, opts: &NewOptions) 
     // to a dev-machine-only *tool* rather than a platform-exclusive
     // runtime *dependency*.
     let web_seo_dev_dep = if opts.platforms.contains(&Platform::Web) {
-        format!("\n[dev-dependencies]\nrosace-web-seo = {{ path = \"{framework}/rosace-web-seo\" }}\n")
+        format!("\n[dev-dependencies]\n{}\n", framework_dep("rosace-web-seo", framework))
     } else {
         String::new()
     };
@@ -516,8 +541,11 @@ name = "{name}"
 path = "src/main.rs"
 
 [dependencies]
-rosace = {{ path = "{framework}/rosace" }}
-{rosace_ffi_dep}{web}{android_jni_dep}{web_seo_dev_dep}"#
+{rosace_dep}
+{rosace_ffi_dep}{web}{android_jni_dep}
+[build-dependencies]
+{asset_codegen_dep}
+{web_seo_dev_dep}"#
     )
 }
 
@@ -533,6 +561,12 @@ fn rsc_toml(name: &str, bundle_id: &str, opts: &NewOptions) -> String {
 name = "{name}"
 bundle_id = "{bundle_id}"
 platforms = [{plats}]
+
+# Bundled assets (images, fonts, data). Directories are scanned recursively;
+# reference files in code via the generated typed handles, e.g.
+# `Image::asset(assets::LOGO)`. Editing an asset hot-reloads under `rsc dev`.
+[assets]
+dirs = ["assets"]
 "#
     )
 }
@@ -581,6 +615,13 @@ fn lib_rs(name: &str, opts: &NewOptions) -> String {
 {app_theme_vis}mod app;
 {ffi_mod}mod screens;
 {app_theme_vis}mod theme;
+
+/// Typed handles for everything under `assets/`, generated at build time by
+/// `build.rs`. Refer to assets as `assets::LOGO` (typo-proof, autocompletes)
+/// rather than raw strings. Add a file to `assets/` and it appears here.
+pub mod assets {{
+    include!(concat!(env!("OUT_DIR"), "/rosace_assets.rs"));
+}}
 
 use rosace::prelude::*;
 
@@ -725,6 +766,14 @@ pub fn themes() -> rosace::prelude::Themes {
 
     out
 }
+
+const BUILD_RS: &str = r#"//! Build script: scans `assets/` and generates the typed `assets` module
+//! (included from `src/lib.rs`). Re-runs only when the asset tree changes.
+
+fn main() {
+    rosace_asset_codegen::generate("assets");
+}
+"#;
 
 const SCREENS_MOD_RS: &str = r#"//! One file per screen. Re-export each screen's builder here.
 
@@ -1182,9 +1231,16 @@ tasks.register("cargoBuildAndroid") {{
         // registered task's doLast across Gradle/Kotlin-DSL versions
         // (confirmed: "Unresolved reference 'exec'" against this project's
         // Gradle 9.4 — plain JVM process APIs sidestep that entirely).
-        val processBuilder = ProcessBuilder(
-            "cargo", "build", "--lib", "--target", rustTriple, "--release"
-        )
+        // Dev hot reload (Tier 1): `RSC_HOT=1` (set by `rsc dev --target
+        // android`) builds a debug lib WITH the `rosace-ffi/rsc-hot` feature so
+        // the app opens its reload socket; otherwise a normal release lib.
+        val cargoArgs = mutableListOf("cargo", "build", "--lib", "--target", rustTriple)
+        if (System.getenv("RSC_HOT") == "1") {{
+            cargoArgs.add("--features"); cargoArgs.add("rosace-ffi/rsc-hot")
+        }} else {{
+            cargoArgs.add("--release")
+        }}
+        val processBuilder = ProcessBuilder(cargoArgs)
         processBuilder.directory(rootProject.projectDir.parentFile)
         val env = processBuilder.environment()
         env["CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"] = linker
@@ -1229,6 +1285,11 @@ fn android_manifest_xml(name: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Dev hot reload (Tier 1) binds a localhost socket to receive pushed
+         `view!` edits over `adb forward`. INTERNET covers the localhost bind;
+         it has no effect on a release build (no socket is opened). -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="true"
@@ -1370,7 +1431,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> 2
             else -> return false
         }}
-        nativeTouch(engineHandle, kind, event.x, event.y)
+        // MotionEvent x/y are PHYSICAL pixels; the engine hit-tests in LOGICAL
+        // coordinates (like the desktop `position.x / scale_factor` path and
+        // iOS's already-logical `touch.location(in: view)`). Divide by the same
+        // density used for nativeResize — without this, taps on a hi-DPI screen
+        // land at 2-3x the intended point and every click misses its target.
+        val density = resources.displayMetrics.density
+        nativeTouch(engineHandle, kind, event.x / density, event.y / density)
         return true
     }}
 }}

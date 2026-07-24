@@ -82,6 +82,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
             picture,
             child_size,
             viewport_rect: vp_rect,
+            zoom: 1.0,
             scroll_x,
             scroll_y,
         });

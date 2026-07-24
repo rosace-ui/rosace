@@ -430,6 +430,13 @@ fn run_web(app: &App, port: u16) -> Result<(), String> {
         return Err("wasm-bindgen failed".into());
     }
 
+    // 2b. Copy assets into dist/ (A6): the web build fetches them from
+    // `/assets/<name>` at the same relative path the typed handles encode.
+    crate::commands::package::copy_assets_into(
+        Path::new("assets"),
+        std::path::PathBuf::from("dist").join("assets"),
+    )?;
+
     // 3. Host page: use the app's web/index.html if present, else a default.
     let index_src = Path::new("web/index.html");
     if index_src.exists() {
@@ -528,6 +535,11 @@ fn run_ios_xcodeproj(app: &App, device: &str) -> Result<(), String> {
         return Err(format!("xcodebuild reported success but {} wasn't produced — unexpected", bundle));
     }
 
+    // Copy the app's assets into the .app (A6). iOS bundles are flat, and the
+    // Rust runtime resolves `current_exe()` (→ App.app/App) → `App.app/assets`,
+    // so this is the location `Image::asset(...)` reads from on device.
+    crate::commands::package::copy_assets_into(Path::new("assets"), Path::new(&bundle).join("assets"))?;
+
     let _ = Command::new("xcrun").args(["simctl", "boot", &udid]).status();
     let _ = Command::new("open").args(["-a", "Simulator"]).status();
 
@@ -565,12 +577,17 @@ fn resolve_simulator_udid(device: &str) -> Result<String, String> {
 fn run_ios_legacy(app: &App, device: &str) -> Result<(), String> {
     println!("Building '{}' for the iOS simulator (legacy harness — no ios/App.xcodeproj found)...", app.name);
 
-    // 1. Build the executable for the simulator target.
-    let ok = Command::new("cargo")
-        .args(["build", "--bin", &app.name, "--target", "aarch64-apple-ios-sim"])
-        .status()
-        .map_err(|e| format!("cargo: {}", e))?
-        .success();
+    // 1. Build the executable for the simulator target. `RSC_HOT=1` adds the
+    //    hot-reload feature so the app opens its reload socket (the iOS
+    //    simulator shares the host's localhost, so `rsc dev --target ios`
+    //    pushes edits straight to it — no port forward needed).
+    let mut build = Command::new("cargo");
+    build.args(["build", "--bin", &app.name, "--target", "aarch64-apple-ios-sim"]);
+    if std::env::var("RSC_HOT").as_deref() == Ok("1") {
+        build.args(["--features", "rosace/rsc-hot"]);
+        println!("  (hot reload: building with rosace/rsc-hot)");
+    }
+    let ok = build.status().map_err(|e| format!("cargo: {}", e))?.success();
     if !ok {
         return Err("iOS build failed (run: rustup target add aarch64-apple-ios-sim)".into());
     }
@@ -621,6 +638,14 @@ fn run_android(app: &App, device: &str) -> Result<(), String> {
         return Err("android/ not found — scaffold with `rsc new --platforms android`".into());
     }
     ensure_android_local_properties()?;
+    // Copy assets into the Gradle module so they're packaged into the APK (A6).
+    // NOTE: APK assets live inside the zip and can't be `fs::read` directly —
+    // the runtime extracts them to filesDir at first launch (see the scaffold's
+    // Android launch glue) and points the asset root there.
+    crate::commands::package::copy_assets_into(
+        Path::new("assets"),
+        Path::new("android/app/src/main/assets").to_path_buf(),
+    )?;
     println!("Building '{}' for Android (Gradle assembleDebug)...", app.name);
     let ok = Command::new("./gradlew")
         .args(["assembleDebug"])

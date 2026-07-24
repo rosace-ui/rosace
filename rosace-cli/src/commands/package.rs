@@ -1,6 +1,6 @@
 use std::process::Command;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PackageOptions {
@@ -286,6 +286,12 @@ pub(crate) fn assemble_macos_app(
         println!("  Note: macos/icon.icns not found — bundle will use the default OS icon");
     }
 
+    // Copy the app's assets into the bundle (A6 release bundling). They land at
+    // `Contents/Resources/assets/`, which the runtime resolves via
+    // `current_exe()` → `../Resources/assets` — so `Image::asset("logo.png")`
+    // works in a Finder-launched .app exactly as it does under `rsc dev`.
+    copy_assets_into(Path::new("assets"), Path::new(&resources_dir).join("assets"))?;
+
     // Code-sign — even a local .app needs SOME signature to run on Apple
     // Silicon. Ad-hoc (`-`) by default; pass `--identity` for a real
     // Developer ID certificate + `macos/entitlements.plist` if present.
@@ -308,6 +314,44 @@ pub(crate) fn assemble_macos_app(
     Ok(app_dir)
 }
 
+/// Recursively copy an app's `assets/` dir into a bundle location, skipping the
+/// `.gitkeep` placeholder and hidden files. A no-op when `src` doesn't exist
+/// (an app may simply ship no assets). Shared by every platform's bundler so
+/// the on-disk layout the runtime expects is produced identically everywhere.
+pub(crate) fn copy_assets_into(src: &Path, dst: PathBuf) -> Result<(), String> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    let mut copied = 0usize;
+    copy_dir_rec(src, &dst, &mut copied)?;
+    if copied > 0 {
+        println!("  Bundled {copied} asset(s) from {}/", src.display());
+    }
+    Ok(())
+}
+
+fn copy_dir_rec(src: &Path, dst: &Path, copied: &mut usize) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| format!("cannot create {}: {e}", dst.display()))?;
+    for entry in fs::read_dir(src).map_err(|e| format!("read {}: {e}", src.display()))? {
+        let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
+        let name = entry.file_name();
+        // Skip hidden housekeeping files (.gitkeep, .DS_Store, …).
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let from = entry.path();
+        let to = dst.join(&name);
+        if from.is_dir() {
+            copy_dir_rec(&from, &to, copied)?;
+        } else {
+            fs::copy(&from, &to)
+                .map_err(|e| format!("copy {} → {}: {e}", from.display(), to.display()))?;
+            *copied += 1;
+        }
+    }
+    Ok(())
+}
+
 // ── Linux .deb + binary ────────────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]
@@ -325,6 +369,10 @@ fn bundle_linux(name: &str, version: &str, out_dir: &str) -> Result<(), String> 
     perms.set_mode(0o755);
     fs::set_permissions(&dst_bin, perms).map_err(|e| format!("chmod: {}", e))?;
     println!("  Copied binary → {}", dst_bin);
+
+    // Assets beside the standalone binary (A6): the runtime resolves them via
+    // `current_exe()` → `<exe dir>/assets`, so the copied binary finds them.
+    copy_assets_into(Path::new("assets"), PathBuf::from(out_dir).join("assets"))?;
 
     // 2. Build .deb structure
     let deb_root = format!("{}/{}_{}_{}", out_dir, bin_name, version, "amd64");
@@ -411,6 +459,9 @@ fn bundle_windows(name: &str, version: &str, out_dir: &str) -> Result<(), String
     fs::copy(&src_bin, &dst_bin)
         .map_err(|e| format!("cannot copy exe: {}", e))?;
     println!("  Copied → {}", dst_bin);
+
+    // Assets beside the .exe (A6): resolved at runtime via `current_exe()`.
+    copy_assets_into(Path::new("assets"), PathBuf::from(out_dir).join("assets"))?;
 
     // Icon, alongside the .exe — real icon-in-exe embedding needs `rc.exe`
     // resource compilation, deliberately not attempted here (see the

@@ -13,8 +13,10 @@ use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
+use rosace_shader::ShaderMaterial;
 
 use super::container::draw_rounded_rect_pub;
+use super::material::{resolve_material, BottomNavMaterial};
 use super::{avail_w, LayoutCtx, PaintCtx, Widget};
 
 /// One destination in a [`BottomNavigationBar`].
@@ -57,6 +59,7 @@ pub struct BottomNavigationBar {
     font_size: f32,
     /// `0.0` hides the top hairline divider.
     divider_width: f32,
+    material: Option<ShaderMaterial>,
 }
 
 impl BottomNavigationBar {
@@ -70,6 +73,7 @@ impl BottomNavigationBar {
             radius: 0.0,
             font_size: 10.5,
             divider_width: 1.0,
+            material: None,
         }
     }
     pub fn item(mut self, i: BottomNavItem) -> Self { self.items.push(i); self }
@@ -83,6 +87,9 @@ impl BottomNavigationBar {
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
     pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
     pub fn no_divider(mut self) -> Self { self.divider_width = 0.0; self }
+    /// Per-instance shader material — replaces the bar fill when resolved.
+    /// Beats the theme's `BottomNavMaterial` default (D124 Step 5).
+    pub fn material(mut self, m: ShaderMaterial) -> Self { self.material = Some(m); self }
 }
 
 impl Default for BottomNavigationBar {
@@ -112,10 +119,24 @@ impl Widget for BottomNavigationBar {
         };
 
         let r = ctx.rect;
-        if self.radius > 0.0 {
-            draw_rounded_rect_pub(ctx, r, background, self.radius);
-        } else {
-            ctx.fill_rect(r, background);
+        // With a material, only paint a fallback it EXPLICITLY carries —
+        // an unconditional base fill is what a backdrop-sampling glass
+        // material would sample instead of the content behind the bar
+        // (same rule as Container/Card).
+        let material = resolve_material::<BottomNavMaterial>(&ctx.theme, self.material.as_ref());
+        let fill = match &material {
+            Some(m) => m.fallback,
+            None => Some(background),
+        };
+        if let Some(fill) = fill {
+            if self.radius > 0.0 {
+                draw_rounded_rect_pub(ctx, r, fill, self.radius);
+            } else {
+                ctx.fill_rect(r, fill);
+            }
+        }
+        if let Some(m) = &material {
+            ctx.shader_fill(r, m.pipeline, m.uniforms.clone());
         }
         if self.divider_width > 0.0 && self.radius == 0.0 {
             ctx.fill_rect(
@@ -191,6 +212,23 @@ impl Widget for BottomNavigationBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_material_paints_a_shader_fill() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let mut recorder = rosace_render::PictureRecorder::new();
+        let tree = std::rc::Rc::new(std::cell::RefCell::new(super::super::render_tree::RenderTree::new()));
+        let rect = rosace_core::types::Rect {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size { width: 390.0, height: 56.0 },
+        };
+        let mut ctx = PaintCtx::root(&mut recorder, rect, &font, theme, tree);
+        let m = ShaderMaterial::new(rosace_shader::PipelineId::user(0x4003), vec![0u8; 16]);
+        BottomNavigationBar::new().material(m).item(BottomNavItem::new("Home")).paint(&mut ctx);
+        let picture = recorder.finish();
+        assert!(picture.commands.iter().any(|c| matches!(c, rosace_render::DrawCommand::ShaderFill { .. })));
+    }
 
     #[test]
     fn bar_takes_full_width_and_its_configured_height() {

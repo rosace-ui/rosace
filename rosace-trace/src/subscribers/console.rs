@@ -218,6 +218,9 @@ impl ConsoleSubscriber {
             RosaceTrace::ShaderRegister { pipeline, wgsl_len } => {
                 format!("[SHADER]  register pipeline:{}  wgsl:{}b", pipeline, wgsl_len)
             }
+            RosaceTrace::Log { level, target, message, .. } => {
+                format!("[{}] {} {}", level.label().trim(), target, message)
+            }
         }
     }
 }

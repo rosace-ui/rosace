@@ -232,6 +232,7 @@ impl ScrollView {
             picture,
             child_size,
             viewport_rect: vp,
+            zoom: 1.0,
             scroll_x: off[0],
             scroll_y: off[1],
         });

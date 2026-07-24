@@ -79,6 +79,18 @@ impl FileWatcher {
     }
 }
 
+/// Files the watcher reports: Rust source (drives `view!` data reload) plus the
+/// asset types the dev asset watcher hot-swaps (images, fonts, data). Anything
+/// else is ignored so the channel stays quiet. The consumer branches on the
+/// extension — `.rs` → source reload, otherwise → asset invalidation.
+fn is_watched_ext(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("rs" | "png" | "jpg" | "jpeg" | "svg" | "gif" | "webp"
+            | "ttf" | "otf" | "ttc" | "json" | "txt" | "csv")
+    )
+}
+
 fn scan_dir(
     dir: &Path,
     known: &mut HashMap<PathBuf, SystemTime>,
@@ -97,7 +109,7 @@ fn scan_dir(
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if name.starts_with('.') || name == "target" { continue; }
             scan_dir(&path, known, tx, debouncer);
-        } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+        } else if is_watched_ext(&path) {
             if let Ok(meta) = fs::metadata(&path) {
                 if let Ok(modified) = meta.modified() {
                     let prev = known.get(&path).copied();

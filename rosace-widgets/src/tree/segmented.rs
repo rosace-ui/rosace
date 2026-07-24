@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
+use rosace_render::Color;
 use super::{Widget, LayoutCtx, PaintCtx};
 
 /// A one-of-N horizontal selector — segments in a rounded track, the selected
@@ -8,14 +9,30 @@ pub struct SegmentedControl {
     segments: Vec<String>,
     selected: usize,
     height: f32,
+    track_color: Option<Color>,
+    selected_color: Option<Color>,
+    color: Option<Color>,
+    selected_text_color: Option<Color>,
     on_change: Option<Arc<dyn Fn(usize) + Send + Sync>>,
 }
 
 impl SegmentedControl {
     pub fn new(segments: Vec<impl Into<String>>, selected: usize) -> Self {
-        Self { segments: segments.into_iter().map(Into::into).collect(), selected, height: 34.0, on_change: None }
+        Self {
+            segments: segments.into_iter().map(Into::into).collect(), selected, height: 34.0,
+            track_color: None, selected_color: None, color: None, selected_text_color: None,
+            on_change: None,
+        }
     }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
+    /// Track (unselected background) color — theme's `surface_variant` if unset.
+    pub fn track_color(mut self, c: Color) -> Self { self.track_color = Some(c); self }
+    /// Selected pill's fill color — theme's `primary` if unset.
+    pub fn selected_color(mut self, c: Color) -> Self { self.selected_color = Some(c); self }
+    /// Unselected label color — theme's `on_surface` if unset.
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
+    /// Selected label color — theme's `on_primary` if unset.
+    pub fn selected_text_color(mut self, c: Color) -> Self { self.selected_text_color = Some(c); self }
     pub fn on_change(mut self, f: impl Fn(usize) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Arc::new(f)); self
     }
@@ -33,11 +50,15 @@ impl Widget for SegmentedControl {
         let n = self.segments.len().max(1);
         let seg_w = r.size.width / n as f32;
         let radius = self.height / 2.0;
+        let (track, fg, sel_bg, sel_fg) = {
+            let t = &ctx.theme.colors;
+            (self.track_color.unwrap_or_else(|| ctx.tc(t.surface_variant)),
+             self.color.unwrap_or_else(|| ctx.tc(t.on_surface)),
+             self.selected_color.unwrap_or_else(|| ctx.tc(t.primary)),
+             self.selected_text_color.unwrap_or_else(|| ctx.tc(t.on_primary)))
+        };
         // Track
-        ctx.fill_rrect(r, radius, ctx.tc(ctx.theme.colors.surface_variant));
-        let fg = ctx.tc(ctx.theme.colors.on_surface);
-        let sel_bg = ctx.tc(ctx.theme.colors.primary);
-        let sel_fg = ctx.tc(ctx.theme.colors.on_primary);
+        ctx.fill_rrect(r, radius, track);
 
         // The highlight pill slides between segments (eased index position).
         let pos = ctx.animate_to(self.selected as f32, 0.0);
@@ -75,5 +96,25 @@ impl Widget for SegmentedControl {
                 child.register_hit(Arc::new(move || cb(idx)));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_layout::Constraints;
+
+    #[test]
+    fn customization_builders_do_not_change_layout_size() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
+        let base = SegmentedControl::new(vec!["Day", "Week"], 0);
+        let customized = SegmentedControl::new(vec!["Day", "Week"], 0)
+            .track_color(Color::rgb(10, 10, 10))
+            .selected_color(Color::rgb(255, 0, 0))
+            .color(Color::rgb(255, 255, 255))
+            .selected_text_color(Color::rgb(0, 0, 0));
+        assert_eq!(base.layout(&ctx), customized.layout(&ctx));
     }
 }

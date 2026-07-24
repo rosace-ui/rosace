@@ -9,7 +9,14 @@ repository.workspace = true
 [lib]
 proc-macro = true
 
+[features]
+# Dev-only (`rsc dev`) hot-reload codegen: `view!` additionally emits a
+# template descriptor registered by source location. Off in release → `view!`
+# is pure builder calls, zero template machinery in the binary (D103 Option A).
+rsc-hot = []
+
 [dependencies]
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
+rosace-view-syntax = { path = "../rosace-view-syntax" }

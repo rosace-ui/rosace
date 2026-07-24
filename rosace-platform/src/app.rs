@@ -120,6 +120,7 @@ impl PlatformWindow {
             frame_items: Vec::new(),
             shader_fallback_warned: false,
             ime_composing: false,
+            anim_epoch: Instant::now(),
         };
         // Native blocks on the OS event loop; web cannot block, so it hands the
         // app to the browser's requestAnimationFrame loop and returns.
@@ -176,6 +177,11 @@ struct AppState<F> {
     // composing — suppresses winit's own key->text resolution so a
     // composed CJK sequence doesn't also insert its raw keystrokes.
     ime_composing: bool,
+    // Clock origin for `animate_time` shader quads (D109 maturity): the
+    // platform patches `elapsed` into the first 4 uniform bytes of every
+    // retained animated quad at each present — GPU-resident animation, no
+    // CPU repaint. See `DrawCommand::ShaderFill`.
+    anim_epoch: Instant,
 }
 
 /// One canvas frame item (D109 C1) as a compositor item: quads pass
@@ -256,7 +262,7 @@ fn drain_shader_registrations(presenter: &mut rosace_compositor::GpuPresenter) {
         // Failure is already logged loudly by register_shader; nothing to
         // add here — the pipeline simply isn't registered and any quad
         // referencing it warns once at present time.
-        let _ = presenter.register_shader(id.raw(), &spec.wgsl_source, blend);
+        let _ = presenter.register_shader(id.raw(), &spec.wgsl_source, blend, spec.wants_backdrop);
     }
 }
 
@@ -331,8 +337,12 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
             self.overlay_canvas = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
         }
 
-        // Clear overlay to transparent before each frame (D078).
-        self.overlay_canvas.clear_transparent();
+        // Overlay clearing is ENGINE-owned (2026-07-19): the engine
+        // clears exactly when it repaints overlay entries (or when a
+        // repaint frame declared none), so an open paint-time overlay
+        // (Dropdown menu) survives engine-skipped animated presents with
+        // its pixels retained — and idle frames never pay the full-window
+        // tiny-skia fill that was ~40% of a debug core.
 
         let events = std::mem::take(&mut self.pending_events);
         (self.paint_fn)(&mut self.canvas, &mut self.overlay_canvas, &events);
@@ -400,6 +410,45 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                 );
             }
 
+            // GPU-resident animation (D109 maturity): patch the live
+            // clock into every retained `animate_time` quad's first 4
+            // uniform bytes (the `time`-first convention). This is the
+            // whole per-frame cost of continuous shader animation — a
+            // 4-byte write here plus the compositor's uniform upload; no
+            // widget repaints, no tree walk, no rasterization.
+            let now = self.anim_epoch.elapsed().as_secs_f32();
+            let mut has_animated_quads = false;
+            for it in &mut self.frame_items {
+                if let rosace_render::canvas::CanvasFrameItem::Shader(q) = it {
+                    if q.animate_time {
+                        rosace_shader::materials::patch_time(&mut q.uniforms, now);
+                        has_animated_quads = true;
+                    }
+                }
+            }
+            for q in &mut self.shader_quads {
+                if q.animate_time {
+                    rosace_shader::materials::patch_time(&mut q.uniforms, now);
+                    has_animated_quads = true;
+                }
+            }
+            // Animated quads INSIDE retained scroll layers (D109 C2): patch
+            // them too, and remember which layers held one — those need
+            // their offscreen content re-rendered this frame (below), since
+            // a non-publish frame otherwise reuses the offscreen texture.
+            let mut animated_layers: std::collections::HashSet<u64> = std::collections::HashSet::new();
+            for sl in &mut self.scroll_layers {
+                for it in &mut sl.items {
+                    if let rosace_render::canvas::CanvasFrameItem::Shader(q) = it {
+                        if q.animate_time {
+                            rosace_shader::materials::patch_time(&mut q.uniforms, now);
+                            has_animated_quads = true;
+                            animated_layers.insert(sl.id);
+                        }
+                    }
+                }
+            }
+
             // Refresh the retained scroll layers only when the frame
             // loop published (it repainted). `None` = clean frame →
             // keep the retained set so the layers persist unchanged.
@@ -449,11 +498,12 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                 // over the reused content texture (D090).
                 let off = rosace_state::scroll_offset(sl.id);
                 if !sl.items.is_empty() {
-                    // GPU-shapes scroll content (D109 C2): render
-                    // the items into the offscreen target on
-                    // publish frames, sample it at the live offset
-                    // every frame.
-                    if scroll_dirty {
+                    // GPU-shapes scroll content (D109 C2): render the
+                    // items into the offscreen target on publish frames —
+                    // or every frame for a layer holding an animated quad
+                    // (its patched time uniform must reach the texture).
+                    let layer_dirty = scroll_dirty || animated_layers.contains(&sl.id);
+                    if layer_dirty {
                         let sub: Vec<rosace_compositor::FrameItem<'_>> = sl.items
                             .iter()
                             .map(|it| canvas_item_to_frame(it, true))
@@ -466,8 +516,8 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                             dest: rosace_compositor::LayerRect {
                                 x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
                             },
-                            src_offset: (off[0] * scale, off[1] * scale),
-                            dirty: scroll_dirty,
+                            src_offset: (off[0] * scale * sl.zoom, off[1] * scale * sl.zoom),
+                            dirty: layer_dirty,
                         },
                     ));
                 } else {
@@ -477,7 +527,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                             rosace_compositor::LayerRect {
                                 x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
                             },
-                            (off[0] * scale, off[1] * scale),
+                            (off[0] * scale * sl.zoom, off[1] * scale * sl.zoom),
                             scroll_dirty,
                         ),
                     ));
@@ -495,6 +545,31 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                 ));
             }
             presenter.present_frame(&items);
+
+            // An animated quad needs the NEXT frame too. NOT
+            // `window.request_redraw()` — called from inside
+            // `RedrawRequested`, macOS coalesces it into the frame already
+            // in flight and the loop dies after one present (found live:
+            // frozen animation at 0% CPU). `request_frame` goes through
+            // the event-loop proxy (`FrameRequest` user event), the same
+            // path engine-side animation wakeups use, so the redraw lands
+            // AFTER this handler returns.
+            //
+            // Throttled to ~30fps: ambient shader animation doesn't need a
+            // 120Hz ProMotion cadence, and each present of a scene with a
+            // backdrop material re-renders the whole scene texture — at
+            // full refresh that alone was ~70% of a debug-build core
+            // (measured live). One timer thread per presented frame, so
+            // the steady state is 30 wakeups/second, not a spawn storm.
+            if has_animated_quads {
+                #[cfg(not(target_arch = "wasm32"))]
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(33));
+                    rosace_state::request_frame();
+                });
+                #[cfg(target_arch = "wasm32")]
+                rosace_state::request_frame();
+            }
         } else if let Some(surface) = &mut self.surface {
             // Softbuffer fallback: no GPU, so ShaderFill content can't
             // render. Drain quads so they don't accumulate; warn once.
@@ -561,11 +636,15 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = WindowAttributes::default()
             .with_title(&self.config.title)
+            // Open focused + in front (matters for `rsc dev`, which launches the
+            // app from a terminal — otherwise the window opens behind it).
+            .with_active(true)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 self.config.width,
                 self.config.height,
             ));
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
+        window.focus_window();
 
         // On iOS, the native UIWindow's frame/bounds — what actually
         // determines how large our rendered buffer appears on screen — is set
@@ -831,6 +910,22 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 }
             }
 
+            // Real trackpad pinch-to-zoom (macOS/iOS only — winit's own
+            // platform-support note). `phase` (Started/Moved/Ended) isn't
+            // distinguished here: Moved carries the real per-tick delta,
+            // Started/Ended report ~0, which is a harmless no-op multiply
+            // through InteractiveViewer's `zoom *= 1.0 + delta`.
+            WindowEvent::PinchGesture { delta, .. } => {
+                self.pending_events.push(InputEvent::Pinch {
+                    x: self.cursor_x,
+                    y: self.cursor_y,
+                    delta: delta as f32,
+                });
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+
             WindowEvent::KeyboardInput { event, .. } => {
                 let key = match event.physical_key {
                     PhysicalKey::Code(code) => match code {
@@ -846,6 +941,8 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                         KeyCode::Delete => Key::Delete,
                         KeyCode::Home => Key::Home,
                         KeyCode::End => Key::End,
+                        KeyCode::F12 => Key::F12,
+                        KeyCode::F11 => Key::F11,
                         KeyCode::ShiftLeft | KeyCode::ShiftRight => Key::Shift,
                         KeyCode::ControlLeft | KeyCode::ControlRight => Key::Control,
                         KeyCode::AltLeft | KeyCode::AltRight => Key::Alt,

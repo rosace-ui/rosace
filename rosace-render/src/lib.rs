@@ -110,6 +110,7 @@ mod tests {
 
         let mut rec = PictureRecorder::new();
         rec.push(DrawCommand::ShaderFill {
+            animate_time: false,
             pipeline_id: 0x200,
             rect: rect(10.0, 20.0, 30.0, 40.0),
             uniforms: vec![1, 2, 3, 4],
@@ -141,6 +142,7 @@ mod tests {
         rec.push(DrawCommand::PushClip { rect: rect(10.0, 10.0, 50.0, 50.0) });
         rec.push(DrawCommand::PushClip { rect: rect(30.0, 30.0, 50.0, 50.0) });
         rec.push(DrawCommand::ShaderFill {
+            animate_time: false,
             pipeline_id: 0x300,
             rect: rect(0.0, 0.0, 100.0, 100.0),
             uniforms: vec![],
@@ -148,6 +150,7 @@ mod tests {
         rec.push(DrawCommand::PopClip);
         rec.push(DrawCommand::PopClip);
         rec.push(DrawCommand::ShaderFill {
+            animate_time: false,
             pipeline_id: 0x301,
             rect: rect(0.0, 0.0, 10.0, 10.0),
             uniforms: vec![],

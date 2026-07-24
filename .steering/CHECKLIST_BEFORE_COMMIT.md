@@ -91,6 +91,24 @@
 
 ---
 
+## RELEASE CRITERIA (per release/tag — in addition to the per-commit checklist)
+
+```
+□ .steering/AI_SNAPSHOT.md is updated to reflect this release
+    - version + one-line status; feature status table (live vs not)
+    - API cheat sheet (Component/ctx.state/App::launch/view! syntax/widget
+      constructors — verbatim signatures)
+    - conventions (Constructor Law D093, property vocab D094, naming)
+    - THIS-release delta (what changed since the last snapshot)
+    - gotchas / don't-do
+    - pointers to CRATE_CONTRACTS / DECISIONS for deeper scans
+```
+Why: an AI (or AI-assisted developer) scans ONE concise, current file instead of
+relying on stale training knowledge or spelunking 39 crates. Keep it a snapshot
+(concise, current), not history. Complements `.steering/` (design log).
+
+---
+
 ## IF ANY BOX FAILS
 
 Fix it. Do not commit until all boxes pass.

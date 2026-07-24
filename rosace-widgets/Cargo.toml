@@ -8,6 +8,9 @@ repository.workspace = true
 
 [dependencies]
 web-time       = "1"
+# The shared `view!` grammar (D103) — the runtime hot-reload parser reuses the
+# exact grammar the proc-macro uses, so they can't diverge.
+rosace-view-syntax = { path = "../rosace-view-syntax" }
 # D116/Phase 28 Step 2 — UAX #29 grapheme/word segmentation for the
 # text-editing core (see PHASE_28.md's "Approved dependencies").
 unicode-segmentation = "1"

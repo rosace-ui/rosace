@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::bus::TraceSubscriber;
 use crate::event::RosaceTrace;
@@ -15,7 +16,7 @@ type EventFilter = Arc<dyn Fn(&RosaceTrace) -> bool + Send + Sync>;
 ///
 /// Default capacity: 1000 events.
 pub struct RingBufferSubscriber {
-    buffer: Arc<Mutex<VecDeque<RosaceTrace>>>,
+    buffer: Arc<Mutex<VecDeque<(Instant, RosaceTrace)>>>,
     capacity: usize,
     /// When set, only events for which this returns true are retained
     /// (D123/O1 — the flight recorder excludes high-frequency events).
@@ -65,6 +66,7 @@ impl RingBufferSubscriber {
             .lock()
             .expect("RingBufferSubscriber lock poisoned")
             .drain(..)
+            .map(|(_, e)| e)
             .collect()
     }
 
@@ -74,8 +76,28 @@ impl RingBufferSubscriber {
             .lock()
             .expect("RingBufferSubscriber lock poisoned")
             .iter()
+            .map(|(_, e)| e.clone())
+            .collect()
+    }
+
+    /// Like [`Self::snapshot`], but pairs each event with the `Instant` it
+    /// was recorded at (D123/O1 — the Perfetto/Chrome trace JSON export
+    /// needs a timestamp per event; the events themselves mostly don't
+    /// carry one).
+    pub fn snapshot_timestamped(&self) -> Vec<(Instant, RosaceTrace)> {
+        self.buffer
+            .lock()
+            .expect("RingBufferSubscriber lock poisoned")
+            .iter()
             .cloned()
             .collect()
+    }
+
+    /// Export the current buffer as a Chrome/Perfetto-loadable trace JSON
+    /// (Trace Event Format) — drop it in Perfetto UI's "Open trace file"
+    /// for a full flamegraph, for free (D123/O1).
+    pub fn export_perfetto_json(&self) -> String {
+        super::perfetto::to_chrome_trace_json(&self.snapshot_timestamped())
     }
 }
 
@@ -93,6 +115,6 @@ impl TraceSubscriber for RingBufferSubscriber {
         if buf.len() >= self.capacity {
             buf.pop_front();
         }
-        buf.push_back(event.clone());
+        buf.push_back((Instant::now(), event.clone()));
     }
 }

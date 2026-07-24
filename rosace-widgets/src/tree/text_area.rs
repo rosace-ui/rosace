@@ -41,6 +41,9 @@ pub struct TextArea {
     pub height: f32,
     pub font_size: f32,
     pub radius: f32,
+    background: Option<Color>,
+    border_color: Option<Color>,
+    focus_color: Option<Color>,
     on_change: Option<Arc<dyn Fn(String) + Send + Sync>>,
     controller: Option<EditController>,
     spans: Option<Arc<SpanFn>>,
@@ -61,6 +64,9 @@ impl TextArea {
             height: 160.0,
             font_size: 11.0,
             radius: 6.0,
+            background: None,
+            border_color: None,
+            focus_color: None,
             on_change: None,
             controller: None,
             spans: None,
@@ -76,6 +82,12 @@ impl TextArea {
     pub fn focused(mut self) -> Self { self.focused = true; self }
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
+    /// See `TextInput::background` — same seam, same contract.
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    /// See `TextInput::border` — same seam, same contract.
+    pub fn border(mut self, c: Color) -> Self { self.border_color = Some(c); self }
+    /// See `TextInput::focus_color` — same seam, same contract.
+    pub fn focus_color(mut self, c: Color) -> Self { self.focus_color = Some(c); self }
     pub fn on_change(mut self, f: impl Fn(String) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Arc::new(f));
         self
@@ -204,8 +216,12 @@ impl Widget for TextArea {
         // (D116 Step 8), same convention as `TextInput`.
         let full_rect = ctx.rect;
         let r = Rect { origin: full_rect.origin, size: Size { width: full_rect.size.width, height: self.height } };
-        let bg = Color::rgb(15, 16, 28);
-        let border = if is_focused { Color::rgb(110, 75, 210) } else { Color::rgb(32, 35, 58) };
+        let bg = self.background.unwrap_or(Color::rgb(15, 16, 28));
+        let border = if is_focused {
+            self.focus_color.unwrap_or(Color::rgb(110, 75, 210))
+        } else {
+            self.border_color.unwrap_or(Color::rgb(32, 35, 58))
+        };
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
         ctx.stroke_rrect(r, self.radius, border, if is_focused { 1.5 } else { 1.0 });
 
@@ -307,24 +323,41 @@ impl Widget for TextArea {
                     // this line's own start/end boundary.
                     if let Some((sel_s, sel_e)) = state.selection_range() {
                         if sel_s < le && sel_e > ls {
+                            // Colors from the theme's SelectionStyle (D105
+                            // ext, flat default = the pre-themeable look).
+                            // The GLASS magnifier lens is single-line-field
+                            // only for now (TextInput); a multi-line lens
+                            // is a named deferral — here glass mode means
+                            // its tint + lollipop handles.
+                            let sel_style = ctx.theme.ext::<super::SelectionStyle>().cloned().unwrap_or_default();
                             let x0 = ll.x_at(sel_s);
                             let x1 = ll.x_at(sel_e);
                             if x1 > x0 {
                                 ctx.fill_rect(Rect {
                                     origin: Point { x: x0, y },
                                     size: Size { width: x1 - x0, height: line_h },
-                                }, Color::rgba(110, 75, 210, 90));
+                                }, sel_style.highlight);
                             }
                             // Draggable selection handles (D116 Step 7) —
                             // only on the line that actually OWNS each
                             // endpoint (a multi-line selection's middle
-                            // lines get none).
+                            // lines get none). Grips stay at the line
+                            // bottom in both kinds — the engine's
+                            // handle_anchor targets that point.
                             let handle_y = y + line_h;
-                            if sel_s >= ls && sel_s <= le {
-                                ctx.fill_circle(Point { x: x0, y: handle_y }, 4.0, Color::rgb(180, 160, 255));
-                            }
-                            if sel_e >= ls && sel_e <= le {
-                                ctx.fill_circle(Point { x: x1, y: handle_y }, 4.0, Color::rgb(180, 160, 255));
+                            let glass = sel_style.kind == super::SelectionKind::Glass;
+                            for (endpoint, x) in [(sel_s, x0), (sel_e, x1)] {
+                                if endpoint >= ls && endpoint <= le {
+                                    if glass {
+                                        ctx.fill_rect(Rect {
+                                            origin: Point { x: x - 1.0, y },
+                                            size: Size { width: 2.0, height: line_h },
+                                        }, sel_style.handle);
+                                        ctx.fill_circle(Point { x, y: handle_y }, 4.5, sel_style.handle);
+                                    } else {
+                                        ctx.fill_circle(Point { x, y: handle_y }, 4.0, sel_style.handle);
+                                    }
+                                }
                             }
                         }
                     }
@@ -508,5 +541,18 @@ mod tests {
     fn multiple_consecutive_newlines_produce_empty_lines_between_them() {
         let r = ranges_of("a\n\nb", 1000.0, 10.0);
         assert_eq!(r, vec![(0, 1), (2, 2), (3, 4)]);
+    }
+
+    #[test]
+    fn background_border_focus_color_builders_do_not_change_layout_size() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(rosace_layout::Constraints::loose(400.0, 400.0), &font, &theme);
+        let base = TextArea::new().width(200.0);
+        let customized = TextArea::new().width(200.0)
+            .background(Color::rgb(10, 10, 10))
+            .border(Color::rgb(200, 0, 0))
+            .focus_color(Color::rgb(0, 200, 0));
+        assert_eq!(base.layout(&ctx), customized.layout(&ctx));
     }
 }

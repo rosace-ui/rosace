@@ -298,7 +298,10 @@ mod tests {
             }
         };
         let out = crate::view::expand(input).to_string();
-        assert_eq!(out.matches("child").count(), 2, "expected 2 child calls: {out}");
+        // Two child nodes either way: release emits `. child (`, dev emits
+        // `. with_child (`. Both contain the substring `child (`, and nothing
+        // else in the output does — so this counts children in both modes.
+        assert_eq!(out.matches("child (").count(), 2, "expected 2 child nodes: {out}");
     }
 
     #[test]
@@ -325,5 +328,68 @@ mod tests {
         assert!(out.contains("Stack"), "{out}");
         assert!(out.contains("Column"), "{out}");
         assert!(out.contains("Text"), "{out}");
+    }
+
+    // ── Dev-mode (`rsc-hot`) template descriptor codegen ────────────────────
+    // These run only under `--features rsc-hot`, where `expand` takes the dev
+    // branch. The builder-half assertions above still pass in this mode too
+    // (the widget is emitted inside the registration block).
+
+    #[test]
+    #[cfg(feature = "rsc-hot")]
+    fn view_dev_emits_template_registration_keyed_by_location() {
+        let input = quote! { Column { spacing: 12.0 } };
+        let out = crate::view::expand(input).to_string();
+        assert!(out.contains("register"), "no register call: {out}");
+        assert!(out.contains("TemplateKey"), "no location key: {out}");
+        assert!(out.contains("file !") && out.contains("line !"), "key not from location: {out}");
+    }
+
+    #[test]
+    #[cfg(feature = "rsc-hot")]
+    fn view_dev_literal_prop_is_a_static_value() {
+        let input = quote! { Column { spacing: 12.0 } };
+        let out = crate::view::expand(input).to_string();
+        assert!(out.contains("with_static"), "literal not a static: {out}");
+        assert!(out.contains("StaticValue :: Float"), "wrong static variant: {out}");
+        assert!(!out.contains("with_hole"), "a literal should not be a hole: {out}");
+    }
+
+    #[test]
+    #[cfg(feature = "rsc-hot")]
+    fn view_dev_non_literal_prop_is_a_hole() {
+        // A variable (not a literal) → a runtime hole, not data.
+        let input = quote! { Column { spacing: my_spacing } };
+        let out = crate::view::expand(input).to_string();
+        assert!(out.contains("with_hole"), "non-literal not a hole: {out}");
+        assert!(!out.contains("with_static"), "no statics expected here: {out}");
+    }
+
+    #[test]
+    #[cfg(feature = "rsc-hot")]
+    fn view_dev_wraps_a_handler_prop_as_arc_fn() {
+        // A handler prop's closure is wrapped as Arc<dyn Fn()> in the hole array.
+        let out = crate::view::expand(quote! { Button("Save") { on_press: handler } }).to_string();
+        assert!(out.contains("Arc :: new"), "handler not Arc-wrapped: {out}");
+        assert!(out.contains("dyn"), "no dyn Fn wrapping: {out}");
+        // A plain value prop must NOT be wrapped.
+        let out2 = crate::view::expand(quote! { Column { spacing: g } }).to_string();
+        assert!(!out2.contains("Arc :: new"), "value prop should not be Arc-wrapped: {out2}");
+    }
+
+    #[test]
+    #[cfg(feature = "rsc-hot")]
+    fn view_dev_hole_indices_increment_in_traversal_order() {
+        // Two holes across the tree → indices 0 then 1, props-before-children.
+        let input = quote! {
+            Column {
+                spacing: outer_gap
+                Column { spacing: inner_gap }
+            }
+        };
+        let out = crate::view::expand(input).to_string();
+        assert_eq!(out.matches("with_hole").count(), 2, "expected 2 holes: {out}");
+        assert!(out.contains("0usize"), "hole 0 missing: {out}");
+        assert!(out.contains("1usize"), "hole 1 missing: {out}");
     }
 }

@@ -1,0 +1,10 @@
+[package]
+name = "rosace-asset-codegen"
+version.workspace = true
+edition.workspace = true
+
+# Build-time only: apps depend on this under [build-dependencies] and call
+# `rosace_asset_codegen::generate("assets")` from their build.rs. Pure std, no
+# deps, so it adds ~nothing to build time.
+
+[lib]

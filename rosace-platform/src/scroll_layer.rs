@@ -28,6 +28,13 @@ pub struct ScrollLayer {
     pub height: u32,
     /// Viewport placement on screen in physical pixels: `(x, y, w, h)`.
     pub dest:   (f32, f32, f32, f32),
+    /// Content magnification (Phase 32 `InteractiveViewer`) — `1.0` for
+    /// ordinary scrolling. The content texture was rasterized at
+    /// `dpi_scale * zoom` (see `rosace/src/engine.rs`'s TransformLayer
+    /// pass), so the live scroll offset must be scaled up by the same
+    /// factor to land in texture-pixel space before the compositor's UV
+    /// math runs.
+    pub zoom:   f32,
     /// GPU-shapes mode (D109 C2): the content as ordered frame items
     /// (shape quads + CPU segments) instead of a pre-rasterized pixel
     /// buffer — the compositor renders them into an offscreen texture on

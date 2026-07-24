@@ -6,6 +6,7 @@ pub mod bundle_id;
 pub mod build;
 /// `rsc dev` — development server with terminal trace output.
 pub mod dev;
+pub mod hot_ws;
 /// `rsc devices` — list available run targets across platforms.
 pub mod devices;
 /// `rsc doctor` — environment diagnostics for every platform's toolchain.
@@ -20,5 +21,6 @@ pub mod package;
 pub mod run;
 /// `rsc snapshot` — run an example and save its PNG output.
 pub mod snapshot;
+pub mod tier2;
 /// `rsc check`, `rsc test`, `rsc lint`, `rsc fmt` — workspace quality commands.
 pub mod workspace;

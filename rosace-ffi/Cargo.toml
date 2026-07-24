@@ -7,6 +7,10 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Dev hot reload (Tier 1) on mobile: start the socket transport in Engine::init.
+rsc-hot = ["rosace/rsc-hot"]
+
 [dependencies]
 rosace         = { path = "../rosace" }
 rosace-core    = { path = "../rosace-core" }

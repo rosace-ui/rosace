@@ -66,6 +66,12 @@ impl Engine {
 
         let presenter = GpuPresenter::new(surface, width, height)?;
 
+        // Dev hot reload (Tier 1): on a mobile dev build, listen for edited
+        // source pushed from the dev machine over an adb/devicectl-forwarded
+        // socket. Desktop starts this in `App::launch`; mobile enters here.
+        #[cfg(all(feature = "rsc-hot", any(target_os = "android", target_os = "ios")))]
+        rosace::dev_reload::serve_hot_reload_socket(rosace::dev_reload::DEFAULT_HOT_RELOAD_PORT);
+
         // Bundled Inter — the same default face as `App::launch` (Phase 32).
         let font = rosace_render::FontCache::bundled();
 

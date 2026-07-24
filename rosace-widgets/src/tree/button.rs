@@ -28,6 +28,8 @@ pub struct Button {
     pub height: f32,
     pub font_size: f32,
     pub radius: f32,
+    background: Option<Color>,
+    color: Option<Color>,
     on_press: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -42,6 +44,8 @@ impl Button {
             height: 34.0,
             font_size: 11.0,
             radius: 6.0,
+            background: None,
+            color: None,
             on_press: None,
         }
     }
@@ -58,6 +62,11 @@ impl Button {
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
     pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
+    /// Overrides the variant's own fill color — for a one-off custom color
+    /// outside the Primary/Secondary/Ghost/Danger/Success/Link palette.
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    /// Overrides the variant's own label/icon color.
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
     pub fn icon(mut self, w: impl Widget + 'static) -> Self { self.icon = Some(Box::new(w)); self }
 
@@ -91,7 +100,8 @@ impl Widget for Button {
             ButtonVariant::Success   => (Color::rgb( 40, 160, 80), Color::rgb(220, 255, 230), None),
         };
 
-        let fg = if self.disabled { ctx.tc(t.outline) } else { fg };
+        let bg = if self.disabled { bg } else { self.background.unwrap_or(bg) };
+        let fg = if self.disabled { ctx.tc(t.outline) } else { self.color.unwrap_or(fg) };
 
         // Hover/press feedback: lift the fill toward white (opaque variants)
         // or add a faint wash (ghost/link), eased between three levels (D108
@@ -139,4 +149,22 @@ impl Widget for Button {
 pub(super) fn lighten(c: Color, t: f32) -> Color {
     let mix = |v: u8| (v as f32 + (255.0 - v as f32) * t).round() as u8;
     Color::rgba(mix(c.r), mix(c.g), mix(c.b), c.a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_layout::Constraints;
+
+    #[test]
+    fn background_and_color_builders_do_not_change_layout_size() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
+        let base = Button::new("Save").width(90.0);
+        let customized = Button::new("Save").width(90.0)
+            .background(Color::rgb(20, 20, 20))
+            .color(Color::rgb(255, 255, 255));
+        assert_eq!(base.layout(&ctx), customized.layout(&ctx));
+    }
 }

@@ -7,6 +7,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rosace-core  = { path = "../rosace-core" }
-rosace-state = { path = "../rosace-state" }
-rosace-trace = { path = "../rosace-trace" }
+rosace-core    = { path = "../rosace-core" }
+rosace-state   = { path = "../rosace-state" }
+rosace-trace   = { path = "../rosace-trace" }
+rosace-widgets = { path = "../rosace-widgets" }
+rosace-render  = { path = "../rosace-render" }
+
+[dev-dependencies]
+# For constructing `RosaceTrace::Log { timestamp }` in trace_panel tests.
+web-time = "1"

@@ -1,5 +1,6 @@
 pub mod app;
 pub mod app_lifecycle;
+pub mod asset;
 pub mod child_container;
 pub mod component;
 pub mod context;

@@ -159,6 +159,9 @@ fn format_event(ev: &RosaceTrace) -> String {
         RosaceTrace::ShaderRegister { pipeline, wgsl_len } => {
             format!("ShaderRegister  pipeline={} wgsl_len={}", pipeline, wgsl_len)
         }
+        RosaceTrace::Log { level, target, message, .. } => {
+            format!("Log  [{}] {} {}", level.label().trim(), target, message)
+        }
     }
 }
 

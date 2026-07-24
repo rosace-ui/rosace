@@ -6,6 +6,11 @@ pub mod tree;
 pub mod image;
 pub mod prelude;
 
+/// Template descriptor (D103 / D102 Tier 1) — the data form of a `view!` tree
+/// for universal hot reload; see the module docs.
+pub mod template;
+pub use template::{PropValue, StaticValue, Template, TemplateKey, TemplateNode};
+
 // ── Tree widget re-exports (canonical top-level names) ─────────────────────
 pub use tree::{Alignment, Children, Semantics, Widget};
 pub use tree::PaintCtx;
@@ -17,6 +22,12 @@ pub use tree::WidgetApp;
 pub use tree::AppBar;
 pub use tree::{BottomNavItem, BottomNavigationBar, FloatingActionButton, SearchBar, Snackbar};
 pub use tree::{Carousel, PageView, RatingBar, Stepper, Table, TableColumn};
+pub use tree::{InteractiveViewer, DatePicker, SimpleDate, TimePicker, SimpleTime, DataTable, DataTableColumn, SortDirection};
+pub use tree::{
+    ShaderPaint, MaterialKey, resolve_material, ContainerMaterial, CardMaterial,
+    DialogMaterial, SheetMaterial, DrawerMaterial, AppBarMaterial, BottomNavMaterial,
+};
+pub use tree::{GlassLens, SelectionKind, SelectionStyle};
 pub use tree::Avatar;
 pub use tree::Badge;
 pub use tree::Button;

@@ -1,8 +1,10 @@
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::{Color, DrawCommand};
+use rosace_shader::ShaderMaterial;
 use rosace_theme::TitleAlign;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w};
+use super::material::{resolve_material, AppBarMaterial};
 
 /// A top app bar with title, leading, and trailing action slots.
 ///
@@ -25,6 +27,7 @@ pub struct AppBar {
     pub actions: Vec<BoxedWidget>,
     /// `None` = use the active theme's `app_bar.show_traffic_lights`.
     show_traffic_lights: Option<bool>,
+    material: Option<ShaderMaterial>,
 }
 
 impl AppBar {
@@ -39,6 +42,7 @@ impl AppBar {
             leading: None,
             actions: Vec::new(),
             show_traffic_lights: None,
+            material: None,
         }
     }
 
@@ -55,6 +59,9 @@ impl AppBar {
     /// Overrides the active theme's traffic-light setting for this instance.
     pub fn traffic_lights(mut self) -> Self { self.show_traffic_lights = Some(true); self }
     pub fn title_size(mut self, s: f32) -> Self { self.title_size = s; self }
+    /// Per-instance shader material — replaces the bar fill when resolved.
+    /// Beats the theme's `AppBarMaterial` default (D124 Step 5).
+    pub fn material(mut self, m: ShaderMaterial) -> Self { self.material = Some(m); self }
 
     fn effective_height(&self, theme: &rosace_theme::ThemeData) -> f32 {
         self.height.unwrap_or(theme.app_bar.height)
@@ -79,7 +86,20 @@ impl Widget for AppBar {
         let show_traffic_lights = self.show_traffic_lights.unwrap_or(style.show_traffic_lights);
 
         let r = ctx.rect;
-        ctx.fill_rect(r, bg);
+        // With a material, only paint a fallback it EXPLICITLY carries —
+        // an unconditional base fill is what a backdrop-sampling glass
+        // material would sample instead of the content behind the bar
+        // (same rule as Container/Card).
+        let material = resolve_material::<AppBarMaterial>(&ctx.theme, self.material.as_ref());
+        match &material {
+            Some(m) => {
+                if let Some(fallback) = m.fallback {
+                    ctx.fill_rect(r, fallback);
+                }
+                ctx.shader_fill(r, m.pipeline, m.uniforms.clone());
+            }
+            None => ctx.fill_rect(r, bg),
+        }
 
         // Separating edge — theme-controlled (elevation > 0 draws it; 0 omits
         // it entirely, e.g. the flat Cupertino look).
@@ -162,5 +182,27 @@ impl Widget for AppBar {
             ctx.draw_text_at(&self.title, Point { x: title_x, y: title_y }, fg, self.title_size);
             ctx.record(DrawCommand::PopClip);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instance_material_paints_a_shader_fill() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let mut recorder = rosace_render::PictureRecorder::new();
+        let tree = std::rc::Rc::new(std::cell::RefCell::new(super::super::render_tree::RenderTree::new()));
+        let rect = Rect {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size { width: 400.0, height: 44.0 },
+        };
+        let mut ctx = PaintCtx::root(&mut recorder, rect, &font, theme, tree);
+        let m = ShaderMaterial::new(rosace_shader::PipelineId::user(0x4004), vec![0u8; 16]);
+        AppBar::new("t").material(m).paint(&mut ctx);
+        let picture = recorder.finish();
+        assert!(picture.commands.iter().any(|c| matches!(c, rosace_render::DrawCommand::ShaderFill { .. })));
     }
 }

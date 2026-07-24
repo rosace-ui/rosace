@@ -13,14 +13,29 @@ pub struct Dropdown {
     selected: usize,
     open: Atom<bool>,
     width: f32,
+    background: Option<Color>,
+    color: Option<Color>,
+    border_color: Option<Color>,
+    border_width: f32,
+    radius: f32,
     on_change: Option<Arc<dyn Fn(usize) + Send + Sync>>,
 }
 
 impl Dropdown {
     pub fn new(options: Vec<impl Into<String>>, selected: usize, open: Atom<bool>) -> Self {
-        Self { options: options.into_iter().map(Into::into).collect(), selected, open, width: 200.0, on_change: None }
+        Self {
+            options: options.into_iter().map(Into::into).collect(), selected, open, width: 200.0,
+            background: None, color: None, border_color: None, border_width: 1.0, radius: 8.0,
+            on_change: None,
+        }
     }
     pub fn width(mut self, w: f32) -> Self { self.width = w; self }
+    /// Trigger fill color (theme's `surface_variant` if unset).
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    /// Label/chevron color (theme's `on_surface` if unset).
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
+    pub fn border(mut self, c: Color, w: f32) -> Self { self.border_color = Some(c); self.border_width = w; self }
+    pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
     pub fn on_change(mut self, f: impl Fn(usize) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Arc::new(f)); self
     }
@@ -36,10 +51,15 @@ impl Widget for Dropdown {
         // children (via Menu, which already declares semantics) carry the
         // option list; this is just the current-selection summary.
         ctx.semantics(super::Semantics::new(rosace_core::Role::Button).label(selected_label));
+        let (bg, fg, border) = {
+            let t = &ctx.theme.colors;
+            (self.background.unwrap_or_else(|| ctx.tc(t.surface_variant)),
+             self.color.unwrap_or_else(|| ctx.tc(t.on_surface)),
+             self.border_color.unwrap_or_else(|| ctx.tc(t.outline)))
+        };
         let r = ctx.rect;
-        ctx.fill_rrect(r, 8.0, ctx.tc(ctx.theme.colors.surface_variant));
-        ctx.stroke_rrect(r, 8.0, ctx.tc(ctx.theme.colors.outline), 1.0);
-        let fg = ctx.tc(ctx.theme.colors.on_surface);
+        ctx.fill_rrect(r, self.radius, bg);
+        ctx.stroke_rrect(r, self.radius, border, self.border_width);
         let lh = ctx.font.line_height(13.0);
         ctx.draw_text_at(selected_label, Point { x: r.origin.x + 12.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, fg, 13.0);
         let chev = "\u{25be}";
@@ -74,3 +94,24 @@ impl Widget for Dropdown {
 // Silence unused Rect import in some configs.
 #[allow(unused_imports)]
 use Rect as _RectUsed;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_layout::Constraints;
+
+    #[test]
+    fn customization_builders_do_not_change_layout_size() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
+        let open = Atom::new(rosace_state::next_atom_id(), false);
+        let dd = Dropdown::new(vec!["A", "B"], 0, open)
+            .background(Color::rgb(10, 10, 10))
+            .color(Color::rgb(255, 255, 255))
+            .border(Color::rgb(200, 0, 0), 2.0)
+            .radius(4.0);
+        let size = dd.layout(&ctx);
+        assert_eq!((size.width, size.height), (200.0, 36.0));
+    }
+}

@@ -26,7 +26,31 @@ description = "ROSACE UI framework — single-crate SDK entry point"
 # Enforced by keeping this list here and never adding rosace as a dep
 # inside any sub-crate.
 
+# Dual crate-type: `rlib` is the normal/release linkage; `dylib` enables the
+# Tier-2 hot-reload path (host + reloadable UI modules all dynamically link ONE
+# rosace → a single shared state-store instance so state survives a module
+# swap). Harmless to release builds and to published consumers — they link the
+# rlib unless the build opts into `-C prefer-dynamic` (which `rsc dev` sets).
+[lib]
+crate-type = ["dylib", "rlib"]
+
+[features]
+# Dev-only hot-reload codegen (D102/D103 Tier 1). Turned on by `rsc dev`, off
+# for `rsc build`. Propagates to the `view!` macro so it emits template
+# descriptors alongside the builder widget; a no-op for release builds.
+rsc-hot = ["rosace-macros/rsc-hot", "dep:libloading", "dep:libc"]
+
 [dependencies]
+# Tier-2 hot-reload: dlopen the app's UI module dylib (dev-only, native-only —
+# pulled in only when `rsc-hot` is on). See src/dev_host.rs.
+libloading = { version = "0.8", optional = true }
+# Dev crash detector: a SIGSEGV/SIGABRT/SIGBUS handler that turns a silent
+# native crash into a printed report (dev-only, via `rsc-hot`).
+libc = { version = "0.2", optional = true }
+
+# Monotonic clock (wasm-safe) for dev-chrome animation timing (the DevTools FAB).
+web-time = "1"
+
 # Core layers
 rosace-trace   = { path = "../rosace-trace" }
 rosace-state   = { path = "../rosace-state" }
@@ -77,3 +101,14 @@ rosace-test-utils = { path = "../rosace-test-utils" }
 # shipped inside any app binary regardless of the app's target platform.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rosace-web-seo = { path = "../rosace-web-seo" }
+# Web hot-reload transport (Tier 1): a WebSocket receives edited source pushed
+# by the dev server, and console logging. Only pulled into wasm builds.
+wasm-bindgen = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "console",
+    "Window", "Location",
+    "WebSocket", "MessageEvent", "Event", "EventTarget",
+]

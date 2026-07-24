@@ -2,8 +2,10 @@ use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
 use rosace_scroll::ScrollController;
+use rosace_shader::ShaderMaterial;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget};
 use super::container::draw_rounded_rect_pub;
+use super::material::{resolve_material, SheetMaterial};
 use super::padding::EdgeInsets;
 use super::scroll_view::ScrollView;
 use super::spacer::Spacer;
@@ -42,6 +44,7 @@ pub struct Sheet {
     height_mode: SheetHeight,
     background: Option<Color>,
     handle_color: Option<Color>,
+    material: Option<ShaderMaterial>,
     scrollable: bool,
 }
 
@@ -55,6 +58,7 @@ impl Sheet {
             height_mode: SheetHeight::Content,
             background: None,
             handle_color: None,
+            material: None,
             scrollable: false,
         }
     }
@@ -82,6 +86,9 @@ impl Sheet {
 
     /// Grab-handle color — defaults to the theme's `outline`.
     pub fn handle_color(mut self, c: Color) -> Self { self.handle_color = Some(c); self }
+    /// Per-instance shader material — replaces the surface fill when
+    /// resolved. Beats the theme's `SheetMaterial` default (D124 Step 5).
+    pub fn material(mut self, m: ShaderMaterial) -> Self { self.material = Some(m); self }
 
     /// Wrap the content in a [`ScrollView`] so it scrolls when it overflows
     /// the sheet's height. Without an explicit [`Sheet::height`] /
@@ -155,12 +162,26 @@ impl Widget for Sheet {
         let r = ctx.rect;
 
         // Rounded surface, then square off the bottom corners — the sheet
-        // sits flush against the window's bottom edge.
-        draw_rounded_rect_pub(ctx, r, surface, self.radius);
-        ctx.fill_rect(Rect {
-            origin: Point { x: r.origin.x, y: r.origin.y + r.size.height - self.radius },
-            size: Size { width: r.size.width, height: self.radius },
-        }, surface);
+        // sits flush against the window's bottom edge. With a material,
+        // only paint a fallback it EXPLICITLY carries — an unconditional
+        // base fill would be what a backdrop-sampling glass material sees
+        // behind itself, instead of the real content (same rule as
+        // Container/Card).
+        let material = resolve_material::<SheetMaterial>(&ctx.theme, self.material.as_ref());
+        let fill = match &material {
+            Some(m) => m.fallback,
+            None => Some(surface),
+        };
+        if let Some(fill) = fill {
+            draw_rounded_rect_pub(ctx, r, fill, self.radius);
+            ctx.fill_rect(Rect {
+                origin: Point { x: r.origin.x, y: r.origin.y + r.size.height - self.radius },
+                size: Size { width: r.size.width, height: self.radius },
+            }, fill);
+        }
+        if let Some(m) = &material {
+            ctx.shader_fill(r, m.pipeline, m.uniforms.clone());
+        }
 
         if self.show_handle {
             let handle_w = 36.0;
@@ -186,6 +207,20 @@ mod tests {
     use super::*;
     use super::super::spacer::Spacer;
     use rosace_layout::Constraints;
+
+    #[test]
+    fn instance_material_paints_a_shader_fill() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let mut recorder = rosace_render::PictureRecorder::new();
+        let tree = std::rc::Rc::new(std::cell::RefCell::new(super::super::render_tree::RenderTree::new()));
+        let rect = Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 400.0, height: 300.0 } };
+        let mut ctx = PaintCtx::root(&mut recorder, rect, &font, theme, tree);
+        let m = ShaderMaterial::new(rosace_shader::PipelineId::user(0x4001), vec![0u8; 16]);
+        Sheet::new(Spacer::new(0.0)).material(m).paint(&mut ctx);
+        let picture = recorder.finish();
+        assert!(picture.commands.iter().any(|c| matches!(c, rosace_render::DrawCommand::ShaderFill { .. })));
+    }
 
     fn ctx_800x600<'a>(
         font: &'a rosace_render::FontCache,

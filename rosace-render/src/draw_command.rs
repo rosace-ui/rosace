@@ -55,7 +55,14 @@ pub enum DrawCommand {
     /// — opaque here. This command has NO CPU rasterization path by design:
     /// `SkiaCanvas::play_picture` collects it (see `take_shader_quads`) for
     /// the compositor to execute on the GPU at present time.
-    ShaderFill { pipeline_id: u64, rect: Rect, uniforms: Vec<u8> },
+    ///
+    /// `animate_time` (D109 maturity, 2026-07-18): when true, the platform
+    /// patches the first 4 uniform bytes with a live clock at every present
+    /// (the standard `time`-first uniform convention) — continuous shader
+    /// animation then costs one 16-byte GPU buffer write per frame instead
+    /// of a full CPU tree repaint. The widget records this command ONCE;
+    /// no per-frame repaint, no `request_animation` loop.
+    ShaderFill { pipeline_id: u64, rect: Rect, uniforms: Vec<u8>, animate_time: bool },
 }
 
 impl DrawCommand {
@@ -81,8 +88,8 @@ impl DrawCommand {
                 Self::BlitRgba { pixels, src_width, src_height, dest_rect: shift(dest_rect, dx, dy), opacity },
             Self::PushClip   { rect }                  => Self::PushClip   { rect: shift(rect, dx, dy) },
             Self::PopClip                              => Self::PopClip,
-            Self::ShaderFill { pipeline_id, rect, uniforms } =>
-                Self::ShaderFill { pipeline_id, rect: shift(rect, dx, dy), uniforms },
+            Self::ShaderFill { pipeline_id, rect, uniforms, animate_time } =>
+                Self::ShaderFill { pipeline_id, rect: shift(rect, dx, dy), uniforms, animate_time },
             Self::BackdropBlur { rect, radius, blur, tint } =>
                 Self::BackdropBlur { rect: shift(rect, dx, dy), radius, blur, tint },
         }
@@ -126,8 +133,8 @@ impl DrawCommand {
             // generically — only the fill rect morphs. A shader whose
             // uniforms encode absolute positions won't track a Hero morph;
             // that's the shader author's contract, documented on ShaderFill.
-            Self::ShaderFill { pipeline_id, rect, uniforms } =>
-                Self::ShaderFill { pipeline_id, rect: rc(rect, src_origin, dst_origin, sx, sy), uniforms },
+            Self::ShaderFill { pipeline_id, rect, uniforms, animate_time } =>
+                Self::ShaderFill { pipeline_id, rect: rc(rect, src_origin, dst_origin, sx, sy), uniforms, animate_time },
             Self::BackdropBlur { rect, radius, blur, tint } =>
                 Self::BackdropBlur { rect: rc(rect, src_origin, dst_origin, sx, sy), radius: radius * s, blur: blur * s, tint },
         }

@@ -3,11 +3,13 @@ use std::sync::Arc;
 use rosace_core::types::Size;
 use rosace_layout::Constraints;
 use rosace_render::Color;
+use rosace_shader::ShaderMaterial;
 use rosace_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget};
 use super::button::{Button, ButtonVariant};
 use super::column::Column;
 use super::container::draw_rounded_rect_pub;
+use super::material::{resolve_material, DialogMaterial};
 use super::overlay::{
     FocusBehavior, InputBehavior, LayerPosition, OverlayEntry, ScrimConfig, push_overlay,
 };
@@ -65,6 +67,9 @@ pub struct Dialog {
     pub width: f32,
     pub radius: f32,
     pub presentation: DialogPresentation,
+    background: Option<Color>,
+    color: Option<Color>,
+    material: Option<ShaderMaterial>,
     actions: Vec<Action>,
 }
 
@@ -76,6 +81,9 @@ impl Dialog {
             width: 340.0,
             radius: 12.0,
             presentation: DialogPresentation::default(),
+            background: None,
+            color: None,
+            material: None,
             actions: Vec::new(),
         }
     }
@@ -83,6 +91,13 @@ impl Dialog {
     pub fn message(mut self, m: impl Into<String>) -> Self { self.message = Some(m.into()); self }
     pub fn width(mut self, w: f32) -> Self { self.width = w; self }
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
+    /// Dialog surface fill color (theme's `surface` if unset).
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    /// Title/message text color (theme's `on_surface` if unset).
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
+    /// Per-instance shader material — replaces the surface fill when
+    /// resolved. Beats the theme's `DialogMaterial` default (D124 Step 5).
+    pub fn material(mut self, m: ShaderMaterial) -> Self { self.material = Some(m); self }
 
     /// Present as a modal dialog (the default) — see
     /// [`DialogPresentation::Modal`].
@@ -169,12 +184,16 @@ impl Dialog {
     /// Rebuilt on each layout/paint call — construction is a few allocations,
     /// far below the cost of the paint itself.
     fn build_inner(&self) -> BoxedWidget {
+        let mut title = Text::title(&self.title);
+        if let Some(c) = self.color { title = title.color(c); }
         let mut col = Column::new()
             .spacing(12.0)
-            .child(Text::title(&self.title));
+            .child(title);
 
         if let Some(msg) = &self.message {
-            col = col.child(Text::caption(msg));
+            let mut msg_text = Text::caption(msg);
+            if let Some(c) = self.color { msg_text = msg_text.color(c); }
+            col = col.child(msg_text);
         }
 
         if !self.actions.is_empty() {
@@ -219,14 +238,34 @@ impl Widget for Dialog {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         ctx.semantics(super::Semantics::new(rosace_core::Role::Dialog).label(&self.title));
-        let surface = ctx.tc(ctx.theme.colors.surface);
+        let surface = self.background.unwrap_or_else(|| ctx.tc(ctx.theme.colors.surface));
         let r = ctx.rect;
+        let material = resolve_material::<DialogMaterial>(&ctx.theme, self.material.as_ref());
+        // With a material, only paint a fallback it EXPLICITLY carries —
+        // an unconditional base fill lands in the scene right before the
+        // shader quad, so a backdrop-sampling glass material would sample
+        // the fill instead of the content behind the dialog (same rule as
+        // Container/Card).
         if self.presentation == DialogPresentation::FullPage {
             // A page, not a floating card: square, edge-to-edge, no shadow.
-            ctx.fill_rect(r, surface);
+            if let Some(m) = &material {
+                if let Some(fallback) = m.fallback {
+                    ctx.fill_rect(r, fallback);
+                }
+                ctx.shader_fill(r, m.pipeline, m.uniforms.clone());
+            } else {
+                ctx.fill_rect(r, surface);
+            }
         } else {
             ctx.fill_shadow_rrect(r, self.radius, Color::rgba(0, 0, 0, 100), 16.0);
-            draw_rounded_rect_pub(ctx, r, surface, self.radius);
+            if let Some(m) = &material {
+                if let Some(fallback) = m.fallback {
+                    draw_rounded_rect_pub(ctx, r, fallback, self.radius);
+                }
+                ctx.shader_fill(r, m.pipeline, m.uniforms.clone());
+            } else {
+                draw_rounded_rect_pub(ctx, r, surface, self.radius);
+            }
         }
 
         let inner_rect = EdgeInsets::all(PADDING).shrink(r);
@@ -299,5 +338,34 @@ mod tests {
         let on_tap = entries[0].scrim.as_ref().unwrap().on_tap.as_ref().unwrap().clone();
         on_tap();
         assert!(!open.get(), "barrier tap must close the dialog");
+    }
+
+    #[test]
+    fn instance_material_paints_a_shader_fill() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let mut recorder = rosace_render::PictureRecorder::new();
+        let tree = std::rc::Rc::new(std::cell::RefCell::new(super::super::render_tree::RenderTree::new()));
+        let rect = rosace_core::types::Rect {
+            origin: rosace_core::types::Point { x: 0.0, y: 0.0 },
+            size: Size { width: 340.0, height: 200.0 },
+        };
+        let mut ctx = PaintCtx::root(&mut recorder, rect, &font, theme, tree);
+        let m = ShaderMaterial::new(rosace_shader::PipelineId::user(0x4000), vec![0u8; 16]);
+        Dialog::new("t").material(m).paint(&mut ctx);
+        let picture = recorder.finish();
+        assert!(picture.commands.iter().any(|c| matches!(c, rosace_render::DrawCommand::ShaderFill { .. })));
+    }
+
+    #[test]
+    fn background_and_color_builders_do_not_change_layout_size() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
+        let base = Dialog::new("Title").message("Body");
+        let customized = Dialog::new("Title").message("Body")
+            .background(Color::rgb(10, 10, 10))
+            .color(Color::rgb(255, 255, 255));
+        assert_eq!(base.layout(&ctx), customized.layout(&ctx));
     }
 }

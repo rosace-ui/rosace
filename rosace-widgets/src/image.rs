@@ -81,6 +81,18 @@ impl ImageWidget {
         self
     }
 
+    /// Load the image from a bundled **asset** by logical name — resolved
+    /// per-platform via [`rosace_core::asset`] (dev: `assets/<name>`; mobile:
+    /// the app bundle). Prefer this over [`file`](Self::file) for shipped
+    /// images: it's portable across platforms and hot-reloads under `rsc dev`.
+    ///
+    /// ```ignore
+    /// ImageWidget::new().asset("logo.png").fit(ImageFit::Contain)
+    /// ```
+    pub fn asset(self, name: impl rosace_core::asset::AssetRef) -> Self {
+        self.file(rosace_core::asset::resolve(name))
+    }
+
     /// Set the image source to raw PNG bytes.
     pub fn bytes(mut self, data: Vec<u8>) -> Self {
         self.source = ImageSource::Bytes(data);
@@ -339,6 +351,13 @@ impl ImageCache {
         use std::sync::{Mutex, OnceLock};
         static CACHE: OnceLock<Mutex<ImageCache>> = OnceLock::new();
         CACHE.get_or_init(|| Mutex::new(ImageCache::new()))
+    }
+
+    /// Drop the decode for a single path (the rest of the cache survives).
+    /// The dev asset watcher uses [`ImageCache::clear`] for a blanket flush;
+    /// this is the targeted variant for when only one asset changed.
+    pub fn invalidate(&mut self, path: impl Into<PathBuf>) {
+        self.cache.remove(&path.into());
     }
 
     /// Return the cached image for `path`, loading and decoding it on first

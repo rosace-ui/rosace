@@ -342,13 +342,18 @@ fn fs_main(in: GlassVsOut) -> @location(0) vec4<f32> {
 /// Full-resolution scene + half-resolution blur ping-pong targets, created
 /// lazily on the first backdrop frame and resized with the surface.
 struct SceneTargets {
-    #[allow(dead_code)]
     scene:       wgpu::Texture,
     scene_view:  wgpu::TextureView,
     half_a_view: wgpu::TextureView,
     half_b_view: wgpu::TextureView,
     /// Blits the finished scene to the surface (pipeline_base).
     blit_bind_group: wgpu::BindGroup,
+    /// Snapshot of the scene texture, refreshed (via GPU copy) right before
+    /// each backdrop-sampling shader quad draws (D124 Phase 33 Step 4) — a
+    /// pipeline can't sample the same texture it's rendering into within one
+    /// pass, so this is the "what's behind me so far" copy it reads instead.
+    snapshot:      wgpu::Texture,
+    snapshot_view: wgpu::TextureView,
     w: u32,
     h: u32,
 }
@@ -562,8 +567,33 @@ struct CachedLayer {
 /// `register_shader` time, never lazily on first paint (the Impeller
 /// lesson, PHASE_27.md).
 struct ShaderPipelineEntry {
-    pipeline: wgpu::RenderPipeline,
+    pipeline:       wgpu::RenderPipeline,
+    /// D124 Phase 33 Step 4 — this pipeline was registered with
+    /// `wants_backdrop`; its bind group carries the extra scene-window
+    /// uniform + scene texture + sampler, and its quad forces the frame
+    /// into scene-texture mode.
+    wants_backdrop: bool,
 }
+
+/// Appended (after the base [`shader_quad_header.wgsl`]) only for pipelines
+/// registered with `wants_backdrop` (D124 Phase 33 Step 4). Declares the
+/// extra bindings and a helper so the fragment shader can read what's
+/// behind its own fill rect: `rosace_sample_backdrop(in.uv)`. `in.uv` is the
+/// same quad-local (0,0)-(1,1) space the base header already documents —
+/// the helper remaps it into the captured scene texture's window.
+const BACKDROP_SHADER_HEADER: &str = r#"
+struct RosaceBackdropWindow {
+    scene_uv_min:  vec2<f32>,
+    scene_uv_span: vec2<f32>,
+};
+@group(0) @binding(2) var<uniform> rosace_backdrop: RosaceBackdropWindow;
+@group(0) @binding(3) var t_rosace_scene: texture_2d<f32>;
+@group(0) @binding(4) var s_rosace_scene: sampler;
+
+fn rosace_sample_backdrop(uv: vec2<f32>) -> vec4<f32> {
+    return textureSample(t_rosace_scene, s_rosace_scene, rosace_backdrop.scene_uv_min + uv * rosace_backdrop.scene_uv_span);
+}
+"#;
 
 /// Persistent GPU resources for one shader quad slot, reused across frames
 /// (same D089 discipline as pixel layers): buffers rewritten only when the
@@ -578,6 +608,11 @@ struct CachedShaderQuad {
     user_buf:    wgpu::Buffer,
     user_len:    usize,
     bind_group:  wgpu::BindGroup,
+    /// True when this quad's pipeline was registered with `wants_backdrop`
+    /// (D124 Phase 33 Step 4) — its `bind_group` uses the backdrop layout
+    /// and `backdrop_buf` holds the scene-window uniform.
+    wants_backdrop: bool,
+    backdrop_buf:   Option<wgpu::Buffer>,
 }
 
 /// Compute the quad placement uniform (dest NDC + size in px) for a shader
@@ -593,6 +628,16 @@ fn shader_quad_uniform(rect: (f32, f32, f32, f32), surface_w: u32, surface_h: u3
         w, h,                          // size_px
         0.0, 0.0,                      // pad
     ]
+}
+
+/// Compute a backdrop-sampling quad's scene-texture UV window (D124 Phase
+/// 33 Step 4): its own fill rect expressed as a fraction of the full
+/// surface, matching how `GLASS_WGSL`'s `uv_min`/`uv_span` are derived.
+/// Pure function — unit-testable without a GPU.
+fn backdrop_window_uniform(rect: (f32, f32, f32, f32), surface_w: u32, surface_h: u32) -> [f32; 4] {
+    let (sw, sh) = (surface_w.max(1) as f32, surface_h.max(1) as f32);
+    let (x, y, w, h) = rect;
+    [x / sw, y / sh, w / sw, h / sh]
 }
 
 /// Clamp a physical-px clip rect to the surface and convert to a wgpu
@@ -642,6 +687,10 @@ pub struct GpuPresenter {
     /// (fragment).
     shader_bgl:            wgpu::BindGroupLayout,
     shader_pipeline_layout: wgpu::PipelineLayout,
+    /// Bind group + pipeline layout for backdrop-sampling pipelines (D124
+    /// Phase 33 Step 4) — see [`BACKDROP_SHADER_HEADER`].
+    shader_bgl_backdrop:            wgpu::BindGroupLayout,
+    shader_pipeline_layout_backdrop: wgpu::PipelineLayout,
     /// Persistent per-slot quad resources (D089 discipline for quads).
     cached_quads:          Vec<CachedShaderQuad>,
     /// Offscreen render targets keyed by caller key (D109 C2 — GPU scroll
@@ -927,6 +976,67 @@ impl GpuPresenter {
             push_constant_ranges: &[],
         });
 
+        // Backdrop-sampling shader pipelines (D124 Phase 33 Step 4): the same
+        // two bindings as `shader_bgl`, plus the captured-scene window
+        // uniform, the scene texture, and its sampler — see
+        // `BACKDROP_SHADER_HEADER` for the WGSL side of this contract.
+        let shader_bgl_backdrop = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label:   Some("shader-quad-backdrop-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding:    0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                 wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:   None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                 wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:   None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty:                 wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size:   None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type:    wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled:   false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let shader_pipeline_layout_backdrop = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:                Some("shader-quad-backdrop-pl"),
+            bind_group_layouts:   &[&shader_bgl_backdrop],
+            push_constant_ranges: &[],
+        });
+
         // ── Glyph atlas + instanced pipeline (D109 Step 4) ──────────────
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label:           Some("glyph-atlas"),
@@ -1158,6 +1268,8 @@ impl GpuPresenter {
             shader_pipelines: std::collections::HashMap::new(),
             shader_bgl,
             shader_pipeline_layout,
+            shader_bgl_backdrop,
+            shader_pipeline_layout_backdrop,
             cached_quads: Vec::new(),
             offscreen: std::collections::HashMap::new(),
             glyph_atlas: GlyphAtlas {
@@ -1205,7 +1317,9 @@ impl GpuPresenter {
                 dimension:       wgpu::TextureDimension::D2,
                 format:          self.config.format,
                 usage:           wgpu::TextureUsages::RENDER_ATTACHMENT
-                               | wgpu::TextureUsages::TEXTURE_BINDING,
+                               | wgpu::TextureUsages::TEXTURE_BINDING
+                               | wgpu::TextureUsages::COPY_SRC
+                               | wgpu::TextureUsages::COPY_DST,
                 view_formats:    &[],
             })
         };
@@ -1213,6 +1327,8 @@ impl GpuPresenter {
         let scene_view = scene.create_view(&wgpu::TextureViewDescriptor::default());
         let half_a = mk(sw / 2, sh / 2, "backdrop-half-a");
         let half_b = mk(sw / 2, sh / 2, "backdrop-half-b");
+        let snapshot = mk(sw, sh, "backdrop-shader-snapshot");
+        let snapshot_view = snapshot.create_view(&wgpu::TextureViewDescriptor::default());
         // Fullscreen blit of the finished scene onto the surface: reuse the
         // layer machinery (pipeline_base + bind_group_layout).
         let uniform = placed_uniform(None, sw, sh, (0.0, 0.0), sw, sh);
@@ -1235,6 +1351,7 @@ impl GpuPresenter {
             half_a_view: half_a.create_view(&wgpu::TextureViewDescriptor::default()),
             half_b_view: half_b.create_view(&wgpu::TextureViewDescriptor::default()),
             blit_bind_group,
+            snapshot, snapshot_view,
             w: sw, h: sh,
         });
     }
@@ -1632,6 +1749,16 @@ impl GpuPresenter {
                         }
                         continue;
                     };
+                    if entry.wants_backdrop {
+                        // `bind_group` above was built against the plain
+                        // (non-backdrop) layout — a backdrop-sampling
+                        // pipeline needs a live scene texture, not available
+                        // inside an offscreen scroll-layer render (D124
+                        // Phase 33 Step 4; same limitation as
+                        // `FrameItem::Backdrop` above).
+                        log::debug!("backdrop-sampling shader quad inside scroll content is not supported yet — skipped");
+                        continue;
+                    }
                     cleared = true;
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("offscreen-quad-pass"),
@@ -1735,13 +1862,24 @@ impl GpuPresenter {
     ///
     /// Takes primitives only (`u64`/`&str`/[`ShaderBlend`]) — this crate is
     /// Layer 0 and cannot import `rosace-shader`'s typed `ShaderSpec`;
-    /// `rosace-platform` converts.
-    pub fn register_shader(&mut self, pipeline: u64, wgsl_fragment: &str, blend: ShaderBlend) -> bool {
-        let source = format!(
-            "{}\n{}",
-            include_str!("shader_quad_header.wgsl"),
-            wgsl_fragment,
-        );
+    /// `rosace-platform` converts. `wants_backdrop` selects the backdrop
+    /// bind group layout (see [`BACKDROP_SHADER_HEADER`]) — D124 Phase 33
+    /// Step 4.
+    pub fn register_shader(&mut self, pipeline: u64, wgsl_fragment: &str, blend: ShaderBlend, wants_backdrop: bool) -> bool {
+        let source = if wants_backdrop {
+            format!(
+                "{}\n{}\n{}",
+                include_str!("shader_quad_header.wgsl"),
+                BACKDROP_SHADER_HEADER,
+                wgsl_fragment,
+            )
+        } else {
+            format!(
+                "{}\n{}",
+                include_str!("shader_quad_header.wgsl"),
+                wgsl_fragment,
+            )
+        };
 
         // Scope validation errors so a bad shader is a logged failure, not
         // a process-level panic from wgpu's uncaptured-error handler.
@@ -1769,9 +1907,10 @@ impl GpuPresenter {
             }),
         };
 
+        let layout = if wants_backdrop { &self.shader_pipeline_layout_backdrop } else { &self.shader_pipeline_layout };
         let compiled = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label:  Some("registered-shader-pipeline"),
-            layout: Some(&self.shader_pipeline_layout),
+            layout: Some(layout),
             vertex: wgpu::VertexState {
                 module:              &module,
                 entry_point:         Some("vs_main"),
@@ -1802,7 +1941,7 @@ impl GpuPresenter {
 
         // Replacement invalidates any cached quad bound to the old pipeline
         // object — drop quad caches so the next present rebuilds them.
-        if self.shader_pipelines.insert(pipeline, ShaderPipelineEntry { pipeline: compiled }).is_some() {
+        if self.shader_pipelines.insert(pipeline, ShaderPipelineEntry { pipeline: compiled, wants_backdrop }).is_some() {
             self.cached_quads.clear();
         }
         self.missing_pipeline_warned.remove(&pipeline);
@@ -2093,15 +2232,21 @@ impl GpuPresenter {
             }
         }
 
-        // ── Sync the persistent quad resources (same D089 discipline) ──────
-        self.sync_cached_quads(&quads, sw, sh);
-
         // ── Composite the items, in order ───────────────────────────────────
-        // Frames containing a Backdrop render into an intermediate scene
-        // texture (so the glass can SAMPLE what's beneath it) and blit to
-        // the surface at the end; all other frames render direct.
-        let use_scene = !backdrops.is_empty();
+        // Frames containing a Backdrop, OR a backdrop-sampling shader quad
+        // (D124 Phase 33 Step 4), render into an intermediate scene texture
+        // (so glass/custom materials can SAMPLE what's beneath them) and
+        // blit to the surface at the end; all other frames render direct.
+        let quad_needs_scene = quads.iter().any(|q| {
+            self.shader_pipelines.get(&q.pipeline).map(|e| e.wants_backdrop).unwrap_or(false)
+        });
+        let use_scene = !backdrops.is_empty() || quad_needs_scene;
         if use_scene { self.ensure_scene(sw, sh); }
+
+        // ── Sync the persistent quad resources (same D089 discipline) ──────
+        // Must run AFTER `ensure_scene` — a backdrop-sampling quad's bind
+        // group references the scene snapshot view.
+        self.sync_cached_quads(&quads, sw, sh);
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let target: &wgpu::TextureView = if use_scene {
             &self.scene.as_ref().expect("ensure_scene above").scene_view
@@ -2183,6 +2328,29 @@ impl GpuPresenter {
                         },
                         None => None,
                     };
+
+                    // Backdrop-sampling pipeline (D124 Phase 33 Step 4): copy
+                    // the scene so far into the snapshot texture — a pass
+                    // can't sample the same texture it renders into, so the
+                    // fragment shader reads this copy instead of `target`.
+                    if entry.wants_backdrop {
+                        let st = self.scene.as_ref().expect("use_scene guarantees a scene for a backdrop quad");
+                        encoder.copy_texture_to_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture:   &st.scene,
+                                mip_level: 0,
+                                origin:    wgpu::Origin3d::ZERO,
+                                aspect:    wgpu::TextureAspect::All,
+                            },
+                            wgpu::TexelCopyTextureInfo {
+                                texture:   &st.snapshot,
+                                mip_level: 0,
+                                origin:    wgpu::Origin3d::ZERO,
+                                aspect:    wgpu::TextureAspect::All,
+                            },
+                            wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
+                        );
+                    }
 
                     let load = if !cleared {
                         wgpu::LoadOp::Clear(wgpu::Color::BLACK)
@@ -2489,6 +2657,10 @@ impl GpuPresenter {
     /// Sync `cached_quads` to this frame's quads: reuse buffers when the
     /// uniform size matches (rewriting only changed bytes), rebuild the slot
     /// otherwise. Mirrors the pixel-layer texture cache's D089 discipline.
+    ///
+    /// Callers must have already called `ensure_scene` when any quad in
+    /// `quads` references a backdrop-sampling pipeline (D124 Phase 33 Step
+    /// 4) — its bind group references the scene snapshot view.
     fn sync_cached_quads(&mut self, quads: &[&ShaderQuad<'_>], sw: u32, sh: u32) {
         /// Uniform bindings cannot be zero-sized — a shader with no uniforms
         /// binds 16 zero bytes.
@@ -2499,15 +2671,21 @@ impl GpuPresenter {
             let user_bytes: &[u8] =
                 if quad.uniforms.is_empty() { &EMPTY_UNIFORMS } else { quad.uniforms };
             let quad_uniform = shader_quad_uniform(quad.rect, sw, sh);
+            let wants_backdrop = self.shader_pipelines.get(&quad.pipeline)
+                .map(|e| e.wants_backdrop)
+                .unwrap_or(false);
 
             let reusable = self.cached_quads.get(idx)
-                .map(|c| c.user_len == user_bytes.len())
+                .map(|c| c.user_len == user_bytes.len() && c.wants_backdrop == wants_backdrop)
                 .unwrap_or(false);
 
             if reusable {
                 let cached = &mut self.cached_quads[idx];
                 if cached.rect != quad.rect {
                     self.queue.write_buffer(&cached.quad_buf, 0, bytemuck_f32x8(&quad_uniform));
+                    if let Some(buf) = &cached.backdrop_buf {
+                        self.queue.write_buffer(buf, 0, f32s_as_bytes(&backdrop_window_uniform(quad.rect, sw, sh)));
+                    }
                 }
                 if cached.uniforms != quad.uniforms {
                     self.queue.write_buffer(&cached.user_buf, 0, user_bytes);
@@ -2527,14 +2705,36 @@ impl GpuPresenter {
                     contents: user_bytes,
                     usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
-                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label:   Some("shader-quad-bg"),
-                    layout:  &self.shader_bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: quad_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: user_buf.as_entire_binding() },
-                    ],
-                });
+                let (bind_group, backdrop_buf) = if wants_backdrop {
+                    let st = self.scene.as_ref().expect("ensure_scene called before a backdrop quad syncs");
+                    let backdrop_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label:    Some("shader-quad-backdrop-window"),
+                        contents: f32s_as_bytes(&backdrop_window_uniform(quad.rect, sw, sh)),
+                        usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+                    let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label:   Some("shader-quad-backdrop-bg"),
+                        layout:  &self.shader_bgl_backdrop,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: quad_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: user_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 2, resource: backdrop_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&st.snapshot_view) },
+                            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler_linear) },
+                        ],
+                    });
+                    (bg, Some(backdrop_buf))
+                } else {
+                    let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label:   Some("shader-quad-bg"),
+                        layout:  &self.shader_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: quad_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: user_buf.as_entire_binding() },
+                        ],
+                    });
+                    (bg, None)
+                };
                 let cached = CachedShaderQuad {
                     pipeline:   quad.pipeline,
                     rect:       quad.rect,
@@ -2544,6 +2744,8 @@ impl GpuPresenter {
                     user_buf,
                     user_len:   user_bytes.len(),
                     bind_group,
+                    wants_backdrop,
+                    backdrop_buf,
                 };
                 if idx < self.cached_quads.len() {
                     self.cached_quads[idx] = cached;
@@ -2654,6 +2856,20 @@ mod tests {
         assert!((u[1] + 0.5).abs() < 1e-6, "bottom: {}", u[1]);
         assert!((u[2] - 0.5).abs() < 1e-6, "right: {}", u[2]);
         assert!((u[3] - 0.5).abs() < 1e-6, "top: {}", u[3]);
+    }
+
+    #[test]
+    fn backdrop_window_uniform_full_surface_is_unit_window() {
+        let u = backdrop_window_uniform((0.0, 0.0, 800.0, 600.0), 800, 600);
+        assert_eq!(u, [0.0, 0.0, 1.0, 1.0], "a full-surface rect samples the whole scene texture");
+    }
+
+    #[test]
+    fn backdrop_window_uniform_maps_a_quarter_rect_proportionally() {
+        // A rect at (400, 300) sized 200x150 on an 800x600 surface: exactly
+        // the bottom-right quadrant's top-left quarter — (0.5, 0.5, 0.25, 0.25).
+        let u = backdrop_window_uniform((400.0, 300.0, 200.0, 150.0), 800, 600);
+        assert_eq!(u, [0.5, 0.5, 0.25, 0.25]);
     }
 
     #[test]
