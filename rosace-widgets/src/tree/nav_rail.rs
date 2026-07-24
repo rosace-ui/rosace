@@ -1,10 +1,16 @@
+use std::sync::Arc;
+
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_h};
 use super::container::draw_rounded_rect_pub;
 
-/// A single item in a [`NavRail`].
+fn with_alpha(c: Color, a: f32) -> Color {
+    Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// A single item in a [`NavRail`] — a navigation destination.
 pub struct NavItem {
     pub label: String,
     pub badge: Option<u32>,
@@ -12,6 +18,7 @@ pub struct NavItem {
     pub leading: Option<BoxedWidget>,
     pub height: f32,
     pub font_size: f32,
+    on_press: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl NavItem {
@@ -21,14 +28,20 @@ impl NavItem {
             badge: None,
             active: false,
             leading: None,
-            height: 32.0,
-            font_size: 10.5,
+            height: 36.0,
+            font_size: 12.0,
+            on_press: None,
         }
     }
     pub fn active(mut self) -> Self { self.active = true; self }
+    pub fn active_if(mut self, c: bool) -> Self { self.active = c; self }
     pub fn badge(mut self, n: u32) -> Self { self.badge = Some(n); self }
     pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Box::new(w)); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
+    /// Navigate on tap. Without it the item still absorbs (interactive-by-identity).
+    pub fn on_press(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_press = Some(Arc::new(f)); self
+    }
 }
 
 impl Widget for NavItem {
@@ -45,16 +58,27 @@ impl Widget for NavItem {
         ctx.semantics(sem);
         let r = ctx.rect;
 
+        // Interactive-by-identity: always own the hit region.
+        match &self.on_press {
+            Some(cb) => ctx.register_hit(Arc::clone(cb)),
+            None => ctx.register_hit(Arc::new(|| {})),
+        }
+        let hovered = ctx.hovered();
+        let pressed = ctx.pressed();
+
+        let colors = ctx.theme.colors.clone();
+        let accent = ctx.tc(colors.primary);
+        let on_surf = ctx.tc(colors.on_surface);
+        let pill = Rect { origin: Point { x: r.origin.x + 6.0, y: r.origin.y + 2.0 },
+                          size: Size { width: r.size.width - 12.0, height: r.size.height - 4.0 } };
+
+        // Active pill + accent bar; hover/press wash for the rest.
         if self.active {
-            ctx.fill_rect(
-                Rect { origin: Point { x: r.origin.x + 6.0, y: r.origin.y },
-                       size: Size { width: r.size.width - 12.0, height: r.size.height } },
-                Color::rgb(26, 29, 50),
-            );
-            ctx.fill_rect(
-                Rect { origin: r.origin, size: Size { width: 3.0, height: r.size.height } },
-                Color::rgb(110, 75, 210),
-            );
+            draw_rounded_rect_pub(ctx, pill, with_alpha(accent, 0.16), 8.0);
+            ctx.fill_rect(Rect { origin: Point { x: r.origin.x, y: r.origin.y + 6.0 },
+                                 size: Size { width: 3.0, height: r.size.height - 12.0 } }, accent);
+        } else if hovered || pressed {
+            draw_rounded_rect_pub(ctx, pill, with_alpha(on_surf, if pressed { 0.12 } else { 0.07 }), 8.0);
         }
 
         let mut lx = r.origin.x + 14.0;
@@ -67,8 +91,10 @@ impl Widget for NavItem {
             lx += ls.width + 8.0;
         }
 
-        // Label
-        let label_color = if self.active { Color::rgb(220, 222, 240) } else { Color::rgb(140, 144, 175) };
+        // Label — active/hover brighten toward full on_surface.
+        let label_color = if self.active { on_surf }
+            else if hovered { super::lerp_color(with_alpha(on_surf, 0.6), on_surf, 0.5) }
+            else { with_alpha(on_surf, 0.6) };
         let line_h = ctx.font.line_height(self.font_size);
         let ty = r.origin.y + (r.size.height - line_h) / 2.0;
         ctx.draw_text_at(&self.label, Point { x: lx, y: ty }, label_color, self.font_size);
@@ -78,9 +104,9 @@ impl Widget for NavItem {
             let bw = ns.len() as f32 * 7.0 + 8.0;
             let bx = r.origin.x + r.size.width - bw - 10.0;
             let by = r.origin.y + (r.size.height - 16.0) / 2.0;
-            let badge_col = if self.active { Color::rgb(110, 75, 210) } else { Color::rgb(50, 55, 90) };
+            let badge_col = if self.active { accent } else { with_alpha(on_surf, 0.18) };
             draw_rounded_rect_pub(ctx, Rect { origin: Point { x: bx, y: by }, size: Size { width: bw, height: 16.0 } }, badge_col, 8.0);
-            let badge_text_color = if self.active { Color::rgb(230, 232, 245) } else { Color::rgb(140, 144, 175) };
+            let badge_text_color = if self.active { Color::rgb(252, 252, 255) } else { with_alpha(on_surf, 0.7) };
             ctx.draw_text_at(&ns, Point { x: bx + 4.0, y: by + 3.0 }, badge_text_color, 8.5);
         }
     }
