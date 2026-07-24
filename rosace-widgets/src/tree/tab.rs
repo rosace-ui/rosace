@@ -125,19 +125,32 @@ impl Widget for TabBar {
         };
         ctx.fill_rect(underline, indicator);
 
+        let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
         for (i, tab) in self.tabs.iter().enumerate() {
             let tab_x = r.origin.x + i as f32 * tab_w;
-            // Label color crossfades toward `active` as the indicator nears it.
+            let tab_rect = Rect { origin: Point { x: tab_x, y: r.origin.y }, size: Size { width: tab_w, height: r.size.height } };
+            let mut child = ctx.child(tab_rect);
+            let hov = child.hovered();
+            let prs = child.pressed();
+            // Hover/press wash behind the tab (an inactive tab under the pointer
+            // reads as reachable — Material's tab state layer).
+            if hov || prs {
+                child.fill_rect(Rect {
+                    origin: Point { x: tab_x + 2.0, y: r.origin.y + 2.0 },
+                    size: Size { width: tab_w - 4.0, height: r.size.height - 4.0 },
+                }, with_alpha(active, if prs { 0.10 } else { 0.06 }));
+            }
+            // Label color crossfades toward `active` as the indicator nears it,
+            // and brightens further while hovered.
             let nearness = (1.0 - (pos - i as f32).abs()).clamp(0.0, 1.0);
-            let label_color = super::lerp_color(inactive, active, nearness);
-            let text_w = ctx.font.measure_text(&tab.label, self.font_size);
-            let line_h = ctx.font.line_height(self.font_size);
+            let mut label_color = super::lerp_color(inactive, active, nearness);
+            if hov { label_color = super::lerp_color(label_color, active, 0.6); }
+            let text_w = child.font.measure_text(&tab.label, self.font_size);
+            let line_h = child.font.line_height(self.font_size);
             let tx = tab_x + (tab_w - text_w) / 2.0;
             let ty = r.origin.y + (r.size.height - line_h) / 2.0;
-            ctx.draw_text_at(&tab.label, Point { x: tx, y: ty }, label_color, self.font_size);
+            child.draw_text_at(&tab.label, Point { x: tx, y: ty }, label_color, self.font_size);
 
-            let tab_rect = Rect { origin: Point { x: tab_x, y: r.origin.y }, size: Size { width: tab_w, height: r.size.height } };
-            let child = ctx.child(tab_rect);
             child.semantics(
                 super::Semantics::new(rosace_core::Role::Tab)
                     .label(&tab.label)
