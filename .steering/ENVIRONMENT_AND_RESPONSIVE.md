@@ -3,9 +3,9 @@
 Two complementary mechanisms. Neither is `LayoutBuilder` — that one is rejected
 because in a `ScrollView` the offered constraint is **infinite** (unbounded
 axis), so a builder that reads `max_height` gets `∞` and breaks. We measure the
-**real placed rect** instead, and expose global environment as a reactive atom.
+**real placed rect** instead, and expose the global `Environment` as a reactive atom (`use_env()`).
 
-## Part A — Global MediaQuery (a `GlobalAtom`)
+## Part A — Global `Environment` (a `GlobalAtom`) — DECIDED name
 App-level environment, **reactive**. NOT just width — supplies:
 - **brightness** (dark / light) and the active **theme**
 - **orientation** (portrait / landscape)
@@ -14,11 +14,11 @@ App-level environment, **reactive**. NOT just width — supplies:
 - **safe-area** insets (this ALREADY exists as `use_safe_area()` — the exact
   pattern to generalize)
 
-Mechanism: `static MEDIA_QUERY: GlobalAtom<MediaQuery>`; `use_media_query()` to
+Mechanism: `static ENVIRONMENT: GlobalAtom<Environment>`; `use_env()` to
 read (reading subscribes the component, so it rebuilds when it changes);
-`set_media_query(..)` called by the platform/engine on startup and on
-resize / theme-toggle / orientation-change. This is Flutter's `MediaQuery` but
-as a clean reactive atom — and `safe_area.rs` already proves the pattern works.
+`set_env(..)` called by the platform/engine on startup and on
+resize / theme-toggle / orientation-change. (Named `Environment`, read via `use_env()` — chosen over "MediaQuery", which is CSS/print-era baggage: "media" is a dead distinction and nothing is "queried". This is Flutter.s `MediaQuery` in spirit but
+a clean reactive atom named honestly — and `safe_area.rs` already proves the pattern works.
 
 ## Part B — Per-widget post-layout callback (`on_layout(rect)`)
 The user's idea, and it's the right primitive: a widget optionally gets a
@@ -44,7 +44,7 @@ by (a) fire-only-on-change and (b) layout converging to a stable rect (same as
 own `on_layout` without a fixed point.
 
 ## How they combine (the responsive story)
-- **Global MediaQuery** → app-shell decisions: "window is 400px / portrait /
+- **Global `Environment`** (use_env) → app-shell decisions: "window is 400px / portrait /
   dark" → mobile drawer vs desktop rail; dark theme.
 - **`on_layout`** → local decisions that work anywhere, including scroll views:
   "THIS panel became 300px → reflow its grid to 1 column."
