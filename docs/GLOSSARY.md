@@ -45,343 +45,414 @@ This glossary has two parts:
 
 ## A
 
-**Atom**
-ROSACE's core state primitive. A reactive value of type T.
-When changed via .set() or .update(), all subscriber components
-are scheduled for rebuild. The smallest unit of state.
+### Atom
+ROSACE's core state primitive — a reactive value of type `T`
+([`atom.rs`](../rosace-state/src/atom.rs)). Changing it via `.set()` or
+`.update()` schedules every subscriber [component](#component) for
+rebuild. The smallest unit of state; read it with [`use_atom`](#use_atom).
+See [state-and-reactivity.md](architecture/state-and-reactivity.md).
 
-**AtomId**
-A unique identifier for an atom instance. Used by the
-refresh engine and tracing system.
+### AtomId
+A unique identifier for an atom instance, used by the
+[RefreshEngine](#refreshengine) and the [tracing](#tracingbus) system.
 
-**AtomProvider**
-A widget that makes a scoped atom available to its subtree.
-Multiple providers can exist for the same atom — each is isolated.
+### AtomProvider
+*No matching symbol in the source — treat as aspirational.* The intended
+idea: a widget that makes a scoped [atom](#atom) available to its subtree,
+with multiple isolated providers per atom. See also [Provider](#provider).
 
-**AsyncState<T>**
-The five states of an async atom:
-Idle, Loading, Success(T), Error(RosaceError), Refreshing(T).
+### AsyncState
+The five states an async value moves through
+([`async_state.rs`](../rosace-state/src/async_state.rs), D009): `Idle`,
+`Loading`, `Success(T)`, `Error(`[`RosaceError`](#rosaceerror)`)`,
+`Refreshing(T)`. Note: this is a **data enum only** — there is no
+`use_async` hook that drives it (see [use_async](#use_async)).
 
-**AxisBound**
-Describes the constraint on one axis: Bounded(f32) for exact max,
-Unbounded for scroll axes, Shrink to take only needed space.
+### AxisBound
+The constraint on one layout axis
+([`render_object.rs`](../rosace-core/src/render_object.rs)):
+`Bounded(f32)` (exact max), `Unbounded` (scroll axes), or `Shrink` (take
+only needed space). The building block of [Constraints](#constraints).
 
 ---
 
 ## B
 
-**Batch**
-A group of atom changes that triggers only one rebuild.
-Automatic within sync blocks. Manual via batch() function.
+### Batch
+A group of [atom](#atom) changes that triggers only one rebuild —
+automatic within a sync block, manual via `batch()`. See [Priority](#priority).
 
-**BiDi**
-Bidirectional text — mixed left-to-right and right-to-left
-text in the same paragraph (e.g. an English word inside an Arabic
-sentence). ROSACE's handling lives in `rosace-bidi`; full
-complex-script shaping is deferred to v1.0 (see **HarfBuzz** below).
+### BiDi
+Bidirectional text — mixed left-to-right and right-to-left in one
+paragraph (e.g. an English word inside an Arabic sentence). ROSACE's
+handling lives in `rosace-bidi`; full complex-script shaping is deferred
+to v1.0 (see [HarfBuzz](#harfbuzz)).
+*📖 [Wikipedia — Bidirectional text](https://en.wikipedia.org/wiki/Bidirectional_text).*
 
 ---
 
 ## C
 
-**ChildContainer**
-A trait implemented by multi-child widgets (Column, Row, Stack etc.)
-providing .child(), .children(), .builder(), .child_if(), .prepend(),
-.append(), .append_many() methods.
+### ChildContainer
+A trait implemented by multi-child widgets (`Column`, `Row`, `Stack`…)
+providing `.child()`, `.children()`, `.builder()`, `.child_if()`,
+`.prepend()`, `.append()`, `.append_many()`.
 
-**ComponentId**
-A unique identifier for a component instance in the tree.
-Used for identity tracking, key resolution, and tracing.
+### Component
+The core trait every UI type implements
+([`component.rs`](../rosace-core/src/component.rs)): `trait Component:
+Send + Sync + 'static { fn build(&self, ctx: &mut `[`Context`](#context)`)
+-> `[`Element`](#element)` }`. (Older docs called this `RosaceComponent`
+— that name does not exist; the real trait is `Component`.) See
+[core.md](architecture/core.md).
 
-**Constraints**
-The layout instruction passed from parent to child:
-min_width, max_width (AxisBound), min_height, max_height (AxisBound).
+### ComponentId
+A unique identifier for a component instance in the tree
+([defined in `rosace-trace`](../rosace-trace/src/event.rs)) — its DFS
+position (D001). Used for identity tracking, [Key](#key) resolution,
+[tracing](#tracingbus), and to key [atoms](#atom) so state survives
+rebuilds and hot-reloads.
 
-**Context**
-The build context passed to RosaceComponent::build().
-Provides access to local state, lifecycle hooks, and services.
+### Constraints
+The layout instruction passed parent→child
+([`constraints.rs`](../rosace-layout/src/constraints.rs)): `min/max_width`
+and `min/max_height`, each an [AxisBound](#axisbound). Consumed by
+[Flexure](#flexure); see [render-pipeline.md](architecture/render-pipeline.md).
 
-**cosmic-text** — *NOT used (historical).*
-An early design named `cosmic-text` as the text-layout library, but it
-was never adopted. The real stack is `fontdue` (glyph rasterization) +
-`ttf-parser` (font-file parsing) with ROSACE's own glyph-placement walk
+### Context
+The build context passed to [`Component::build()`](#component)
+([`context.rs`](../rosace-core/src/context.rs)) — access to local state
+(`ctx.state(default)`), [lifecycle hooks](#on_mount), and services.
+
+### cosmic-text
+*NOT used (historical).* An early design named `cosmic-text` as the
+text-layout library; it was never adopted. The real stack is `fontdue`
+(glyph rasterization) + `ttf-parser` (font parsing) with ROSACE's own
+[glyph](#glyph)-placement walk
 ([`layout_glyphs`](../rosace-render/src/font.rs)) and a first-fit
-`FallbackShaper` (one glyph per character — full shaping deferred to
-v1.0, D014). Kept here only so old references resolve to the truth.
+`FallbackShaper` (one glyph per character — full shaping deferred, D014).
+Kept so old references resolve to the truth. See [Skia / tiny-skia](#skia--tiny-skia).
 
 ---
 
 ## D
 
-**Derived Atom**
-An atom whose value is computed from other atoms.
-Lazily recomputed — only when read. Auto-invalidated when
-source atoms change.
+### Derived Atom
+*No matching symbol in the source — treat as aspirational.* Intended: an
+[atom](#atom) computed from other atoms, lazily recomputed on read and
+auto-invalidated when its sources change.
 
-**Dirty**
-A component or screen region that needs to be rebuilt or repainted.
-Marked dirty by the refresh engine when a subscribed atom changes.
+### Dirty
+A component or screen region that needs rebuilding or repainting. Marked
+dirty by the [RefreshEngine](#refreshengine) when a subscribed
+[atom](#atom) changes; drives frame-skip (see
+[render-pipeline.md](architecture/render-pipeline.md)).
 
-**DFS Timestamp**
-Depth-first search entry/exit timestamps used by the refresh engine's
-tree index for O(1) ancestor lookup.
+### DFS Timestamp
+Depth-first-search entry/exit timestamps in the [RefreshEngine](#refreshengine)'s
+tree index, giving O(1) ancestor lookup when pruning [dirty](#dirty) subtrees.
+*📖 [Wikipedia — Depth-first search](https://en.wikipedia.org/wiki/Depth-first_search).*
 
 ---
 
 ## E
 
-**Element**
-A lightweight, immutable description of what a component wants
-to render. Created by RosaceComponent::build(). Cheap to create.
-The virtual representation before layout and paint.
+### Element
+A lightweight, immutable description of what a [component](#component)
+wants to render, produced by `build()`. Cheap to create — the virtual
+representation before layout and paint. See [core.md](architecture/core.md).
 
-**ErrorBoundary**
-A widget that catches panics and RosaceErrors from its subtree
+### ErrorBoundary
+*No matching symbol in the source — treat as aspirational.* Intended: a
+widget that catches panics/[`RosaceError`](#rosaceerror)s from its subtree
 and shows a fallback UI instead of crashing.
 
 ---
 
 ## F
 
-**Flexure**
-The name of ROSACE's constraint-based layout engine.
-Implements three-pass layout: Measure, Place, Paint.
+### Flexure
+ROSACE's constraint-based layout engine
+([`flexure.rs`](../rosace-layout/src/flexure.rs)) — three-pass layout
+(measure → place → paint, D013/D014). Consumes [Constraints](#constraints),
+produces sizes + child positions. See [render-pipeline.md](architecture/render-pipeline.md).
 
-**ForeignBox**
-A RAII wrapper for memory allocated by external C code.
-Automatically calls the provided free function on drop.
+### ForeignBox
+*No matching symbol found — verify before use.* Intended: an RAII wrapper
+for memory allocated by external C code, calling the provided free
+function on drop. (The FFI layer exists — see [SharedMemory](#sharedmemory)
+— but this exact type wasn't found.)
+*📖 [Wikipedia — RAII](https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization).*
 
-**FocusScope**
-A widget that manages keyboard focus. Can auto-focus first child
-and trap focus within its subtree (for dialogs).
+### FocusScope
+*No matching symbol in the source — treat as aspirational.* Intended: a
+widget managing keyboard focus — auto-focus first child, trap focus in a
+subtree (for dialogs). (Focus itself exists in the engine; this wrapper
+widget wasn't found.)
 
 ---
 
 ## G
 
-**GlobalAtom**
-An atom with app-wide scope. Accessible from any component
-without a provider. Use sparingly — only for truly global state.
+### GlobalAtom
+An [atom](#atom) with app-wide scope, reachable from any component
+without a provider (used e.g. for [LifecycleState](#lifecyclestate)). Use
+sparingly — only for truly global state.
 
-**Glyph Cache**
-A GPU texture atlas of rasterized glyphs. Prevents rasterizing
-the same glyph twice. LRU eviction when full.
+### Glyph Cache
+The cache of rasterized [glyphs](#glyph) — on GPU it's a
+[glyph atlas](GLOSSARY.md#glyph-atlas) with [LRU](GLOSSARY.md#lru-cache)
+eviction; each distinct glyph is rasterized once (`fontdue`). See the
+graphics primer for the full mechanism.
 
 ---
 
 ## H
 
-**HarfBuzz** — *NOT used (deferred).*
-The industry-standard text *shaping* library (used by Chrome/Firefox):
-it turns a run of Unicode characters into correctly positioned glyphs,
-handling ligatures, kerning, and complex scripts (Arabic joining,
-Indic reordering). ROSACE does **not** depend on it. Today it uses a
-first-fit `FallbackShaper` (one glyph per character, no ligatures/
-complex scripts); real shaping is deferred to v1.0 (D014). Shaping =
-"which glyphs, in what order, where"; see also **kerning** in the
-graphics primer.
+### HarfBuzz
+*NOT used (deferred).* The industry-standard text *shaping* library
+(Chrome/Firefox): turns Unicode characters into correctly positioned
+glyphs, handling ligatures, [kerning](GLOSSARY.md#baseline-bearing-kerning),
+and complex scripts (Arabic joining, Indic reordering). ROSACE does
+**not** depend on it — today it uses a first-fit `FallbackShaper` (one
+glyph per character); real shaping is deferred to v1.0 (D014).
+*📖 [Wikipedia — HarfBuzz](https://en.wikipedia.org/wiki/HarfBuzz).*
 
 ---
 
 ## I
 
-**IntrinsicHeight / IntrinsicWidth / IntrinsicSize**
-Widgets that force a two-pass layout to measure children before
-sizing themselves. Explicit opt-in — zero cost when not used.
+### IntrinsicHeight / IntrinsicWidth / IntrinsicSize
+*The concept is real (D016 opt-in intrinsic sizing) but these widget
+names weren't found in the source — verify before use.* Intended: force
+a two-pass layout to measure children before sizing self; explicit
+opt-in, zero cost when unused.
 
 ---
 
 ## J
 
-**JIT (dev mode)**
-ROSACE approximates JIT in dev mode via WASM hot-swap.
-Component code changes → WASM module swapped → UI updates instantly.
-Not true JIT — fast incremental recompile + hot-swap.
+### JIT (dev mode)
+*Misleading — corrected.* ROSACE dev-mode reload is **not** WASM/JIT. It's
+a three-tier system (data-swap → dylib-swap → hot-restart) — see
+[hot-reload.md](architecture/hot-reload.md). No WASM module swapping is
+involved on native; the web path rebuilds + rehydrates.
+*📖 [Wikipedia — JIT compilation](https://en.wikipedia.org/wiki/Just-in-time_compilation) (for the general term).*
 
 ---
 
 ## K
 
-**Key**
-An optional identifier attached to a component with .key(value).
-Tells ROSACE to track this component by key rather than position.
-Required for dynamic lists where order can change.
+### Key
+An optional identifier attached to a component with `.key(value)`. Tells
+ROSACE to track a component by key rather than tree position — required
+for dynamic lists where order changes. See [ComponentId](#componentid).
 
-**KeepAlive**
-A widget that preserves its child's state even when removed from
-the active tree (e.g. tab switching). Memory budget enforced via LRU.
+### KeepAlive
+Preserves a child's state even when removed from the active tree (e.g.
+tab switching) — [`rosace-nav`](../rosace-nav/src/lib.rs). Memory budget
+enforced via [LRU](GLOSSARY.md#lru-cache).
 
 ---
 
 ## L
 
-**Layout Cache**
-A cache of text layout results keyed by string + style + width.
-Invalidated when any input changes. Prevents re-measuring unchanged text.
+### Layout Cache
+A cache of text-layout results keyed by string + style + width;
+invalidated when any input changes, so unchanged text isn't re-measured.
+[LRU](GLOSSARY.md#lru-cache)-bounded.
 
-**LifecycleState**
-The four states of app lifecycle: Active, Inactive, Background, Suspended.
-Available as a GlobalAtom.
+### LifecycleState
+The app-lifecycle states — `Active`, `Inactive`, `Background`,
+`Suspended` (D110). Exposed as a [GlobalAtom](#globalatom). See
+[platform-and-app-loop.md](architecture/platform-and-app-loop.md).
 
-**Logical Sides**
-Padding/margin values that respect text direction:
-.padding_start() = left in LTR, right in RTL.
-.padding_end() = right in LTR, left in RTL.
+### Logical Sides
+Padding/margin that respects text direction: `.padding_start()` = left in
+LTR / right in [RTL](#rtl); `.padding_end()` the reverse. Contrast
+[Physical Sides](#physical-sides).
 
 ---
 
 ## N
 
-**NavigationDecision**
-The result of a navigation guard: Allow, Block, or RedirectTo(route).
+### NavigationDecision
+The result of a navigation guard
+([`route.rs`](../rosace-nav/src/route.rs)): `Allow`, `Block`, or
+`RedirectTo(route)`.
 
 ---
 
 ## O
 
-**on_mount**
-Lifecycle hook. Fires once when component is added to the tree.
-Return a cleanup function to run on unmount.
+### on_mount
+Lifecycle hook — fires once when a component enters the tree; return a
+cleanup closure to run on unmount. See [Context](#context).
 
-**on_unmount**
-Lifecycle hook. Fires once when component is removed from tree.
+### on_unmount
+Lifecycle hook — fires once when a component leaves the tree.
 
-**on_update**
-Lifecycle hook. Fires when component's own props change.
-Receives previous props.
+### on_update
+Lifecycle hook — fires when a component's own props change; receives the
+previous props.
 
 ---
 
 ## P
 
-**Physical Sides**
-Padding/margin values that never mirror with RTL:
-.padding_left() always = left. .padding_right() always = right.
+### Physical Sides
+Padding/margin that never mirrors with [RTL](#rtl): `.padding_left()` is
+always left, `.padding_right()` always right. Contrast
+[Logical Sides](#logical-sides).
 
-**Priority**
-Batching priority for atom updates:
-Immediate (bypasses batch), Normal (default, batched), Background (deferred).
+### Priority
+[Batching](#batch) priority for atom updates: `Immediate` (bypasses the
+batch), `Normal` (default, batched), `Background` (deferred).
 
-**Provider**
-See AtomProvider. Makes a scoped atom available to a subtree.
+### Provider
+*See [AtomProvider](#atomprovider) — aspirational, no matching symbol.*
 
 ---
 
 ## R
 
-**RefreshEngine**
-The system that minimizes component rebuilds. Collects dirty
-components, prunes descendants, rebuilds from roots only.
-Guarantees each component rebuilds at most once per frame.
+### RefreshEngine
+The system that minimizes rebuilds: collects [dirty](#dirty) components,
+prunes descendants (via [DFS timestamps](#dfs-timestamp)), and rebuilds
+from roots only — each component rebuilds at most once per frame. See
+[state-and-reactivity.md](architecture/state-and-reactivity.md).
 
-**RenderObject**
-The layer below Element. Handles layout (sizing), painting (by emitting
-[`DrawCommand`](../rosace-render/src/draw_command.rs)s — never touching
-pixels directly, see [**rasterization**](#rasterization)), and hit
-testing. Created from Element during reconciliation.
+### RenderObject
+The layer below [Element](#element): handles layout (sizing), painting
+(by emitting [`DrawCommand`](../rosace-render/src/draw_command.rs)s —
+never touching pixels directly, see
+[rasterization](GLOSSARY.md#rasterization)), and hit testing. Created from
+`Element` during reconciliation.
 
-**RingBufferSubscriber**
-A TraceSubscriber that keeps the last N RosaceTrace events in memory.
-Enables time travel debugging. Default capacity: 1000 events.
+### RingBufferSubscriber
+A [TraceSubscriber](#tracesubscriber) that keeps the last N
+[RosaceTrace](#rosacetrace) events in memory
+([`rosace-trace`](../rosace-trace/src/subscribers/ring_buffer.rs)) —
+enables time-travel debugging. Default capacity 1000.
 
-**RTL**
-Right-to-left text direction. Used by Arabic, Hebrew, Persian.
-ROSACE handles RTL automatically when locale is set.
+### RTL
+Right-to-left text direction (Arabic, Hebrew, Persian). ROSACE mirrors
+[Logical Sides](#logical-sides) when the locale is RTL.
+*📖 [Wikipedia — Right-to-left script](https://en.wikipedia.org/wiki/Right-to-left_script).*
 
 ---
 
 ## S
 
-**SemanticNode**
-The accessibility tree node. Created from RenderObject.
-Bridges to platform accessibility APIs (UIAccessibility, ARIA etc.).
+### SemanticNode
+The accessibility-tree node created from a [RenderObject](#renderobject),
+bridging to platform a11y APIs (UIAccessibility, ARIA…). See `rosace-a11y`.
 
-**SharedMemory**
-A memory region shared between ROSACE and native FFI code.
-Used for the synchronous platform bridge hot path.
+### SharedMemory
+A memory region shared between ROSACE and native FFI code — the
+synchronous platform-bridge hot path (D106). See `rosace-ffi` and
+[platform-and-app-loop.md](architecture/platform-and-app-loop.md).
 
-**Skia / tiny-skia**
+### Skia / tiny-skia
 "Skia" is Google's C++ 2D graphics library (Flutter, Chrome). ROSACE
-does **not** use it. Decision D032 said "Skia" but the code actually
-ships [`tiny-skia`](https://github.com/RazrFalcon/tiny-skia) — a
-pure-Rust re-implementation of Skia's *software* (CPU) backend: no
-C++, no GPU. It rasterizes each [`DrawCommand`](../rosace-render/src/draw_command.rs)
-into an RGBA [**pixmap**](#pixmap--rgba-buffer) on the CPU. As of
-Phase 27 (D109) shapes and text are migrating to the GPU
-([**wgpu**](#wgpu)); `tiny-skia` stays as the CPU/web fallback. See
-[render-pipeline.md](architecture/render-pipeline.md) for the two modes.
+does **not** use it. D032 said "Skia" but the code ships
+[`tiny-skia`](https://github.com/RazrFalcon/tiny-skia) — a pure-Rust
+re-implementation of Skia's *software* (CPU) backend: no C++, no GPU. It
+[rasterizes](GLOSSARY.md#rasterization) each
+[`DrawCommand`](../rosace-render/src/draw_command.rs) into an RGBA
+[pixmap](GLOSSARY.md#pixmap--rgba-buffer). Phase 27 (D109) migrates shapes
+and text to the GPU ([wgpu](GLOSSARY.md#wgpu)); `tiny-skia` stays the
+CPU/web fallback. See [render-pipeline.md](architecture/render-pipeline.md).
 
 ---
 
 ## T
 
-**RosaceApp** — *renamed; the real type is `App`.*
-The root builder for a ROSACE application is
-[`App`](../rosace/src/lib.rs): `App::new().title(..).size(w, h).launch(Component)`.
-Configures theme/window and starts the event loop. ("RosaceApp" was the
-old planned name and does not exist as a type.)
+### App
+The root builder for a ROSACE application
+([`rosace/src/lib.rs`](../rosace/src/lib.rs)):
+`App::new().title(..).size(w, h).launch(root)`. Configures theme/window
+and starts the frame loop. *(Older docs called this `RosaceApp`, which
+does not exist as a type.)*
 
-**RosaceComponent**
-The core trait. Implement this to create a component.
-Must implement build() → Element.
+### RosaceComponent
+*Renamed → see [Component](#component).* The core trait is named
+`Component`, not `RosaceComponent`; this entry exists only so the old
+name resolves.
 
-**RosaceError**
-The standard error type used throughout ROSACE.
+### RosaceError
+The standard error type ([`error.rs`](../rosace-core/src/error.rs)) used
+throughout ROSACE. Paired with [RosaceResult](#rosaceresult).
 
-**RosaceRenderer**
-A trait for custom render pipelines (Level 5 customization).
-Allows bypassing Skia for game engines, 3D, WebGL etc.
+### RosaceRenderer
+*No matching symbol in the source — treat as aspirational.* Intended: a
+trait for custom render pipelines ("Level 5 customization") to bypass the
+renderer for game engines / 3D. Note: the "Level 1–5 customization"
+framing appears only in this glossary, not in code or `DECISIONS.md`.
 
-**RosaceResult<T>**
-Result<T, RosaceError>. Used for expected failures in components.
+### RosaceResult
+`Result<T, `[`RosaceError`](#rosaceerror)`>`
+([`error.rs`](../rosace-core/src/error.rs)) — for expected failures.
 
-**RosaceTheme**
-A derive macro for defining exhaustive theme token sets.
-Partial theme (missing any token) = compile error.
+### RosaceTheme
+The theme-definition trait
+([`theme.rs`](../rosace-theme/src/theme.rs)) for exhaustive theme token
+sets — a partial theme (missing a token) is a compile error. See
+[theming.md](guide/theming.md).
 
-**RosaceTrace**
-The unified event enum emitted by all ROSACE systems.
-Zero cost in production via #[cfg(debug_assertions)].
+### RosaceTrace
+The unified event enum emitted by every ROSACE system
+([`rosace-trace`](../rosace-trace/src/lib.rs)); near-zero cost in release.
+Dispatched by the [TracingBus](#tracingbus).
 
-**TracingBus**
-The central hub that receives RosaceTrace events and dispatches
-to all registered TraceSubscribers. Global singleton.
+### TracingBus
+The central hub that receives [RosaceTrace](#rosacetrace) events and
+dispatches them to every registered [TraceSubscriber](#tracesubscriber)
+([`rosace-trace`](../rosace-trace/src/lib.rs)) — a global singleton.
 
-**TraceSubscriber**
-A trait for receiving RosaceTrace events.
-Implementations: RingBuffer, Console, File, DevTools, IDE.
+### TraceSubscriber
+A trait for receiving [RosaceTrace](#rosacetrace) events.
+Implementations: [RingBuffer](#ringbuffersubscriber), Console, File,
+DevTools.
 
-**rsc**
-The ROSACE CLI binary. Short for ROSACE.
-Commands: rsc dev, rsc build, rsc test, rsc analyze, rsc snapshot.
+### rsc
+The ROSACE CLI binary ([`rosace-cli`](../rosace-cli/src/main.rs)).
+Real subcommands: `new`, `dev`, `run`, `build`, `package`, `test`,
+`check`, `fmt`, `lint`, `analyze`, `doctor`, `devices`, `bundle-id`,
+`snapshot`. See [cli.md](architecture/cli.md).
 
 ---
 
 ## U
 
-**use_async**
-A hook that fetches data asynchronously on mount.
-Returns AsyncState<T>. Cancels automatically on unmount.
+### use_async
+*No such hook exists — treat as aspirational.* Intended: a hook that
+fetches data on mount, returning [AsyncState](#asyncstate), cancelling on
+unmount. Today `AsyncState` is just the data enum with no driving hook
+(confirmed in [state-and-reactivity.md](architecture/state-and-reactivity.md)).
+The real async-fetch hook that *does* exist is `use_query` (`rosace-net`).
 
-**use_atom**
-A hook that reads an atom and subscribes to its changes.
-The component rebuilds when the atom changes.
+### use_atom
+A hook that reads an [atom](#atom) and subscribes to its changes
+([`use_atom`](../rosace-state/src/lib.rs)) — the component rebuilds when
+the atom changes.
 
-**use_before_leave**
-A hook that registers an async guard before navigation.
-Returns NavigationDecision.
+### use_before_leave
+*No such hook exists — treat as aspirational.* Intended: register an async
+navigation guard returning a [NavigationDecision](#navigationdecision).
 
 ---
 
 ## W
 
-**WidgetOverride**
-A trait for replacing a built-in widget globally (Level 3 customization).
-Receives original props and returns custom Element.
+### WidgetOverride
+*No matching symbol in the source — treat as aspirational.* Intended: a
+trait to replace a built-in widget globally ("Level 3 customization").
+The "Level 1–5" framing is glossary-only, not in code.
 
-**WidgetScope**
-A widget that applies widget overrides to its subtree only.
-Inside: uses overridden widget. Outside: uses original.
+### WidgetScope
+*No matching symbol in the source — treat as aspirational.* Intended: a
+widget applying [WidgetOverride](#widgetoverride)s to its subtree only.
 
 ---
 ---
