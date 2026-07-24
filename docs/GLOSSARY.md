@@ -20,6 +20,29 @@ This glossary has two parts:
 
 ---
 
+> ### ⚠️ Audit banner — entries not verified against the current build (2026-07-24)
+>
+> A code-grounded sweep found these A–Z entries describe APIs with **no
+> matching symbol anywhere in the source** — they're Phase-1-era aspirational
+> names, not shipped types. Kept (not deleted) in case they're roadmap items,
+> but **do not treat them as real until verified**:
+>
+> - **`use_async`**, **`use_before_leave`** — no such hooks (the
+>   [state chapter](architecture/state-and-reactivity.md) explicitly says
+>   `use_async` is unimplemented; `AsyncState` is just the data enum).
+> - **`RosaceRenderer`**, **`WidgetOverride`**, **`WidgetScope`** + the whole
+>   "**Level 1–5 customization**" framing — that phrase appears *only* in this
+>   glossary, never in code or `DECISIONS.md`.
+> - **`ErrorBoundary`**, **`FocusScope`**, **`AtomProvider`/`Provider`**,
+>   **`ForeignBox`**, **`IntrinsicHeight`/`IntrinsicWidth`** (the *concept* —
+>   D016 opt-in intrinsic sizing — exists, but not under these widget names),
+>   **`Derived Atom`** — no matching symbol found.
+> - **`RosaceApp`** — the real root builder is **`App`** (`App::new().title().size(w,h).launch(Component)`).
+>
+> Verified-real entries (`Atom`, `use_atom`, `AsyncState`, `GlobalAtom`,
+> `NavigationDecision`, `KeepAlive`, `SemanticNode`, `RingBufferSubscriber`,
+> `TracingBus`, `RosaceTheme`, `RosaceError`, `Flexure`, …) are unaffected.
+
 ## A
 
 **Atom**
@@ -292,9 +315,11 @@ Phase 27 (D109) shapes and text are migrating to the GPU
 
 ## T
 
-**RosaceApp**
-The root builder for a ROSACE application.
-Configures theme, plugins, locale, and starts the event loop.
+**RosaceApp** — *renamed; the real type is `App`.*
+The root builder for a ROSACE application is
+[`App`](../rosace/src/lib.rs): `App::new().title(..).size(w, h).launch(Component)`.
+Configures theme/window and starts the event loop. ("RosaceApp" was the
+old planned name and does not exist as a type.)
 
 **RosaceComponent**
 The core trait. Implement this to create a component.
