@@ -8,7 +8,7 @@ A `Widget` is a small object that knows how to measure itself, draw itself, and 
 
 ## Mental model
 
-If [core.md](core.md) is "what you write" (`Component::build()` returning an `Element`), `Widget` is "what actually gets measured and painted." A `Component` is a recipe; a `Widget` (`Column`, `Text`, `Button`, …) is the dish. Every `Widget` occupies exactly one slot in the `RenderTree`, keyed by its **position** in paint order — not by identity or a key — so the tree looks and behaves like a flat, positionally-addressed array of "boxes that remember things between frames":
+If [core.md](core.md) is "what you write" ([`Component::build()`](../GLOSSARY.md#component) returning an [`Element`](../GLOSSARY.md#element)), `Widget` is "what actually gets measured and painted." A `Component` is a recipe; a `Widget` (`Column`, `Text`, `Button`, …) is the dish. Every `Widget` occupies exactly one slot in the `RenderTree`, keyed by its **position** in paint order — not by identity or a [key](../GLOSSARY.md#key) — so the tree looks and behaves like a flat, positionally-addressed array of "boxes that remember things between frames":
 
 ```mermaid
 graph TD

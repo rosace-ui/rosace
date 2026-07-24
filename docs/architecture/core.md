@@ -4,11 +4,11 @@
 
 ## In one sentence
 
-You write **Components** that produce an **Element** tree by reading state through a **Context**; the framework turns that tree into on-screen widgets and rebuilds only the components whose state changed.
+You write **[Components](../GLOSSARY.md#component)** that produce an **[Element](../GLOSSARY.md#element)** tree by reading state through a **[Context](../GLOSSARY.md#context)**; the framework turns that tree into on-screen widgets and rebuilds only the components whose state changed.
 
 ## Mental model
 
-If you know React: `Component` ≈ a component, `build()` ≈ `render()`, `Context::state` ≈ `useState`, and an **Atom** ≈ a piece of reactive state. The key difference from React: there is no virtual-DOM diff of *everything* every frame. ROSACE tracks which components read which atoms, and when an atom changes it rebuilds **only its subscribers**.
+If you know React: `Component` ≈ a component, `build()` ≈ `render()`, `Context::state` ≈ `useState`, and an **[Atom](../GLOSSARY.md#atom)** ≈ a piece of reactive state. The key difference from React: there is no virtual-DOM diff of *everything* every frame. ROSACE tracks which components read which atoms, and when an atom changes it rebuilds **only its subscribers** (the [RefreshEngine](../GLOSSARY.md#refreshengine)).
 
 ```mermaid
 graph TD
@@ -39,7 +39,7 @@ pub fn state<T: Clone + Send + Sync + 'static>(&mut self, default: T) -> Atom<T>
 **3. `build()` returns an `Element`.** [`Element`](../../rosace-core/src/element.rs) is the lightweight description of the tree — either a nested component or a *native* node carrying a boxed widget. You rarely construct `Element` directly: widgets provide `.into_element()`, and returning a widget from a `Scaffold`/layout does it for you.
 
 **4. The frame engine turns Elements into pixels — but only when dirty.** The loop lives in [`FrameEngine::paint`](../../rosace/src/engine.rs). Each frame it:
-   - drains the **dirty set** (`rosace_state::take_dirty_components()` + `is_global_dirty()`);
+   - drains the **[dirty](../GLOSSARY.md#dirty) set** (`rosace_state::take_dirty_components()` + `is_global_dirty()`);
    - **rebuilds only dirty components** (clean ones reuse their cached Element — this is why `build()` must not have side effects that need to run every frame);
    - lays out the tree ([`rosace-layout`](../../rosace-layout/src/)), then paints it ([`rosace-render`](../../rosace-render/src/)), then the compositor presents it to the GPU surface.
 

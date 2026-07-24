@@ -4,7 +4,7 @@
 
 ## In one sentence
 
-Every [`Atom<T>`](../../rosace-state/src/atom.rs) is a mutex-guarded value with a subscriber list; writing to it drops the subscribers' component IDs into a global dirty set and pokes the platform to render a frame, and that's the entire mechanism — there is no dependency graph, no virtual DOM diff, no scheduler thread.
+Every [`Atom<T>`](../../rosace-state/src/atom.rs) ([glossary](../GLOSSARY.md#atom)) is a mutex-guarded value with a subscriber list; writing to it drops the subscribers' [component IDs](../GLOSSARY.md#componentid) into a global [dirty](../GLOSSARY.md#dirty) set and pokes the platform to render a frame, and that's the entire mechanism — there is no dependency graph, no virtual DOM diff, no scheduler thread.
 
 ## Mental model
 
@@ -34,7 +34,7 @@ graph TD
 
 **4. The dirty set is one global `Mutex<Option<HashSet<ComponentId>>>`.** [`dirty_set.rs`](../../rosace-state/src/dirty_set.rs) has three states baked into that `Option`: `None` means "globally dirty" (rebuild everything — the startup state, or after `reset_to_global_dirty()`), `Some(empty)` means "nothing dirty", `Some(ids)` means exactly those components need rebuilding. `take_dirty_components()` drains it once per frame, transitioning `None → Some(empty)` on the way — so the very first frame after startup is always a full rebuild.
 
-**5. `batch()` collapses N writes into one dirty-set flush.** [`batch::batch(f)`](../../rosace-state/src/batch.rs) sets a thread-local flag, runs `f`, then drains a thread-local `Vec<(AtomId, Vec<ComponentId>)>` queue and calls `mark_dirty` once per queued entry plus a single `request_frame()` — so five `atom.set()` calls inside one `batch()` still schedule only one frame, but each atom's subscribers still land in the dirty set individually (there's no coalescing of *which* components are dirty, only of *when* the frame gets requested). `Priority` (`Immediate`/`Normal`/`Background`) is defined but not read anywhere in the batching path today — it's a plain enum, not yet wired to different scheduling behavior.
+**5. `batch()` collapses N writes into one dirty-set flush.** [`batch::batch(f)`](../../rosace-state/src/batch.rs) sets a thread-local flag, runs `f`, then drains a thread-local `Vec<(AtomId, Vec<ComponentId>)>` queue and calls `mark_dirty` once per queued entry plus a single `request_frame()` — so five `atom.set()` calls inside one `batch()` still schedule only one frame, but each atom's subscribers still land in the dirty set individually (there's no coalescing of *which* components are dirty, only of *when* the frame gets requested). [`Priority`](../GLOSSARY.md#priority) (`Immediate`/`Normal`/`Background`) is defined but not read anywhere in the batching path today — it's a plain enum, not yet wired to different scheduling behavior.
 
 **6. `request_frame()` is how state reaches the platform.** [`frame_scheduler.rs`](../../rosace-state/src/frame_scheduler.rs) is a static `AtomicBool` plus a `OnceLock<Box<dyn Fn()>>` wakeup closure that `rosace-platform` installs once at startup via `register_wakeup`. Calling `request_frame()` sets the flag and invokes the wakeup closure, which sends a user event into the winit loop to break it out of `ControlFlow::Wait`. Multiple calls before the platform polls collapse into one redraw (`take_frame_requested` swaps the flag to `false` and returns whether it was set) — this is the mechanism [`FrameEngine::paint`](../../rosace/src/engine.rs) rides on to actually get invoked.
 

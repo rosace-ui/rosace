@@ -4,7 +4,7 @@
 
 ## In one sentence
 
-`rsc` is a single binary with no argument-parsing dependency — a hand-rolled `match` on `argv[1]` dispatches to one module per subcommand, and each subcommand hides a platform's real toolchain (cargo, wasm-bindgen, xcodebuild, gradlew, codesign) behind one command so app authors never touch them directly.
+[`rsc`](../GLOSSARY.md#rsc) is a single binary with no argument-parsing dependency — a hand-rolled `match` on `argv[1]` dispatches to one module per subcommand, and each subcommand hides a platform's real toolchain (cargo, wasm-bindgen, xcodebuild, gradlew, codesign) behind one command so app authors never touch them directly.
 
 ## Mental model
 
