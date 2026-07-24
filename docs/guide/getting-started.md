@@ -9,7 +9,7 @@ By the end of this chapter you'll have a ROSACE app running in a window.
 
 ## The `rsc` CLI
 
-ROSACE ships a developer CLI, `rsc`, that wraps `cargo` and adds the app-framework workflow: scaffolding, a dev loop with hot reload, and multi-platform build/run. Install it from the repo:
+ROSACE ships a developer CLI, [`rsc`](../GLOSSARY.md#rsc), that wraps `cargo` and adds the app-framework workflow: scaffolding, a dev loop with hot reload, and multi-platform build/run. Install it from the repo:
 
 ```bash
 # from the ROSACE repo root
@@ -40,7 +40,7 @@ rsc run          # build + run once (release-style, no hot reload)
 
 ## The anatomy of an app
 
-Every ROSACE app is a **Component** you hand to `App::launch`:
+Every ROSACE app is a **[Component](../GLOSSARY.md#component)** you hand to [`App`](../GLOSSARY.md#app)`::launch`:
 
 ```rust
 use rosace::prelude::*;

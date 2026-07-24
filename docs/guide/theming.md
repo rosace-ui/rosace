@@ -62,7 +62,7 @@ impl Component for Card {
 }
 ```
 
-`use_theme()` reads a global reactive atom — components that call it are automatically subscribed, so a later `set_theme(...)` re-renders them like any other state change (see [Components & State](components-and-state.md)).
+`use_theme()` reads a global reactive atom ([GlobalAtom](../GLOSSARY.md#globalatom)) — components that call it are automatically subscribed, so a later `set_theme(...)` re-renders them like any other state change (see [Components & State](components-and-state.md)).
 
 **A gotcha with colors specifically:** the prelude's `Color` (what `Container::background(...)`/`Text::color(...)` expect) is `rosace_render::Color` — 0–255 `u8` channels. `theme.colors.*` values are `rosace_theme::Color` — 0.0–1.0 `f32` channels, the token type. They're different types on purpose (the token type is what `Lerp`/theme math is built on), so passing a theme color straight into a widget builder call won't compile — convert channel-by-channel first:
 

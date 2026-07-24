@@ -106,7 +106,7 @@ Scaffold::new(view).app_bar(bar).into_element()
 
 ## The stack model underneath
 
-`ScreenNav` is a thin, reactive wrapper over a plain **navigation stack**: `push` appends, `pop` removes the top (never the root), `replace` swaps the top in place without changing depth, and the stack is backed by an `Atom<Vec<R>>` — which is exactly why navigating triggers a rebuild for free, the same mechanism as any other state change (see [Components & State](components-and-state.md)).
+`ScreenNav` is a thin, reactive wrapper over a plain **navigation stack**: `push` appends, `pop` removes the top (never the root), `replace` swaps the top in place without changing depth, and the stack is backed by an [`Atom`](../GLOSSARY.md#atom)`<Vec<R>>` — which is exactly why navigating triggers a rebuild for free, the same mechanism as any other state change (see [Components & State](components-and-state.md)).
 
 Screens that are popped off the stack aren't dropped immediately — a keep-alive registry retains them (by route) until the stack is reset to a new root, so a tab's scroll position or in-progress form state isn't lost just because the user navigated away and back. This is opt-in bookkeeping the stack does for you; there's no widget-level API to opt out of it per screen currently.
 

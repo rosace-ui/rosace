@@ -1,6 +1,6 @@
 # Components & State
 
-These two ideas — **components** and **state** — are the whole framework. Everything else is widgets and platform glue on top. Get these and you can build anything.
+These two ideas — **[components](../GLOSSARY.md#component)** and **state** — are the whole framework. Everything else is widgets and platform glue on top. Get these and you can build anything.
 
 ## Components
 
@@ -14,7 +14,7 @@ impl Component for MyScreen {
 }
 ```
 
-`build` returns an `Element` — a description of your UI as a tree of widgets. The framework calls `build` for you; you never call it yourself. Think of it as: *"given the current state, here's what the screen should look like."*
+`build` returns an [`Element`](../GLOSSARY.md#element) — a description of your UI as a tree of widgets. The framework calls `build` for you; you never call it yourself. Think of it as: *"given the current state, here's what the screen should look like."*
 
 Components compose: a component's `build` can include child components and widgets freely.
 
@@ -26,7 +26,7 @@ A `build` that only ever returns the same thing is a static screen. To make it *
 let count = ctx.state(0i32);   // an Atom<i32>, starting at 0
 ```
 
-`ctx.state(default)` returns an **`Atom`** — a reactive value. Atoms have three moves:
+`ctx.state(default)` returns an **[`Atom`](../GLOSSARY.md#atom)** — a reactive value. Atoms have three moves:
 
 ```rust
 count.get();                    // read the current value
