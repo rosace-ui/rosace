@@ -177,9 +177,10 @@ impl Widget for DatePicker {
         };
         let r = ctx.rect;
         let cell_w = r.size.width / 7.0;
+        let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
 
-        // Header: "«  ‹  Month Year  ›  »" — «/» jump a YEAR, ‹/› a month.
-        // (Original report: only month nav existed, no way to change year.)
+        // Header: ‹ chevron   Month Year   chevron › — real Material icon
+        // buttons with a hover/press state layer (was ASCII "<< < > >>").
         let header_rect = Rect { origin: r.origin, size: Size { width: r.size.width, height: HEADER_H } };
         let label = format!("{} {}", SimpleDate::month_name(self.viewed_month.month), self.viewed_month.year);
         let text_w = ctx.font.measure_text(&label, 15.0);
@@ -188,42 +189,30 @@ impl Widget for DatePicker {
             y: vcenter_text_y(header_rect.origin.y, HEADER_H, ctx.font, 15.0),
         }, on_bg, 15.0);
 
-        let nav_w = 28.0;
-        let nav_y_text = vcenter_text_y(header_rect.origin.y, HEADER_H, ctx.font, 15.0);
-        let prev_year_rect = Rect { origin: header_rect.origin, size: Size { width: nav_w, height: HEADER_H } };
-        let prev_month_rect = Rect {
-            origin: Point { x: header_rect.origin.x + nav_w, y: header_rect.origin.y },
-            size: Size { width: nav_w, height: HEADER_H },
-        };
-        let next_month_rect = Rect {
-            origin: Point { x: header_rect.origin.x + header_rect.size.width - nav_w * 2.0, y: header_rect.origin.y },
-            size: Size { width: nav_w, height: HEADER_H },
-        };
-        let next_year_rect = Rect {
+        let nav_w = HEADER_H;
+        let month = self.viewed_month;
+        let prev_rect = Rect { origin: header_rect.origin, size: Size { width: nav_w, height: HEADER_H } };
+        let next_rect = Rect {
             origin: Point { x: header_rect.origin.x + header_rect.size.width - nav_w, y: header_rect.origin.y },
             size: Size { width: nav_w, height: HEADER_H },
         };
-        for (glyph, rect) in [("<<", prev_year_rect), ("<", prev_month_rect), (">", next_month_rect), (">>", next_year_rect)] {
-            let w = ctx.font.measure_text(glyph, 15.0);
-            ctx.draw_text_at(glyph, Point { x: rect.origin.x + (nav_w - w) / 2.0, y: nav_y_text }, on_bg, 15.0);
-        }
-
-        let node = ctx.node;
-        if let Some(f) = &self.on_month_change {
-            let month = self.viewed_month;
-            for (rect, next) in [
-                (prev_year_rect, month.prev_year()),
-                (prev_month_rect, month.prev_month()),
-                (next_month_rect, month.next_month()),
-                (next_year_rect, month.next_year()),
-            ] {
-                let f = f.clone();
-                ctx.tree.borrow_mut().node_mut(node).hits.push((rect, Arc::new(move || f(next))));
+        for (rect, kind, next) in [
+            (prev_rect, super::IconKind::ChevronLeft, month.prev_month()),
+            (next_rect, super::IconKind::ChevronRight, month.next_month()),
+        ] {
+            let mut btn = ctx.child(rect);
+            btn.hoverable();
+            let (hov, prs) = (btn.hovered(), btn.pressed());
+            let c = Point { x: rect.origin.x + nav_w / 2.0, y: rect.origin.y + HEADER_H / 2.0 };
+            if hov || prs {
+                btn.fill_circle(c, 15.0, with_alpha(on_bg, if prs { 0.14 } else { 0.08 }));
             }
-        } else {
-            // Interactive-by-identity: absorb even when unwired.
-            for rect in [prev_year_rect, prev_month_rect, next_month_rect, next_year_rect] {
-                ctx.tree.borrow_mut().node_mut(node).hits.push((rect, Arc::new(|| {})));
+            let isz = 22.0;
+            let ir = Rect { origin: Point { x: c.x - isz / 2.0, y: c.y - isz / 2.0 }, size: Size { width: isz, height: isz } };
+            super::Icon::new(kind).size(isz).color(on_bg).paint(&mut btn.child(ir));
+            match &self.on_month_change {
+                Some(f) => { let f = f.clone(); btn.register_hit(Arc::new(move || f(next))); }
+                None => btn.register_hit(Arc::new(|| {})),
             }
         }
 
@@ -242,7 +231,6 @@ impl Widget for DatePicker {
         let days = SimpleDate::days_in_month(self.viewed_month.year, self.viewed_month.month);
         let grid_top = weekday_y + WEEKDAY_ROW_H;
 
-        let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
         let band_c = self.range_color.unwrap_or_else(|| with_alpha(accent, 0.18));
         let is_range = self.mode == SelectionMode::Range;
         let (r_start, r_end) = match self.range { Some((s, e)) => (Some(s), e), None => (None, None) };

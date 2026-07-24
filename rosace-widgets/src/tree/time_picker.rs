@@ -163,12 +163,58 @@ impl Widget for TimePicker {
         let dial_r = DIAL_D / 2.0;
         let num_r = dial_r - 22.0; // ring the numbers sit on
 
+        // Dial hit + drag detection FIRST. `hoverable()` makes `pressed()` track
+        // the press, so a pressed dial = the user is dragging → the hand SNAPS to
+        // obey the finger; otherwise it animates.
+        let dial_rect = Rect { origin: Point { x: cx - dial_r, y: cy - dial_r }, size: Size { width: DIAL_D, height: DIAL_D } };
+        let dragging;
+        {
+            let dial = ctx.child(dial_rect);
+            dial.hoverable();
+            dragging = dial.pressed();
+            match &self.on_change {
+                Some(oc) => {
+                    let oc = oc.clone();
+                    let (unit, step, v) = (self.editing, self.minute_step, self.value);
+                    dial.on_press_at(move |px, py| {
+                        let dx = px - cx; let dy = py - cy;
+                        let mut deg = dx.atan2(-dy).to_degrees();
+                        if deg < 0.0 { deg += 360.0; }
+                        match unit {
+                            TimeUnit::Hour => {
+                                let h = (((deg / 30.0).round() as i32) % 12 + 12) % 12;
+                                let h12 = if h == 0 { 12 } else { h as u8 };
+                                oc(v.with_hour_12(h12, v.hour_12().1));
+                            }
+                            TimeUnit::Minute => {
+                                let m = (((deg / 6.0).round() as i32) % 60 + 60) % 60;
+                                let snapped = ((m as f32 / step as f32).round() as i32 * step as i32).rem_euclid(60) as u8;
+                                oc(SimpleTime::new(v.hour, snapped));
+                            }
+                        }
+                    });
+                }
+                None => dial.on_press_at(|_, _| {}),
+            }
+        }
+
         ctx.fill_circle(Point { x: cx, y: cy }, dial_r, dial_fill);
 
-        // Animated hand angle: seed at 12-o'clock so it sweeps to the target on
-        // first launch, then eases on every value/unit change.
+        // Hand angle. Snap while dragging (obey the finger, no lag); otherwise
+        // ease along the SHORTEST path — unwrap the target to the equivalent
+        // nearest the current angle, so 11→12 goes clockwise, not the long way.
+        let target = self.target_angle();
         ctx.seed_channel_if_unset(0, 0.0);
-        let angle = ctx.animate_channel(0, self.target_angle(), 0.0);
+        let angle = if dragging {
+            ctx.set_anim_channel(0, target);
+            target
+        } else {
+            let cur = ctx.anim_channel(0).unwrap_or(target);
+            let mut adj = target;
+            while adj - cur > 180.0 { adj -= 360.0; }
+            while adj - cur < -180.0 { adj += 360.0; }
+            ctx.animate_channel(0, adj, 0.0)
+        };
         let (tx, ty) = on_circle(cx, cy, num_r, angle);
 
         // Hand: a SOLID line drawn as densely-overlapping circles (there is no
@@ -207,34 +253,6 @@ impl Widget for TimePicker {
             let nh = ctx.font.line_height(15.0);
             ctx.draw_text_at(&label, Point { x: nx - nw / 2.0, y: ny - nh / 2.0 },
                 if is_sel { sel_num_c } else { num_c }, 15.0);
-        }
-
-        // Dial hit: tap/drag anywhere on the face selects (draggable via the
-        // engine's positional press). Round to the nearest hour / stepped minute.
-        let dial_rect = Rect { origin: Point { x: cx - dial_r, y: cy - dial_r }, size: Size { width: DIAL_D, height: DIAL_D } };
-        if let Some(oc) = &self.on_change {
-            let oc = oc.clone();
-            let (unit, step, v) = (self.editing, self.minute_step, self.value);
-            let dial = ctx.child(dial_rect);
-            dial.on_press_at(move |px, py| {
-                let dx = px - cx; let dy = py - cy;
-                let mut deg = dx.atan2(-dy).to_degrees();
-                if deg < 0.0 { deg += 360.0; }
-                match unit {
-                    TimeUnit::Hour => {
-                        let h = (((deg / 30.0).round() as i32) % 12 + 12) % 12;
-                        let h12 = if h == 0 { 12 } else { h as u8 };
-                        oc(v.with_hour_12(h12, v.hour_12().1));
-                    }
-                    TimeUnit::Minute => {
-                        let m = (((deg / 6.0).round() as i32) % 60 + 60) % 60;
-                        let snapped = ((m as f32 / step as f32).round() as i32 * step as i32).rem_euclid(60) as u8;
-                        oc(SimpleTime::new(v.hour, snapped));
-                    }
-                }
-            });
-        } else {
-            ctx.child(dial_rect).on_press_at(|_, _| {});
         }
 
         ctx.semantics(super::Semantics::new(rosace_core::Role::Unknown)

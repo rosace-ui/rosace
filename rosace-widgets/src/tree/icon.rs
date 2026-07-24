@@ -108,7 +108,9 @@ pub enum IconKind {
     Menu,
     Arrow,
     ChevronRight,
+    ChevronLeft,
     ChevronDown,
+    ChevronUp,
     Settings,
     User,
     Home,
@@ -131,10 +133,11 @@ pub enum IconKind {
 
 impl IconKind {
     /// Every variant, in declaration order — for galleries and tests.
-    pub const ALL: [IconKind; 27] = [
+    pub const ALL: [IconKind; 29] = [
         IconKind::Check, IconKind::Close, IconKind::Add, IconKind::Remove,
         IconKind::Search, IconKind::Menu, IconKind::Arrow,
-        IconKind::ChevronRight, IconKind::ChevronDown, IconKind::Settings,
+        IconKind::ChevronRight, IconKind::ChevronLeft, IconKind::ChevronDown,
+        IconKind::ChevronUp, IconKind::Settings,
         IconKind::User, IconKind::Home, IconKind::Inbox, IconKind::Calendar,
         IconKind::Star, IconKind::Heart, IconKind::Bell, IconKind::Edit,
         IconKind::Trash, IconKind::Upload, IconKind::Download,
@@ -161,7 +164,9 @@ impl IconKind {
             IconKind::Menu         => '\u{e5d2}', // menu
             IconKind::Arrow        => '\u{e5c8}', // arrow_forward
             IconKind::ChevronRight => '\u{e5cc}', // chevron_right
+            IconKind::ChevronLeft  => '\u{e5cb}', // chevron_left
             IconKind::ChevronDown  => '\u{e5cf}', // expand_more
+            IconKind::ChevronUp    => '\u{e5ce}', // expand_less
             IconKind::Settings     => '\u{e8b8}', // settings
             IconKind::User         => '\u{f0d3}', // person
             IconKind::Home         => '\u{e9b2}', // home

@@ -929,6 +929,23 @@ impl<'a> PaintCtx<'a> {
         }
     }
 
+    /// Read an animation channel's current value (see [`animate_channel`](Self::animate_channel)),
+    /// without advancing it — for widgets that need the settled position to
+    /// compute a shortest-path target (e.g. a clock hand crossing 12).
+    pub fn anim_channel(&self, channel: usize) -> Option<f32> {
+        self.tree.borrow().node(self.node).anim_channels.get(channel).copied().flatten()
+    }
+
+    /// Snap an animation channel to `value` immediately (no easing) — for
+    /// obeying a live drag: the hand tracks the finger exactly instead of
+    /// lagging behind an ease.
+    pub fn set_anim_channel(&self, channel: usize, value: f32) {
+        let mut tree = self.tree.borrow_mut();
+        let node = tree.node_mut(self.node);
+        if node.anim_channels.len() <= channel { node.anim_channels.resize(channel + 1, None); }
+        node.anim_channels[channel] = Some(value);
+    }
+
     /// Push a raw [`DrawCommand`] for advanced use.
     pub fn record(&mut self, cmd: DrawCommand) {
         self.recorder.push(cmd);
