@@ -162,7 +162,24 @@ impl Widget for BottomNavigationBar {
             if let Some(n) = item.badge { sem = sem.value(n.to_string()); }
             slot_ctx.semantics(sem);
 
-            let tint = if item.active { active } else { inactive };
+            // Active pill + hover/press state layer behind the item content
+            // (Material-3 bottom-nav affordance).
+            let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
+            let hov = slot_ctx.hovered();
+            let prs = slot_ctx.pressed();
+            if item.active || hov || prs {
+                let a = if item.active { 0.15 } else if prs { 0.10 } else { 0.06 };
+                let base = if item.active { active } else { inactive };
+                let pill = Rect {
+                    origin: Point { x: slot.origin.x + slot_w * 0.16, y: slot.origin.y + 6.0 },
+                    size: Size { width: slot_w * 0.68, height: (slot.size.height - 12.0).max(4.0) },
+                };
+                draw_rounded_rect_pub(&mut slot_ctx, pill, with_alpha(base, a), 12.0);
+            }
+
+            let tint = if item.active { active }
+                       else if hov { super::lerp_color(inactive, active, 0.5) }
+                       else { inactive };
             let line_h = slot_ctx.font.line_height(self.font_size);
 
             // Icon above label when present; label alone centers vertically.
@@ -202,8 +219,10 @@ impl Widget for BottomNavigationBar {
                 slot_ctx.draw_text_at(&ns, Point { x: bx + 4.0, y: by + 2.5 }, err_fg, 8.5);
             }
 
-            if let Some(cb) = &item.on_press {
-                slot_ctx.register_hit(Arc::clone(cb));
+            // Interactive-by-identity: always absorb (nav bars sit over content).
+            match &item.on_press {
+                Some(cb) => slot_ctx.register_hit(Arc::clone(cb)),
+                None => slot_ctx.register_hit(Arc::new(|| {})),
             }
         }
     }
