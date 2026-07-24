@@ -67,6 +67,10 @@ impl SimpleDate {
 
 const WEEKDAY_LABELS: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
 
+/// How the calendar selects — a single day or a start→end range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SelectionMode { #[default] Single, Range }
+
 /// A month calendar grid: header with prev/next month nav, weekday labels,
 /// a 7-column day grid. Controlled — the app owns `viewed_month`/`selected`.
 pub struct DatePicker {
@@ -76,8 +80,13 @@ pub struct DatePicker {
     today: Option<SimpleDate>,
     min: Option<SimpleDate>,
     max: Option<SimpleDate>,
+    mode: SelectionMode,
+    /// (start, optional end) for `Range` mode.
+    range: Option<(SimpleDate, Option<SimpleDate>)>,
     accent: Option<Color>,
+    range_color: Option<Color>,
     on_change: Option<Arc<dyn Fn(SimpleDate) + Send + Sync>>,
+    on_range_change: Option<Arc<dyn Fn(SimpleDate, Option<SimpleDate>) + Send + Sync>>,
     on_month_change: Option<Arc<dyn Fn(SimpleDate) + Send + Sync>>,
 }
 
@@ -94,8 +103,12 @@ impl DatePicker {
             today: None,
             min: None,
             max: None,
+            mode: SelectionMode::Single,
+            range: None,
             accent: None,
+            range_color: None,
             on_change: None,
+            on_range_change: None,
             on_month_change: None,
         }
     }
@@ -105,11 +118,35 @@ impl DatePicker {
     pub fn min_date(mut self, d: SimpleDate) -> Self { self.min = Some(d); self }
     pub fn max_date(mut self, d: SimpleDate) -> Self { self.max = Some(d); self }
     pub fn accent(mut self, c: Color) -> Self { self.accent = Some(c); self }
+    /// Selection mode — `Single` (default) or `Range`.
+    pub fn mode(mut self, m: SelectionMode) -> Self { self.mode = m; self }
+    /// The current (start, end) selection for `Range` mode.
+    pub fn range(mut self, start: SimpleDate, end: Option<SimpleDate>) -> Self {
+        self.mode = SelectionMode::Range; self.range = Some((start, end)); self
+    }
+    /// The in-between band fill color (default: a faint accent).
+    pub fn range_color(mut self, c: Color) -> Self { self.range_color = Some(c); self }
 
-    /// Called with the clicked date when a non-disabled day is pressed.
+    /// Called with the clicked date when a non-disabled day is pressed (`Single`).
     pub fn on_change(mut self, f: impl Fn(SimpleDate) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Arc::new(f));
         self
+    }
+
+    /// Called with the NEW (start, end) each time a range endpoint is picked
+    /// (`Range` mode). Tapping starts a new range, the next tap completes it.
+    pub fn on_range_change(mut self, f: impl Fn(SimpleDate, Option<SimpleDate>) + Send + Sync + 'static) -> Self {
+        self.on_range_change = Some(Arc::new(f)); self
+    }
+
+    /// Compute the next range given the current one and a tapped date.
+    fn next_range(&self, d: SimpleDate) -> (SimpleDate, Option<SimpleDate>) {
+        match self.range {
+            // No range yet, or a complete one → start fresh.
+            None | Some((_, Some(_))) => (d, None),
+            // Have a start, no end → complete it (ordered).
+            Some((s, None)) => if d >= s { (s, Some(d)) } else { (d, Some(s)) },
+        }
     }
 
     /// Called with the new viewed month when the prev/next nav is pressed.
@@ -205,6 +242,9 @@ impl Widget for DatePicker {
         let grid_top = weekday_y + WEEKDAY_ROW_H;
 
         let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let band_c = self.range_color.unwrap_or_else(|| with_alpha(accent, 0.18));
+        let is_range = self.mode == SelectionMode::Range;
+        let (r_start, r_end) = match self.range { Some((s, e)) => (Some(s), e), None => (None, None) };
         for day in 1..=days {
             let slot = first_weekday as usize + (day - 1) as usize;
             let (col, row) = (slot % 7, slot / 7);
@@ -213,29 +253,60 @@ impl Widget for DatePicker {
                 size: Size { width: cell_w, height: CELL_H },
             };
             let date = SimpleDate::new(self.viewed_month.year, self.viewed_month.month, day);
-            let is_selected = self.selected == Some(date);
             let is_today = self.today == Some(date);
             let disabled = self.is_disabled(date);
             let dot_r = (cell_w.min(CELL_H) * 0.36).min(16.0);
             let center = Point { x: cell_rect.origin.x + cell_w / 2.0, y: cell_rect.origin.y + CELL_H / 2.0 };
 
-            // Per-cell child ctx: gives each day its own hover/press + hit.
+            // Selection classification (Single vs Range).
+            let is_start = is_range && r_start == Some(date);
+            let is_end = is_range && r_end == Some(date);
+            let endpoint = is_start || is_end;
+            let in_band = is_range && matches!((r_start, r_end), (Some(s), Some(e)) if date > s && date < e);
+            let show_circle = (!is_range && self.selected == Some(date)) || endpoint;
+
+            // ── Range band (behind everything): full cell in the middle, an
+            //     inner half at each endpoint, so the band connects the ends. ──
+            if is_range && r_end.is_some() {
+                let by = center.y - dot_r;
+                let band = |x: f32, w: f32| Rect { origin: Point { x, y: by }, size: Size { width: w, height: dot_r * 2.0 } };
+                if in_band {
+                    ctx.fill_rect(band(cell_rect.origin.x, cell_w), band_c);
+                } else if is_start && r_start != r_end {
+                    ctx.fill_rect(band(center.x, cell_rect.origin.x + cell_w - center.x), band_c);
+                } else if is_end && r_start != r_end {
+                    ctx.fill_rect(band(cell_rect.origin.x, center.x - cell_rect.origin.x), band_c);
+                }
+            }
+
+            // Per-cell child ctx: hover/press + hit.
             {
                 let mut cell = ctx.child(cell_rect);
                 let hov = !disabled && cell.hovered();
                 let prs = !disabled && cell.pressed();
-                if (hov || prs) && !is_selected {
+                if (hov || prs) && !show_circle {
                     cell.fill_circle(center, dot_r, with_alpha(accent, if prs { 0.24 } else { 0.12 }));
                 }
                 if !disabled {
-                    match &self.on_change {
-                        Some(f) => { let f = f.clone(); cell.register_hit(Arc::new(move || f(date))); }
-                        None => cell.register_hit(Arc::new(|| {})),
-                    }
+                    let cb: Option<Arc<dyn Fn() + Send + Sync>> = if is_range {
+                        self.on_range_change.clone().map(|f| {
+                            let cur = self.range;
+                            Arc::new(move || {
+                                let (ns, ne) = match cur {
+                                    None | Some((_, Some(_))) => (date, None),
+                                    Some((s, None)) => if date >= s { (s, Some(date)) } else { (date, Some(s)) },
+                                };
+                                f(ns, ne);
+                            }) as Arc<dyn Fn() + Send + Sync>
+                        })
+                    } else {
+                        self.on_change.clone().map(|f| Arc::new(move || f(date)) as Arc<dyn Fn() + Send + Sync>)
+                    };
+                    cell.register_hit(cb.unwrap_or_else(|| Arc::new(|| {})));
                 }
             }
 
-            if is_selected {
+            if show_circle {
                 ctx.fill_circle(center, dot_r, accent);
             } else if is_today {
                 ctx.stroke_rrect(Rect {
@@ -246,7 +317,7 @@ impl Widget for DatePicker {
 
             let day_str = day.to_string();
             let dw = ctx.font.measure_text(&day_str, 13.0);
-            let fg = if disabled { disabled_fg } else if is_selected { bg } else { on_bg };
+            let fg = if disabled { disabled_fg } else if show_circle { bg } else { on_bg };
             ctx.draw_text_at(&day_str, Point {
                 x: cell_rect.origin.x + (cell_w - dw) / 2.0,
                 y: vcenter_text_y(cell_rect.origin.y, CELL_H, ctx.font, 13.0),
@@ -262,6 +333,32 @@ impl Widget for DatePicker {
 mod tests {
     use super::*;
     use rosace_layout::Constraints;
+
+    #[test]
+    #[ignore] // DATE_PNG=/path cargo test -p rosace-widgets date_range_showcase -- --ignored --nocapture
+    fn date_range_showcase() {
+        use super::super::app::WidgetApp;
+        let out = std::env::var("DATE_PNG").unwrap_or_else(|_| "date.png".to_string());
+        let w = DatePicker::new(SimpleDate::new(2026, 7, 1))
+            .today(SimpleDate::new(2026, 7, 24))
+            .range(SimpleDate::new(2026, 7, 8), Some(SimpleDate::new(2026, 7, 19)));
+        let mut theme = rosace_theme::built_in::dark_theme();
+        theme.animation.enabled = false;
+        std::fs::write(&out, WidgetApp::new(320, 300).theme(theme).render_png(&w)).unwrap();
+        println!("wrote {out}");
+    }
+
+    #[test]
+    fn next_range_starts_completes_and_restarts() {
+        let d = |day| SimpleDate::new(2026, 7, day);
+        let base = DatePicker::new(d(1));
+        assert_eq!(base.next_range(d(5)), (d(5), None), "empty → start");
+        let started = DatePicker::new(d(1)).range(d(5), None);
+        assert_eq!(started.next_range(d(9)), (d(5), Some(d(9))), "start+later → complete");
+        assert_eq!(started.next_range(d(2)), (d(2), Some(d(5))), "start+earlier → ordered");
+        let complete = DatePicker::new(d(1)).range(d(5), Some(d(9)));
+        assert_eq!(complete.next_range(d(12)), (d(12), None), "complete → restart");
+    }
 
     #[test]
     fn leap_year_math_is_correct() {
