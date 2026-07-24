@@ -22,7 +22,7 @@ pub use tree::WidgetApp;
 pub use tree::AppBar;
 pub use tree::{BottomNavItem, BottomNavigationBar, FloatingActionButton, SearchBar, Snackbar};
 pub use tree::{Carousel, PageView, RatingBar, Stepper, Table, TableColumn};
-pub use tree::{InteractiveViewer, DatePicker, SimpleDate, TimePicker, SimpleTime, DataTable, DataTableColumn, SortDirection};
+pub use tree::{InteractiveViewer, DatePicker, SimpleDate, SelectionMode, TimePicker, SimpleTime, TimeUnit, DataTable, DataTableColumn, SortDirection};
 pub use tree::{
     ShaderPaint, MaterialKey, resolve_material, ContainerMaterial, CardMaterial,
     DialogMaterial, SheetMaterial, DrawerMaterial, AppBarMaterial, BottomNavMaterial,

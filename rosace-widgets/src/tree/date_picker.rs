@@ -140,6 +140,7 @@ impl DatePicker {
     }
 
     /// Compute the next range given the current one and a tapped date.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn next_range(&self, d: SimpleDate) -> (SimpleDate, Option<SimpleDate>) {
         match self.range {
             // No range yet, or a complete one → start fresh.

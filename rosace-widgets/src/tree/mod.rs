@@ -144,8 +144,8 @@ pub use material::{
 };
 pub use selection::{GlassLens, SelectionKind, SelectionStyle};
 pub use shader_paint::ShaderPaint;
-pub use date_picker::{DatePicker, SimpleDate};
-pub use time_picker::{TimePicker, SimpleTime};
+pub use date_picker::{DatePicker, SimpleDate, SelectionMode};
+pub use time_picker::{TimePicker, SimpleTime, TimeUnit};
 pub use data_table::{DataTable, DataTableColumn, SortDirection};
 pub use render_tree::{HitHandler, InspectNode, NodeId, RenderTree, ScrollAxes, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
