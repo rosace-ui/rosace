@@ -41,6 +41,9 @@ pub struct TextInput {
     keyboard_type: rosace_core::KeyboardType,
     field: Option<rosace_forms::FormField>,
     filters: Vec<super::text_edit::InputFilter>,
+    leading: Option<super::BoxedWidget>,
+    trailing: Option<super::BoxedWidget>,
+    on_trailing: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl TextInput {
@@ -64,7 +67,22 @@ impl TextInput {
             keyboard_type: rosace_core::KeyboardType::default(),
             field: None,
             filters: Vec::new(),
+            leading: None,
+            trailing: None,
+            on_trailing: None,
         }
+    }
+    /// An adornment INSIDE the field, at the left (a search/prefix icon, `$`, …).
+    /// Rendered inside the box; the text insets past it. This is what makes a
+    /// `SearchBar` just a `TextInput` — `.leading(Icon::new(Search))`.
+    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Box::new(w)); self }
+    /// An adornment INSIDE the field, at the right (clear ×, password eye,
+    /// validation status, unit suffix…). Make it tappable with `.on_trailing`.
+    pub fn trailing(mut self, w: impl Widget + 'static) -> Self { self.trailing = Some(Box::new(w)); self }
+    /// Tap handler for the trailing adornment (e.g. clear the field, toggle
+    /// password visibility). The trailing zone owns its own hit region.
+    pub fn on_trailing(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_trailing = Some(Arc::new(f)); self
     }
     pub fn value(mut self, v: impl Into<String>) -> Self { self.value = v.into(); self }
     pub fn placeholder(mut self, p: impl Into<String>) -> Self { self.placeholder = p.into(); self }
@@ -240,8 +258,17 @@ impl Widget for TextInput {
         // and every glyph draw are shifted by the SAME `scroll_x`, so a
         // click, the caret, and the OS candidate window can never drift.
         let state = ctx.text_edit();
-        let inset = 10.0_f32;
-        let visible_w = (r.size.width - inset * 2.0).max(0.0);
+        // Adornment zones eat into the text content area: a leading/trailing
+        // icon gets a square, field-tall zone; the text starts after leading
+        // and ends before trailing. This is what makes `TextInput` a search
+        // field (leading icon) / password field (trailing eye) with no
+        // separate widget. `left_inset`/`right_inset` replace the flat 10px
+        // padding wherever it positioned text/caret/hit-test.
+        let base_pad = 10.0_f32;
+        let left_inset = if self.leading.is_some() { self.height } else { base_pad };
+        let right_inset = if self.trailing.is_some() { self.height } else { base_pad };
+        let inset = left_inset;
+        let visible_w = (r.size.width - left_inset - right_inset).max(0.0);
         let cursor_byte = char_byte_offset(&display, state.cursor());
         let caret_rel = ctx.font.measure_text(&display[..cursor_byte], self.font_size);
         let total_w = ctx.font.measure_text(&display, self.font_size);
@@ -472,6 +499,33 @@ impl Widget for TextInput {
                 }
             }
         }
+
+        // ── Adornments (drawn last, centered in their reserved zones) ────────
+        let adorn = |w: &super::BoxedWidget, font: &rosace_render::FontCache, theme: &rosace_theme::ThemeData| -> Size {
+            let lc = super::LayoutCtx::new(rosace_layout::Constraints::loose(self.height, self.height), font, theme);
+            w.layout(&lc)
+        };
+        if let Some(w) = &self.leading {
+            let sz = adorn(w, ctx.font, &ctx.theme);
+            let cw = sz.width.min(self.height); let ch = sz.height.min(self.height);
+            let rect = Rect {
+                origin: Point { x: r.origin.x + (self.height - cw) / 2.0, y: r.origin.y + (self.height - ch) / 2.0 },
+                size: Size { width: cw, height: ch },
+            };
+            w.paint(&mut ctx.child(rect));
+        }
+        if let Some(w) = &self.trailing {
+            let sz = adorn(w, ctx.font, &ctx.theme);
+            let cw = sz.width.min(self.height); let ch = sz.height.min(self.height);
+            let zx = r.origin.x + r.size.width - self.height;
+            let rect = Rect {
+                origin: Point { x: zx + (self.height - cw) / 2.0, y: r.origin.y + (self.height - ch) / 2.0 },
+                size: Size { width: cw, height: ch },
+            };
+            let mut child = ctx.child(rect);
+            if let Some(cb) = &self.on_trailing { child.register_hit(Arc::clone(cb)); }
+            w.paint(&mut child);
+        }
     }
 }
 
@@ -548,6 +602,25 @@ mod tests {
             theme,
             Rc::new(RefCell::new(RenderTree::new())),
         )
+    }
+
+    #[test]
+    #[ignore] // ADORN_PNG=/path cargo test -p rosace-widgets adornment_showcase -- --ignored --nocapture
+    fn adornment_showcase() {
+        use super::super::app::WidgetApp;
+        use super::super::{Column, Icon, IconKind, Text as WText};
+        use crate::EdgeInsets;
+        let out = std::env::var("ADORN_PNG").unwrap_or_else(|_| "adornments.png".to_string());
+        let col = Column::new().spacing(14.0).padding(EdgeInsets::all(20.0))
+            .child(TextInput::new().value("laptop").width(240.0)
+                .leading(Icon::new(IconKind::Search).size(18.0)))
+            .child(TextInput::new().value("clear me").width(240.0)
+                .trailing(WText::new("\u{00d7}").size(16.0)).on_trailing(|| {}))
+            .child(TextInput::new().value("secret").obscure().width(240.0)
+                .leading(Icon::new(IconKind::User).size(16.0))
+                .trailing(WText::new("\u{1F441}").size(14.0)).on_trailing(|| {}));
+        std::fs::write(&out, WidgetApp::new(300, 200).dark().render_png(&col)).unwrap();
+        println!("wrote {out}");
     }
 
     #[test]

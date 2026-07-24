@@ -42,6 +42,7 @@ pub struct RatingBar {
     count: u8,
     size: f32,
     spacing: f32,
+    disabled: bool,
     color: Option<Color>,
     empty_color: Option<Color>,
     on_change: Option<Arc<dyn Fn(f32) + Send + Sync>>,
@@ -55,11 +56,13 @@ impl RatingBar {
             count: DEFAULT_COUNT,
             size: DEFAULT_SIZE,
             spacing: DEFAULT_SPACING,
+            disabled: false,
             color: None,
             empty_color: None,
             on_change: None,
         }
     }
+    pub fn disabled(mut self) -> Self { self.disabled = true; self }
     /// Number of stars (default `5`).
     pub fn count(mut self, n: u8) -> Self { self.count = n; self }
     /// Star box size in logical px (default `20.0`).
@@ -107,30 +110,44 @@ impl Widget for RatingBar {
 
         // Tap/drag sets the rating — always registered
         // (interactive-by-identity): read-only bars absorb the press.
-        match &self.on_change {
-            Some(cb) => {
+        match (&self.on_change, self.disabled) {
+            (Some(cb), false) => {
                 let cb = Arc::clone(cb);
                 let (left, count, size, spacing) =
                     (r.origin.x, self.count, self.size, self.spacing);
                 ctx.on_press_at(move |x, _y| cb(rating_at(x - left, count, size, spacing)));
             }
-            None => ctx.on_press_at(|_, _| {}),
+            _ => ctx.on_press_at(|_, _| {}),
         }
 
+        let dim = if self.disabled { 0.4 } else { 1.0 };
+        let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, ((c.a as f32 / 255.0) * a.clamp(0.0, 1.0) * 255.0).round() as u8);
         let lit = self.value.round().clamp(0.0, self.count as f32) as u8;
         for i in 0..self.count {
+            let slot_x = r.origin.x + i as f32 * (self.size + self.spacing);
             let star_rect = Rect {
-                origin: Point {
-                    x: r.origin.x + i as f32 * (self.size + self.spacing),
-                    y: r.origin.y,
-                },
+                origin: Point { x: slot_x, y: r.origin.y },
                 size: Size { width: self.size, height: self.size },
             };
-            let tint = if i < lit { filled } else { empty };
+            let mut child = ctx.child(star_rect);
+            // Per-star hover/press micro-interaction: the star under the
+            // pointer brightens and grows slightly (preview-up-to-hovered is a
+            // named follow-up — the paint pass has no pointer coordinate).
+            let active = !self.disabled && (child.hovered() || child.pressed());
+            let base = if i < lit { filled } else { empty };
+            let tint = if active { super::lerp_color(base, filled, 0.6) } else { base };
+            let star_size = if !self.disabled && child.pressed() { self.size * 0.9 }
+                            else if active { self.size * 1.08 } else { self.size };
+            let inset = (self.size - star_size) / 2.0;
+            let draw_rect = Rect {
+                origin: Point { x: slot_x + inset, y: r.origin.y + inset },
+                size: Size { width: star_size, height: star_size },
+            };
+            child.rect = draw_rect;
             super::Icon::new(super::IconKind::Star)
-                .size(self.size)
-                .color(tint)
-                .paint(&mut ctx.child(star_rect));
+                .size(star_size)
+                .color(with_alpha(tint, dim))
+                .paint(&mut child);
         }
     }
 }
