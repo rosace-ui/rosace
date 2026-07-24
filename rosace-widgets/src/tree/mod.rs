@@ -912,6 +912,23 @@ impl<'a> PaintCtx<'a> {
         val
     }
 
+    /// Seed an [`animate_channel`](Self::animate_channel) channel to `value`
+    /// ONLY if it has never been observed — the multi-channel sibling of
+    /// [`seed_anim_if_unset`](Self::seed_anim_if_unset). Use it to opt a
+    /// channel OUT of animate_channel's "first observation snaps" behaviour so
+    /// it visibly eases FROM `value` on the first frame (e.g. a clock hand
+    /// starting at 12:00 and sweeping to the current time).
+    pub fn seed_channel_if_unset(&self, channel: usize, value: f32) {
+        let mut tree = self.tree.borrow_mut();
+        let node = tree.node_mut(self.node);
+        if node.anim_channels.len() <= channel {
+            node.anim_channels.resize(channel + 1, None);
+        }
+        if node.anim_channels[channel].is_none() {
+            node.anim_channels[channel] = Some(value);
+        }
+    }
+
     /// Push a raw [`DrawCommand`] for advanced use.
     pub fn record(&mut self, cmd: DrawCommand) {
         self.recorder.push(cmd);
