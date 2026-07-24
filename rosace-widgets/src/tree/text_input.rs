@@ -31,6 +31,9 @@ pub struct TextInput {
     pub height: f32,
     pub font_size: f32,
     pub radius: f32,
+    background: Option<Color>,
+    border_color: Option<Color>,
+    focus_color: Option<Color>,
     on_change: Option<Arc<dyn Fn(String) + Send + Sync>>,
     controller: Option<EditController>,
     spans: Option<Arc<SpanFn>>,
@@ -51,6 +54,9 @@ impl TextInput {
             height: 36.0,
             font_size: 11.0,
             radius: 6.0,
+            background: None,
+            border_color: None,
+            focus_color: None,
             on_change: None,
             controller: None,
             spans: None,
@@ -71,6 +77,14 @@ impl TextInput {
     pub fn obscure(mut self) -> Self { self.obscure = true; self }
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
+    /// Box fill color (a fixed dark tone if unset — kept as the
+    /// long-standing default rather than switched to a theme token, since
+    /// that would visibly shift every existing app using this widget).
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    /// Unfocused border color.
+    pub fn border(mut self, c: Color) -> Self { self.border_color = Some(c); self }
+    /// Focused border color (also thickens slightly, unchanged).
+    pub fn focus_color(mut self, c: Color) -> Self { self.focus_color = Some(c); self }
     /// Report edits — called by the engine's key/click dispatch whenever
     /// this input's value actually changes (typing, paste, cut). Without
     /// this, the input still accepts keystrokes/selection/caret movement
@@ -185,8 +199,12 @@ impl Widget for TextInput {
         let full_rect = ctx.rect;
         let r = Rect { origin: full_rect.origin, size: Size { width: full_rect.size.width, height: self.height } };
 
-        let bg = Color::rgb(15, 16, 28);
-        let border = if is_focused { Color::rgb(110, 75, 210) } else { Color::rgb(32, 35, 58) };
+        let bg = self.background.unwrap_or(Color::rgb(15, 16, 28));
+        let border = if is_focused {
+            self.focus_color.unwrap_or(Color::rgb(110, 75, 210))
+        } else {
+            self.border_color.unwrap_or(Color::rgb(32, 35, 58))
+        };
 
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
         ctx.stroke_rrect(r, self.radius, border, if is_focused { 1.5 } else { 1.0 });
@@ -211,19 +229,50 @@ impl Widget for TextInput {
         let line_h = ctx.font.line_height(self.font_size);
         let ty = ((r.size.height - line_h) / 2.0).max(0.0);
 
+        // Horizontal scroll-into-view (D116 Step 3 — the `scroll_x` field's
+        // long-declared-but-unwired half). Shift the content left just
+        // enough to keep the caret inside the field when the value
+        // overflows the visible width, the way every single-line editor
+        // does. Persisted through `set_scroll_x` so it survives repaints
+        // instead of snapping back to 0; recomputed and clamped here each
+        // paint against the CURRENT value/caret so deleting text lets the
+        // content scroll back. Both the exported hit-test/IME layout below
+        // and every glyph draw are shifted by the SAME `scroll_x`, so a
+        // click, the caret, and the OS candidate window can never drift.
+        let state = ctx.text_edit();
+        let inset = 10.0_f32;
+        let visible_w = (r.size.width - inset * 2.0).max(0.0);
+        let cursor_byte = char_byte_offset(&display, state.cursor());
+        let caret_rel = ctx.font.measure_text(&display[..cursor_byte], self.font_size);
+        let total_w = ctx.font.measure_text(&display, self.font_size);
+        let mut scroll_x = state.scroll_x;
+        if is_focused {
+            if caret_rel < scroll_x {
+                scroll_x = caret_rel;
+            } else if caret_rel > scroll_x + visible_w {
+                scroll_x = caret_rel - visible_w;
+            }
+        }
+        scroll_x = scroll_x.clamp(0.0, (total_w - visible_w).max(0.0));
+        if (scroll_x - state.scroll_x).abs() > f32::EPSILON {
+            ctx.set_scroll_x(scroll_x);
+        }
+
         // TextLayoutSnapshot (D116 layer 3) — built ONCE per paint, from
         // grapheme boundaries of the REAL value (obscured or not; dots
         // don't preserve multi-char grapheme clustering, so boundaries
         // always come from `self.value`, only the measured WIDTHS come
         // from `display`). Reused below for both the exported hit-test
         // seam and this widget's own caret/selection rendering, so the
-        // two can never drift out of sync.
+        // two can never drift out of sync. Every boundary is shifted by
+        // `-scroll_x` so the whole layout (caret, selection, hit-test)
+        // moves as one when the field scrolls horizontally.
         let boundary_chars = grapheme_boundaries(&self.value);
         let boundary_x: Vec<f32> = boundary_chars
             .iter()
             .map(|&c| {
                 let bx = char_byte_offset(&display, c);
-                r.origin.x + 10.0 + ctx.font.measure_text(&display[..bx], self.font_size)
+                r.origin.x + inset - scroll_x + ctx.font.measure_text(&display[..bx], self.font_size)
             })
             .collect();
         let layout = TextLayoutSnapshot {
@@ -247,7 +296,11 @@ impl Widget for TextInput {
             filters: self.filters.clone(),
         });
 
-        let state = ctx.text_edit();
+        // Clip content to the field so scrolled-out glyphs (and any
+        // overflow past either edge) are trimmed at the box. Popped before
+        // the selection handles + validation caption below, which live
+        // OUTSIDE the field bounds and must not be clipped.
+        ctx.record(DrawCommand::PushClip { rect: r });
 
         if is_focused {
             // Keep frames flowing for the caret blink WHILE focused only
@@ -257,20 +310,17 @@ impl Widget for TextInput {
             super::request_animation();
 
             if let Some((sel_start, sel_end)) = state.selection_range() {
+                // Tint behind the glyphs — color from the theme's
+                // SelectionStyle (D105 ext; flat default = the exact
+                // pre-themeable look). Handles + the glass lens paint
+                // AFTER the text, further down.
+                let sel_style = ctx.theme.ext::<super::SelectionStyle>().cloned().unwrap_or_default();
                 let x0 = layout.x_of(sel_start).unwrap_or(r.origin.x + 10.0);
                 let x1 = layout.x_of(sel_end).unwrap_or(x0);
                 ctx.fill_rect(Rect {
                     origin: Point { x: x0, y: r.origin.y + ty },
                     size: Size { width: x1 - x0, height: line_h },
-                }, Color::rgba(110, 75, 210, 90));
-
-                // Draggable selection handles (D116 Step 7) — the touch
-                // convention (also mouse-draggable: `engine.rs` grabs
-                // whichever is nearest a MouseDown within
-                // `HANDLE_HIT_RADIUS`). A small grip below each endpoint.
-                let handle_y = r.origin.y + ty + line_h;
-                ctx.fill_circle(Point { x: x0, y: handle_y }, 4.0, Color::rgb(180, 160, 255));
-                ctx.fill_circle(Point { x: x1, y: handle_y }, 4.0, Color::rgb(180, 160, 255));
+                }, sel_style.highlight);
             }
 
             // IME preedit underline (D116 Step 6) — the universal
@@ -315,9 +365,13 @@ impl Widget for TextInput {
                 });
             }
         } else {
-            ctx.text(&display, 10.0, ty, text_color, self.font_size);
+            ctx.text(&display, inset - scroll_x, ty, text_color, self.font_size);
         }
 
+        // Caret (content — inside the clip so it's trimmed at the field
+        // edge when the value is scrolled). Drawn before PopClip; the
+        // selection chrome below is popped OUT so its grips can hang past
+        // the box bottom.
         if is_focused && state.selection_range().is_none() {
             // Caret hidden while a selection is active (matches the
             // selection-highlight-instead-of-caret convention every
@@ -331,6 +385,71 @@ impl Widget for TextInput {
                 let cursor_x = line.x_at(state.cursor());
                 let cy = r.origin.y + ty;
                 paint_caret(ctx, &style, cursor_x, cy, line_h, self.font_size, line, state.cursor());
+            }
+        }
+
+        // Content done — release the clip so the selection handles (which
+        // hang below the line) and the validation caption (below the field)
+        // paint unclipped.
+        ctx.record(DrawCommand::PopClip);
+
+        // Selection chrome ABOVE the glyphs (D116 Step 7 handles + the
+        // theme-driven glass lens): drawn after the text so the lens can
+        // sample — and magnify — the glyphs themselves.
+        if is_focused {
+            if let Some((sel_start, sel_end)) = state.selection_range() {
+                let sel_style = ctx.theme.ext::<super::SelectionStyle>().cloned().unwrap_or_default();
+                let x0 = layout.x_of(sel_start).unwrap_or(r.origin.x + 10.0);
+                let x1 = layout.x_of(sel_end).unwrap_or(x0);
+                // Grip anchors stay at the line BOTTOM in both kinds —
+                // `engine.rs`'s handle_anchor targets exactly that point,
+                // so restyling must not move the draggable position.
+                let handle_y = r.origin.y + ty + line_h;
+                match sel_style.kind {
+                    super::SelectionKind::Flat => {
+                        ctx.fill_circle(Point { x: x0, y: handle_y }, 4.0, sel_style.handle);
+                        ctx.fill_circle(Point { x: x1, y: handle_y }, 4.0, sel_style.handle);
+                    }
+                    super::SelectionKind::Glass => {
+                        // Lens sized to the MAGNIFIED selection: `sel × zoom`
+                        // about the selection center, so every zoomed glyph
+                        // fits exactly inside the pill and nothing renders
+                        // past the end bars (found live: a center-zoom over
+                        // an unscaled rect pushed edge glyphs beyond the
+                        // handle — the "t after the cursor" bug). The
+                        // shader's `center + (uv-center)/zoom` sampling then
+                        // lands exactly on the unscaled selection window.
+                        //
+                        // ALL geometry (pill, bars, grips) comes from
+                        // `SelectionStyle::glass_lens` — the engine's
+                        // handle-drag grab uses the SAME function, so the
+                        // visible lollipops and the draggable anchors can
+                        // never drift apart.
+                        let g = sel_style.glass_lens(x0, x1, r.origin.y + ty, line_h);
+                        let lens = Rect {
+                            origin: Point { x: g.rect.0, y: g.rect.1 },
+                            size: Size { width: g.rect.2, height: g.rect.3 },
+                        };
+                        // Full stadium radius — the real liquid-glass pill.
+                        ctx.shader_fill(
+                            lens,
+                            rosace_shader::builtin::SELECTION_LENS,
+                            super::SelectionStyle::lens_uniforms(g.rect.3 / 2.0, sel_style.zoom),
+                        );
+                        // Lollipops: an end bar at each pill edge with its
+                        // grip hanging directly beneath — one connected
+                        // object, cursors always after the last magnified
+                        // glyph.
+                        for x in [g.bar_x.0, g.bar_x.1] {
+                            ctx.fill_rrect(Rect {
+                                origin: Point { x: x - 1.0, y: g.rect.1 + 3.0 },
+                                size: Size { width: 2.0, height: g.rect.3 - 6.0 },
+                            }, 1.0, sel_style.handle);
+                            ctx.fill_circle(Point { x, y: g.grip_y }, 4.5, sel_style.handle);
+                        }
+                        let _ = handle_y;
+                    }
+                }
             }
         }
 
@@ -496,5 +615,103 @@ mod tests {
         };
         paint_caret(&mut ctx, &style, 10.0, 0.0, 20.0, 11.0, &line(), 0);
         assert!(called.load(Ordering::SeqCst), "Custom shape must invoke the app's painter, not a built-in default");
+    }
+
+    #[test]
+    fn background_border_focus_color_builders_do_not_change_layout_size() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(rosace_layout::Constraints::loose(400.0, 400.0), &font, &theme);
+        let base = TextInput::new().width(200.0);
+        let customized = TextInput::new().width(200.0)
+            .background(Color::rgb(10, 10, 10))
+            .border(Color::rgb(200, 0, 0))
+            .focus_color(Color::rgb(0, 200, 0));
+        assert_eq!(base.layout(&ctx), customized.layout(&ctx));
+    }
+
+    /// Paint a focused, selection-carrying input under `theme` and return
+    /// whether the picture contains a `ShaderFill` (the glass lens).
+    fn selection_paints_a_lens(theme: rosace_theme::ThemeData) -> bool {
+        use super::super::text_edit::Selection;
+        let font = FontCache::embedded();
+        let mut recorder = PictureRecorder::new();
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        tree.borrow_mut().node_mut(RenderTree::ROOT).text_edit.selection =
+            Selection::range(0, 5);
+        let mut ctx = PaintCtx::root(
+            &mut recorder,
+            Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 300.0, height: 40.0 } },
+            &font,
+            theme,
+            tree,
+        );
+        TextInput::new().value("hello world").focused().paint(&mut ctx);
+        let picture = recorder.finish();
+        picture.commands.iter().any(|c| matches!(c, DrawCommand::ShaderFill { .. }))
+    }
+
+    #[test]
+    fn glass_selection_theme_paints_the_magnifier_lens() {
+        let theme = rosace_theme::built_in::dark_theme()
+            .with_ext(super::super::SelectionStyle::glass());
+        assert!(selection_paints_a_lens(theme), "glass theme must emit the lens ShaderFill");
+    }
+
+    #[test]
+    fn default_theme_selection_stays_flat_with_no_lens() {
+        assert!(
+            !selection_paints_a_lens(rosace_theme::built_in::dark_theme()),
+            "no SelectionStyle registered must keep the flat look — zero shader quads"
+        );
+    }
+
+    /// Paint a focused, single-line `TextInput` whose value overflows the
+    /// field with the caret at the END, and return the `scroll_x` written
+    /// back into the tree plus whether the content was clip-bracketed.
+    fn paint_overflowing(width: f32, value: &str, focused: bool) -> (f32, bool, bool) {
+        use super::super::text_edit::Selection;
+        let font = FontCache::embedded();
+        let mut recorder = PictureRecorder::new();
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let len = value.chars().count();
+        // Collapsed caret at the very end — the overflow case.
+        tree.borrow_mut().node_mut(RenderTree::ROOT).text_edit.selection =
+            Selection::range(len, len);
+        let mut ctx = PaintCtx::root(
+            &mut recorder,
+            Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width, height: 40.0 } },
+            &font,
+            rosace_theme::built_in::dark_theme(),
+            tree.clone(),
+        );
+        let mut input = TextInput::new().value(value);
+        if focused {
+            input = input.focused();
+        }
+        input.paint(&mut ctx);
+        let picture = recorder.finish();
+        let scroll_x = tree.borrow().node(RenderTree::ROOT).text_edit.scroll_x;
+        let has_push = picture.commands.iter().any(|c| matches!(c, DrawCommand::PushClip { .. }));
+        let has_pop = picture.commands.iter().any(|c| matches!(c, DrawCommand::PopClip));
+        (scroll_x, has_push, has_pop)
+    }
+
+    #[test]
+    fn caret_at_end_of_overflowing_value_scrolls_content_left_and_clips() {
+        // A long value in a narrow field, caret at the end: the content
+        // MUST shift left (scroll_x > 0) so the caret stays visible, and
+        // the glyphs MUST be clip-bracketed to the field box.
+        let (scroll_x, has_push, has_pop) =
+            paint_overflowing(100.0, "the quick brown fox jumps over the lazy dog", true);
+        assert!(scroll_x > 0.0, "overflowing focused field must scroll left, got scroll_x={scroll_x}");
+        assert!(has_push && has_pop, "content must be bracketed by PushClip/PopClip");
+    }
+
+    #[test]
+    fn short_value_never_scrolls() {
+        // A value that fits leaves scroll_x at 0 — no gratuitous shift.
+        let (scroll_x, _, _) = paint_overflowing(300.0, "hi", true);
+        assert_eq!(scroll_x, 0.0, "a value that fits must not scroll");
     }
 }

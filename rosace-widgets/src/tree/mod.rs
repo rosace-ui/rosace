@@ -15,6 +15,7 @@ pub mod expander;
 mod hero;
 pub mod hero_tag;
 pub mod segmented;
+pub mod tabs;
 pub mod radio;
 pub mod skeleton;
 pub mod circular_progress;
@@ -56,6 +57,13 @@ pub mod table;
 pub mod carousel;
 pub mod stepper;
 pub mod rating_bar;
+pub mod interactive_viewer;
+pub mod material;
+pub mod selection;
+pub mod shader_paint;
+pub mod date_picker;
+pub mod time_picker;
+pub mod data_table;
 pub mod render_tree;
 pub mod repaint_boundary;
 pub mod row;
@@ -92,6 +100,7 @@ pub use circular_progress::CircularProgress;
 pub use skeleton::Skeleton;
 pub use radio::Radio;
 pub use segmented::SegmentedControl;
+pub use tabs::{TabView, Tabs};
 pub use expander::Expander;
 pub use hero_tag::{Hero, HeroApi};
 pub use dropdown::Dropdown;
@@ -128,7 +137,17 @@ pub use table::{Table, TableColumn};
 pub use carousel::{Carousel, PageView};
 pub use stepper::Stepper;
 pub use rating_bar::RatingBar;
-pub use render_tree::{HitHandler, NodeId, RenderTree, ScrollAxes, TreeNode};
+pub use interactive_viewer::InteractiveViewer;
+pub use material::{
+    MaterialKey, resolve_material, ContainerMaterial, CardMaterial,
+    DialogMaterial, SheetMaterial, DrawerMaterial, AppBarMaterial, BottomNavMaterial,
+};
+pub use selection::{GlassLens, SelectionKind, SelectionStyle};
+pub use shader_paint::ShaderPaint;
+pub use date_picker::{DatePicker, SimpleDate};
+pub use time_picker::{TimePicker, SimpleTime};
+pub use data_table::{DataTable, DataTableColumn, SortDirection};
+pub use render_tree::{HitHandler, InspectNode, NodeId, RenderTree, ScrollAxes, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
@@ -303,6 +322,15 @@ pub struct TransformLayerEntry {
     pub child_size:    Size,
     /// Viewport rect in screen-space logical pixels.
     pub viewport_rect: Rect,
+    /// Content magnification factor — `1.0` for ordinary scrolling (all
+    /// existing consumers). `InteractiveViewer` (Phase 32) is the only
+    /// consumer that varies this: the offscreen content texture is
+    /// rasterized at `dpi_scale * zoom` (engine.rs), so the compositor's
+    /// existing UV-window math (`uv_span = dest / tex_size`) naturally
+    /// samples a smaller fraction of a bigger texture — real GPU-crisp
+    /// zoom with no compositor changes. Screen<->content coordinate remap
+    /// (`child_coords`/`content_to_screen`) must divide/multiply by this.
+    pub zoom:          f32,
     /// Current horizontal scroll in logical pixels.
     pub scroll_x:      f32,
     /// Current vertical scroll in logical pixels.
@@ -366,6 +394,14 @@ impl<'a> PaintCtx<'a> {
     /// declared regions are cleared for re-declaration. `clip_rect` propagates.
     pub fn child(&mut self, rect: Rect) -> PaintCtx<'_> {
         let node = self.tree.borrow_mut().slot(self.node, true);
+        // Record every painted widget node's world-space rect (D123/O2):
+        // the DevTools element picker (`RenderTree::pick`/`inspect`) reads
+        // `cached_rect`, and without this only element/cache-boundary nodes
+        // — not the widgets inside a component's tree — were selectable.
+        // Cheap (one field write per child paint); walk_element sets its
+        // OWN element nodes' `cached_rect` separately, so this can't
+        // interfere with the picture-cache replay check.
+        self.tree.borrow_mut().node_mut(node).cached_rect = Some(rect);
         PaintCtx {
             recorder: self.recorder,
             rect,
@@ -388,6 +424,13 @@ impl<'a> PaintCtx<'a> {
         callback: Arc<dyn Fn(f32, f32) + Send + Sync>,
     ) {
         self.tree.borrow_mut().node_mut(self.node).scrolls.push((rect, axes, callback));
+    }
+
+    /// Register a trackpad pinch-to-zoom region (`InteractiveViewer`, Phase
+    /// 32) — the callback receives the gesture's raw `delta` (see
+    /// [`render_tree::ZoomRegion`]'s doc: an increment, not a multiplier).
+    pub fn register_zoom_target(&self, rect: Rect, callback: Arc<dyn Fn(f32) + Send + Sync>) {
+        self.tree.borrow_mut().node_mut(self.node).zooms.push((rect, callback));
     }
 
     /// Register a focus node for Tab-cycle inclusion (called from `WithFocus<W>::paint`).
@@ -559,6 +602,16 @@ impl<'a> PaintCtx<'a> {
         self.tree.borrow_mut().node_mut(self.node).text_edit.scrolled_cursor = cursor;
     }
 
+    /// Record the horizontal scroll-into-view offset (see
+    /// [`TextEditState::scroll_x`]) — the single-line counterpart to
+    /// `set_scrolled_cursor`. View state, so paint-written: `TextInput`
+    /// computes how far the content must shift left to keep the caret
+    /// visible when the value overflows the field, and stores it here so
+    /// it persists across repaints instead of resetting to 0.
+    pub fn set_scroll_x(&self, scroll_x: f32) {
+        self.tree.borrow_mut().node_mut(self.node).text_edit.scroll_x = scroll_x;
+    }
+
     /// Record `paint` into a standalone [`Picture`] at `rect`, returning it —
     /// used by RepaintBoundary to cache an expensive subtree. Runs on a fresh
     /// child slot so interactive regions declared inside still register.
@@ -692,6 +745,21 @@ impl<'a> PaintCtx<'a> {
             pipeline_id: pipeline.raw(),
             rect,
             uniforms,
+            animate_time: false,
+        });
+    }
+
+    /// [`Self::shader_fill`] with the D109-maturity animation flag: the
+    /// PLATFORM patches the first 4 uniform bytes (the `time`-first
+    /// convention) with a live clock at every present, so continuous
+    /// animation costs a GPU buffer write per frame — record once, never
+    /// repaint, no `request_animation` loop.
+    pub fn shader_fill_animated(&mut self, rect: Rect, pipeline: rosace_shader::PipelineId, uniforms: Vec<u8>) {
+        self.recorder.push(DrawCommand::ShaderFill {
+            pipeline_id: pipeline.raw(),
+            rect,
+            uniforms,
+            animate_time: true,
         });
     }
 
@@ -962,6 +1030,16 @@ pub(crate) fn avail_w(c: Constraints) -> f32 { c.max_width_f32() }
 
 /// Extract the max available height from constraints.
 pub(crate) fn avail_h(c: Constraints) -> f32 { c.max_height_f32() }
+
+/// `PaintCtx::draw_text_at`'s `origin.y` is the TOP of the text line, not its
+/// baseline or vertical center (`layout_glyphs` adds the font's ascender
+/// internally) — an eyeballed fraction of a box's height overflows the box
+/// whenever the box-height/font-size ratio changes (bit `DatePicker`'s
+/// header/day-cells and `TimePicker`'s value pills/arrows: text spilled past
+/// the box bottom). Center properly using the font's own line height.
+pub(crate) fn vcenter_text_y(box_top: f32, box_h: f32, font: &rosace_render::FontCache, px: f32) -> f32 {
+    box_top + (box_h - font.line_height(px)) / 2.0
+}
 
 /// Clamp a size to sit within constraints.
 #[allow(dead_code)]
