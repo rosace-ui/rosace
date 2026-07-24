@@ -107,10 +107,14 @@ impl Widget for Switch {
         ctx.register_hit(toggle);
         let focused = !self.disabled && ctx.focus_node().is_focused();
 
-        // ── One animated value drives everything ─────────────────────────────
-        let t = ctx.animate_to(if self.on { 1.0 } else { 0.0 }, 0.0); // 0=off, 1=on
+        // ── Three independent animated channels (smooth, not snapping) ───────
         let hovered = !self.disabled && ctx.hovered();
         let pressed = !self.disabled && ctx.pressed();
+        // ch0: position (off→on). ch1: state-layer halo opacity. ch2: press amount.
+        let t = ctx.animate_channel(0, if self.on { 1.0 } else { 0.0 }, 0.0);
+        let halo_target = if pressed { 0.16 } else if focused { 0.12 } else if hovered { 0.08 } else { 0.0 };
+        let halo = ctx.animate_channel(1, halo_target, 0.0);
+        let press_amt = ctx.animate_channel(2, if pressed { 1.0 } else if hovered { 0.35 } else { 0.0 }, 0.0);
 
         let colors = &ctx.theme.colors;
         let on_track  = self.on_color.unwrap_or_else(|| ctx.tc(colors.primary));
@@ -140,9 +144,7 @@ impl Widget for Switch {
         let base_r = (r.size.height / 2.0) - pad;      // fills the track minus padding
         let off_r = base_r - 2.0;                       // smaller when off (M3)
         let on_r = base_r;                              // full when on
-        let mut thumb_r = off_r + (on_r - off_r) * t;
-        if pressed { thumb_r += 1.5; }                  // press "stretch"
-        else if hovered { thumb_r += 0.5; }
+        let thumb_r = off_r + (on_r - off_r) * t + press_amt * 1.5; // smooth press stretch
 
         let cy = r.origin.y + r.size.height / 2.0;
         let off_cx = r.origin.x + pad + base_r;
@@ -151,8 +153,7 @@ impl Widget for Switch {
 
         // ── State layer: a translucent halo behind the thumb on hover/press/
         //     focus — the Material-3 signal that a control is live ─────────────
-        let halo = if pressed { 0.16 } else if focused { 0.12 } else if hovered { 0.08 } else { 0.0 };
-        if halo > 0.0 {
+        if halo > 0.001 {
             let halo_color = super::lerp_color(outline, on_track, t);
             ctx.fill_circle(Point { x: cx, y: cy }, thumb_r + 8.0, with_alpha(halo_color, halo));
         }
@@ -166,9 +167,9 @@ impl Widget for Switch {
             4.0,
         );
         ctx.fill_circle(Point { x: cx, y: cy }, thumb_r, with_alpha(thumb_c, dim));
-
-        // Keep the frame flowing while focused so the ring/halo stay live.
-        if focused { ctx.request_animation(); }
+        // No always-on repaint: animate_channel self-drives frames only while a
+        // channel is still easing, then goes idle (D111 — never animate a
+        // settled, idle widget).
     }
 }
 

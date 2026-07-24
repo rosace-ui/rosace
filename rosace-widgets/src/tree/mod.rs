@@ -871,6 +871,47 @@ impl<'a> PaintCtx<'a> {
         }
     }
 
+    /// Ease the `channel`-th independent animated scalar of this node toward
+    /// `target` and return the current value. This is the multi-value sibling
+    /// of [`Self::animate_to`]: a widget that must animate more than one thing
+    /// at once (a Switch's thumb *position* AND its hover/press *state-layer*,
+    /// a Slider's fill AND its thumb halo) gives each its own `channel`.
+    ///
+    /// Channels are independent persistent scalars keyed by the explicit
+    /// `channel` index — no call-order coupling, so branches that skip a
+    /// channel some frames don't shift the others. Identical easing policy to
+    /// `animate_to`: honors the theme's global `AnimationConfig` (snaps when
+    /// disabled), exponentially eases over the theme duration (or `duration_ms`
+    /// if > 0), first observation snaps (no appear-pop), and keeps requesting
+    /// frames until settled.
+    pub fn animate_channel(&self, channel: usize, target: f32, duration_ms: f32) -> f32 {
+        let cfg = self.theme.animation;
+        let mut tree = self.tree.borrow_mut();
+        let node = tree.node_mut(self.node);
+        if node.anim_channels.len() <= channel {
+            node.anim_channels.resize(channel + 1, None);
+        }
+        if !cfg.enabled {
+            node.anim_channels[channel] = Some(target);
+            return target;
+        }
+        let dur = (if duration_ms > 0.0 { duration_ms } else { cfg.duration_ms }).max(1.0);
+        let (val, settled) = match node.anim_channels[channel] {
+            None => (target, true),
+            Some(cur) => {
+                let dt = rosace_animate::frame_dt();
+                let alpha = 1.0 - (-dt * (1000.0 / dur)).exp();
+                let next = cur + (target - cur) * alpha;
+                let settled = (next - target).abs() < 0.001;
+                (if settled { target } else { next }, settled)
+            }
+        };
+        node.anim_channels[channel] = Some(val);
+        drop(tree);
+        if !settled { crate::tree::request_animation(); }
+        val
+    }
+
     /// Push a raw [`DrawCommand`] for advanced use.
     pub fn record(&mut self, cmd: DrawCommand) {
         self.recorder.push(cmd);

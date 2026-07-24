@@ -94,6 +94,13 @@ pub struct TreeNode {
     /// A persistent eased scalar (0..1) for toggle transitions — advanced by
     /// PaintCtx::animate_to. `None` until first observed (then snaps).
     pub anim: Option<f32>,
+    /// Multiple independent persistent eased scalars for a widget that needs
+    /// to animate more than one value at once (e.g. a Switch's position AND
+    /// its hover/press state-layer) — advanced by `PaintCtx::animate_channel`,
+    /// indexed by an explicit channel id. Each entry is `None` until first
+    /// observed (then snaps), exactly like `anim`. Grows on demand; persists
+    /// across repaints and cache-hit frames like the other retained state.
+    pub anim_channels: Vec<Option<f32>>,
     /// This node's [`rosace_a11y::FocusNode`] (D112/Phase 28 Step 1) —
     /// created lazily by [`super::PaintCtx::focus_node`], survives
     /// rebuilds like `scroll_ctrl` above.
