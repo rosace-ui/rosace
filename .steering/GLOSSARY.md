@@ -2,6 +2,21 @@
 > Every term defined precisely.
 > When in doubt, check here first.
 
+> ### ⚠️ This copy is stale — see `docs/GLOSSARY.md` for the corrected version
+> A 2026-07-24 code-grounded audit found this glossary describes an *intended*
+> stack and several APIs that were never built. The published copy at
+> [`docs/GLOSSARY.md`](../docs/GLOSSARY.md) has been corrected and also adds a
+> from-scratch graphics/GPU primer with Wikipedia links. Known fiction here,
+> **do not trust these entries** until this file is synced:
+> - **Renderer/text:** claims Skia + cosmic-text + HarfBuzz. Real stack:
+>   `tiny-skia` (CPU) + `fontdue` + `ttf-parser` + `wgpu` (GPU); shaping is
+>   `FallbackShaper` (HarfBuzz deferred, D014).
+> - **Non-existent APIs (no matching symbol in source):** `use_async`,
+>   `use_before_leave`, `RosaceRenderer`, `WidgetOverride`, `WidgetScope`,
+>   `ErrorBoundary`, `FocusScope`, `AtomProvider`/`Provider`, `ForeignBox`,
+>   `IntrinsicHeight`, `Derived Atom`, and the "Level 1–5 customization"
+>   framing. `RosaceApp` → the real type is `App`.
+
 ---
 
 ## A

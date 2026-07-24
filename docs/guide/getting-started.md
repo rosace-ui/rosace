@@ -68,13 +68,19 @@ fn main() {
 - `Column` stacks children vertically; `Text` renders text; `.into_element()` turns a widget into the `Element` the framework expects.
 - `App::new()...launch(...)` opens the window and starts the frame loop.
 
-## Running the examples
+## Scaffolding a real app
 
-The repo ships runnable examples you can learn from:
+The fastest way to a running app is the `rsc` CLI, which generates a
+ready-to-run project and launches it:
 
 ```bash
-cargo run -p rosace-examples --bin widget_gallery
-cargo run -p rosace-examples --bin markdown_editor_demo
+rsc new my-app        # scaffold a new ROSACE app
+cd my-app
+rsc run               # build and run it on the desktop
+# or: rsc dev         # run with hot reload (edit + see changes live)
 ```
+
+`rsc run`/`rsc dev` also take a target (e.g. `--mac`, `--ios`, `--android`)
+— see [The rsc CLI](../architecture/cli.md) for the full command surface.
 
 Next: [Components & State](components-and-state.md) — the two ideas everything else is built on.
