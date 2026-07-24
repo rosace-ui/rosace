@@ -204,6 +204,7 @@ impl Widget for DatePicker {
         let days = SimpleDate::days_in_month(self.viewed_month.year, self.viewed_month.month);
         let grid_top = weekday_y + WEEKDAY_ROW_H;
 
+        let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
         for day in 1..=days {
             let slot = first_weekday as usize + (day - 1) as usize;
             let (col, row) = (slot % 7, slot / 7);
@@ -215,14 +216,30 @@ impl Widget for DatePicker {
             let is_selected = self.selected == Some(date);
             let is_today = self.today == Some(date);
             let disabled = self.is_disabled(date);
+            let dot_r = (cell_w.min(CELL_H) * 0.36).min(16.0);
+            let center = Point { x: cell_rect.origin.x + cell_w / 2.0, y: cell_rect.origin.y + CELL_H / 2.0 };
+
+            // Per-cell child ctx: gives each day its own hover/press + hit.
+            {
+                let mut cell = ctx.child(cell_rect);
+                let hov = !disabled && cell.hovered();
+                let prs = !disabled && cell.pressed();
+                if (hov || prs) && !is_selected {
+                    cell.fill_circle(center, dot_r, with_alpha(accent, if prs { 0.24 } else { 0.12 }));
+                }
+                if !disabled {
+                    match &self.on_change {
+                        Some(f) => { let f = f.clone(); cell.register_hit(Arc::new(move || f(date))); }
+                        None => cell.register_hit(Arc::new(|| {})),
+                    }
+                }
+            }
 
             if is_selected {
-                let dot_r = (cell_w.min(CELL_H) * 0.36).min(16.0);
-                ctx.fill_circle(Point { x: cell_rect.origin.x + cell_w / 2.0, y: cell_rect.origin.y + CELL_H / 2.0 }, dot_r, accent);
+                ctx.fill_circle(center, dot_r, accent);
             } else if is_today {
-                let dot_r = (cell_w.min(CELL_H) * 0.36).min(16.0);
                 ctx.stroke_rrect(Rect {
-                    origin: Point { x: cell_rect.origin.x + cell_w / 2.0 - dot_r, y: cell_rect.origin.y + CELL_H / 2.0 - dot_r },
+                    origin: Point { x: center.x - dot_r, y: center.y - dot_r },
                     size: Size { width: dot_r * 2.0, height: dot_r * 2.0 },
                 }, dot_r, accent, 1.5);
             }
@@ -234,15 +251,6 @@ impl Widget for DatePicker {
                 x: cell_rect.origin.x + (cell_w - dw) / 2.0,
                 y: vcenter_text_y(cell_rect.origin.y, CELL_H, ctx.font, 13.0),
             }, fg, 13.0);
-
-            if !disabled {
-                if let Some(f) = &self.on_change {
-                    let f = f.clone();
-                    ctx.tree.borrow_mut().node_mut(node).hits.push((cell_rect, Arc::new(move || f(date))));
-                } else {
-                    ctx.tree.borrow_mut().node_mut(node).hits.push((cell_rect, Arc::new(|| {})));
-                }
-            }
         }
 
         ctx.semantics(super::Semantics::new(rosace_core::Role::Unknown)
