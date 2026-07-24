@@ -8,6 +8,7 @@ use super::{Widget, LayoutCtx, PaintCtx};
 pub struct SegmentedControl {
     segments: Vec<String>,
     selected: usize,
+    disabled: bool,
     height: f32,
     track_color: Option<Color>,
     selected_color: Option<Color>,
@@ -19,12 +20,13 @@ pub struct SegmentedControl {
 impl SegmentedControl {
     pub fn new(segments: Vec<impl Into<String>>, selected: usize) -> Self {
         Self {
-            segments: segments.into_iter().map(Into::into).collect(), selected, height: 34.0,
+            segments: segments.into_iter().map(Into::into).collect(), selected, disabled: false, height: 34.0,
             track_color: None, selected_color: None, color: None, selected_text_color: None,
             on_change: None,
         }
     }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
+    pub fn disabled(mut self) -> Self { self.disabled = true; self }
     /// Track (unselected background) color — theme's `surface_variant` if unset.
     pub fn track_color(mut self, c: Color) -> Self { self.track_color = Some(c); self }
     /// Selected pill's fill color — theme's `primary` if unset.
@@ -57,8 +59,12 @@ impl Widget for SegmentedControl {
              self.selected_color.unwrap_or_else(|| ctx.tc(t.primary)),
              self.selected_text_color.unwrap_or_else(|| ctx.tc(t.on_primary)))
         };
+        let dim = if self.disabled { 0.45 } else { 1.0 };
+        let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let focused = !self.disabled && ctx.focus_node().is_focused();
+
         // Track
-        ctx.fill_rrect(r, radius, track);
+        ctx.fill_rrect(r, radius, with_alpha(track, dim));
 
         // The highlight pill slides between segments (eased index position).
         let pos = ctx.animate_to(self.selected as f32, 0.0);
@@ -67,34 +73,48 @@ impl Widget for SegmentedControl {
             origin: Point { x: px + 3.0, y: r.origin.y + 3.0 },
             size: Size { width: seg_w - 6.0, height: r.size.height - 6.0 },
         };
-        ctx.fill_rrect(pill, radius - 3.0, sel_bg);
+        ctx.fill_rrect(pill, radius - 3.0, with_alpha(sel_bg, dim));
 
         for (i, label) in self.segments.iter().enumerate() {
             let x = r.origin.x + i as f32 * seg_w;
             let seg_rect = Rect { origin: Point { x, y: r.origin.y }, size: Size { width: seg_w, height: r.size.height } };
-            let tw = ctx.font.measure_text(label, 13.0);
-            let lh = ctx.font.line_height(13.0);
+            let mut child = ctx.child(seg_rect);
+
+            // Per-segment hover/press wash on the UNSELECTED segments (the
+            // selected one already reads as active via the pill).
+            let hov = !self.disabled && child.hovered();
+            let prs = !self.disabled && child.pressed();
+            let nearness = (1.0 - (pos - i as f32).abs()).clamp(0.0, 1.0);
+            if (hov || prs) && nearness < 0.5 {
+                let wash = if prs { 0.12 } else { 0.07 };
+                child.fill_rrect(Rect {
+                    origin: Point { x: x + 3.0, y: r.origin.y + 3.0 },
+                    size: Size { width: seg_w - 6.0, height: r.size.height - 6.0 },
+                }, radius - 3.0, with_alpha(Color::rgb(255, 255, 255), wash));
+            }
+
+            let tw = child.font.measure_text(label, 13.0);
+            let lh = child.font.line_height(13.0);
             let tx = x + (seg_w - tw) / 2.0;
             let ty = r.origin.y + (r.size.height - lh) / 2.0;
             // Text color blends toward selected as the pill nears this segment.
-            let nearness = (1.0 - (pos - i as f32).abs()).clamp(0.0, 1.0);
             let col = super::lerp_color(fg, sel_fg, nearness);
-            ctx.draw_text_at(label, Point { x: tx, y: ty }, col, 13.0);
-            let child = ctx.child(seg_rect);
+            child.draw_text_at(label, Point { x: tx, y: ty }, with_alpha(col, dim), 13.0);
             child.semantics(
                 super::Semantics::new(rosace_core::Role::Tab)
                     .label(label)
                     .value(if i == self.selected { "selected" } else { "not selected" }),
             );
-            if self.on_change.is_none() {
-                // Interactive-by-identity (Phase 32): absorb unwired taps.
-                child.register_hit(std::sync::Arc::new(|| {}));
+            match (&self.on_change, self.disabled) {
+                (Some(cb), false) => { let cb = cb.clone(); let idx = i; child.register_hit(Arc::new(move || cb(idx))); }
+                _ => child.register_hit(Arc::new(|| {})),
             }
-            if let Some(cb) = &self.on_change {
-                let cb = cb.clone();
-                let idx = i;
-                child.register_hit(Arc::new(move || cb(idx)));
-            }
+        }
+
+        // Focus ring around the whole control.
+        if focused {
+            let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
+            ctx.stroke_rrect(r, radius, with_alpha(sel_bg, 0.9), 2.0);
         }
     }
 }
