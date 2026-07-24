@@ -12,6 +12,7 @@ pub struct Dropdown {
     options: Vec<String>,
     selected: usize,
     open: Atom<bool>,
+    disabled: bool,
     width: f32,
     background: Option<Color>,
     color: Option<Color>,
@@ -24,12 +25,13 @@ pub struct Dropdown {
 impl Dropdown {
     pub fn new(options: Vec<impl Into<String>>, selected: usize, open: Atom<bool>) -> Self {
         Self {
-            options: options.into_iter().map(Into::into).collect(), selected, open, width: 200.0,
+            options: options.into_iter().map(Into::into).collect(), selected, open, disabled: false, width: 200.0,
             background: None, color: None, border_color: None, border_width: 1.0, radius: 8.0,
             on_change: None,
         }
     }
     pub fn width(mut self, w: f32) -> Self { self.width = w; self }
+    pub fn disabled(mut self) -> Self { self.disabled = true; self }
     /// Trigger fill color (theme's `surface_variant` if unset).
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
     /// Label/chevron color (theme's `on_surface` if unset).
@@ -57,17 +59,34 @@ impl Widget for Dropdown {
              self.color.unwrap_or_else(|| ctx.tc(t.on_surface)),
              self.border_color.unwrap_or_else(|| ctx.tc(t.outline)))
         };
-        let r = ctx.rect;
-        ctx.fill_rrect(r, self.radius, bg);
-        ctx.stroke_rrect(r, self.radius, border, self.border_width);
-        let lh = ctx.font.line_height(13.0);
-        ctx.draw_text_at(selected_label, Point { x: r.origin.x + 12.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, fg, 13.0);
-        let chev = "\u{25be}";
-        let cw = ctx.font.measure_text(chev, 13.0);
-        ctx.draw_text_at(chev, Point { x: r.origin.x + r.size.width - cw - 10.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, fg, 13.0);
+        let is_open = self.open.get();
+        let focused = !self.disabled && ctx.focus_node().is_focused();
+        let hovered = !self.disabled && ctx.hovered();
+        let pressed = !self.disabled && ctx.pressed();
+        let wash = ctx.animate_channel(0, if pressed { 0.10 } else if hovered { 0.05 } else { 0.0 }, 0.0);
+        let dim = if self.disabled { 0.45 } else { 1.0 };
+        let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, ((c.a as f32 / 255.0) * a.clamp(0.0, 1.0) * 255.0).round() as u8);
 
-        let open = self.open.clone();
-        ctx.register_hit(Arc::new(move || open.set(true)));
+        let r = ctx.rect;
+        let mut bg = bg;
+        if wash > 0.001 { bg = super::lerp_color(bg, Color::rgb(255, 255, 255), wash); }
+        ctx.fill_rrect(r, self.radius, with_alpha(bg, dim));
+        // Focus/open border brightens toward the accent.
+        let ring = if focused || is_open { ctx.tc(ctx.theme.colors.primary) } else { border };
+        ctx.stroke_rrect(r, self.radius, with_alpha(ring, dim), if focused || is_open { 1.5 } else { self.border_width });
+        let lh = ctx.font.line_height(13.0);
+        ctx.draw_text_at(selected_label, Point { x: r.origin.x + 12.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, with_alpha(fg, dim), 13.0);
+        // Chevron flips ▾→▴ when open.
+        let chev = if is_open { "\u{25b4}" } else { "\u{25be}" };
+        let cw = ctx.font.measure_text(chev, 13.0);
+        ctx.draw_text_at(chev, Point { x: r.origin.x + r.size.width - cw - 10.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, with_alpha(fg, dim), 13.0);
+
+        if !self.disabled {
+            let open = self.open.clone();
+            ctx.register_hit(Arc::new(move || open.set(true)));
+        } else {
+            ctx.register_hit(Arc::new(|| {}));
+        }
 
         if self.open.get() {
             let pos = Point { x: r.origin.x, y: r.origin.y + r.size.height + 4.0 };

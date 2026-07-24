@@ -100,9 +100,10 @@ impl Widget for Menu {
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
         ctx.stroke_rrect(r, self.radius, Color { a: 120, ..outline }, 1.0);
         let line_h = ctx.font.line_height(self.font_size);
+        let hi = ctx.tc(ctx.theme.colors.on_surface);
+        let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
 
         for (i, (label, cb)) in self.items.iter().enumerate() {
-            ctx.semantics(super::Semantics::new(rosace_core::Role::MenuItem).label(label));
             let row = Rect {
                 origin: rosace_core::types::Point {
                     x: r.origin.x,
@@ -110,16 +111,22 @@ impl Widget for Menu {
                 },
                 size: Size { width: r.size.width, height: self.row_height },
             };
+            // Child ctx per row — hit rect is clip-aware AND hover/press are
+            // tracked per-row so we can highlight the item under the pointer.
+            let mut child = ctx.child(row);
+            let hov = child.hovered();
+            let prs = child.pressed();
+            if hov || prs {
+                let inset = Rect {
+                    origin: rosace_core::types::Point { x: row.origin.x + 5.0, y: row.origin.y + 2.0 },
+                    size: Size { width: row.size.width - 10.0, height: row.size.height - 4.0 },
+                };
+                child.fill_rrect(inset, 8.0, with_alpha(hi, if prs { 0.16 } else { 0.09 }));
+            }
             let ty = row.origin.y + (self.row_height - line_h) / 2.0;
-            ctx.draw_text_at(
-                label,
-                rosace_core::types::Point { x: row.origin.x + PAD_H, y: ty },
-                fg,
-                self.font_size,
-            );
-            // register_hit uses the ctx rect — derive a child ctx for the row
-            // so the hit rect is clip-aware.
-            ctx.child(row).register_hit(Arc::clone(cb));
+            child.draw_text_at(label, rosace_core::types::Point { x: row.origin.x + PAD_H, y: ty }, fg, self.font_size);
+            child.semantics(super::Semantics::new(rosace_core::Role::MenuItem).label(label));
+            child.register_hit(Arc::clone(cb));
         }
     }
 }
