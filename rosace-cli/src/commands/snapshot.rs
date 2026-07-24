@@ -11,7 +11,7 @@ pub struct SnapshotOptions {
     pub example: String,
     /// Directory to copy the snapshot PNG into.
     pub out_dir: String,
-    /// Cargo package that owns the example (default: "rosace-examples").
+    /// Cargo package that owns the example (required — pass --package).
     pub package: String,
 }
 
@@ -23,7 +23,7 @@ impl SnapshotOptions {
         }
         let mut example = None;
         let mut out_dir = "snapshots".to_string();
-        let mut package = "rosace-examples".to_string();
+        let mut package = None;
 
         let mut i = 0;
         while i < args.len() {
@@ -37,8 +37,12 @@ impl SnapshotOptions {
                     i += 2;
                 }
                 "--package" if i + 1 < args.len() => {
-                    package = args[i + 1].clone();
+                    package = Some(args[i + 1].clone());
                     i += 2;
+                }
+                other if other.starts_with("--package=") => {
+                    package = Some(other.trim_start_matches("--package=").to_string());
+                    i += 1;
                 }
                 other if other.starts_with("--example=") => {
                     example = Some(other.trim_start_matches("--example=").to_string());
@@ -53,6 +57,7 @@ impl SnapshotOptions {
         }
 
         let example = example.ok_or_else(|| "missing --example <name>".to_string())?;
+        let package = package.ok_or_else(|| "missing --package <name>".to_string())?;
         Ok(Self { example, out_dir, package })
     }
 }
@@ -66,7 +71,7 @@ pub fn print_help() {
     println!("OPTIONS:");
     println!("  --example <name>   Example binary to run (required)");
     println!("  --out <dir>        Directory to copy the snapshot PNG into (default: snapshots)");
-    println!("  --package <name>   Cargo package that owns the example (default: rosace-examples)");
+    println!("  --package <name>   Cargo package that owns the example (required)");
     println!("  -h, --help         Print this message");
 }
 
@@ -129,14 +134,20 @@ mod tests {
 
     #[test]
     fn snapshot_options_from_args_example() {
-        let args: Vec<String> = vec!["--example".to_string(), "phase10_demo".to_string()];
+        let args: Vec<String> = vec![
+            "--example".to_string(), "phase10_demo".to_string(),
+            "--package".to_string(), "my-pkg".to_string(),
+        ];
         let opts = SnapshotOptions::from_args(&args).unwrap();
         assert_eq!(opts.example, "phase10_demo");
     }
 
     #[test]
     fn snapshot_options_default_out_dir() {
-        let args: Vec<String> = vec!["--example".to_string(), "phase10_demo".to_string()];
+        let args: Vec<String> = vec![
+            "--example".to_string(), "phase10_demo".to_string(),
+            "--package".to_string(), "my-pkg".to_string(),
+        ];
         let opts = SnapshotOptions::from_args(&args).unwrap();
         assert_eq!(opts.out_dir, "snapshots");
     }
@@ -145,6 +156,7 @@ mod tests {
     fn snapshot_options_custom_out_dir() {
         let args: Vec<String> = vec![
             "--example".to_string(), "phase10_demo".to_string(),
+            "--package".to_string(), "my-pkg".to_string(),
             "--out".to_string(), "golden/".to_string(),
         ];
         let opts = SnapshotOptions::from_args(&args).unwrap();
@@ -153,9 +165,11 @@ mod tests {
 
     #[test]
     fn snapshot_options_eq_syntax() {
-        let args: Vec<String> = vec!["--example=phase9_demo".to_string()];
+        let args: Vec<String> =
+            vec!["--example=phase9_demo".to_string(), "--package=my-pkg".to_string()];
         let opts = SnapshotOptions::from_args(&args).unwrap();
         assert_eq!(opts.example, "phase9_demo");
+        assert_eq!(opts.package, "my-pkg");
     }
 
     #[test]
@@ -166,10 +180,11 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_options_default_package() {
+    fn snapshot_options_missing_package_errors() {
         let args: Vec<String> = vec!["--example".to_string(), "demo".to_string()];
-        let opts = SnapshotOptions::from_args(&args).unwrap();
-        assert_eq!(opts.package, "rosace-examples");
+        let result = SnapshotOptions::from_args(&args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--package"));
     }
 
     #[test]

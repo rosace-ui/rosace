@@ -1,4 +1,0 @@
-# ROSACE app manifest — read by `rsc run` / `rsc build`.
-name = "my_app"
-bundle_id = "dev.rosace.my_app"
-platforms = ["macos", "web", "ios"]
