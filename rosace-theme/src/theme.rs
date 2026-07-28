@@ -20,7 +20,7 @@ pub struct AnimationConfig {
 }
 
 impl Default for AnimationConfig {
-    fn default() -> Self { Self { enabled: true, duration_ms: 160.0 } }
+    fn default() -> Self { Self { enabled: true, duration_ms: 110.0 } }
 }
 
 /// Where an [`AppBar`](rosace_widgets equivalent — see `rosace-widgets`)

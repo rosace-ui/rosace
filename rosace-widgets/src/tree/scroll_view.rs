@@ -186,6 +186,13 @@ impl ScrollView {
     /// content fits in a single placed texture ([`MAX_TL_DIM`] — taller
     /// content needs re-render windowing, not yet built, so it must stay on
     /// the base path rather than silently mis-render).
+    ///
+    /// The cap is a *physical* one: the engine allocates the layer texture at
+    /// `logical × scale` and clamps it to [`MAX_TL_DIM`] px. So the gate must
+    /// compare the physical extent — otherwise on a 2× display content between
+    /// `MAX_TL_DIM/2` and `MAX_TL_DIM` logical passes here but is silently
+    /// cropped by the clamped texture (user-reported: last item in a tall
+    /// scroll gallery cut off).
     fn should_auto_gpu(&self, vp: Size, child_size: Size) -> bool {
         let (overflow, extent) = match self.axis {
             ScrollAxis::Vertical => (child_size.height > vp.height, child_size.height),
@@ -195,7 +202,8 @@ impl ScrollView {
                 child_size.height.max(child_size.width),
             ),
         };
-        overflow && extent <= MAX_TL_DIM
+        let scale = rosace_state::render_scale().max(1.0);
+        overflow && extent * scale <= MAX_TL_DIM
     }
 
     /// GPU-layer paint path (D090). Records the content once into its own

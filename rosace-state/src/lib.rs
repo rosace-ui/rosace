@@ -19,6 +19,7 @@ pub mod frame_scheduler;
 pub mod global_atom;
 pub mod pan_momentum;
 pub mod refresh_engine;
+pub mod render_scale;
 pub mod scroll_offset;
 pub mod state_store;
 
@@ -31,6 +32,7 @@ pub use frame_scheduler::{register_wakeup, request_frame, take_frame_requested};
 pub use global_atom::GlobalAtom;
 pub use refresh_engine::RefreshEngine;
 pub use pan_momentum::{drag_last, set_drag_last, pan_velocity, set_pan_velocity, clear_pan_momentum};
+pub use render_scale::{render_scale, set_render_scale};
 pub use scroll_offset::{scroll_offset, set_scroll_offset, scroll_offset_by, clear_scroll_offset};
 pub use state_store::{hook_state, clear_component};
 

@@ -690,6 +690,11 @@ impl FrameEngine {
         let root = &self.root;
         let font = &self.font;
 
+        // Publish the device pixel scale before paint so the widget layer can
+        // reason in physical pixels this same frame (e.g. ScrollView's GPU-layer
+        // gate, whose texture is `logical × scale` and capped at MAX_TL_DIM).
+        rosace_state::set_render_scale(canvas.scale());
+
         // ── Drain dirty-component set for this frame ───────────────────
         let global_dirty = rosace_state::is_global_dirty();
         let dirty_ids = rosace_state::take_dirty_components();
@@ -1264,6 +1269,7 @@ impl FrameEngine {
                 rosace_platform::InputEvent::MouseDown {
                     x, y, button: rosace_platform::MouseButton::Left
                 } => {
+                    rosace_widgets::tree::set_pointer(*x, *y);
                     // Cancel any still-in-flight long-press timer from a
                     // PREVIOUS press before considering a new one — a
                     // fresh MouseDown always supersedes an unreleased
@@ -1542,6 +1548,7 @@ impl FrameEngine {
                 }
                 rosace_platform::InputEvent::MouseMove { x, y } => {
                     use std::sync::atomic::Ordering;
+                    rosace_widgets::tree::set_pointer(*x, *y);
                     if let Some(cb) = &self.active_drag {
                         cb(*x, *y);
                     }

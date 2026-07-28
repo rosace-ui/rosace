@@ -47,6 +47,7 @@ pub struct TimePicker {
     value: SimpleTime,
     editing: TimeUnit,
     minute_step: u8,
+    use_24h: bool,
     accent: Option<Color>,
     dial_color: Option<Color>,
     hand_color: Option<Color>,
@@ -60,7 +61,7 @@ pub struct TimePicker {
 impl TimePicker {
     pub fn new(value: SimpleTime) -> Self {
         Self {
-            value, editing: TimeUnit::Hour, minute_step: 1,
+            value, editing: TimeUnit::Hour, minute_step: 1, use_24h: false,
             accent: None, dial_color: None, hand_color: None, thumb_color: None,
             number_color: None, selected_number_color: None,
             on_change: None, on_unit_change: None,
@@ -68,6 +69,9 @@ impl TimePicker {
     }
     /// Which unit the dial edits (controlled; pair with `.on_unit_change`).
     pub fn editing(mut self, u: TimeUnit) -> Self { self.editing = u; self }
+    /// 24-hour clock: two concentric rings (00–11 outer, 12–23 inner), no
+    /// AM/PM. The distance of a tap from the centre picks the ring.
+    pub fn use_24h(mut self) -> Self { self.use_24h = true; self }
     pub fn minute_step(mut self, s: u8) -> Self { self.minute_step = s.max(1); self }
     pub fn accent(mut self, c: Color) -> Self { self.accent = Some(c); self }
     /// Dial face fill (default: a faint `surface_variant`).
@@ -125,7 +129,7 @@ impl Widget for TimePicker {
         // ── Header: HH : MM  (tappable to switch unit) + AM/PM ───────────────
         let hy = r.origin.y + PAD;
         let big = 34.0;
-        let hh = format!("{h12:02}");
+        let hh = if self.use_24h { format!("{:02}", self.value.hour) } else { format!("{h12:02}") };
         let mm = format!("{:02}", self.value.minute);
         let hw = ctx.font.measure_text(&hh, big);
         let cw = ctx.font.measure_text(":", big);
@@ -145,23 +149,28 @@ impl Widget for TimePicker {
             { let uc = uc.clone(); ctx.child(min_hit).register_hit(Arc::new(move || uc(TimeUnit::Minute))); }
         }
 
-        // AM/PM pill (top-right).
+        // AM/PM pill (top-right) — 12-hour mode only.
         let ampm_label = if is_pm { "PM" } else { "AM" };
-        let ap_w = 44.0;
-        let ap_rect = Rect { origin: Point { x: r.origin.x + r.size.width - ap_w - PAD, y: hy + 4.0 }, size: Size { width: ap_w, height: 30.0 } };
-        draw_rounded_rect_pub(ctx, ap_rect, with_alpha(accent, 0.9), 8.0);
-        let apw = ctx.font.measure_text(ampm_label, 14.0);
-        ctx.draw_text_at(ampm_label, Point { x: ap_rect.origin.x + (ap_w - apw) / 2.0, y: vcenter_text_y(ap_rect.origin.y, 30.0, ctx.font, 14.0) }, sel_num_c, 14.0);
-        if let Some(oc) = &self.on_change {
-            let oc = oc.clone(); let v = self.value;
-            ctx.child(ap_rect).register_hit(Arc::new(move || { let (h, pm) = v.hour_12(); oc(v.with_hour_12(h, !pm)); }));
+        if !self.use_24h {
+            let ap_w = 44.0;
+            let ap_rect = Rect { origin: Point { x: r.origin.x + r.size.width - ap_w - PAD, y: hy + 4.0 }, size: Size { width: ap_w, height: 30.0 } };
+            draw_rounded_rect_pub(ctx, ap_rect, with_alpha(accent, 0.9), 8.0);
+            let apw = ctx.font.measure_text(ampm_label, 14.0);
+            ctx.draw_text_at(ampm_label, Point { x: ap_rect.origin.x + (ap_w - apw) / 2.0, y: vcenter_text_y(ap_rect.origin.y, 30.0, ctx.font, 14.0) }, sel_num_c, 14.0);
+            if let Some(oc) = &self.on_change {
+                let oc = oc.clone(); let v = self.value;
+                ctx.child(ap_rect).register_hit(Arc::new(move || { let (h, pm) = v.hour_12(); oc(v.with_hour_12(h, !pm)); }));
+            }
         }
 
         // ── Dial ─────────────────────────────────────────────────────────────
         let cx = r.origin.x + r.size.width / 2.0;
         let cy = r.origin.y + HEADER_H + PAD + DIAL_D / 2.0;
         let dial_r = DIAL_D / 2.0;
-        let num_r = dial_r - 22.0; // ring the numbers sit on
+        let num_r = dial_r - 22.0;        // outer ring the numbers sit on
+        let inner_r = num_r * 0.60;       // 24-hour inner ring (12–23)
+        let two_ring = self.use_24h && matches!(self.editing, TimeUnit::Hour);
+        let ring_mid = (num_r + inner_r) / 2.0;
 
         // Dial hit + drag detection FIRST. `hoverable()` makes `pressed()` track
         // the press, so a pressed dial = the user is dragging → the hand SNAPS to
@@ -175,7 +184,7 @@ impl Widget for TimePicker {
             match &self.on_change {
                 Some(oc) => {
                     let oc = oc.clone();
-                    let (unit, step, v) = (self.editing, self.minute_step, self.value);
+                    let (unit, step, v, use_24h) = (self.editing, self.minute_step, self.value, self.use_24h);
                     dial.on_press_at(move |px, py| {
                         let dx = px - cx; let dy = py - cy;
                         let mut deg = dx.atan2(-dy).to_degrees();
@@ -183,8 +192,15 @@ impl Widget for TimePicker {
                         match unit {
                             TimeUnit::Hour => {
                                 let h = (((deg / 30.0).round() as i32) % 12 + 12) % 12;
-                                let h12 = if h == 0 { 12 } else { h as u8 };
-                                oc(v.with_hour_12(h12, v.hour_12().1));
+                                if use_24h {
+                                    // Distance from centre picks the ring: inner = 12–23.
+                                    let inner = (dx * dx + dy * dy).sqrt() < ring_mid;
+                                    let hour = if inner { ((h + 12) % 24) as u8 } else { h as u8 };
+                                    oc(SimpleTime::new(hour, v.minute));
+                                } else {
+                                    let h12 = if h == 0 { 12 } else { h as u8 };
+                                    oc(v.with_hour_12(h12, v.hour_12().1));
+                                }
                             }
                             TimeUnit::Minute => {
                                 let m = (((deg / 6.0).round() as i32) % 60 + 60) % 60;
@@ -198,6 +214,17 @@ impl Widget for TimePicker {
             }
         }
 
+        // Auto-advance: releasing the dial while editing the Hour jumps to Minute.
+        // Channel 1 latches the previous frame's drag state so we can spot the
+        // press→release transition (there is no dedicated release event).
+        let was_dragging = ctx.anim_channel(1).unwrap_or(0.0) > 0.5;
+        if was_dragging && !dragging && matches!(self.editing, TimeUnit::Hour) {
+            if let Some(uc) = &self.on_unit_change {
+                uc(TimeUnit::Minute);
+            }
+        }
+        ctx.set_anim_channel(1, if dragging { 1.0 } else { 0.0 });
+
         ctx.fill_circle(Point { x: cx, y: cy }, dial_r, dial_fill);
 
         // Hand angle. Snap while dragging (obey the finger, no lag); otherwise
@@ -206,16 +233,33 @@ impl Widget for TimePicker {
         let target = self.target_angle();
         ctx.seed_channel_if_unset(0, 0.0);
         let angle = if dragging {
-            ctx.set_anim_channel(0, target);
-            target
+            // Follow the finger CONTINUOUSLY (smooth), not the snapped value —
+            // the committed value still rounds to the nearest number (below), so
+            // releasing between two numbers picks the nearest.
+            let p = ctx.pointer();
+            let mut raw = (p.x - cx).atan2(-(p.y - cy)).to_degrees();
+            if raw < 0.0 { raw += 360.0; }
+            let cur = ctx.anim_channel(0).unwrap_or(raw);
+            while raw - cur > 180.0 { raw -= 360.0; }   // no 359→0 jump
+            while raw - cur < -180.0 { raw += 360.0; }
+            ctx.set_anim_channel(0, raw);
+            raw
         } else {
             let cur = ctx.anim_channel(0).unwrap_or(target);
             let mut adj = target;
-            while adj - cur > 180.0 { adj -= 360.0; }
+            while adj - cur > 180.0 { adj -= 360.0; }   // shortest path
             while adj - cur < -180.0 { adj += 360.0; }
             ctx.animate_channel(0, adj, 0.0)
         };
-        let (tx, ty) = on_circle(cx, cy, num_r, angle);
+        // Hand length: inner ring for 24h hours 12–23 (or the ring the finger is
+        // near while dragging in 24h mode).
+        let hand_r = if two_ring {
+            if dragging {
+                let p = ctx.pointer();
+                if ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt() < ring_mid { inner_r } else { num_r }
+            } else if self.value.hour >= 12 { inner_r } else { num_r }
+        } else { num_r };
+        let (tx, ty) = on_circle(cx, cy, hand_r, angle);
 
         // Hand: a SOLID line drawn as densely-overlapping circles (there is no
         // line primitive). Step < radius so it reads as one continuous stroke,
@@ -232,27 +276,41 @@ impl Widget for TimePicker {
         ctx.fill_circle(Point { x: cx, y: cy }, 4.5, hand_c);          // centre hub
         ctx.fill_circle(Point { x: tx, y: ty }, 18.0, thumb_c);        // thumb disc
 
-        // Numbers around the ring.
-        let sel_index = match self.editing {
-            TimeUnit::Hour => (self.value.hour_12().0 % 12) as i32,
-            TimeUnit::Minute => (self.value.minute / 5) as i32 * if self.value.minute % 5 == 0 { 1 } else { 1 },
-        };
-        for i in 0..12 {
-            let deg = i as f32 * 30.0;
-            let (nx, ny) = on_circle(cx, cy, num_r, deg);
-            let label = match self.editing {
-                TimeUnit::Hour => if i == 0 { "12".to_string() } else { i.to_string() },
-                TimeUnit::Minute => format!("{:02}", i * 5),
-            };
-            let is_sel = match self.editing {
-                TimeUnit::Hour => (self.value.hour_12().0 % 12) as i32 == i,
-                TimeUnit::Minute => (self.value.minute as i32 / 5) == i && self.value.minute % 5 == 0,
-            };
-            let _ = sel_index;
-            let nw = ctx.font.measure_text(&label, 15.0);
+        // Numbers. A small helper to draw one centered number.
+        let num_at = |ctx: &mut PaintCtx, x: f32, y: f32, label: &str, sel: bool| {
+            let nw = ctx.font.measure_text(label, 15.0);
             let nh = ctx.font.line_height(15.0);
-            ctx.draw_text_at(&label, Point { x: nx - nw / 2.0, y: ny - nh / 2.0 },
-                if is_sel { sel_num_c } else { num_c }, 15.0);
+            ctx.draw_text_at(label, Point { x: x - nw / 2.0, y: y - nh / 2.0 }, if sel { sel_num_c } else { num_c }, 15.0);
+        };
+        if two_ring {
+            // 24-hour: outer ring 00–11, inner ring 12–23.
+            for i in 0..12 {
+                let deg = i as f32 * 30.0;
+                let (ox, oy) = on_circle(cx, cy, num_r, deg);
+                num_at(ctx, ox, oy, &format!("{:02}", i), self.value.hour == i as u8);
+                let (ix, iy) = on_circle(cx, cy, inner_r, deg);
+                let hr = (i + 12) as u8;
+                let sel = self.value.hour == hr;
+                let nw = ctx.font.measure_text(&format!("{hr:02}"), 15.0);
+                let nh = ctx.font.line_height(15.0);
+                // Inner numbers slightly smaller/dimmer unless selected.
+                ctx.draw_text_at(&format!("{hr:02}"), Point { x: ix - nw / 2.0, y: iy - nh / 2.0 },
+                    if sel { sel_num_c } else { with_alpha(num_c, 0.7) }, 15.0);
+            }
+        } else {
+            for i in 0..12 {
+                let deg = i as f32 * 30.0;
+                let (nx, ny) = on_circle(cx, cy, num_r, deg);
+                let label = match self.editing {
+                    TimeUnit::Hour => if i == 0 { "12".to_string() } else { i.to_string() },
+                    TimeUnit::Minute => format!("{:02}", i * 5),
+                };
+                let is_sel = match self.editing {
+                    TimeUnit::Hour => (self.value.hour_12().0 % 12) as i32 == i,
+                    TimeUnit::Minute => (self.value.minute as i32 / 5) == i && self.value.minute % 5 == 0,
+                };
+                num_at(ctx, nx, ny, &label, is_sel);
+            }
         }
 
         ctx.semantics(super::Semantics::new(rosace_core::Role::Unknown)
@@ -270,12 +328,14 @@ mod tests {
     fn clock_showcase() {
         use super::super::app::WidgetApp;
         let out = std::env::var("TIME_PNG").unwrap_or_else(|_| "clock.png".to_string());
-        let w = TimePicker::new(SimpleTime::new(9, 30));
-        // Settled frame (animation off) so the hand rests at the real position.
         let mut theme = rosace_theme::built_in::dark_theme();
-        theme.animation.enabled = false;
-        std::fs::write(&out, WidgetApp::new((DIAL_D + PAD * 2.0) as u32, (HEADER_H + DIAL_D + PAD * 2.0) as u32).theme(theme).render_png(&w)).unwrap();
-        println!("wrote {out}");
+        theme.animation.enabled = false; // settled frame
+        let (w, h) = ((DIAL_D + PAD * 2.0) as u32, (HEADER_H + DIAL_D + PAD * 2.0) as u32);
+        std::fs::write(&out, WidgetApp::new(w, h).theme(theme.clone()).render_png(&TimePicker::new(SimpleTime::new(9, 30)))).unwrap();
+        // 24-hour dial (15:45 → the "15" sits on the inner ring).
+        std::fs::write(out.replace(".png", "_24h.png"),
+            WidgetApp::new(w, h).theme(theme).render_png(&TimePicker::new(SimpleTime::new(15, 45)).use_24h())).unwrap();
+        println!("wrote {out} + _24h");
     }
 
     #[test]

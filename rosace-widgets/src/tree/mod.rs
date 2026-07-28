@@ -144,7 +144,7 @@ pub use material::{
 };
 pub use selection::{GlassLens, SelectionKind, SelectionStyle};
 pub use shader_paint::ShaderPaint;
-pub use date_picker::{DatePicker, SimpleDate, SelectionMode};
+pub use date_picker::{DatePicker, SimpleDate, SelectionMode, PageAxis};
 pub use time_picker::{TimePicker, SimpleTime, TimeUnit};
 pub use data_table::{DataTable, DataTableColumn, SortDirection};
 pub use render_tree::{HitHandler, InspectNode, NodeId, RenderTree, ScrollAxes, TreeNode};
@@ -198,6 +198,17 @@ thread_local! {
 /// Ask the frame loop to schedule another frame — self-animating widgets
 /// (CircularProgress spinner, Skeleton shimmer) call this each paint.
 pub fn request_animation() { ANIM_REQUEST.with(|a| a.set(true)); }
+
+thread_local! {
+    static CURRENT_POINTER: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
+}
+/// The latest pointer position (window-space logical px) — set by the engine on
+/// every pointer event. Read via [`PaintCtx::pointer`]: for widgets that must
+/// follow the finger CONTINUOUSLY during a drag (a clock hand sweeping to any
+/// angle), not just snap between discrete values.
+pub fn set_pointer(x: f32, y: f32) { CURRENT_POINTER.with(|p| p.set((x, y))); }
+/// The last pointer position the engine recorded.
+pub fn current_pointer() -> (f32, f32) { CURRENT_POINTER.with(|p| p.get()) }
 
 thread_local! {
     static BOTTOM_OVERLAY_INSET: Cell<f32> = const { Cell::new(0.0) };
@@ -934,6 +945,15 @@ impl<'a> PaintCtx<'a> {
     /// compute a shortest-path target (e.g. a clock hand crossing 12).
     pub fn anim_channel(&self, channel: usize) -> Option<f32> {
         self.tree.borrow().node(self.node).anim_channels.get(channel).copied().flatten()
+    }
+
+    /// The latest pointer position (window-space logical px) — for a widget
+    /// that follows the finger during a drag (e.g. a clock hand). Combine with
+    /// [`Self::pressed`]: while pressed, draw at the raw pointer angle (smooth);
+    /// on release, snap to the nearest value.
+    pub fn pointer(&self) -> Point {
+        let (x, y) = crate::tree::current_pointer();
+        Point { x, y }
     }
 
     /// Snap an animation channel to `value` immediately (no easing) — for
