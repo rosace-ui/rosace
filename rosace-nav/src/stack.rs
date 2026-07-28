@@ -47,7 +47,7 @@ impl<R: Route> NavigationStack<R> {
                 transition: Transition("push".to_string()),
             });
         }
-        self.stack.update(|s| {
+        self.stack.update_always(|s| {
             let mut s = s.clone();
             s.push(route);
             s
@@ -81,7 +81,7 @@ impl<R: Route> NavigationStack<R> {
             if let Some(route) = popped {
                 self.keep_alive.lock().unwrap().push(route);
             }
-            self.stack.update(|s| {
+            self.stack.update_always(|s| {
                 let mut s = s.clone();
                 s.pop();
                 s
@@ -102,7 +102,7 @@ impl<R: Route> NavigationStack<R> {
                 transition: Transition("replace".to_string()),
             });
         }
-        self.stack.update(|s| {
+        self.stack.update_always(|s| {
             let mut s = s.clone();
             if let Some(last) = s.last_mut() {
                 *last = route;
@@ -125,7 +125,7 @@ impl<R: Route> NavigationStack<R> {
             });
         }
         self.keep_alive.lock().unwrap().clear();
-        self.stack.update(|_| vec![route]);
+        self.stack.update_always(|_| vec![route]);
     }
 
     /// Returns the current route (top of stack), or `None` if the stack is

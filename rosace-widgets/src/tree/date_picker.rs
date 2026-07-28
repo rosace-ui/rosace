@@ -385,7 +385,10 @@ impl DatePicker {
 
 impl Widget for DatePicker {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let width = super::avail_w(ctx.constraints).clamp(7.0 * CELL_H, 320.0);
+        // Fill the available width (so it spans a phone screen) with a min for
+        // legible cells and a generous max so an unbounded parent can't blow it
+        // up. 320 was too narrow on modern phones — it left a right-side gap.
+        let width = super::avail_w(ctx.constraints).clamp(7.0 * CELL_H, 500.0);
         let height = HEADER_H + WEEKDAY_ROW_H + GRID_ROWS as f32 * CELL_H;
         Size { width, height }
     }

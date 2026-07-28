@@ -30,6 +30,10 @@ pub struct Engine {
     width: u32,
     height: u32,
     scale: f32,
+    /// Wall-clock of the previous `frame()`, for the real animation `dt`.
+    last_frame: Option<std::time::Instant>,
+    /// Whether at least one frame has been presented (the first must always go).
+    presented_once: bool,
 }
 
 impl Engine {
@@ -85,6 +89,8 @@ impl Engine {
             width,
             height,
             scale,
+            last_frame: None,
+            presented_once: false,
         }))
     }
 
@@ -141,12 +147,40 @@ impl Engine {
     /// composite + present (via `GpuPresenter`) — the same two-step sequence
     /// `rosace-platform/src/app.rs`'s `RedrawRequested` handler runs.
     pub fn frame(&mut self) {
+        // Real wall-clock dt EVERY tick (cheap) so a resumed animation eases at
+        // true speed — without this, `frame_dt` stays at its 1/60 default and
+        // everything advances per-frame (slow motion on a slower device).
+        let now = std::time::Instant::now();
+        let dt = self.last_frame
+            .map(|t| now.duration_since(t).as_secs_f32())
+            // 250ms cap (not desktop's 100ms): a slow device can legitimately
+            // take >100ms per frame, and a dt clamped below real elapsed makes
+            // animations ease in slow motion; still absorbs a resume spike.
+            .unwrap_or(1.0 / 60.0)
+            .clamp(0.001, 0.25);
+        rosace::animate::set_frame_dt(dt);
+        self.last_frame = Some(now);
+
+        // Frame-request-driven, exactly like desktop's winit loop (which only
+        // redraws on RedrawRequested). The CADisplayLink polls at 60Hz, but a
+        // full paint + overlay redraw + GPU present every tick when NOTHING
+        // changed pegs the UI thread (brutal on a slow simulator → the "hang":
+        // the DevTools FAB overlay alone re-draws + presents every tick). So do
+        // nothing unless the engine actually asked for a frame — an atom change,
+        // a running animation, a scroll shift/momentum — or there's pending
+        // input. This keeps the render policy platform-agnostic (dirty-driven);
+        // the host just adapts that signal to its polling display link.
+        let has_input = !self.pending_events.is_empty();
+        if self.presented_once && !has_input && !rosace_state::take_frame_requested() {
+            return;
+        }
+        self.presented_once = true;
+
         self.overlay_canvas.clear_transparent();
         let events = std::mem::take(&mut self.pending_events);
         self.frame_engine.paint(&mut self.canvas, &mut self.overlay_canvas, &events);
 
         let base_dirty = self.canvas.take_frame_dirty();
-
         let refreshed = rosace_platform::take_scroll_layers();
         let scroll_dirty = refreshed.is_some();
         if let Some(layers) = refreshed {

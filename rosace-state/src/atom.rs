@@ -120,8 +120,22 @@ impl<T: 'static> Atom<T> {
     /// dispatched when the batch closes.
     ///
     /// [`AtomWrite`]: rosace_trace::event::RosaceTrace::AtomWrite
-    pub fn set(&self, value: T) {
+    pub fn set(&self, value: T)
+    where
+        T: PartialEq,
+    {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Value-dedup: writing the SAME value is a no-op — no dirty, no frame
+        // request, no on_change. Without this, any callback that fires the
+        // current value every frame (e.g. a control whose gesture re-reports an
+        // unchanged selection) marks its subscribers dirty forever → the UI
+        // repaints every frame producing identical pixels, pegging the CPU.
+        // "Dirty repaint" must mean *actually changed*.
+        if guard.value == value {
+            return;
+        }
+
         let atom_id = guard.id;
 
         #[cfg(debug_assertions)]
@@ -155,13 +169,42 @@ impl<T: 'static> Atom<T> {
         }
     }
 
+    /// Writes unconditionally — for value types that are not `PartialEq` (a
+    /// theme bundle carrying a type-erased extension map, a controller holding
+    /// callbacks). Prefer [`set`](Self::set), which dedups equal writes; only
+    /// reach for this when the type genuinely cannot be compared, and only for
+    /// atoms that are not written every frame.
+    pub fn set_always(&self, value: T) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let atom_id = guard.id;
+        guard.value = value;
+        let subscribers = guard.subscribers.clone();
+        let on_change = guard.on_change.clone();
+        drop(guard);
+        if crate::batch::is_batching() {
+            crate::batch::queue_dirty(atom_id, subscribers);
+        } else {
+            crate::dirty_set::mark_dirty(&subscribers);
+            crate::frame_scheduler::request_frame();
+            if let Some(cb) = on_change {
+                cb(atom_id, subscribers);
+            }
+        }
+    }
+
     /// Atomically reads the current value, applies `f`, and writes the result.
     ///
     /// The read-modify-write is performed under a single lock acquisition so
     /// concurrent callers cannot interleave their updates.
-    pub fn update(&self, f: impl FnOnce(&T) -> T) {
+    pub fn update(&self, f: impl FnOnce(&T) -> T)
+    where
+        T: PartialEq,
+    {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let new_value = f(&guard.value);
+        if guard.value == new_value {
+            return; // unchanged → no dirty/frame (see `set`)
+        }
         let atom_id = guard.id;
 
         #[cfg(debug_assertions)]
@@ -184,6 +227,27 @@ impl<T: 'static> Atom<T> {
             location: rosace_trace::location!(),
         });
 
+        if crate::batch::is_batching() {
+            crate::batch::queue_dirty(atom_id, subscribers);
+        } else {
+            crate::dirty_set::mark_dirty(&subscribers);
+            crate::frame_scheduler::request_frame();
+            if let Some(cb) = on_change {
+                cb(atom_id, subscribers);
+            }
+        }
+    }
+
+    /// Unconditional read-modify-write for non-`PartialEq` values — the
+    /// [`update`](Self::update) counterpart of [`set_always`](Self::set_always).
+    pub fn update_always(&self, f: impl FnOnce(&T) -> T) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let new_value = f(&guard.value);
+        let atom_id = guard.id;
+        guard.value = new_value;
+        let subscribers = guard.subscribers.clone();
+        let on_change = guard.on_change.clone();
+        drop(guard);
         if crate::batch::is_batching() {
             crate::batch::queue_dirty(atom_id, subscribers);
         } else {

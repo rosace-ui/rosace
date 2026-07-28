@@ -2,7 +2,7 @@ use rosace_core::Context;
 use rosace_state::Atom;
 
 /// Persistent state for a spring simulation, stored across frames via hook state.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct SpringState {
     pub position: f32,
     pub velocity: f32,

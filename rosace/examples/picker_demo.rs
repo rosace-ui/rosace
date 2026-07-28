@@ -100,6 +100,7 @@ impl Component for Demo {
             Column::new()
                 .padding(EdgeInsets::all(20.0))
                 .spacing(10.0)
+                .cross_axis_alignment(CrossAxisAlignment::Center)
                 .child(heading("1 · TimePicker"))
                 .child(caption(&time_label))
                 .child(Row::new().spacing(8.0).child(caption("24-hour dial")).child(h24_toggle))

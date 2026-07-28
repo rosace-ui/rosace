@@ -83,7 +83,7 @@ pub fn use_websocket(ctx: &mut Context, url: impl Into<String>) -> WsHandle {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let (tx, rx) = std::sync::mpsc::channel::<WsMessage>();
-            sender_slot.set(Some(tx));
+            sender_slot.set_always(Some(tx)); // Sender is not PartialEq
 
             let state = state.clone();
             let alive = alive.get();

@@ -38,7 +38,7 @@ pub fn set_animations(enabled: bool) {
 }
 
 pub fn set_theme(theme: ThemeData) {
-    CURRENT_THEME.set(theme);
+    CURRENT_THEME.set_always(theme); // ThemeData carries a non-PartialEq ext map
 }
 
 // ---------------------------------------------------------------------------

@@ -246,10 +246,13 @@ impl Widget for TimePicker {
             raw
         } else {
             let cur = ctx.anim_channel(0).unwrap_or(target);
-            let mut adj = target;
-            while adj - cur > 180.0 { adj -= 360.0; }   // shortest path
-            while adj - cur < -180.0 { adj += 360.0; }
-            ctx.animate_channel(0, adj, 0.0)
+            // Shortest signed arc to `target` as a STABLE delta. Recomputing an
+            // unwrapped target with a while-loop each frame can flip sign when
+            // `cur` sits ~180° from `target`, trapping the hand in a frame-to-
+            // frame oscillation that never settles (perpetual repaint). The
+            // rem_euclid form always picks one consistent direction.
+            let d = (target - cur + 180.0).rem_euclid(360.0) - 180.0;
+            ctx.animate_channel(0, cur + d, 0.0)
         };
         // Hand length: inner ring for 24h hours 12–23 (or the ring the finger is
         // near while dragging in 24h mode).

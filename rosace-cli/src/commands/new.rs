@@ -677,7 +677,11 @@ impl Component for AppRoot {{
         // Hooks — declared unconditionally, in a stable order.
         let nav = ScreenNav::new(ctx, Screen::Home);
         let count = ctx.state(0i32);
-        let is_dark = ctx.state(true);
+        // Starts `false` to match the launch theme (light — see `theme.rs`/
+        // `ffi.rs`). If this disagreed with the actual initial theme, the first
+        // toggle tap would set the theme it's already showing (a no-op), so it
+        // would take two taps to flip the first time.
+        let is_dark = ctx.state(false);
 
         // Same match arms build both the current and (if mid-transition)
         // previous screen, so ScreenTransitionView can animate between

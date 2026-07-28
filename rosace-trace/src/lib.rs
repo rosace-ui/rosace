@@ -5,7 +5,12 @@ pub mod subscribers;
 
 pub use bus::{TraceSubscriber, TracingBus, TRACING_BUS};
 pub use event::{LogLevel, RosaceTrace, TraceCategory};
-pub use log::{init_from_env, max_level, set_max_level};
+pub use log::{max_level, set_max_level};
+// `init_from_env` reads process env/stderr — native only (it is
+// `#[cfg(not(wasm32))]` in `log`), so its re-export must be gated too or the
+// whole wasm/web build fails to resolve this import.
+#[cfg(not(target_arch = "wasm32"))]
+pub use log::init_from_env;
 pub use subscribers::{flight_recorder, install_flight_recorder, install_log_console};
 pub use subscribers::perfetto::to_chrome_trace_json;
 

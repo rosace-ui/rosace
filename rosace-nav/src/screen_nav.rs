@@ -137,8 +137,8 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
     /// unless animations are globally disabled, an enter-from-the-right
     /// slide (or the app/platform's resolved style).
     pub fn push(&self, route: R) {
-        self.previous.set(self.current());
-        self.atom.update(|s| {
+        self.previous.set_always(self.current());
+        self.atom.update_always(|s| {
             let mut v = s.clone();
             v.push(route);
             v
@@ -150,8 +150,8 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
     /// Triggers the reverse of `push`'s transition (enter from the left).
     pub fn pop(&self) -> bool {
         if self.atom.get().len() > 1 {
-            self.previous.set(self.current());
-            self.atom.update(|s| {
+            self.previous.set_always(self.current());
+            self.atom.update_always(|s| {
                 let mut v = s.clone();
                 v.pop();
                 v
@@ -167,8 +167,8 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
     /// (never slides — there's no push/pop direction to derive a slide
     /// from) unless the resolved style is `None`.
     pub fn replace(&self, route: R) {
-        self.previous.set(self.current());
-        self.atom.update(|s| {
+        self.previous.set_always(self.current());
+        self.atom.update_always(|s| {
             let mut v = s.clone();
             if let Some(last) = v.last_mut() {
                 *last = route;

@@ -13,7 +13,7 @@ pub enum AnimationState {
 ///
 /// Call `tick(dt)` each frame with the elapsed time in seconds; it returns the
 /// current progress value in `[0, 1]`.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct AnimationController {
     pub duration: Duration,
     pub repeat: bool,

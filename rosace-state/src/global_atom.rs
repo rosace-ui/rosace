@@ -46,8 +46,17 @@ impl<T: Clone + Send + Sync + 'static> GlobalAtom<T> {
     }
 
     /// Writes a new value to the atom, notifying all subscribers.
-    pub fn set(&self, value: T) {
+    /// A write equal to the current value is a no-op (see [`Atom::set`]).
+    pub fn set(&self, value: T)
+    where
+        T: PartialEq,
+    {
         self.get_or_init().set(value);
+    }
+
+    /// Unconditional write for non-`PartialEq` values (see [`Atom::set_always`]).
+    pub fn set_always(&self, value: T) {
+        self.get_or_init().set_always(value);
     }
 
     /// Returns a clone of the atom's current value.
