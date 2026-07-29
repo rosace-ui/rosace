@@ -31,7 +31,7 @@ pub use capability::{
     take_push_request, PushMessage, PUSH_MESSAGE, PUSH_PERMISSION, PUSH_TOKEN,
 };
 pub use engine::Engine;
-pub use event::{focused_keyboard_type, RscInputEventFfi};
+pub use event::{focused_keyboard_type, text_input_active, RscInputEventFfi};
 pub use surface::RawSurface;
 
 /// Point asset resolution at a host-provided directory (A6). A native host

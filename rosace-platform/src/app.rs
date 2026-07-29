@@ -286,6 +286,78 @@ pub fn drain_shader_registrations(presenter: &mut rosace_compositor::GpuPresente
 thread_local! {
     static PENDING_PRESENTER: std::cell::RefCell<Option<rosace_compositor::GpuPresenter>> =
         const { std::cell::RefCell::new(None) };
+    /// Keyboard events captured directly from the canvas (see
+    /// `wire_web_keyboard`). winit's web backend does not deliver
+    /// `WindowEvent::KeyboardInput` — the browser dispatches `keydown` to the
+    /// focused canvas but winit never surfaces it — so we listen ourselves and
+    /// drain this into `pending_events` each `redraw`.
+    #[cfg(target_arch = "wasm32")]
+    static WEB_INPUT_QUEUE: std::cell::RefCell<Vec<InputEvent>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Map a browser `KeyboardEvent` to our `InputEvent`s: named keys become
+/// `KeyDown`/`KeyUp`; a single printable `key` becomes `Text` (skipped under
+/// Ctrl/Meta so shortcuts don't type their letter). Mirrors the winit path in
+/// `WindowEvent::KeyboardInput`, which never fires on web.
+#[cfg(target_arch = "wasm32")]
+fn web_key_events(ev: &web_sys::KeyboardEvent, pressed: bool) -> Vec<InputEvent> {
+    let k = ev.key();
+    let special = match k.as_str() {
+        "Enter" => Some(Key::Enter),
+        "Backspace" => Some(Key::Backspace),
+        "Tab" => Some(Key::Tab),
+        "Escape" => Some(Key::Escape),
+        "ArrowLeft" => Some(Key::ArrowLeft),
+        "ArrowRight" => Some(Key::ArrowRight),
+        "ArrowUp" => Some(Key::ArrowUp),
+        "ArrowDown" => Some(Key::ArrowDown),
+        "Delete" => Some(Key::Delete),
+        "Home" => Some(Key::Home),
+        "End" => Some(Key::End),
+        "Shift" => Some(Key::Shift),
+        "Control" => Some(Key::Control),
+        "Alt" => Some(Key::Alt),
+        "Meta" => Some(Key::Meta),
+        _ => None,
+    };
+    if let Some(key) = special {
+        vec![if pressed { InputEvent::KeyDown { key } } else { InputEvent::KeyUp { key } }]
+    } else if pressed && k.chars().count() == 1 && !ev.ctrl_key() && !ev.meta_key() {
+        vec![InputEvent::Text { character: k.chars().next().unwrap() }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Attach `keydown`/`keyup` listeners to the canvas that push into
+/// `WEB_INPUT_QUEUE` and wake the loop — the web keyboard bridge, since winit
+/// never surfaces key events on web.
+#[cfg(target_arch = "wasm32")]
+fn wire_web_keyboard(canvas: &web_sys::HtmlCanvasElement) {
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    let down = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+        let evs = web_key_events(&ev, true);
+        if !evs.is_empty() {
+            ev.prevent_default(); // keep Tab/Space/arrows/Backspace from scrolling or navigating away
+            WEB_INPUT_QUEUE.with(|q| q.borrow_mut().extend(evs));
+            rosace_state::request_frame();
+        }
+    });
+    let up = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+        let evs = web_key_events(&ev, false);
+        if !evs.is_empty() {
+            WEB_INPUT_QUEUE.with(|q| q.borrow_mut().extend(evs));
+            rosace_state::request_frame();
+        }
+    });
+    let _ = canvas.add_event_listener_with_callback("keydown", down.as_ref().unchecked_ref());
+    let _ = canvas.add_event_listener_with_callback("keyup", up.as_ref().unchecked_ref());
+    // Leak the closures: they live for the page's lifetime (one window).
+    down.forget();
+    up.forget();
 }
 
 impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
@@ -387,6 +459,11 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
         // (Dropdown menu) survives engine-skipped animated presents with
         // its pixels retained — and idle frames never pay the full-window
         // tiny-skia fill that was ~40% of a debug core.
+
+        // Fold web keyboard events (captured by our canvas listeners, since
+        // winit doesn't deliver them) into this frame's batch.
+        #[cfg(target_arch = "wasm32")]
+        WEB_INPUT_QUEUE.with(|q| self.pending_events.append(&mut q.borrow_mut()));
 
         let events = std::mem::take(&mut self.pending_events);
         (self.paint_fn)(&mut self.canvas, &mut self.overlay_canvas, &events);
@@ -734,9 +811,21 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                     let _ = style.set_property("width", &format!("{}px", vw));
                     let _ = style.set_property("height", &format!("{}px", vh));
                     let _ = style.set_property("display", "block");
+                    // Keyboard input: a <canvas> only receives key events when
+                    // it is focusable AND focused. Give it a tabindex and focus
+                    // it so winit's KeyboardInput events fire — from there the
+                    // SAME app.rs key/Text handling desktop uses drives text
+                    // editing. Clicking the canvas re-focuses it automatically,
+                    // so tapping a field keeps keys flowing. The default focus
+                    // ring is hidden (the app draws its own focus visuals).
+                    let _ = canvas.set_attribute("tabindex", "0");
+                    let _ = style.set_property("outline", "none");
                     web_win.document()
                         .and_then(|d| d.body())
                         .and_then(|b| b.append_child(&canvas).ok());
+                    let _ = canvas.focus();
+                    // winit never delivers key events on web — listen ourselves.
+                    wire_web_keyboard(&canvas);
                 }
             }
         }

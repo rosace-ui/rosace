@@ -76,6 +76,17 @@ pub const RSC_KEYBOARD_NUMERIC: u32 = 2;
 pub const RSC_KEYBOARD_URL: u32 = 3;
 pub const RSC_KEYBOARD_PHONE: u32 = 4;
 
+/// Whether a text field currently holds the caret. A native host polls this
+/// once per frame to decide whether to SHOW or HIDE the OS soft keyboard
+/// (become/resign first responder on iOS, `showSoftInput`/`hideSoftInput` on
+/// Android, focus/blur a hidden input on web). Backed by the same
+/// `ime_cursor_area` signal desktop uses to place the IME — `Some` exactly
+/// when an editable is focused, so `focused_keyboard_type` alone (which can't
+/// tell "default field" from "nothing") is not enough on its own.
+pub fn text_input_active() -> bool {
+    rosace_core::ime_cursor_area().is_some()
+}
+
 /// The currently-focused field's keyboard-type hint, encoded as a
 /// `RSC_KEYBOARD_*` constant — a native host polls this once per frame
 /// tick (same polling shape `take_camera_request` uses) to know which
