@@ -61,5 +61,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    return textureSample(t_frame, s_frame, uv);
+    // `textureSampleLevel` (explicit LOD 0), not `textureSample`: this sits
+    // after an early-return branch on `uv`, so it is non-uniform control flow,
+    // which WebGPU's WGSL validator forbids for the derivative-taking
+    // `textureSample` (naga was lenient for Metal/Vulkan). The target is a
+    // full-res, mip-less render texture, so LOD 0 is identical output.
+    return textureSampleLevel(t_frame, s_frame, uv, 0.0);
 }

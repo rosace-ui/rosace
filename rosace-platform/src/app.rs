@@ -81,7 +81,12 @@ impl PlatformWindow {
         // Surface real panic messages in the browser console instead of a bare
         // "RuntimeError: unreachable".
         #[cfg(target_arch = "wasm32")]
-        console_error_panic_hook::set_once();
+        {
+            console_error_panic_hook::set_once();
+            // Route `log` to the browser console so GPU-init / shader errors
+            // are visible (nothing else installs a logger on web).
+            let _ = console_log::init_with_level(log::Level::Info);
+        }
 
         let event_loop = EventLoop::<FrameRequest>::with_user_event()
             .build()
@@ -274,6 +279,15 @@ pub fn drain_shader_registrations(presenter: &mut rosace_compositor::GpuPresente
     }
 }
 
+// Web-only hand-off for the asynchronously-built GPU presenter (D109): the
+// `spawn_local`'d init in `resumed` drops the finished presenter here, and the
+// next `redraw` installs it (single-threaded, so a thread-local cell suffices).
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static PENDING_PRESENTER: std::cell::RefCell<Option<rosace_compositor::GpuPresenter>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
     /// Resize the GPU surface/canvases to the current physical window size,
     /// run one paint pass, and present. Called from `RedrawRequested` (the
@@ -287,6 +301,28 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
         let phys_h = phys.height;
         if phys_w == 0 || phys_h == 0 {
             return;
+        }
+
+        // Web: the async wgpu build (spawned in `resumed`) may have finished —
+        // install it now, drop the softbuffer bridge, and switch on GPU shapes
+        // (the same enable `resumed` does for native). From here web renders on
+        // the GPU exactly like every other platform; no more per-frame CPU
+        // raster. `ROSACE_CPU_SHAPES=1` still forces the tiny-skia path.
+        #[cfg(target_arch = "wasm32")]
+        if self.presenter.is_none() {
+            if let Some(mut p) = PENDING_PRESENTER.with(|c| c.borrow_mut().take()) {
+                self.context = None;
+                self.surface = None;
+                if std::env::var_os("ROSACE_CPU_SHAPES").is_none() {
+                    rosace_shader::builtin::register_builtins();
+                    p.set_glyph_gamma(rosace_render::canvas::text_gamma_lut());
+                    self.canvas.set_gpu_shapes(true);
+                }
+                drain_shader_registrations(&mut p);
+                self.presenter = Some(p);
+                self.canvas.mark_frame_dirty();
+                log::info!("rosace-platform: web GPU compositor installed");
+            }
         }
 
         if let Some(surface) = self.surface.as_mut() {
@@ -706,11 +742,27 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         }
 
         // Try GPU compositor (D072). Fall back to softbuffer if unavailable.
-        // On web, wgpu init is async and `GpuPresenter::new` blocks on it
-        // (`pollster::block_on`) — blocking is illegal on wasm and traps
-        // ("RuntimeError: unreachable"), so use the CPU softbuffer path there.
+        // On web, wgpu init is async — blocking on it traps the wasm main
+        // thread — so `spawn_local` the build and install the presenter into
+        // the running loop once it resolves (top of `redraw`). The softbuffer
+        // CPU path bridges the (brief) gap so the first frames still show.
         #[cfg(target_arch = "wasm32")]
-        let presenter: Option<rosace_compositor::GpuPresenter> = None;
+        let presenter: Option<rosace_compositor::GpuPresenter> = {
+            let win = window.clone();
+            let (w, h) = (self.config.width, self.config.height);
+            wasm_bindgen_futures::spawn_local(async move {
+                match rosace_compositor::GpuPresenter::new_async(win, w, h).await {
+                    Some(p) => {
+                        PENDING_PRESENTER.with(|c| *c.borrow_mut() = Some(p));
+                        rosace_state::request_frame(); // wake the loop to install it
+                    }
+                    None => log::error!(
+                        "rosace-platform: web GPU init failed; staying on softbuffer"
+                    ),
+                }
+            });
+            None
+        };
         #[cfg(not(target_arch = "wasm32"))]
         let presenter = rosace_compositor::GpuPresenter::new(
             window.clone(),
@@ -720,23 +772,31 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         if presenter.is_some() {
             log::info!("rosace-platform: using GPU compositor (wgpu)");
         } else {
-            // No GPU: nothing will ever compile shader pipelines for this
-            // window. Registrations queued before startup are dropped now,
-            // loudly, instead of accumulating forever.
-            let dropped = rosace_shader::take_pending_shaders();
-            if !dropped.is_empty() {
-                log::warn!(
-                    "rosace-platform: GPU unavailable — {} shader pipeline registration(s) \
-                     dropped; DrawCommand::ShaderFill content will not render on the \
-                     softbuffer fallback path",
-                    dropped.len(),
-                );
+            // Native with no GPU → softbuffer CPU fallback. NOT taken on web:
+            // there `presenter` is only None because the async wgpu build is
+            // still in flight, and a softbuffer 2d context would permanently
+            // claim the canvas and block wgpu's webgl2 surface on it. Web shows
+            // a blank frame or two until the GPU presenter installs (redraw).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // No GPU: nothing will ever compile shader pipelines for this
+                // window. Registrations queued before startup are dropped now,
+                // loudly, instead of accumulating forever.
+                let dropped = rosace_shader::take_pending_shaders();
+                if !dropped.is_empty() {
+                    log::warn!(
+                        "rosace-platform: GPU unavailable — {} shader pipeline registration(s) \
+                         dropped; DrawCommand::ShaderFill content will not render on the \
+                         softbuffer fallback path",
+                        dropped.len(),
+                    );
+                }
+                log::info!("rosace-platform: GPU compositor unavailable, using softbuffer");
+                let context = softbuffer::Context::new(window.clone()).unwrap();
+                let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
+                self.context = Some(context);
+                self.surface = Some(surface);
             }
-            log::info!("rosace-platform: GPU compositor unavailable, using softbuffer");
-            let context = softbuffer::Context::new(window.clone()).unwrap();
-            let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
-            self.context = Some(context);
-            self.surface = Some(surface);
         }
         // Enable OS IME globally for this window (D116 Step 6) — not
         // scoped to "only while a text field is focused": there is no

@@ -304,6 +304,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_log"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86919cef3e37b9356ccf54d4421208c17ecfda01beae61393e7ffd72916c0ef1"
+dependencies = [
+ "log",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2223,6 +2234,7 @@ name = "rosace-platform"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "console_log",
  "js-sys",
  "log",
  "rosace-animate",
@@ -2236,6 +2248,7 @@ dependencies = [
  "rosace-web-seo",
  "softbuffer",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "web-time",
  "winit",

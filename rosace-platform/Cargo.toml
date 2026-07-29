@@ -32,6 +32,12 @@ winit = { version = "0.30", features = ["android-native-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+# Drives the async wgpu init on web: `spawn_local` the presenter build so the
+# browser event loop can poll it, instead of blocking the main thread.
+wasm-bindgen-futures = "0.4"
+# Bridges the `log` facade to the browser console (nothing inits a logger
+# otherwise, so every log::info!/error! is a silent no-op on web).
+console_log = { version = "1", features = ["color"] }
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 # D107 Phase 25 Step 4 — runtime shadow-DOM sync (post-hydration state

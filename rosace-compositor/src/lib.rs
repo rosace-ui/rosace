@@ -329,7 +329,10 @@ fn fs_main(in: GlassVsOut) -> @location(0) vec4<f32> {
     let mask = clamp(0.5 - d, 0.0, 1.0);
     if mask <= 0.0 { return vec4<f32>(0.0); }
 
-    let blurred = textureSample(t_blur, s_blur, in.uv).rgb;
+    // `textureSampleLevel` (LOD 0), not `textureSample`: after the `mask`
+    // early-return this is non-uniform control flow, rejected by WebGPU's WGSL
+    // validator for derivative-taking samples. The blur target is mip-less.
+    let blurred = textureSampleLevel(t_blur, s_blur, in.uv, 0.0).rgb;
     // Tint over the blur, slight lift so glass reads brighter than what's
     // behind it, and a soft rim at the panel edge.
     var col = mix(blurred, u.tint.rgb, u.tint.a) * 1.04 + vec3<f32>(0.015);
@@ -669,6 +672,9 @@ pub struct GpuPresenter {
     device:                wgpu::Device,
     queue:                 wgpu::Queue,
     config:                wgpu::SurfaceConfiguration,
+    /// The sRGB format all pipelines/offscreens/surface-views target — equals
+    /// `config.format` on native, its sRGB variant on web (see `new_async`).
+    render_format:         wgpu::TextureFormat,
     /// Pipeline for the base layer (REPLACE blend — writes all channels).
     pipeline_base:         wgpu::RenderPipeline,
     /// Pipeline for overlay layers (ALPHA_BLENDING — Porter-Duff over).
@@ -751,7 +757,10 @@ impl GpuPresenter {
         pollster::block_on(Self::new_async(window, width, height))
     }
 
-    async fn new_async<W>(window: W, width: u32, height: u32) -> Option<Self>
+    /// Async constructor — `await` it directly on web (where `new`'s blocking
+    /// `pollster` would trap on the wasm main thread). Native callers use
+    /// [`Self::new`], which just blocks on this.
+    pub async fn new_async<W>(window: W, width: u32, height: u32) -> Option<Self>
     where
         W: wgpu::rwh::HasWindowHandle
             + wgpu::rwh::HasDisplayHandle
@@ -806,20 +815,44 @@ impl GpuPresenter {
             .await
             .ok()?;
 
+        // Web can't block to pop error scopes, so per-call validation checks
+        // are skipped there (see register_shader). Instead route ALL device
+        // errors — bad shader, format mismatch, etc. — to the console
+        // asynchronously, so a silent black frame becomes a visible cause.
+        #[cfg(target_arch = "wasm32")]
+        device.on_uncaptured_error(Box::new(|e| {
+            log::error!("rosace-compositor: wgpu error: {e}");
+        }));
+
         let caps   = surface.get_capabilities(&adapter);
-        let format = caps.formats.iter()
+        // Log what the surface actually supports — the black-frame suspects
+        // (format/alpha) are here.
+        #[cfg(target_arch = "wasm32")]
+        log::info!(
+            "rosace-compositor(web): surface formats={:?} alpha={:?}",
+            caps.formats, caps.alpha_modes
+        );
+        let surface_format = caps.formats.iter()
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(caps.formats[0]);
+        // Render and sample in the sRGB VARIANT so the GPU performs the
+        // linear<->sRGB encode/decode (shaders work in linear). Web canvases
+        // only expose the NON-sRGB surface format, so the surface stays
+        // `surface_format` but is VIEWED as `format` (sRGB) — that view is what
+        // every pipeline/offscreen targets. Native already offers an sRGB
+        // surface, so the two are equal there and behaviour is unchanged.
+        let format = surface_format.add_srgb_suffix();
 
         let config = wgpu::SurfaceConfiguration {
             usage:        wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
+            format:       surface_format,
             width:        width.max(1),
             height:       height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode:   caps.alpha_modes[0],
-            view_formats: vec![],
+            // Allow creating the sRGB view of a non-sRGB surface (web).
+            view_formats: if format != surface_format { vec![format] } else { vec![] },
             desired_maximum_frame_latency: 2,
         };
         // Configure inside an error scope so an invalid surface RETURNS None
@@ -830,7 +863,9 @@ impl GpuPresenter {
         // used to kill the app (Known Issue #16).
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         surface.configure(&device, &config);
-        if let Some(err) = pollster::block_on(device.pop_error_scope()) {
+        // `.await` (not `pollster::block_on`) — we are already async, and
+        // blocking traps on the wasm main thread.
+        if let Some(err) = device.pop_error_scope().await {
             log::error!("rosace-compositor: surface configure failed: {err}");
             return None;
         }
@@ -1258,6 +1293,7 @@ impl GpuPresenter {
             device,
             queue,
             config,
+            render_format: format,
             pipeline_base,
             pipeline_overlay,
             bind_group_layout,
@@ -1315,7 +1351,7 @@ impl GpuPresenter {
                 mip_level_count: 1,
                 sample_count:    1,
                 dimension:       wgpu::TextureDimension::D2,
-                format:          self.config.format,
+                format:          self.render_format,
                 usage:           wgpu::TextureUsages::RENDER_ATTACHMENT
                                | wgpu::TextureUsages::TEXTURE_BINDING
                                | wgpu::TextureUsages::COPY_SRC
@@ -1579,7 +1615,7 @@ impl GpuPresenter {
                 // the pipeline (this was a real launch abort with
                 // Rgba8UnormSrgb vs the macOS Bgra8UnormSrgb surface).
                 // Sampling doesn't care about component order.
-                format:          self.config.format,
+                format:          self.render_format,
                 usage:           wgpu::TextureUsages::RENDER_ATTACHMENT
                                | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats:    &[],
@@ -1882,7 +1918,10 @@ impl GpuPresenter {
         };
 
         // Scope validation errors so a bad shader is a logged failure, not
-        // a process-level panic from wgpu's uncaptured-error handler.
+        // a process-level panic from wgpu's uncaptured-error handler. Skipped
+        // on wasm: popping the scope needs a blocking wait, which traps on the
+        // main thread — a bad shader there surfaces via the default handler.
+        #[cfg(not(target_arch = "wasm32"))]
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1921,7 +1960,7 @@ impl GpuPresenter {
                 module:      &module,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format:     self.config.format,
+                    format:     self.render_format,
                     blend:      blend_state,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -1934,6 +1973,7 @@ impl GpuPresenter {
             cache:         None,
         });
 
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(err) = pollster::block_on(self.device.pop_error_scope()) {
             log::error!("shader pipeline {pipeline} failed to compile: {err}");
             return false;
@@ -2247,7 +2287,13 @@ impl GpuPresenter {
         // Must run AFTER `ensure_scene` — a backdrop-sampling quad's bind
         // group references the scene snapshot view.
         self.sync_cached_quads(&quads, sw, sh);
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // View the surface texture in the sRGB render format (equals the
+        // surface format on native; the sRGB variant of a non-sRGB web canvas)
+        // so the final present encodes linear->sRGB like every other target.
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.render_format),
+            ..Default::default()
+        });
         let target: &wgpu::TextureView = if use_scene {
             &self.scene.as_ref().expect("ensure_scene above").scene_view
         } else {
