@@ -1,6 +1,10 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+// `web_time::Instant` (not `std::time`) — `std::time::Instant::now()` panics
+// on wasm ("time not implemented"), which aborted the whole app on the first
+// trace. `event.rs` already uses `web_time`; this subscriber was the one spot
+// still on `std`. Drop-in identical on native.
+use web_time::Instant;
 
 use crate::bus::TraceSubscriber;
 use crate::event::RosaceTrace;

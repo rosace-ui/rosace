@@ -186,7 +186,11 @@ struct AppState<F> {
 
 /// One canvas frame item (D109 C1) as a compositor item: quads pass
 /// through; CPU segments become placed pixel layers at their bbox.
-fn canvas_item_to_frame<'a>(
+///
+/// `pub` so custom host drivers that replay this per-frame sequence
+/// outside the winit loop (e.g. `rosace-ffi`'s mobile `Engine`) share the
+/// exact GPU-shapes translation rather than duplicating it.
+pub fn canvas_item_to_frame<'a>(
     it: &'a rosace_render::canvas::CanvasFrameItem,
     dirty: bool,
 ) -> rosace_compositor::FrameItem<'a> {
@@ -252,7 +256,11 @@ fn canvas_item_to_frame<'a>(
 /// (D109) — eager compilation at the frame boundary, converting the typed
 /// `ShaderSpec` to the compositor's primitives-only API (its Layer-0
 /// zero-rosace-deps contract means it cannot see `rosace-shader` types).
-fn drain_shader_registrations(presenter: &mut rosace_compositor::GpuPresenter) {
+/// Compile+register any shader pipelines queued since the last drain into
+/// the presenter. `pub` for the same reason as [`canvas_item_to_frame`]:
+/// custom host drivers (mobile `rosace-ffi`) must run it at startup so the
+/// built-in GPU-shape pipelines exist before the first present.
+pub fn drain_shader_registrations(presenter: &mut rosace_compositor::GpuPresenter) {
     for (id, spec) in rosace_shader::take_pending_shaders() {
         let blend = match spec.blend {
             rosace_shader::BlendMode::Alpha    => rosace_compositor::ShaderBlend::Alpha,

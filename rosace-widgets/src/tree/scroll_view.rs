@@ -195,7 +195,13 @@ impl ScrollView {
                 child_size.height.max(child_size.width),
             ),
         };
-        overflow && extent <= MAX_TL_DIM
+        // PHYSICAL fit: the offscreen texture is allocated at `extent * scale`
+        // and hard-capped at `MAX_TL_DIM` (engine.rs). A logical-only check
+        // (`extent <= MAX_TL_DIM`) passes content that then can't fit its
+        // texture on a 2x/3x display, clipping the bottom. Gate on the physical
+        // size so taller-than-cap content falls to the CPU (base) path — which
+        // re-renders only the visible slice and has no single-texture limit.
+        overflow && extent * rosace_state::render_scale() <= MAX_TL_DIM
     }
 
     /// GPU-layer paint path (D090). Records the content once into its own
@@ -209,7 +215,54 @@ impl ScrollView {
         use super::TransformLayerEntry;
         let vp = ctx.rect;
         let node_id = ctx.node as u64;
-        let off = rosace_state::scroll_offset(node_id);
+
+        // Controller-backed offset (D101) — the SAME model `paint_base` uses,
+        // so the GPU path gets real drag + flick momentum instead of wheel
+        // only. This path composites the content as an offscreen texture and
+        // shifts its sample offset each frame, so the live offset is also
+        // mirrored to the non-reactive channel the compositor reads
+        // (`scroll_offset`): the controller is the source of truth.
+        let ctrl = ctx.scroll_controller();
+        let axes = match self.axis {
+            ScrollAxis::Vertical   => super::ScrollAxes::Y,
+            ScrollAxis::Horizontal => super::ScrollAxes::X,
+            ScrollAxis::Both       => super::ScrollAxes::BOTH,
+        };
+        let (ax, ay) = (axes.x, axes.y);
+        let physics = resolve_physics(&ctx.theme, self.physics);
+
+        // Publish extents so `apply_momentum`/`coast` can clamp (guarded — an
+        // unconditional atom write during paint would dirty every frame).
+        let vp_s = [vp.size.width, vp.size.height];
+        if ctrl.viewport_size.get() != vp_s { ctrl.viewport_size.set(vp_s); }
+        let cs = [child_size.width, child_size.height];
+        if ctrl.content_size.get() != cs { ctrl.content_size.set(cs); }
+
+        // Momentum drive — identical to `paint_base`: track drag velocity
+        // while pressed, coast / spring-back once released (unless wheel input
+        // is still live). See `paint_base` for the wheel-idle-grace rationale.
+        let dt = rosace_animate::frame_dt().max(0.0001);
+        let is_pressed = ctx.pressed();
+        let was_pressed = ctrl.was_pressed();
+        ctrl.advance_wheel_idle(dt);
+        if is_pressed {
+            ctrl.track_velocity(dt);
+        } else if ctrl.wheel_recently_active() {
+            ctx.request_animation();
+        } else {
+            if was_pressed { ctrl.end_drag(); }
+            if !ctx.theme.animation.enabled {
+                ctrl.stop_coasting();
+            } else if ctrl.coast(physics, dt) {
+                ctx.request_animation();
+            }
+        }
+        ctrl.set_was_pressed(is_pressed);
+
+        // Live (post-coast) offset drives BOTH this frame's transform and the
+        // compositor's offscreen sample position (via the mirrored channel).
+        let off = ctrl.offset.get();
+        rosace_state::set_scroll_offset(node_id, off);
 
         // Record the content at (0,0) into its own node/picture (D090).
         let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
@@ -237,23 +290,24 @@ impl ScrollView {
             scroll_y: off[1],
         });
 
-        // Wheel scrolling → offset channel (no repaint). Axis-clamped.
-        let max_x = match self.axis {
-            ScrollAxis::Horizontal | ScrollAxis::Both => (child_size.width - vp.size.width).max(0.0),
-            ScrollAxis::Vertical => 0.0,
-        };
-        let max_y = match self.axis {
-            ScrollAxis::Vertical | ScrollAxis::Both => (child_size.height - vp.size.height).max(0.0),
-            ScrollAxis::Horizontal => 0.0,
-        };
-        let axes = match self.axis {
-            ScrollAxis::Vertical   => super::ScrollAxes::Y,
-            ScrollAxis::Horizontal => super::ScrollAxes::X,
-            ScrollAxis::Both       => super::ScrollAxes::BOTH,
-        };
+        // Wheel/trackpad → `apply_momentum` (respects Bounce overscroll),
+        // marks wheel active so coast holds off while it's live.
+        let wheel_ctrl = ctrl.clone();
         ctx.register_scroll_target(vp, axes, Arc::new(move |dx, dy| {
-            rosace_state::scroll_offset_by(node_id, -dx, -dy, max_x, max_y);
+            wheel_ctrl.apply_momentum(if ax { -dx } else { 0.0 }, if ay { -dy } else { 0.0 }, physics);
+            wheel_ctrl.mark_wheel_active();
         }));
+
+        // Touch/mouse drag-to-pan (GPU-path parity): a finger produces no
+        // wheel event, so without this the GPU scroll path could not scroll on
+        // touch devices at all (the gallery was frozen on iOS, fine on the
+        // Mac trackpad). Streams absolute drag position → delta →
+        // `apply_momentum`, which also feeds the velocity the flick coasts on.
+        let pan_ctrl = ctrl.clone();
+        ctx.on_press_at(move |x, y| {
+            let (dx, dy) = pan_ctrl.drag_delta(x, y);
+            pan_ctrl.apply_momentum(if ax { -dx } else { 0.0 }, if ay { -dy } else { 0.0 }, physics);
+        });
 
         // Scrollbar drawn into the base canvas from the live channel offset.
         if self.show_scrollbar && matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both)

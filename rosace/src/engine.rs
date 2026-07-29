@@ -690,6 +690,11 @@ impl FrameEngine {
         let root = &self.root;
         let font = &self.font;
 
+        // Publish the DPI/content scale so `ScrollView::should_auto_gpu` can
+        // decide the GPU-vs-CPU path in PHYSICAL terms (its offscreen texture
+        // is physical-px and capped) — one place, every platform.
+        rosace_state::set_render_scale(canvas.scale());
+
         // ── Drain dirty-component set for this frame ───────────────────
         let global_dirty = rosace_state::is_global_dirty();
         let dirty_ids = rosace_state::take_dirty_components();

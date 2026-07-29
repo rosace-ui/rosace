@@ -10,7 +10,9 @@
 //! (`"ph":"X"`, `"ts"` + `"dur"`) so Perfetto draws it as a duration bar
 //! instead of a tick mark.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// `web_time::Instant` to match `event.rs`/`ring_buffer.rs` — see ring_buffer.
+use web_time::Instant;
 
 use crate::event::RosaceTrace;
 use super::console::ConsoleSubscriber;

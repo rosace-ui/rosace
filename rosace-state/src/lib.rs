@@ -31,7 +31,7 @@ pub use frame_scheduler::{register_wakeup, request_frame, take_frame_requested};
 pub use global_atom::GlobalAtom;
 pub use refresh_engine::RefreshEngine;
 pub use pan_momentum::{drag_last, set_drag_last, pan_velocity, set_pan_velocity, clear_pan_momentum};
-pub use scroll_offset::{scroll_offset, set_scroll_offset, scroll_offset_by, clear_scroll_offset};
+pub use scroll_offset::{scroll_offset, set_scroll_offset, scroll_offset_by, clear_scroll_offset, render_scale, set_render_scale};
 pub use state_store::{hook_state, clear_component};
 
 /// Creates a new local atom initialised with `default`.

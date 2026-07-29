@@ -34,6 +34,12 @@ pub struct Engine {
     last_frame: Option<std::time::Instant>,
     /// Whether at least one frame has been presented (the first must always go).
     presented_once: bool,
+    /// Retained GPU-shapes base frame items (D109 C1): rebuilt only on
+    /// painted frames, reused on clean ones — same policy as desktop.
+    /// Empty when GPU-shapes is off (CPU pixel path).
+    frame_items: Vec<rosace_render::canvas::CanvasFrameItem>,
+    /// Monotonic epoch for animated shader `time` uniforms.
+    anim_epoch: std::time::Instant,
 }
 
 impl Engine {
@@ -68,7 +74,25 @@ impl Engine {
             }
         }
 
-        let presenter = GpuPresenter::new(surface, width, height)?;
+        let mut presenter = GpuPresenter::new(surface, width, height)?;
+        let mut canvas = SkiaCanvas::new_hidpi(width, height, scale);
+
+        // GPU-shapes mode (D109/Phase 27): built-in shape commands render as
+        // SDF pipelines on the GPU base canvas instead of CPU tiny-skia.
+        // Desktop enables this in `App::launch`; the mobile host enters here
+        // and never did — so on-device every shape re-rasterized on the CPU
+        // each frame (measured: ~35ms paint vs ~4ms present at 3x on iOS),
+        // pegging the CADisplayLink thread and stalling animations. The
+        // overlay/scroll canvases stay tiny-skia (matches desktop until C2).
+        // `ROSACE_CPU_SHAPES=1` is the kill switch / A-B lever.
+        if std::env::var_os("ROSACE_CPU_SHAPES").is_none() {
+            rosace::shader::builtin::register_builtins();
+            presenter.set_glyph_gamma(rosace_render::canvas::text_gamma_lut());
+            canvas.set_gpu_shapes(true);
+        }
+        // Eager pipeline compilation (the Impeller lesson): everything queued
+        // above compiles now, at startup, never lazily on the first paint.
+        rosace_platform::app::drain_shader_registrations(&mut presenter);
 
         // Dev hot reload (Tier 1): on a mobile dev build, listen for edited
         // source pushed from the dev machine over an adb/devicectl-forwarded
@@ -82,7 +106,7 @@ impl Engine {
         Some(Box::new(Engine {
             frame_engine: rosace::FrameEngine::new(root, font),
             presenter,
-            canvas: SkiaCanvas::new_hidpi(width, height, scale),
+            canvas,
             overlay_canvas: SkiaCanvas::new_hidpi(width, height, scale),
             scroll_layers: Vec::new(),
             pending_events: Vec::new(),
@@ -91,6 +115,8 @@ impl Engine {
             scale,
             last_frame: None,
             presented_once: false,
+            frame_items: Vec::new(),
+            anim_epoch: std::time::Instant::now(),
         }))
     }
 
@@ -117,7 +143,11 @@ impl Engine {
         self.height = height;
         self.scale = scale;
         self.presenter.resize(width, height);
+        // Carry the GPU-shapes flag across recreation — a resized surface
+        // silently dropping to CPU shapes would be an invisible mode flip.
+        let gpu_shapes = self.canvas.gpu_shapes();
         self.canvas = SkiaCanvas::new_hidpi(width, height, scale);
+        self.canvas.set_gpu_shapes(gpu_shapes);
         self.overlay_canvas = SkiaCanvas::new_hidpi(width, height, scale);
     }
 
@@ -176,7 +206,9 @@ impl Engine {
         }
         self.presented_once = true;
 
-        self.overlay_canvas.clear_transparent();
+        // The engine owns the overlay clear (it clears exactly when overlay
+        // entries repaint), so no unconditional full-window wipe here — that
+        // matches desktop and lets a paint-time overlay persist across frames.
         let events = std::mem::take(&mut self.pending_events);
         self.frame_engine.paint(&mut self.canvas, &mut self.overlay_canvas, &events);
 
@@ -187,21 +219,94 @@ impl Engine {
             self.scroll_layers = layers;
         }
 
-        let mut layers = vec![
-            CompositorLayer::tracked(self.canvas.pixels(), self.width, self.height, base_dirty),
-        ];
-        for sl in &self.scroll_layers {
-            let off = rosace_state::scroll_offset(sl.id);
-            layers.push(CompositorLayer::placed(
-                &sl.pixels, sl.width, sl.height,
-                LayerRect { x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3 },
-                (off[0] * self.scale, off[1] * self.scale),
-                scroll_dirty,
-            ));
+        if self.canvas.gpu_shapes() {
+            // GPU-shapes present path (D109 C1): the base is an ordered item
+            // list — shape SDF quads + CPU text/blit segments in command
+            // order — not one pixel buffer. Rebuild only on painted frames;
+            // reuse the retained set on clean ones. Overlay stays CPU pixels
+            // (tiny-skia until C2); scroll content is GPU offscreens (C2).
+            if base_dirty {
+                self.frame_items = self.canvas.take_frame_items();
+            }
+            // Live clock into animated shader `time` uniforms; a running one
+            // asks for the next frame (the display link reads this flag).
+            let now = self.anim_epoch.elapsed().as_secs_f32();
+            let mut has_animated = false;
+            for it in &mut self.frame_items {
+                if let rosace_render::canvas::CanvasFrameItem::Shader(q) = it {
+                    if q.animate_time {
+                        rosace::shader::materials::patch_time(&mut q.uniforms, now);
+                        has_animated = true;
+                    }
+                }
+            }
+
+            // Reborrow the presenter as a local so the scroll loop can render
+            // offscreens while `items` holds immutable borrows of the other
+            // (disjoint) fields — same shape as the desktop redraw path.
+            let presenter = &mut self.presenter;
+            let mut items: Vec<rosace_compositor::FrameItem<'_>> = self
+                .frame_items
+                .iter()
+                .map(|it| rosace_platform::app::canvas_item_to_frame(it, base_dirty))
+                .collect();
+            for sl in &self.scroll_layers {
+                let off = rosace_state::scroll_offset(sl.id);
+                let dest = LayerRect { x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3 };
+                // Content was rasterized at `scale * zoom`, so the live
+                // offset scales up by the same factor into texture space.
+                let src_offset = (off[0] * self.scale * sl.zoom, off[1] * self.scale * sl.zoom);
+                if !sl.items.is_empty() {
+                    // GPU-shapes scroll content (D109 C2): render the items
+                    // into the offscreen target on publish frames, then
+                    // sample it at the live scroll offset. `pixels` is empty
+                    // in this mode — reading it would over-run a 0-len slice.
+                    if scroll_dirty {
+                        let sub: Vec<rosace_compositor::FrameItem<'_>> = sl
+                            .items
+                            .iter()
+                            .map(|it| rosace_platform::app::canvas_item_to_frame(it, true))
+                            .collect();
+                        presenter.render_offscreen(sl.id, sl.width, sl.height, &sub);
+                    }
+                    items.push(rosace_compositor::FrameItem::Offscreen(
+                        rosace_compositor::OffscreenRef { key: sl.id, dest, src_offset, dirty: scroll_dirty },
+                    ));
+                } else {
+                    items.push(rosace_compositor::FrameItem::Pixels(CompositorLayer::placed(
+                        &sl.pixels, sl.width, sl.height, dest, src_offset, scroll_dirty,
+                    )));
+                }
+            }
+            if self.overlay_canvas.has_drawn() {
+                items.push(rosace_compositor::FrameItem::Pixels(CompositorLayer::tracked(
+                    self.overlay_canvas.pixels(), self.width, self.height, true,
+                )));
+            }
+            presenter.present_frame(&items);
+
+            if has_animated {
+                rosace_state::request_frame();
+            }
+        } else {
+            // CPU pixel path (ROSACE_CPU_SHAPES=1 kill switch): single
+            // full-window base buffer, scroll + overlay placed on top.
+            let mut layers = vec![
+                CompositorLayer::tracked(self.canvas.pixels(), self.width, self.height, base_dirty),
+            ];
+            for sl in &self.scroll_layers {
+                let off = rosace_state::scroll_offset(sl.id);
+                layers.push(CompositorLayer::placed(
+                    &sl.pixels, sl.width, sl.height,
+                    LayerRect { x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3 },
+                    (off[0] * self.scale, off[1] * self.scale),
+                    scroll_dirty,
+                ));
+            }
+            if self.overlay_canvas.has_drawn() {
+                layers.push(CompositorLayer::tracked(self.overlay_canvas.pixels(), self.width, self.height, true));
+            }
+            self.presenter.present_layers(&layers);
         }
-        if self.overlay_canvas.has_drawn() {
-            layers.push(CompositorLayer::tracked(self.overlay_canvas.pixels(), self.width, self.height, true));
-        }
-        self.presenter.present_layers(&layers);
     }
 }

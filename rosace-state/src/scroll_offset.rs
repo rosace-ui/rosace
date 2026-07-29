@@ -16,6 +16,23 @@ use std::collections::HashMap;
 
 thread_local! {
     static SCROLL_OFFSETS: RefCell<HashMap<u64, [f32; 2]>> = RefCell::new(HashMap::new());
+    /// Active DPI/content scale (physical px per logical px), 1.0 until set.
+    static RENDER_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// The active DPI/content scale, published once per frame by
+/// `FrameEngine::paint` from the base canvas. `ScrollView` consults it to make
+/// its GPU-vs-CPU path decision in PHYSICAL terms: the offscreen scroll texture
+/// is allocated in physical px and capped at `MAX_TL_DIM`, so a purely LOGICAL
+/// fit check under-counts on a 2x/3x display and the bottom of tall content
+/// clips. Main-thread only, same as the offset channel above.
+pub fn render_scale() -> f32 {
+    RENDER_SCALE.with(|s| s.get())
+}
+
+/// Publishes the active DPI/content scale (clamped away from zero).
+pub fn set_render_scale(scale: f32) {
+    RENDER_SCALE.with(|s| s.set(scale.max(0.01)));
 }
 
 /// Current offset (logical px) for a placed layer, or `[0, 0]` if never set.
