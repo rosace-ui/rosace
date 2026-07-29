@@ -54,6 +54,9 @@ features = [
     "HtmlCanvasElement", "CanvasRenderingContext2d", "CssStyleDeclaration",
     "ImageData", "Performance",
     "MouseEvent", "KeyboardEvent", "Event", "EventTarget",
+    # winit's web backend delivers only CursorMoved — no clicks/touch/wheel/keys
+    # — so we attach our own listeners (see wire_web_input) and need these.
+    "PointerEvent", "WheelEvent",
     # D107 Phase 25 Step 4 — reuses the Declarative Shadow DOM root Step 3's
     # build-time export already attached to #rsc-seo (falls back to
     # attach_shadow if none exists, e.g. `rsc dev` without a build step).

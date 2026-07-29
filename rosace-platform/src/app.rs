@@ -334,30 +334,71 @@ fn web_key_events(ev: &web_sys::KeyboardEvent, pressed: bool) -> Vec<InputEvent>
 /// `WEB_INPUT_QUEUE` and wake the loop — the web keyboard bridge, since winit
 /// never surfaces key events on web.
 #[cfg(target_arch = "wasm32")]
-fn wire_web_keyboard(canvas: &web_sys::HtmlCanvasElement) {
+fn queue_web_input(events: Vec<InputEvent>) {
+    if events.is_empty() { return; }
+    WEB_INPUT_QUEUE.with(|q| q.borrow_mut().extend(events));
+    rosace_state::request_frame();
+}
+
+/// Attach ALL input listeners to the canvas — key, pointer, and wheel — since
+/// winit's web backend delivers only `CursorMoved` (no clicks, touch, wheel, or
+/// keys). Each browser event is translated to an `InputEvent` and queued for
+/// the next `redraw` (see `WEB_INPUT_QUEUE`). Pointer events unify mouse and
+/// touch; `offsetX/offsetY` are CSS px, which equal the engine's logical
+/// coordinate space, so no scaling is needed.
+#[cfg(target_arch = "wasm32")]
+fn wire_web_input(canvas: &web_sys::HtmlCanvasElement) {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
 
-    let down = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+    let keydown = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
         let evs = web_key_events(&ev, true);
         if !evs.is_empty() {
             ev.prevent_default(); // keep Tab/Space/arrows/Backspace from scrolling or navigating away
-            WEB_INPUT_QUEUE.with(|q| q.borrow_mut().extend(evs));
-            rosace_state::request_frame();
+            queue_web_input(evs);
         }
     });
-    let up = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-        let evs = web_key_events(&ev, false);
-        if !evs.is_empty() {
-            WEB_INPUT_QUEUE.with(|q| q.borrow_mut().extend(evs));
-            rosace_state::request_frame();
-        }
+    let keyup = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+        queue_web_input(web_key_events(&ev, false));
     });
-    let _ = canvas.add_event_listener_with_callback("keydown", down.as_ref().unchecked_ref());
-    let _ = canvas.add_event_listener_with_callback("keyup", up.as_ref().unchecked_ref());
-    // Leak the closures: they live for the page's lifetime (one window).
-    down.forget();
-    up.forget();
+
+    // Pointer down/move/up (mouse AND touch). No `prevent_default` on down, so
+    // the canvas still takes focus (our keydown listener needs it).
+    let pdown = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |ev: web_sys::PointerEvent| {
+        let (x, y) = (ev.offset_x() as f32, ev.offset_y() as f32);
+        queue_web_input(vec![
+            InputEvent::MouseMove { x, y }, // seed the hit position, like the touch path does
+            InputEvent::MouseDown { x, y, button: MouseButton::Left },
+        ]);
+    });
+    let pmove = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |ev: web_sys::PointerEvent| {
+        queue_web_input(vec![InputEvent::MouseMove { x: ev.offset_x() as f32, y: ev.offset_y() as f32 }]);
+    });
+    let pup = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |ev: web_sys::PointerEvent| {
+        queue_web_input(vec![InputEvent::MouseUp {
+            x: ev.offset_x() as f32, y: ev.offset_y() as f32, button: MouseButton::Left,
+        }]);
+    });
+
+    // Wheel -> Scroll. Negate so the scroll handler's own negation nets to
+    // "content follows the wheel". (deltaMode 0 = pixels, the common case.)
+    let wheel = Closure::<dyn FnMut(web_sys::WheelEvent)>::new(move |ev: web_sys::WheelEvent| {
+        ev.prevent_default(); // stop the page from scrolling under the canvas
+        queue_web_input(vec![InputEvent::Scroll {
+            x: ev.offset_x() as f32, y: ev.offset_y() as f32,
+            delta_x: -ev.delta_x() as f32, delta_y: -ev.delta_y() as f32,
+        }]);
+    });
+
+    let _ = canvas.add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref());
+    let _ = canvas.add_event_listener_with_callback("keyup", keyup.as_ref().unchecked_ref());
+    let _ = canvas.add_event_listener_with_callback("pointerdown", pdown.as_ref().unchecked_ref());
+    let _ = canvas.add_event_listener_with_callback("pointermove", pmove.as_ref().unchecked_ref());
+    let _ = canvas.add_event_listener_with_callback("pointerup", pup.as_ref().unchecked_ref());
+    let _ = canvas.add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref());
+    // Leak: they live for the page's lifetime (one window).
+    keydown.forget(); keyup.forget();
+    pdown.forget(); pmove.forget(); pup.forget(); wheel.forget();
 }
 
 impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
@@ -824,8 +865,9 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                         .and_then(|d| d.body())
                         .and_then(|b| b.append_child(&canvas).ok());
                     let _ = canvas.focus();
-                    // winit never delivers key events on web — listen ourselves.
-                    wire_web_keyboard(&canvas);
+                    // winit's web backend delivers no clicks/touch/wheel/keys —
+                    // we listen for all of them ourselves.
+                    wire_web_input(&canvas);
                 }
             }
         }
