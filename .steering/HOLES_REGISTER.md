@@ -45,7 +45,98 @@ deliberate, named deferrals. Update as holes are closed or new ones surface.
 - `TextInput.scroll_x` horizontal scroll-into-view — wired + headless-tested.
 - Confirmed mouse-drag selection was already done (no work needed).
 
+## Workspace-wide dead-code/debug-plug sweep (2026-07-30)
+
+A full-workspace sweep (compiler warnings, `#[allow(dead_code/unused_*)]`
+sites, orphaned files, stray `println!`/`eprintln!`/`dbg!`, ad-hoc debug
+env-vars, commented-out code, `TODO`/`FIXME`/`XXX`/`HACK`) across all ~41
+crates. Overall the codebase came back clean — no TODO/FIXME/HACK anywhere,
+no commented-out code, no ad-hoc debug env-vars beyond the known real ones
+(`ROSACE_LOG`, `ROSACE_TRACE`, `ROSACE_CPU_SHAPES`, etc.). What follows is
+everything that wasn't already clean.
+
+### 🔴 HIGH PRIORITY — needs investigation, not fixed here
+- **13 pre-existing failures in `rosace`'s engine test suite**, reproducing
+  identically on the commit *before* this session's changes (confirmed via
+  `git stash`) and in isolation single-threaded (so not pure test-order
+  interference, though the failure count does shift with `--test-threads`,
+  suggesting some interference on top of a real underlying issue). Repro:
+  `cargo test -p rosace --lib -- --test-threads=1`. Failing names cluster
+  around typing/arrow-key editing, form validity, and scroll-into-view —
+  e.g. `arrow_left_then_insert_lands_in_the_middle_not_appended_at_the_end`,
+  `typing_in_a_bound_field_updates_the_forms_live_validity`,
+  `wheel_scrolling_away_from_the_caret_is_not_snapped_back_by_scroll_into_view`.
+  This reads like a real, current regression in the text-editing/forms
+  pipeline (or a broken shared test fixture) — worth a dedicated session,
+  not folded into a cleanup pass. **Not caused by, and not fixed by, any
+  commit in this session.**
+
+### 🟡 MEDIUM — flagged, deliberately not touched
+- **`rosace-hot-reload/src/watcher.rs:21`** — `FileWatcher`'s `sender` field
+  is `#[allow(dead_code)]` with no comment explaining why it's kept-but-
+  unused. Plausible reason (holds a channel sender open so the receiver
+  doesn't see a spurious disconnect) but unconfirmed — worth a second look.
+- **`rosace-render/src/canvas.rs:519`** — `grow_segment`'s doc comment says
+  code that skips a GPU pipeline "must call this before rasterizing... or
+  `cut_segment` will silently drop its pixels," implying a call site that
+  should exist but currently doesn't. Reads like a latent gap rather than
+  confirmed-intentional dead code — needs someone who knows this path to
+  confirm whether a call site is actually missing.
+- **`rosace-page/`** — an empty, no-commits nested `.git` clone sitting in
+  the workspace root (remote `rosace-ui/rosace-page.git`, no `Cargo.toml`,
+  no `src/`). It's explicitly listed in `.gitignore` (not accidentally
+  untracked), which reads as intentional local scratch space rather than
+  junk — left alone. **Ask the user directly** what this is for and whether
+  it should stay, be finished, or be deleted; don't guess.
+- **Library/dev-tooling code bypassing the `rosace-trace` logging
+  framework** — `rosace-hot-reload/src/rebuild.rs`, `rosace/src/dev_host.rs`,
+  `rosace/src/dev_reload.rs`, `rosace-ffi/src/engine.rs:73`,
+  `rosace/src/lib.rs:171-173`, and `rosace-widgets/src/tree/{column,row}.rs`
+  all use raw `println!`/`eprintln!` for legitimate developer-facing
+  messages (hot-reload status, a debug-only unbounded-`Expanded` warning)
+  instead of `info!`/`warn!`. Not leftover scaffolding — these read as
+  intentional — but architecturally inconsistent with the rest of the
+  codebase. A consistency pass (migrate to the trace macros) would be
+  low-risk but touches several files; not done as part of this cleanup
+  since it wasn't asked for and isn't itself a defect.
+
+### ✅ Clarified, not actually a hole
+- **"hooks"** — an earlier project-memory note mentioned "forms, RichText,
+  hooks" as a recurring built-but-never-wired pattern, but no `use_hook`/
+  `hooks::`-named artifact exists anywhere in the workspace today. Traced
+  it: this almost certainly refers to `rosace-animate`'s `use_animation`/
+  `use_spring` (the hook-style animation API — see its crate contract in
+  CRATE_CONTRACTS.md), which is confirmed actively wired into
+  `rosace-widgets`/`rosace-platform`/`rosace-nav-anim`. Not a gap.
+- **`rosace-forms` / `RichText`** — both confirmed fully wired (engine.rs
+  Form/FormField dispatch, widget builder methods, umbrella re-exports).
+  The "built ahead of integration" phase for these has already closed.
+
+### Removed this session (confirmed dead, not "built ahead of schedule")
+- `rosace-anim` — a whole duplicate animation crate (744 lines), zero
+  consumers anywhere except its own dead re-export. This was flagged as an
+  **open, unresolved decision** in the 2026-07-08 `CRATE_CONTRACTS.md` audit
+  ("remove, or find/state its purpose") — resolved now: removed, with the
+  user's explicit go-ahead given it's a whole-crate deletion. See D126 /
+  CRATE_CONTRACTS.md.
+- `rosace-platform/src/web.rs` — the original pre-winit single-frame web
+  MVP (`putImageData`, no event loop), already documented as dead in
+  `docs/architecture/platform-and-app-loop.md`, now triply superseded.
+- `rosace-widgets/src/tree/mod.rs`'s `clamp(Constraints, Size)` — zero
+  call sites workspace-wide.
+- `rosace-widgets/src/tree/dropdown.rs`'s `Rect` import — unused; had been
+  silenced with a decoy `use Rect as _RectUsed` alias instead of removed.
+- `rosace-cli/src/commands/tier2.rs`'s trailing `child.wait()` — provably
+  unreachable (every loop exit is an explicit `return`; `try_wait()` inside
+  `app_closed()` already reaps on every path that observes the exit).
+- `rosace/src/engine.rs`'s `probe_offsets_frame_by_frame_after_typing_
+  from_scrolled_top` test — a self-labeled "TEMP diagnostic probe" with
+  zero assertions, superseded by the real regression test right above it.
+
 ## Next candidates
 - Live-verify `TextInput.scroll_x` in a real windowed app (scaffold via `rsc new`).
 - Live-verify net/ws hooks (`use_query`/`use_websocket`) — deferred "check later".
 - `rosace-style` integration (explicitly deferred by user).
+- **Investigate the 13 failing engine tests** (see HIGH PRIORITY above) — likely the single most important open item in this file right now.
+- Confirm/fix the `watcher.rs` unused `sender` field and `canvas.rs`'s `grow_segment` possible-missing-call-site (both MEDIUM above).
+- Ask the user what `rosace-page/` is for.
