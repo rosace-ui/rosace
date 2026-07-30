@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use rosace_core::types::{Point, Rect, Size};
+use rosace_core::types::{Point, Size};
 use rosace_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx};
 use super::overlay::{OverlayEntry, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig, push_overlay};
@@ -109,10 +109,6 @@ impl Widget for Dropdown {
         }
     }
 }
-
-// Silence unused Rect import in some configs.
-#[allow(unused_imports)]
-use Rect as _RectUsed;
 
 #[cfg(test)]
 mod tests {

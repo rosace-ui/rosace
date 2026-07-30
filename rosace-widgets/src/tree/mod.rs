@@ -1136,10 +1136,6 @@ pub(crate) fn vcenter_text_y(box_top: f32, box_h: f32, font: &rosace_render::Fon
     box_top + (box_h - font.line_height(px)) / 2.0
 }
 
-/// Clamp a size to sit within constraints.
-#[allow(dead_code)]
-pub(crate) fn clamp(c: Constraints, s: Size) -> Size { c.constrain(s) }
-
 /// Build a Rect from origin point + size.
 pub(crate) fn rect_at(origin: Point, size: Size) -> Rect {
     Rect { origin, size }
