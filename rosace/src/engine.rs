@@ -3427,35 +3427,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn probe_offsets_frame_by_frame_after_typing_from_scrolled_top() {
-        // TEMP diagnostic probe (twitch bug, 2026-07-12): caret at the
-        // bottom, view wheel-scrolled to the top, type ONE char — print
-        // the offset after every subsequent frame to see the down/up
-        // twitch the user reported live.
-        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let (mut engine, mut canvas, mut overlay, _atom) = headless_text_area_engine(100.0);
-        engine.paint(&mut canvas, &mut overlay, &[]);
-        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
-        for i in 0..20 {
-            if i > 0 {
-                engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Enter)]);
-            }
-            type_str(&mut engine, &mut canvas, &mut overlay, &format!("line_{i}"));
-        }
-        let scroll = rosace_platform::InputEvent::Scroll { x: 20.0, y: 5.0, delta_x: 0.0, delta_y: 100_000.0 };
-        engine.paint(&mut canvas, &mut overlay, &[scroll]);
-        engine.paint(&mut canvas, &mut overlay, &[]);
-        println!("PROBE start (top, caret bottom): {:?}", scroll_offset(&engine));
-
-        engine.paint(&mut canvas, &mut overlay, &[rosace_platform::InputEvent::Text { character: 'z' }]);
-        println!("PROBE after event frame: {:?}", scroll_offset(&engine));
-        for i in 0..6 {
-            engine.paint(&mut canvas, &mut overlay, &[]);
-            println!("PROBE frame {i}: {:?}", scroll_offset(&engine));
-        }
-    }
-
     // ── Tooltip position inside a scroll layer (Phase 32 bug fix) ────────
 
     // ── Build-time overlay emission (Phase 32 bug fix) ───────────────────
