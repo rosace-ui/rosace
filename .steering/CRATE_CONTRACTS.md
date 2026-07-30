@@ -40,9 +40,9 @@ Layer 8  rosace-ffi          → rosace + layers 0-6 (D106 Phase 24 Step 1;
                                  by `rosace`)
 ```
 
-**Layer 5 services** (22 crates; the original doc only ever named a handful
+**Layer 5 services** (21 crates; the original doc only ever named a handful
 of these and never gave them a relative order — see Known Issues):
-`rosace-anim`, `rosace-animate`, `rosace-scroll`, `rosace-nav`,
+`rosace-animate`, `rosace-scroll`, `rosace-nav`,
 `rosace-nav-anim`, `rosace-hot-reload`, `rosace-devtools`,
 `rosace-forms`, `rosace-a11y`, `rosace-gesture`, `rosace-net`,
 `rosace-text`, `rosace-shaping`, `rosace-bidi`, `rosace-i18n`,
@@ -61,15 +61,9 @@ These are real findings, not just doc staleness — flagged here rather than
 silently baked into the contracts below, per the project's violation policy
 (§ bottom of this file: redesign or document, never silently absorb).
 
-1. **`rosace-anim` is dead code.** It compiles and is re-exported as
-   `rosace::anim`, but grepping the whole workspace for `rosace_anim::`
-   finds zero consumers outside its own crate and that one re-export.
-   `rosace-animate` (a similarly-named, independently-implemented crate) is
-   the one actually used by `rosace-widgets`, `rosace-platform`,
-   `rosace-nav-anim`, and `rosace-examples`. These are NOT a shim/alias
-   pair — they're two real, separately-maintained animation systems, and one
-   of them is unused. Needs a decision: remove `rosace-anim`, or find/state
-   its intended purpose.
+1. ~~`rosace-anim` is dead code.~~ **RESOLVED 2026-07-30 — removed.** Confirmed
+   still zero consumers at removal time; `rosace-animate` (the actively-used,
+   independently-implemented system) is unaffected. See DECISIONS.md.
 2. **`rosace-gesture` depends on `rosace-platform`.** Both are Layer-5
    services; the documented layer rule only governs Layers 0–4 → nothing
    stops one service depending on another. This ties gesture recognition
@@ -482,8 +476,9 @@ single `dt` it's handed — no call-site changes needed anywhere in
 real-world `dt` and assert bounded, convergent output.
 
 None of these are fixed by this doc rewrite — this is the audit that found
-them. Fixing them (removing `rosace-anim`, reordering `gesture`, moving
-`test-utils` to dev-deps, deciding `rosace-style`'s fate) is separate work.
+them. `rosace-anim` was removed 2026-07-30 (see Known Issues above); reordering
+`gesture`, moving `test-utils` to dev-deps, and deciding `rosace-style`'s fate
+remain separate, still-open work.
 
 ---
 
@@ -723,18 +718,6 @@ external `winit`, `softbuffer`, plus wasm32-only `wasm-bindgen`/`web-sys`.
 **Note (D106)**: on iOS this crate's winit-owns-the-app-lifecycle model is
 being replaced by a real native host (Xcode project + our own AppDelegate) —
 see D106/`PHASE_24.md`. Desktop/web keep winit.
-
----
-
-### rosace-anim  (Layer 5 — service, DEAD CODE, see Known Issues)
-**Job as implemented**: Pure-math animation primitives (`Tween`, `Easing`,
-`Timeline`/`Keyframe`, `AnimationController`) explicitly documented as
-"driven by external dt," with no hook/state integration.
-**Exports**: `easing_fn`/`Easing`, `Lerp`, `Keyframe`/`Timeline`,
-`AnimationController`/`AnimationState`, `Tween`.
-**Depends on**: `rosace-theme` only.
-**Status**: compiles, re-exported as `rosace::anim`, but has zero real
-consumers anywhere in the framework. See Known Issues #1.
 
 ---
 
