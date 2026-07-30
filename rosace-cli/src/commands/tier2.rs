@@ -389,8 +389,6 @@ fn watch_and_rebuild(
         // iteration's `rx.recv()` returns one immediately → exactly one more
         // coalesced rebuild. Nothing is lost; nothing piles up.
     }
-
-    let _ = child.wait();
 }
 
 /// True once the app process has ended — the signal to stop supervising. Also
