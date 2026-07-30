@@ -48,6 +48,8 @@ const DOUBLE_CLICK_SLOP: f32 = 5.0;
 /// is called on every subsequent keyboard event, not just the next
 /// MouseDown/Up, closing the race a longer timeout would only widen.
 const LONG_PRESS_SELECT_MS: u64 = 500;
+
+use rosace_state::fire_after_ms;
 /// A handle's hit radius (D116 Step 7) — how close a MouseDown must land
 /// to a selection-handle anchor point to grab it instead of starting a
 /// fresh click/drag.
@@ -1498,8 +1500,7 @@ impl FrameEngine {
                         use std::sync::atomic::{AtomicBool, Ordering};
                         let cancel = Arc::new(AtomicBool::new(false));
                         self.lp_cancel = Some(cancel.clone());
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        fire_after_ms(500, move || {
                             if !cancel.load(Ordering::Relaxed) {
                                 cb();
                                 rosace_state::request_frame();
@@ -1517,8 +1518,7 @@ impl FrameEngine {
                         let cancel = Arc::new(AtomicBool::new(false));
                         self.lp_cancel = Some(cancel.clone());
                         let pending = self.pending_long_press_select.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(LONG_PRESS_SELECT_MS));
+                        fire_after_ms(LONG_PRESS_SELECT_MS, move || {
                             if !cancel.load(Ordering::Relaxed) {
                                 *pending.lock().unwrap() = Some((node_id, pos));
                                 rosace_state::request_frame();

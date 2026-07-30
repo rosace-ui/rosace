@@ -8,3 +8,10 @@ repository.workspace = true
 
 [dependencies]
 rosace-trace = { path = "../rosace-trace" }
+
+# Web-safe delayed-callback primitive (`fire_after_ms`): wasm32 has no threads,
+# so the auto-dismiss / long-press timers use `setTimeout` there instead of a
+# timer thread.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window"] }

@@ -87,8 +87,9 @@ impl Snackbar {
     pub fn show(open: &Atom<bool>, secs: f32) {
         open.set(true);
         let open = open.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs_f32(secs));
+        // Web-safe timer (see [`super::Toast::show`]) — `thread::spawn` aborts
+        // the module on wasm32.
+        rosace_state::fire_after_ms((secs * 1000.0) as u64, move || {
             open.set(false);
         });
     }

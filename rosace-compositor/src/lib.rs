@@ -768,28 +768,44 @@ impl GpuPresenter {
             + Sync
             + 'static,
     {
-        // Backend selection. On Android, PREFER Vulkan and exclude GL: the
-        // OpenGL-ES path (both on the emulator's ES translator and some real
-        // drivers) fails window-surface creation with `create_window_surface:
-        // BadAlloc` → `Surface::configure: Invalid surface` — the exact crash
-        // that made Android non-functional since the D109 GPU migration
-        // (root-caused via logcat, Known Issue #16). Vulkan is guaranteed on
-        // Android 7+ (our minSdk 24) and is the platform's recommended GPU
-        // API; on the emulator it resolves to SwiftShader (CPU, but it
-        // WORKS), on real devices to the real GPU. Every other platform keeps
-        // all backends.
+        let instance = Self::make_instance();
+        let surface = instance.create_surface(window).ok()?;
+        Self::build_from_surface(instance, surface, width, height).await
+    }
+
+    /// Shared `wgpu::Instance` setup. Android PREFERS Vulkan and excludes GL:
+    /// the OpenGL-ES path fails window-surface creation with `BadAlloc` →
+    /// `Surface::configure: Invalid surface` (Known Issue #16, root-caused via
+    /// logcat). Vulkan is guaranteed on Android 7+ (minSdk 24); every other
+    /// platform keeps all backends.
+    fn make_instance() -> wgpu::Instance {
         #[cfg(target_os = "android")]
         let backends = wgpu::Backends::VULKAN;
         #[cfg(not(target_os = "android"))]
         let backends = wgpu::Backends::all();
+        wgpu::Instance::new(&wgpu::InstanceDescriptor { backends, ..Default::default() })
+    }
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends,
-            ..Default::default()
-        });
+    /// Build a presenter with its surface taken straight from an HTML canvas —
+    /// web has no winit window / raw-window-handle to reuse (rosace-platform's
+    /// web-native loop drives frames itself, no winit event loop). `await` it
+    /// via `wasm_bindgen_futures::spawn_local`.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn new_async_canvas(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32) -> Option<Self> {
+        let instance = Self::make_instance();
+        let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas)).ok()?;
+        Self::build_from_surface(instance, surface, width, height).await
+    }
 
-        let surface = instance.create_surface(window).ok()?;
-
+    /// Everything after the surface exists: adapter, device, swapchain config,
+    /// and all pipelines. Shared by the window (`new_async`) and canvas
+    /// (`new_async_canvas`) entry points.
+    async fn build_from_surface(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference:       wgpu::PowerPreference::HighPerformance,

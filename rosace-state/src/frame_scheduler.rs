@@ -33,6 +33,35 @@ pub fn take_frame_requested() -> bool {
     FRAME_REQUESTED.swap(false, Ordering::AcqRel)
 }
 
+/// Run `f` once, `ms` milliseconds from now — the web-safe timer primitive.
+///
+/// Native spawns a short-lived timer thread. Web uses `setTimeout`, because
+/// `wasm32-unknown-unknown` has NO threads and `std::thread::spawn` aborts the
+/// whole module there (this is what used to crash the app the instant a text
+/// field was focused, and would crash on any toast/snackbar). Callbacks must
+/// only touch `Atom`s / atomics / mutexes and call [`request_frame`] — never
+/// engine internals — so the single-threaded web path stays sound.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fire_after_ms(ms: u64, f: impl FnOnce() + Send + 'static) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        f();
+    });
+}
+
+/// See the native docs above — web variant, `setTimeout`-backed, no `Send`.
+#[cfg(target_arch = "wasm32")]
+pub fn fire_after_ms(ms: u64, f: impl FnOnce() + 'static) {
+    use wasm_bindgen::JsCast;
+    let cb = wasm_bindgen::closure::Closure::once_into_js(f);
+    if let Some(w) = web_sys::window() {
+        let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+            cb.as_ref().unchecked_ref(),
+            ms as i32,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

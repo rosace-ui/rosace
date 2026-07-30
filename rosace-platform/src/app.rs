@@ -9,7 +9,11 @@ use rosace_trace::{event::RosaceTrace, trace};
 use rosace_render::canvas::SkiaCanvas;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::ActiveEventLoop;
+// The event-loop builder + control-flow are desktop-only now; web runs its own
+// requestAnimationFrame loop (`run_web_native`), never winit.
+#[cfg(not(target_arch = "wasm32"))]
+use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
@@ -78,63 +82,56 @@ impl PlatformWindow {
         // (`spawn_app`); native `move` closures already satisfy it.
         F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent]) + 'static,
     {
-        // Surface real panic messages in the browser console instead of a bare
-        // "RuntimeError: unreachable".
+        // Web owns its OWN frame loop, no winit: winit's web event loop won't
+        // reliably run frames (`request_redraw` is coalesced however it's
+        // triggered), so we create the canvas, build the GPU surface straight
+        // from it, and drive `FrameEngine::paint` + present from our own
+        // `requestAnimationFrame` (see `run_web_native`). Desktop keeps winit.
         #[cfg(target_arch = "wasm32")]
         {
-            console_error_panic_hook::set_once();
-            // Route `log` to the browser console so GPU-init / shader errors
-            // are visible (nothing else installs a logger on web).
-            let _ = console_log::init_with_level(log::Level::Info);
+            run_web_native(self.config, paint_fn);
         }
 
-        let event_loop = EventLoop::<FrameRequest>::with_user_event()
-            .build()
-            .expect("failed to create event loop");
-        event_loop.set_control_flow(ControlFlow::Wait);
-
-        // Register the wakeup fn BEFORE the first frame so background threads
-        // (e.g. animation timers) can trigger redraws immediately.
-        let proxy = event_loop.create_proxy();
-        rosace_state::register_wakeup(move || {
-            let _ = proxy.send_event(FrameRequest);
-        });
-
-        // Request the first frame immediately so the window paints on open.
-        rosace_state::request_frame();
-
-        let w = self.config.width;
-        let h = self.config.height;
-        let mut app = AppState {
-            config: self.config,
-            paint_fn,
-            window: None,
-            surface: None,
-            context: None,
-            presenter: None,
-            canvas: SkiaCanvas::new(w, h),
-            overlay_canvas: SkiaCanvas::new(w, h),
-            pending_events: Vec::new(),
-            frame_counter: 0,
-            cursor_x: 0.0,
-            cursor_y: 0.0,
-            mouse_down: false,
-            last_frame_time: None,
-            scroll_layers: Vec::new(),
-            shader_quads: Vec::new(),
-            frame_items: Vec::new(),
-            shader_fallback_warned: false,
-            ime_composing: false,
-            anim_epoch: Instant::now(),
-        };
-        // Native blocks on the OS event loop; web cannot block, so it hands the
-        // app to the browser's requestAnimationFrame loop and returns.
         #[cfg(not(target_arch = "wasm32"))]
-        event_loop.run_app(&mut app).unwrap();
-        #[cfg(target_arch = "wasm32")]
         {
-            use winit::platform::web::EventLoopExtWebSys;
-            event_loop.spawn_app(app);
+            let event_loop = EventLoop::<FrameRequest>::with_user_event()
+                .build()
+                .expect("failed to create event loop");
+            event_loop.set_control_flow(ControlFlow::Wait);
+
+            // Register the wakeup fn BEFORE the first frame so background threads
+            // (e.g. animation timers) can trigger redraws immediately.
+            let proxy = event_loop.create_proxy();
+            rosace_state::register_wakeup(move || {
+                let _ = proxy.send_event(FrameRequest);
+            });
+            rosace_state::request_frame();
+
+            let w = self.config.width;
+            let h = self.config.height;
+            let mut app = AppState {
+                config: self.config,
+                paint_fn,
+                window: None,
+                surface: None,
+                context: None,
+                presenter: None,
+                canvas: SkiaCanvas::new(w, h),
+                overlay_canvas: SkiaCanvas::new(w, h),
+                pending_events: Vec::new(),
+                frame_counter: 0,
+                cursor_x: 0.0,
+                cursor_y: 0.0,
+                mouse_down: false,
+                last_frame_time: None,
+                scroll_layers: Vec::new(),
+                shader_quads: Vec::new(),
+                frame_items: Vec::new(),
+                shader_fallback_warned: false,
+                ime_composing: false,
+                anim_epoch: Instant::now(),
+            };
+            event_loop.run_app(&mut app).unwrap();
         }
     }
 }
@@ -399,6 +396,242 @@ fn wire_web_input(canvas: &web_sys::HtmlCanvasElement) {
     // Leak: they live for the page's lifetime (one window).
     keydown.forget(); keyup.forget();
     pdown.forget(); pmove.forget(); pup.forget(); wheel.forget();
+}
+
+/// Web-native app state. Unlike desktop (winit `AppState`), this owns NOTHING
+/// from winit — just the GPU presenter, the two skia canvases, and the scroll
+/// layers. Frames are driven by our own `requestAnimationFrame`.
+#[cfg(target_arch = "wasm32")]
+struct WebState {
+    presenter:     Option<rosace_compositor::GpuPresenter>,
+    canvas:        SkiaCanvas,
+    overlay:       SkiaCanvas,
+    scroll_layers: Vec<crate::scroll_layer::ScrollLayer>,
+    frame_items:   Vec<rosace_render::canvas::CanvasFrameItem>,
+    width:         u32,
+    height:        u32,
+    scale:         f32,
+    anim_epoch:    Instant,
+    last_frame:    Option<Instant>,
+    paint_fn:      Box<dyn FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])>,
+}
+
+/// Drive ONE web frame: drain our canvas-listener input, paint, present. This
+/// is what winit-web couldn't give us reliably — it's called straight from our
+/// own rAF, so it runs every animation tick no matter what winit thinks.
+#[cfg(target_arch = "wasm32")]
+fn web_native_frame(s: &mut WebState) {
+    // Real wall-clock dt (web_time::Instant → performance.now()).
+    let now = Instant::now();
+    let dt = s
+        .last_frame
+        .map(|t| now.duration_since(t).as_secs_f32())
+        .unwrap_or(1.0 / 60.0)
+        .clamp(0.001, 0.1);
+    rosace_animate::set_frame_dt(dt);
+    s.last_frame = Some(now);
+
+    // ALWAYS drain input so keystrokes/clicks are never lost — even on the
+    // early frames before the async GPU build has resolved.
+    let mut events: Vec<InputEvent> = Vec::new();
+    WEB_INPUT_QUEUE.with(|q| events.append(&mut q.borrow_mut()));
+
+    // GPU not installed yet: still run paint so focus/scroll/hover state
+    // advances with the input, but there's nothing to present.
+    if s.presenter.is_none() {
+        (s.paint_fn)(&mut s.canvas, &mut s.overlay, &events);
+        let _ = s.canvas.take_frame_dirty();
+        let _ = crate::scroll_layer::take_scroll_layers();
+        return;
+    }
+
+    (s.paint_fn)(&mut s.canvas, &mut s.overlay, &events);
+
+    let base_dirty = s.canvas.take_frame_dirty();
+    let refreshed = crate::scroll_layer::take_scroll_layers();
+    let scroll_dirty = refreshed.is_some();
+    if let Some(l) = refreshed {
+        s.scroll_layers = l;
+    }
+
+    // GPU-shapes present, mirroring the mobile FFI engine's frame path.
+    if base_dirty {
+        s.frame_items = s.canvas.take_frame_items();
+    }
+    let t = s.anim_epoch.elapsed().as_secs_f32();
+    for it in &mut s.frame_items {
+        if let rosace_render::canvas::CanvasFrameItem::Shader(q) = it {
+            if q.animate_time {
+                rosace_shader::materials::patch_time(&mut q.uniforms, t);
+            }
+        }
+    }
+    let presenter = s.presenter.as_mut().unwrap();
+    let mut items: Vec<rosace_compositor::FrameItem<'_>> = s
+        .frame_items
+        .iter()
+        .map(|it| canvas_item_to_frame(it, base_dirty))
+        .collect();
+    for sl in &s.scroll_layers {
+        let off = rosace_state::scroll_offset(sl.id);
+        let dest = rosace_compositor::LayerRect { x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3 };
+        let src = (off[0] * s.scale * sl.zoom, off[1] * s.scale * sl.zoom);
+        if !sl.items.is_empty() {
+            if scroll_dirty {
+                let sub: Vec<rosace_compositor::FrameItem<'_>> =
+                    sl.items.iter().map(|it| canvas_item_to_frame(it, true)).collect();
+                presenter.render_offscreen(sl.id, sl.width, sl.height, &sub);
+            }
+            items.push(rosace_compositor::FrameItem::Offscreen(rosace_compositor::OffscreenRef {
+                key: sl.id,
+                dest,
+                src_offset: src,
+                dirty: scroll_dirty,
+            }));
+        } else {
+            items.push(rosace_compositor::FrameItem::Pixels(rosace_compositor::CompositorLayer::placed(
+                &sl.pixels, sl.width, sl.height, dest, src, scroll_dirty,
+            )));
+        }
+    }
+    if s.overlay.has_drawn() {
+        items.push(rosace_compositor::FrameItem::Pixels(rosace_compositor::CompositorLayer::tracked(
+            s.overlay.pixels(),
+            s.width,
+            s.height,
+            true,
+        )));
+    }
+    presenter.present_frame(&items);
+}
+
+/// Web entry point: create the canvas, build the GPU surface straight from it,
+/// wire input, and drive frames from our OWN `requestAnimationFrame` — winit is
+/// never involved on web.
+#[cfg(target_arch = "wasm32")]
+fn run_web_native(
+    _config: PlatformWindowConfig,
+    paint_fn: impl FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent]) + 'static,
+) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    console_error_panic_hook::set_once();
+    let _ = console_log::init_with_level(log::Level::Info);
+
+    let web_win = web_sys::window().expect("no window");
+    let document = web_win.document().expect("no document");
+    let dpr = web_win.device_pixel_ratio() as f32;
+    let vw = web_win.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
+    let vh = web_win.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(600.0);
+    let phys_w = (vw as f32 * dpr).max(1.0) as u32;
+    let phys_h = (vh as f32 * dpr).max(1.0) as u32;
+
+    let canvas: web_sys::HtmlCanvasElement =
+        document.create_element("canvas").unwrap().dyn_into().unwrap();
+    canvas.set_width(phys_w);
+    canvas.set_height(phys_h);
+    let style = canvas.style();
+    let _ = style.set_property("width", &format!("{vw}px"));
+    let _ = style.set_property("height", &format!("{vh}px"));
+    let _ = style.set_property("display", "block");
+    let _ = style.set_property("outline", "none");
+    let _ = canvas.set_attribute("tabindex", "0");
+    if let Some(body) = document.body() {
+        let _ = body.append_child(&canvas);
+    }
+    let _ = canvas.focus();
+    wire_web_input(&canvas);
+
+    let state = Rc::new(RefCell::new(WebState {
+        presenter:     None,
+        canvas:        SkiaCanvas::new_hidpi(phys_w, phys_h, dpr),
+        overlay:       SkiaCanvas::new_hidpi(phys_w, phys_h, dpr),
+        scroll_layers: Vec::new(),
+        frame_items:   Vec::new(),
+        width:         phys_w,
+        height:        phys_h,
+        scale:         dpr,
+        anim_epoch:    Instant::now(),
+        last_frame:    None,
+        paint_fn:      Box::new(paint_fn),
+    }));
+
+    // Async GPU build straight from the canvas, then enable GPU-shapes.
+    {
+        let state = state.clone();
+        let canvas = canvas.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match rosace_compositor::GpuPresenter::new_async_canvas(canvas, phys_w, phys_h).await {
+                Some(mut p) => {
+                    rosace_shader::builtin::register_builtins();
+                    p.set_glyph_gamma(rosace_render::canvas::text_gamma_lut());
+                    drain_shader_registrations(&mut p);
+                    let mut s = state.borrow_mut();
+                    s.canvas.set_gpu_shapes(true);
+                    s.presenter = Some(p);
+                    log::info!("rosace-platform(web): GPU compositor installed");
+                }
+                None => log::error!("rosace-platform(web): GPU init FAILED — no frames will present"),
+            }
+        });
+    }
+
+    // Keep the canvas + presenter matched to the viewport on resize.
+    {
+        let state = state.clone();
+        let canvas = canvas.clone();
+        let onresize = Closure::<dyn FnMut()>::new(move || {
+            let Some(w) = web_sys::window() else { return };
+            let dpr = w.device_pixel_ratio() as f32;
+            let vw = w.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
+            let vh = w.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(600.0);
+            let pw = (vw as f32 * dpr).max(1.0) as u32;
+            let ph = (vh as f32 * dpr).max(1.0) as u32;
+            let mut s = state.borrow_mut();
+            if s.width == pw && s.height == ph && (s.scale - dpr).abs() < 0.01 {
+                return;
+            }
+            canvas.set_width(pw);
+            canvas.set_height(ph);
+            let st = canvas.style();
+            let _ = st.set_property("width", &format!("{vw}px"));
+            let _ = st.set_property("height", &format!("{vh}px"));
+            s.width = pw;
+            s.height = ph;
+            s.scale = dpr;
+            if let Some(p) = s.presenter.as_mut() {
+                p.resize(pw, ph);
+            }
+            let has_gpu = s.presenter.is_some();
+            s.canvas = SkiaCanvas::new_hidpi(pw, ph, dpr);
+            s.canvas.set_gpu_shapes(has_gpu);
+            s.overlay = SkiaCanvas::new_hidpi(pw, ph, dpr);
+        });
+        web_win.set_onresize(Some(onresize.as_ref().unchecked_ref()));
+        onresize.forget();
+    }
+
+    // THE loop: our own rAF, self-rescheduling. This is the whole point of
+    // dropping winit — the frame runs every tick, so queued input always drains.
+    let cb: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let cb2 = cb.clone();
+    *cb.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+        web_native_frame(&mut state.borrow_mut());
+        if let Some(w) = web_sys::window() {
+            if let Some(c) = cb2.borrow().as_ref() {
+                let _ = w.request_animation_frame(c.as_ref().unchecked_ref());
+            }
+        }
+    }) as Box<dyn FnMut()>));
+    {
+        let b = cb.borrow();
+        if let Some(c) = b.as_ref() {
+            let _ = web_win.request_animation_frame(c.as_ref().unchecked_ref());
+        }
+    }
 }
 
 impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
@@ -872,6 +1105,33 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             }
         }
 
+        // Web: drive redraws with our OWN requestAnimationFrame loop, issuing
+        // `request_redraw` from OUTSIDE the redraw handler every frame. winit's
+        // web loop parks and won't wake reliably from `request_frame`, and a
+        // `request_redraw` issued from INSIDE `redraw` is coalesced away (the
+        // same macOS gotcha) — so neither self-sustains and queued input never
+        // drains. An external rAF pump keeps `RedrawRequested` firing reliably.
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wasm_bindgen::closure::Closure;
+            use wasm_bindgen::JsCast;
+            let win = window.clone();
+            let cb: std::rc::Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>> =
+                std::rc::Rc::new(std::cell::RefCell::new(None));
+            let cb2 = cb.clone();
+            *cb.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+                win.request_redraw();
+                if let Some(w) = web_sys::window() {
+                    let _ = w.request_animation_frame(
+                        cb2.borrow().as_ref().unwrap().as_ref().unchecked_ref());
+                }
+            }) as Box<dyn FnMut()>));
+            if let Some(w) = web_sys::window() {
+                let _ = w.request_animation_frame(
+                    cb.borrow().as_ref().unwrap().as_ref().unchecked_ref());
+            }
+        }
+
         // Try GPU compositor (D072). Fall back to softbuffer if unavailable.
         // On web, wgpu init is async — blocking on it traps the wasm main
         // thread — so `spawn_local` the build and install the presenter into
@@ -1212,6 +1472,8 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
     /// Called after all pending events are processed. Only redraws if an atom
     /// change requested a frame (e.g. from a background animation timer).
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Web self-sustains its rAF loop from inside `redraw`, so this only
+        // matters on desktop (idle until an OS event or `request_frame`).
         if rosace_state::take_frame_requested() {
             if let Some(w) = &self.window {
                 w.request_redraw();

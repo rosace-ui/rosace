@@ -2096,6 +2096,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "pollster",
+ "web-sys",
  "wgpu",
 ]
 
@@ -2303,6 +2304,8 @@ name = "rosace-state"
 version = "0.1.0"
 dependencies = [
  "rosace-trace",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

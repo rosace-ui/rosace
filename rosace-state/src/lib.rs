@@ -27,7 +27,7 @@ pub use atom::Atom;
 pub use atom_id_gen::next_atom_id;
 pub use batch::{batch, is_batching, Priority};
 pub use dirty_set::{mark_dirty, is_global_dirty, take_dirty_components, reset_to_global_dirty};
-pub use frame_scheduler::{register_wakeup, request_frame, take_frame_requested};
+pub use frame_scheduler::{fire_after_ms, register_wakeup, request_frame, take_frame_requested};
 pub use global_atom::GlobalAtom;
 pub use refresh_engine::RefreshEngine;
 pub use pan_momentum::{drag_last, set_drag_last, pan_velocity, set_pan_velocity, clear_pan_momentum};
