@@ -652,7 +652,6 @@ pub mod render    { pub use rosace_render::*; }
 pub mod core      { pub use rosace_core::*; }
 pub mod state     { pub use rosace_state::*; pub use rosace_trace::event::AtomId; }
 pub mod animate   { pub use rosace_animate::*; }
-pub mod anim      { pub use rosace_anim::*; }
 pub mod scroll    { pub use rosace_scroll::*; }
 pub mod nav       { pub use rosace_nav::*; }
 pub mod nav_anim  { pub use rosace_nav_anim::*; }

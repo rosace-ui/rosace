@@ -14,7 +14,6 @@ members = [
     "rosace-cli",
     "rosace-asset-codegen",
     "rosace-platform",
-    "rosace-anim",
     "rosace-animate",
     "rosace-scroll",
     "rosace-nav",

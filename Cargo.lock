@@ -2000,7 +2000,6 @@ dependencies = [
  "libc",
  "libloading",
  "rosace-a11y",
- "rosace-anim",
  "rosace-animate",
  "rosace-bidi",
  "rosace-clipboard",
@@ -2043,13 +2042,6 @@ version = "0.1.0"
 dependencies = [
  "rosace-core",
  "rosace-state",
-]
-
-[[package]]
-name = "rosace-anim"
-version = "0.1.0"
-dependencies = [
- "rosace-theme",
 ]
 
 [[package]]

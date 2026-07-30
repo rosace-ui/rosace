@@ -64,7 +64,6 @@ rosace-widgets = { path = "../rosace-widgets" }
 
 # Service layer
 rosace-animate  = { path = "../rosace-animate" }
-rosace-anim     = { path = "../rosace-anim" }
 rosace-scroll   = { path = "../rosace-scroll" }
 rosace-nav      = { path = "../rosace-nav" }
 rosace-nav-anim = { path = "../rosace-nav-anim" }
