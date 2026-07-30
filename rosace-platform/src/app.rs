@@ -1,23 +1,28 @@
-use std::num::NonZeroU32;
-use std::sync::Arc;
 use web_time::Instant;
 
-#[cfg(debug_assertions)]
-use rosace_trace::{event::RosaceTrace, trace};
-
-
 use rosace_render::canvas::SkiaCanvas;
-use winit::application::ApplicationHandler;
-use winit::event::{ElementState, Ime, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
-// The event-loop builder + control-flow are desktop-only now; web runs its own
-// requestAnimationFrame loop (`run_web_native`), never winit.
-#[cfg(not(target_arch = "wasm32"))]
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
 use crate::event::{InputEvent, Key, MouseButton};
+
+// Everything below is desktop-only: `AppState`/`ApplicationHandler` is winit's
+// OS-event-loop-driven frame path, never constructed on web (`run_web_native`
+// owns the whole web frame loop instead — see below).
+#[cfg(not(target_arch = "wasm32"))]
+use std::num::NonZeroU32;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use rosace_trace::{event::RosaceTrace, trace};
+#[cfg(not(target_arch = "wasm32"))]
+use winit::application::ApplicationHandler;
+#[cfg(not(target_arch = "wasm32"))]
+use winit::event::{ElementState, Ime, WindowEvent};
+#[cfg(not(target_arch = "wasm32"))]
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+#[cfg(not(target_arch = "wasm32"))]
+use winit::keyboard::{KeyCode, PhysicalKey};
+#[cfg(not(target_arch = "wasm32"))]
+use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
 
 /// Sent to the winit event loop from any thread to wake it from `Wait` sleep.
 ///
@@ -78,8 +83,8 @@ impl PlatformWindow {
     /// on the GPU (base first, overlay on top with `ALPHA_BLENDING`).
     pub fn run_layered<F>(self, paint_fn: F)
     where
-        // `'static` so the app can be handed to the browser's rAF loop on web
-        // (`spawn_app`); native `move` closures already satisfy it.
+        // `'static` so the closure can live inside the web `WebState` across
+        // rAF callbacks; native `move` closures already satisfy it.
         F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent]) + 'static,
     {
         // Web owns its OWN frame loop, no winit: winit's web event loop won't
@@ -142,6 +147,11 @@ impl Default for PlatformWindow {
     }
 }
 
+// Desktop-only: this is winit's `ApplicationHandler`, the OS-event-loop-driven
+// frame path. Web never constructs this — `run_web_native` above owns the
+// whole web frame loop instead (see the module doc for why winit-web's event
+// loop was dropped entirely).
+#[cfg(not(target_arch = "wasm32"))]
 struct AppState<F> {
     config: PlatformWindowConfig,
     paint_fn: F,
@@ -276,19 +286,11 @@ pub fn drain_shader_registrations(presenter: &mut rosace_compositor::GpuPresente
     }
 }
 
-// Web-only hand-off for the asynchronously-built GPU presenter (D109): the
-// `spawn_local`'d init in `resumed` drops the finished presenter here, and the
-// next `redraw` installs it (single-threaded, so a thread-local cell suffices).
+// Keyboard/pointer/wheel events captured directly from the canvas (see
+// `wire_web_input`) — winit is not involved on web at all; `run_web_native`
+// drains this into each frame's input batch.
 #[cfg(target_arch = "wasm32")]
 thread_local! {
-    static PENDING_PRESENTER: std::cell::RefCell<Option<rosace_compositor::GpuPresenter>> =
-        const { std::cell::RefCell::new(None) };
-    /// Keyboard events captured directly from the canvas (see
-    /// `wire_web_keyboard`). winit's web backend does not deliver
-    /// `WindowEvent::KeyboardInput` — the browser dispatches `keydown` to the
-    /// focused canvas but winit never surfaces it — so we listen ourselves and
-    /// drain this into `pending_events` each `redraw`.
-    #[cfg(target_arch = "wasm32")]
     static WEB_INPUT_QUEUE: std::cell::RefCell<Vec<InputEvent>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -634,6 +636,7 @@ fn run_web_native(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
     /// Resize the GPU surface/canvases to the current physical window size,
     /// run one paint pass, and present. Called from `RedrawRequested` (the
@@ -647,28 +650,6 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
         let phys_h = phys.height;
         if phys_w == 0 || phys_h == 0 {
             return;
-        }
-
-        // Web: the async wgpu build (spawned in `resumed`) may have finished —
-        // install it now, drop the softbuffer bridge, and switch on GPU shapes
-        // (the same enable `resumed` does for native). From here web renders on
-        // the GPU exactly like every other platform; no more per-frame CPU
-        // raster. `ROSACE_CPU_SHAPES=1` still forces the tiny-skia path.
-        #[cfg(target_arch = "wasm32")]
-        if self.presenter.is_none() {
-            if let Some(mut p) = PENDING_PRESENTER.with(|c| c.borrow_mut().take()) {
-                self.context = None;
-                self.surface = None;
-                if std::env::var_os("ROSACE_CPU_SHAPES").is_none() {
-                    rosace_shader::builtin::register_builtins();
-                    p.set_glyph_gamma(rosace_render::canvas::text_gamma_lut());
-                    self.canvas.set_gpu_shapes(true);
-                }
-                drain_shader_registrations(&mut p);
-                self.presenter = Some(p);
-                self.canvas.mark_frame_dirty();
-                log::info!("rosace-platform: web GPU compositor installed");
-            }
         }
 
         if let Some(surface) = self.surface.as_mut() {
@@ -733,11 +714,6 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
         // (Dropdown menu) survives engine-skipped animated presents with
         // its pixels retained — and idle frames never pay the full-window
         // tiny-skia fill that was ~40% of a debug core.
-
-        // Fold web keyboard events (captured by our canvas listeners, since
-        // winit doesn't deliver them) into this frame's batch.
-        #[cfg(target_arch = "wasm32")]
-        WEB_INPUT_QUEUE.with(|q| self.pending_events.append(&mut q.borrow_mut()));
 
         let events = std::mem::take(&mut self.pending_events);
         (self.paint_fn)(&mut self.canvas, &mut self.overlay_canvas, &events);
@@ -957,13 +933,10 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
             // (measured live). One timer thread per presented frame, so
             // the steady state is 30 wakeups/second, not a spawn storm.
             if has_animated_quads {
-                #[cfg(not(target_arch = "wasm32"))]
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_millis(33));
                     rosace_state::request_frame();
                 });
-                #[cfg(target_arch = "wasm32")]
-                rosace_state::request_frame();
             }
         } else if let Some(surface) = &mut self.surface {
             // Softbuffer fallback: no GPU, so ShaderFill content can't
@@ -1027,6 +1000,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandler<FrameRequest> for AppState<F> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = WindowAttributes::default()
@@ -1063,98 +1037,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         #[cfg(target_os = "ios")]
         sync_ios_safe_area(&window);
 
-        // On web, winit creates a <canvas> but (a) does not attach it to the
-        // page and (b) ignores `with_inner_size` for it — the canvas keeps the
-        // HTML default of 300x150, which crams the whole UI into a tiny box
-        // (widgets overflow off-screen, click coords mismatch). Append it and
-        // size it to fill the viewport: backing buffer in physical px, CSS box
-        // in logical px. winit reads the canvas size back for `inner_size()`.
-        #[cfg(target_arch = "wasm32")]
-        {
-            use winit::platform::web::WindowExtWebSys;
-            if let Some(canvas) = window.canvas() {
-                if let Some(web_win) = web_sys::window() {
-                    let dpr = web_win.device_pixel_ratio();
-                    let vw = web_win.inner_width().ok()
-                        .and_then(|v| v.as_f64()).unwrap_or(800.0);
-                    let vh = web_win.inner_height().ok()
-                        .and_then(|v| v.as_f64()).unwrap_or(600.0);
-                    canvas.set_width((vw * dpr) as u32);
-                    canvas.set_height((vh * dpr) as u32);
-                    let style = canvas.style();
-                    let _ = style.set_property("width", &format!("{}px", vw));
-                    let _ = style.set_property("height", &format!("{}px", vh));
-                    let _ = style.set_property("display", "block");
-                    // Keyboard input: a <canvas> only receives key events when
-                    // it is focusable AND focused. Give it a tabindex and focus
-                    // it so winit's KeyboardInput events fire — from there the
-                    // SAME app.rs key/Text handling desktop uses drives text
-                    // editing. Clicking the canvas re-focuses it automatically,
-                    // so tapping a field keeps keys flowing. The default focus
-                    // ring is hidden (the app draws its own focus visuals).
-                    let _ = canvas.set_attribute("tabindex", "0");
-                    let _ = style.set_property("outline", "none");
-                    web_win.document()
-                        .and_then(|d| d.body())
-                        .and_then(|b| b.append_child(&canvas).ok());
-                    let _ = canvas.focus();
-                    // winit's web backend delivers no clicks/touch/wheel/keys —
-                    // we listen for all of them ourselves.
-                    wire_web_input(&canvas);
-                }
-            }
-        }
-
-        // Web: drive redraws with our OWN requestAnimationFrame loop, issuing
-        // `request_redraw` from OUTSIDE the redraw handler every frame. winit's
-        // web loop parks and won't wake reliably from `request_frame`, and a
-        // `request_redraw` issued from INSIDE `redraw` is coalesced away (the
-        // same macOS gotcha) — so neither self-sustains and queued input never
-        // drains. An external rAF pump keeps `RedrawRequested` firing reliably.
-        #[cfg(target_arch = "wasm32")]
-        {
-            use wasm_bindgen::closure::Closure;
-            use wasm_bindgen::JsCast;
-            let win = window.clone();
-            let cb: std::rc::Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>> =
-                std::rc::Rc::new(std::cell::RefCell::new(None));
-            let cb2 = cb.clone();
-            *cb.borrow_mut() = Some(Closure::wrap(Box::new(move || {
-                win.request_redraw();
-                if let Some(w) = web_sys::window() {
-                    let _ = w.request_animation_frame(
-                        cb2.borrow().as_ref().unwrap().as_ref().unchecked_ref());
-                }
-            }) as Box<dyn FnMut()>));
-            if let Some(w) = web_sys::window() {
-                let _ = w.request_animation_frame(
-                    cb.borrow().as_ref().unwrap().as_ref().unchecked_ref());
-            }
-        }
-
         // Try GPU compositor (D072). Fall back to softbuffer if unavailable.
-        // On web, wgpu init is async — blocking on it traps the wasm main
-        // thread — so `spawn_local` the build and install the presenter into
-        // the running loop once it resolves (top of `redraw`). The softbuffer
-        // CPU path bridges the (brief) gap so the first frames still show.
-        #[cfg(target_arch = "wasm32")]
-        let presenter: Option<rosace_compositor::GpuPresenter> = {
-            let win = window.clone();
-            let (w, h) = (self.config.width, self.config.height);
-            wasm_bindgen_futures::spawn_local(async move {
-                match rosace_compositor::GpuPresenter::new_async(win, w, h).await {
-                    Some(p) => {
-                        PENDING_PRESENTER.with(|c| *c.borrow_mut() = Some(p));
-                        rosace_state::request_frame(); // wake the loop to install it
-                    }
-                    None => log::error!(
-                        "rosace-platform: web GPU init failed; staying on softbuffer"
-                    ),
-                }
-            });
-            None
-        };
-        #[cfg(not(target_arch = "wasm32"))]
         let presenter = rosace_compositor::GpuPresenter::new(
             window.clone(),
             self.config.width,
@@ -1163,31 +1046,23 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         if presenter.is_some() {
             log::info!("rosace-platform: using GPU compositor (wgpu)");
         } else {
-            // Native with no GPU → softbuffer CPU fallback. NOT taken on web:
-            // there `presenter` is only None because the async wgpu build is
-            // still in flight, and a softbuffer 2d context would permanently
-            // claim the canvas and block wgpu's webgl2 surface on it. Web shows
-            // a blank frame or two until the GPU presenter installs (redraw).
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // No GPU: nothing will ever compile shader pipelines for this
-                // window. Registrations queued before startup are dropped now,
-                // loudly, instead of accumulating forever.
-                let dropped = rosace_shader::take_pending_shaders();
-                if !dropped.is_empty() {
-                    log::warn!(
-                        "rosace-platform: GPU unavailable — {} shader pipeline registration(s) \
-                         dropped; DrawCommand::ShaderFill content will not render on the \
-                         softbuffer fallback path",
-                        dropped.len(),
-                    );
-                }
-                log::info!("rosace-platform: GPU compositor unavailable, using softbuffer");
-                let context = softbuffer::Context::new(window.clone()).unwrap();
-                let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
-                self.context = Some(context);
-                self.surface = Some(surface);
+            // No GPU: nothing will ever compile shader pipelines for this
+            // window. Registrations queued before startup are dropped now,
+            // loudly, instead of accumulating forever.
+            let dropped = rosace_shader::take_pending_shaders();
+            if !dropped.is_empty() {
+                log::warn!(
+                    "rosace-platform: GPU unavailable — {} shader pipeline registration(s) \
+                     dropped; DrawCommand::ShaderFill content will not render on the \
+                     softbuffer fallback path",
+                    dropped.len(),
+                );
             }
+            log::info!("rosace-platform: GPU compositor unavailable, using softbuffer");
+            let context = softbuffer::Context::new(window.clone()).unwrap();
+            let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
+            self.context = Some(context);
+            self.surface = Some(surface);
         }
         // Enable OS IME globally for this window (D116 Step 6) — not
         // scoped to "only while a text field is focused": there is no
@@ -1518,7 +1393,10 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
 fn physical_canvas_size(window: &winit::window::Window) -> winit::dpi::PhysicalSize<u32> {
     window.current_monitor().map(|m| m.size()).unwrap_or_else(|| window.outer_size())
 }
-#[cfg(not(target_os = "ios"))]
+// `AppState` (this fn's only caller) is native-only — web never builds a
+// winit window, so wasm32 is excluded here even though it'd already fall
+// under "not ios".
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 fn physical_canvas_size(window: &winit::window::Window) -> winit::dpi::PhysicalSize<u32> {
     window.inner_size()
 }
