@@ -1305,6 +1305,7 @@ fn android_manifest_xml(name: &str) -> String {
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustNothing"
             android:label="{name}">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -1339,12 +1340,78 @@ fn android_main_activity_kt(bundle_id: &str, crate_lib_name: &str) -> String {
         r#"package {package}
 
 import android.app.Activity
+import android.content.Context
 import android.os.Bundle
+import android.text.InputType
 import android.view.Choreographer
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
+
+/// A `SurfaceView` that can receive the soft keyboard's `InputConnection`
+/// (D116 Step 6, Android). A plain `SurfaceView` isn't a text editor, so the
+/// OS never offers to show a keyboard for it — opting in via
+/// `onCheckIsTextEditor`/`onCreateInputConnection` is the same mechanism a
+/// custom text-editing widget uses, mirroring iOS's `UIKeyInput` conformance
+/// on the Metal view. Typed characters and special keys (Backspace/Enter/Tab)
+/// are forwarded out through the two callbacks rather than calling the JNI
+/// bridge directly, so this view has no engine-handle knowledge of its own.
+private class EngineSurfaceView(
+    context: Context,
+    private val onText: (Int) -> Unit,
+    private val onKey: (Int) -> Unit,
+) : SurfaceView(context) {{
+    // RSC_KEY_* (rosace_ffi::event) — Enter/Tab/Backspace are commands, never
+    // literal text, same convention iOS's insertText special-cases them with.
+    private val keyEnter = 0
+    private val keyBackspace = 3
+    private val keyTab = 4
+
+    var keyboardInputType: Int = InputType.TYPE_CLASS_TEXT
+
+    init {{
+        isFocusable = true
+        isFocusableInTouchMode = true
+    }}
+
+    override fun onCheckIsTextEditor(): Boolean = true
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {{
+        outAttrs.inputType = keyboardInputType
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
+        return object : BaseInputConnection(this, false) {{
+            override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {{
+                text.codePoints().forEach {{ onText(it) }}
+                return true
+            }}
+
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {{
+                // Predictive-input/composing backspace arrives this way
+                // instead of a KeyEvent — treat each deleted char the same
+                // as a real Backspace keypress.
+                repeat(beforeLength) {{ onKey(keyBackspace) }}
+                return true
+            }}
+
+            override fun sendKeyEvent(event: KeyEvent): Boolean {{
+                if (event.action == KeyEvent.ACTION_DOWN) {{
+                    when (event.keyCode) {{
+                        KeyEvent.KEYCODE_DEL -> onKey(keyBackspace)
+                        KeyEvent.KEYCODE_ENTER -> onKey(keyEnter)
+                        KeyEvent.KEYCODE_TAB -> onKey(keyTab)
+                    }}
+                }}
+                return super.sendKeyEvent(event)
+            }}
+        }}
+    }}
+}}
 
 class MainActivity : Activity(), SurfaceHolder.Callback {{
 
@@ -1358,17 +1425,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
         safeTop: Float, safeRight: Float, safeBottom: Float, safeLeft: Float,
     )
     private external fun nativeTouch(handle: Long, kind: Int, x: Float, y: Float)
+    private external fun nativeKey(handle: Long, key: Int)
+    private external fun nativeText(handle: Long, character: Int)
+    private external fun nativeTextInputActive(): Boolean
+    private external fun nativeFocusedKeyboardType(): Int
     private external fun nativeLifecycle(handle: Long, kind: Int)
     private external fun nativeFrame(handle: Long)
     private external fun nativeShutdown(handle: Long)
 
     private var engineHandle: Long = 0
-    private lateinit var surfaceView: SurfaceView
+    private lateinit var surfaceView: EngineSurfaceView
 
     private val frameCallback = object : Choreographer.FrameCallback {{
         override fun doFrame(frameTimeNanos: Long) {{
             if (engineHandle != 0L) {{
                 nativeFrame(engineHandle)
+                syncSoftKeyboard()
                 Choreographer.getInstance().postFrameCallback(this)
             }}
         }}
@@ -1376,9 +1448,41 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
 
     override fun onCreate(savedInstanceState: Bundle?) {{
         super.onCreate(savedInstanceState)
-        surfaceView = SurfaceView(this)
+        surfaceView = EngineSurfaceView(
+            this,
+            onText = {{ c -> if (engineHandle != 0L) nativeText(engineHandle, c) }},
+            onKey = {{ k -> if (engineHandle != 0L) nativeKey(engineHandle, k) }},
+        )
         surfaceView.holder.addCallback(this)
         setContentView(surfaceView)
+    }}
+
+    /// Show/hide/reconfigure the soft keyboard to match the engine's focused
+    /// field (D116 Step 6) — the Android counterpart of iOS's
+    /// `syncSoftKeyboard`, polled once per frame tick the same way.
+    private fun uiInputTypeFor(hint: Int): Int = when (hint) {{
+        1 -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS // RSC_KEYBOARD_EMAIL
+        2 -> InputType.TYPE_CLASS_NUMBER                                              // RSC_KEYBOARD_NUMERIC
+        3 -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI           // RSC_KEYBOARD_URL
+        4 -> InputType.TYPE_CLASS_PHONE                                              // RSC_KEYBOARD_PHONE
+        else -> InputType.TYPE_CLASS_TEXT                                            // RSC_KEYBOARD_DEFAULT
+    }}
+
+    private fun syncSoftKeyboard() {{
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        if (nativeTextInputActive()) {{
+            val want = uiInputTypeFor(nativeFocusedKeyboardType())
+            if (want != surfaceView.keyboardInputType) {{
+                surfaceView.keyboardInputType = want
+                if (surfaceView.isFocused) imm.restartInput(surfaceView)
+            }}
+            if (!surfaceView.isFocused) {{
+                surfaceView.requestFocus()
+                imm.showSoftInput(surfaceView, InputMethodManager.SHOW_IMPLICIT)
+            }}
+        }} else if (surfaceView.isFocused) {{
+            imm.hideSoftInputFromWindow(surfaceView.windowToken, 0)
+        }}
     }}
 
     // App lifecycle -> RSC_EVENT_LIFECYCLE_* (D110 Phase 29 Step 1);
@@ -1598,6 +1702,14 @@ private let RSC_EVENT_MOUSE_MOVE: UInt32 = 0
 private let RSC_EVENT_MOUSE_DOWN: UInt32 = 1
 private let RSC_EVENT_MOUSE_UP: UInt32 = 2
 private let RSC_BUTTON_LEFT: UInt32 = 0
+// Text input (D116 Step 6): typed characters go as RSC_EVENT_TEXT; backspace
+// as a RSC_EVENT_KEY_DOWN carrying RSC_KEY_BACKSPACE — same events the desktop
+// winit host produces, so the engine's editor handles them identically.
+private let RSC_EVENT_KEY_DOWN: UInt32 = 3
+private let RSC_EVENT_TEXT: UInt32 = 5
+private let RSC_KEY_ENTER: UInt32 = 0
+private let RSC_KEY_BACKSPACE: UInt32 = 3
+private let RSC_KEY_TAB: UInt32 = 4
 private let RSC_EVENT_LIFECYCLE_ACTIVE: UInt32 = 8
 private let RSC_EVENT_LIFECYCLE_INACTIVE: UInt32 = 9
 private let RSC_EVENT_LIFECYCLE_BACKGROUND: UInt32 = 10
@@ -1627,6 +1739,12 @@ func rsc_push_permission_take_request() -> UInt8
 @_silgen_name("rsc_push_permission_report_result")
 func rsc_push_permission_report_result(_ granted: UInt8)
 
+@_silgen_name("rsc_text_input_active")
+func rsc_text_input_active() -> UInt8
+
+@_silgen_name("rsc_focused_keyboard_type")
+func rsc_focused_keyboard_type() -> UInt32
+
 // MARK: - View
 
 /// A `CAMetalLayer`-backed view — the surface the Rust engine renders into.
@@ -1653,9 +1771,75 @@ final class MetalView: UIView {
     }
 }
 
-final class EngineViewController: UIViewController {
+final class EngineViewController: UIViewController, UIKeyInput {
     private var engine: RscEngine?
     private var displayLink: CADisplayLink?
+
+    // MARK: Soft keyboard (D116 Step 6). The Metal view isn't a text field, so
+    // the OS shows no keyboard on its own. Adopt `UIKeyInput` and, each tick,
+    // become/resign first responder to match the engine's focused text field
+    // (`rsc_text_input_active`), configuring the layout from its keyboard-type
+    // hint. Keystrokes are forwarded back through `rsc_engine_input`.
+    override var canBecomeFirstResponder: Bool { true }
+    var keyboardType: UIKeyboardType = .default
+    var hasText: Bool { true }
+
+    private func sendKey(_ key: UInt32) {
+        guard let engine else { return }
+        var e = RscInputEvent(
+            kind: RSC_EVENT_KEY_DOWN, x: 0, y: 0, button: 0,
+            key: key, character: 0, width: 0, height: 0, delta_x: 0, delta_y: 0
+        )
+        withUnsafePointer(to: &e) { rsc_engine_input(engine, $0, 1) }
+    }
+
+    func insertText(_ text: String) {
+        guard let engine else { return }
+        for scalar in text.unicodeScalars {
+            // Return and Tab are SPECIAL keys, not literal text: the engine
+            // treats them as newline/submit and focus-traversal via KeyDown,
+            // and drops control chars from the Text path — so forward them as
+            // key events (matching what the desktop winit host sends).
+            switch scalar {
+            case "\n", "\r": sendKey(RSC_KEY_ENTER)
+            case "\t":       sendKey(RSC_KEY_TAB)
+            default:
+                var e = RscInputEvent(
+                    kind: RSC_EVENT_TEXT, x: 0, y: 0, button: 0,
+                    key: 0, character: scalar.value, width: 0, height: 0, delta_x: 0, delta_y: 0
+                )
+                withUnsafePointer(to: &e) { rsc_engine_input(engine, $0, 1) }
+            }
+        }
+    }
+
+    func deleteBackward() {
+        sendKey(RSC_KEY_BACKSPACE)
+    }
+
+    private func uiKeyboardType(for hint: UInt32) -> UIKeyboardType {
+        switch hint {
+        case 1:  return .emailAddress // RSC_KEYBOARD_EMAIL
+        case 2:  return .numberPad    // RSC_KEYBOARD_NUMERIC
+        case 3:  return .URL          // RSC_KEYBOARD_URL
+        case 4:  return .phonePad     // RSC_KEYBOARD_PHONE
+        default: return .default
+        }
+    }
+
+    /// Show/hide/reconfigure the OS keyboard to match the focused field.
+    private func syncSoftKeyboard() {
+        if rsc_text_input_active() != 0 {
+            let want = uiKeyboardType(for: rsc_focused_keyboard_type())
+            if want != keyboardType {
+                keyboardType = want
+                if isFirstResponder { reloadInputViews() }
+            }
+            if !isFirstResponder { becomeFirstResponder() }
+        } else if isFirstResponder {
+            resignFirstResponder()
+        }
+    }
 
     override func loadView() {
         view = MetalView(frame: UIScreen.main.bounds)
@@ -1727,6 +1911,8 @@ final class EngineViewController: UIViewController {
         if rsc_push_permission_take_request() != 0 {
             requestPushPermission()
         }
+
+        syncSoftKeyboard()
     }
 
     /// Real OS permission prompt + APNs registration. The result flows back
@@ -2315,6 +2501,24 @@ pub unsafe extern "C" fn rsc_push_report_notification(
     rosace_ffi::report_push_notification(read(title), read(body), read(payload_json));
 }
 
+// -- Soft-keyboard sync (D116 Step 6) -----------------------------------------
+// Shared, platform-agnostic (like the push functions above): a native host
+// polls these once per frame tick to know whether to show/hide its OS soft
+// keyboard and which layout to use — iOS via `@_silgen_name`, Android through
+// the JNI wrappers below. No engine handle needed; these read the same
+// process-global focus signal `ime_cursor_area`/`keyboard_type` already use
+// for desktop's real OS IME.
+
+#[no_mangle]
+pub extern "C" fn rsc_text_input_active() -> u8 {
+    rosace_ffi::text_input_active() as u8
+}
+
+#[no_mangle]
+pub extern "C" fn rsc_focused_keyboard_type() -> u32 {
+    rosace_ffi::focused_keyboard_type()
+}
+
 // -- Android: JNI -------------------------------------------------------------
 // Symbol names are burned in at codegen time (JNI resolves by exact name,
 // no runtime registration) — see the module doc above for why this can't be
@@ -2442,6 +2646,75 @@ pub extern "system" fn Java_{jni_prefix}_nativeTouch(
     unsafe {{ (*ptr).engine.input(&[event]) }};
 }}
 
+/// One key event per call — `key` is an `RSC_KEY_*` constant (matching
+/// `rosace_ffi::event`'s desktop/iOS key encoding); `kind` 3 = KeyDown (see
+/// `rosace_ffi::event::RSC_EVENT_KEY_DOWN` — not re-exported, so burned in as
+/// a literal here, same as `nativeLifecycle`'s kinds below). Used for
+/// Backspace, Enter, and Tab, which the engine's editor treats as commands
+/// rather than literal text (see `nativeText` below for typed characters).
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeKey(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+    key: jni::sys::jint,
+) {{
+    if handle == 0 {{ return; }}
+    let ptr = handle as *mut AndroidEngine;
+    let event = RscInputEventFfi {{
+        kind: 3, x: 0.0, y: 0.0, button: 0,
+        key: key as u32, character: 0, width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
+    }};
+    unsafe {{ (*ptr).engine.input(&[event]) }};
+}}
+
+/// One typed Unicode scalar per call — `kind` 5 = Text (`RSC_EVENT_TEXT`).
+/// The IME's `commitText` forwards each character here (mirroring iOS's
+/// `UIKeyInput.insertText`); Enter/Tab are sent through `nativeKey` instead,
+/// never as text (see the Kotlin `InputConnection` this backs for why).
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeText(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+    character: jni::sys::jint,
+) {{
+    if handle == 0 {{ return; }}
+    let ptr = handle as *mut AndroidEngine;
+    let event = RscInputEventFfi {{
+        kind: 5, x: 0.0, y: 0.0, button: 0,
+        key: 0, character: character as u32, width: 0, height: 0, delta_x: 0.0, delta_y: 0.0,
+    }};
+    unsafe {{ (*ptr).engine.input(&[event]) }};
+}}
+
+/// Whether a text field is currently focused (D116 Step 6) — polled once per
+/// frame tick (mirroring iOS's `rsc_text_input_active`) to decide whether to
+/// show/hide the soft keyboard. No handle needed: same process-global focus
+/// signal desktop's real OS IME already uses.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeTextInputActive(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+) -> jni::sys::jboolean {{
+    rosace_ffi::text_input_active() as jni::sys::jboolean
+}}
+
+/// The focused field's keyboard-type hint, an `RSC_KEYBOARD_*` constant
+/// (mirroring iOS's `rsc_focused_keyboard_type`) — used to pick the IME's
+/// `inputType` (email/numeric/URL/phone/default).
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeFocusedKeyboardType(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+) -> jni::sys::jint {{
+    rosace_ffi::focused_keyboard_type() as jni::sys::jint
+}}
+
 /// One app-lifecycle transition per call (D110 Phase 29 Step 1) — `kind`
 /// is a `RSC_EVENT_LIFECYCLE_*` constant (8 = active, 9 = inactive,
 /// 10 = background). `Engine::input` applies lifecycle immediately (see
@@ -2558,5 +2831,26 @@ mod ffi_codegen_tests {
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeLifecycle"));
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeFrame"));
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeShutdown"));
+    }
+
+    #[test]
+    fn ffi_rs_embeds_the_keyboard_bridge_for_both_platforms() {
+        let src = ffi_rs("dev.rosace.myapp");
+        // Shared (iOS via @_silgen_name, Android via the JNI wrappers below).
+        assert!(src.contains("fn rsc_text_input_active"));
+        assert!(src.contains("fn rsc_focused_keyboard_type"));
+        // Android JNI keyboard bridge.
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeKey"));
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeText"));
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeTextInputActive"));
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeFocusedKeyboardType"));
+    }
+
+    #[test]
+    fn ios_swift_template_has_the_keyboard_bridge() {
+        assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("UIKeyInput"));
+        assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("rsc_text_input_active"));
+        assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("rsc_focused_keyboard_type"));
+        assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("syncSoftKeyboard"));
     }
 }
