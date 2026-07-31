@@ -629,9 +629,23 @@ pub mod assets {{
 
 use rosace::prelude::*;
 
+/// One-time app startup — register Platform Channel method handlers here
+/// (`rosace_ffi::set_method_call_handler`), or anything else that must run
+/// exactly once before the engine starts.
+///
+/// Called from EVERY entry point below (`launch`, and — on iOS/Android —
+/// `ffi.rs`'s `rsc_engine_init`/`nativeInit`), not just this one: mobile's
+/// FFI entry points construct the engine directly and never call `launch`,
+/// so code that only ran here would silently never execute on iOS/Android
+/// (found live: a Platform Channel handler registered only in `launch`
+/// answered every call with "no handler registered" on mobile until its
+/// registration moved here instead).
+pub(crate) fn app_init() {{}}
+
 /// Start the app. Runs the winit event loop on native; hands off to the
 /// browser's requestAnimationFrame loop on web.
 pub fn launch() {{
+    app_init();
     // Window size applies on desktop; mobile is always fullscreen.
     App::new()
         .title("{name}")
@@ -2464,6 +2478,10 @@ pub unsafe extern "C" fn rsc_engine_init(
     let Some(handle) = NonNull::new(surface_handle) else { return std::ptr::null_mut() };
     let surface = unsafe { RawSurface::from_ca_metal_layer(handle, None, width, height, scale) };
     let theme = light_theme();
+    // Mobile bypasses lib.rs's launch() entirely — app_init() must be
+    // called explicitly here too, or one-time app setup silently never
+    // runs on iOS (see app_init's doc in lib.rs for why).
+    crate::app_init();
     match Engine::init(Box::new(AppRoot), theme, surface) {
         Some(engine) => Box::into_raw(engine),
         None => std::ptr::null_mut(),
@@ -2763,6 +2781,10 @@ pub extern "system" fn Java_{jni_prefix}_nativeInit(
     }};
     let raw_surface = unsafe {{ handle.raw_surface(width as u32, height as u32, scale) }};
     let theme = light_theme();
+    // Mobile bypasses lib.rs's launch() entirely — app_init() must be
+    // called explicitly here too, or one-time app setup silently never
+    // runs on Android (see app_init's doc in lib.rs for why).
+    crate::app_init();
     match Engine::init(Box::new(AppRoot), theme, raw_surface) {{
         Some(engine) => Box::into_raw(Box::new(AndroidEngine {{ engine, surface: handle }})) as jni::sys::jlong,
         None => 0,
@@ -3115,6 +3137,33 @@ mod ffi_codegen_tests {
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativePlatformChannelReportResult"));
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativePlatformChannelReportError"));
         assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativePlatformChannelDispatch"));
+    }
+
+    #[test]
+    fn lib_rs_defines_app_init_and_calls_it_from_launch() {
+        let opts = NewOptions {
+            name: "myapp".into(),
+            platforms: vec![Platform::Ios, Platform::Android],
+            bundle_id: "dev.rosace.myapp".into(),
+        };
+        let src = lib_rs("myapp", &opts);
+        assert!(src.contains("fn app_init()"));
+        assert!(src.contains("    app_init();"), "launch() must call app_init() as its first step");
+    }
+
+    #[test]
+    fn mobile_entry_points_call_app_init_not_just_launch() {
+        // Root-caused live (D127): mobile's Engine::init call sites bypass
+        // lib.rs's launch() entirely, so a Platform Channel handler (or any
+        // one-time setup) registered only in launch() silently never runs
+        // on iOS/Android — a real handler call answered "no handler
+        // registered" until app_init() was added and called from both
+        // mobile entry points too. This guards the fix.
+        let src = ffi_rs("dev.rosace.myapp");
+        assert_eq!(
+            src.matches("crate::app_init();").count(), 2,
+            "both the iOS rsc_engine_init and Android nativeInit must call app_init()"
+        );
     }
 
     #[test]
