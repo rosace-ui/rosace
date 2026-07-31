@@ -26,3 +26,9 @@ Cargo.lock
 # Scratch/test apps — not workspace members, carry their own build output
 /hotreload_test/
 /mobile_journey/
+
+# The rosace-examples repo, nested here for easy context (framework source
+# and example apps side by side) but git-independent — its own repo, own
+# remote (github.com/rosace-ui/rosace-examples), own history. Never tracked
+# or committed by this repo's git.
+/examples/
