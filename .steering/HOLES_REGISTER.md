@@ -32,9 +32,19 @@ deliberate, named deferrals. Update as holes are closed or new ones surface.
 - ✅ **Mouse-drag text selection** (P28) — Already CLOSED. `engine.rs` has
   `text_drag` (D116 Step 3) + `handle_drag` (Step 7); the register's earlier
   "not implemented" note was based on stale mid-phase P28 text.
-- **P32 widgets not started**: InteractiveViewer, DatePicker/TimePicker, RichText, emoji, italic axis.
-- **P27 GPU migration** — scoped; CPU `tiny-skia` DrawText/BlitRgba commands still present.
-- **Web/wasm backends** — net (P30), storage `permanent` tier via IndexedDB (P31), WebGPU presenter (P27).
+- ✅ **P32 widgets** — CONFIRMED 2026-07-31 (user). InteractiveViewer,
+  DatePicker/TimePicker, RichText are built and done — the earlier "not
+  started" note was stale. Emoji and italic axis are separate, still-open
+  font-level items (emoji: bundling Noto for web, see
+  `project_web_fonts_emoji` memory; italic axis: not tracked further here).
+- **P27 GPU migration** — CORRECTED 2026-07-31 (user): this is not an
+  unfinished CPU-fallback path. The intended architecture is GPU-shapes (SDF
+  quads) for shapes plus `tiny-skia` scoped specifically to rasterization
+  (text glyphs, images) that feeds the GPU compositor as textures — that's
+  the design, not leftover CPU-only work (confirmed during the 2026-07-30
+  workspace cleanup, when tiny-skia removal was considered and rejected for
+  exactly this reason).
+- **Web/wasm backends** — net (P30), storage `permanent` tier via IndexedDB (P31); WebGPU presenter now landed (D126) for the main frame path.
 - **Push notifications** — real APNs/FCM blocked on account access (P29).
 
 ## Deferred to v1.0 (do not touch now)
