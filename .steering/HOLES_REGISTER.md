@@ -55,21 +55,19 @@ no commented-out code, no ad-hoc debug env-vars beyond the known real ones
 (`ROSACE_LOG`, `ROSACE_TRACE`, `ROSACE_CPU_SHAPES`, etc.). What follows is
 everything that wasn't already clean.
 
-### 🔴 HIGH PRIORITY — needs investigation, not fixed here
-- **13 pre-existing failures in `rosace`'s engine test suite**, reproducing
-  identically on the commit *before* this session's changes (confirmed via
-  `git stash`) and in isolation single-threaded (so not pure test-order
-  interference, though the failure count does shift with `--test-threads`,
-  suggesting some interference on top of a real underlying issue). Repro:
-  `cargo test -p rosace --lib -- --test-threads=1`. Failing names cluster
-  around typing/arrow-key editing, form validity, and scroll-into-view —
-  e.g. `arrow_left_then_insert_lands_in_the_middle_not_appended_at_the_end`,
-  `typing_in_a_bound_field_updates_the_forms_live_validity`,
-  `wheel_scrolling_away_from_the_caret_is_not_snapped_back_by_scroll_into_view`.
-  This reads like a real, current regression in the text-editing/forms
-  pipeline (or a broken shared test fixture) — worth a dedicated session,
-  not folded into a cleanup pass. **Not caused by, and not fixed by, any
-  commit in this session.**
+### ✅ RESOLVED 2026-07-31 — the 13 pre-existing engine test failures
+Bisected with a `git worktree` (not the main checkout) to `a34e7e8`
+(2026-07-24) — already known and named in `project_dev_release_state.md` as
+"test-isolation/global-state leakage in the DevTools WIP." Root cause:
+`devtools_fab_enabled()` checked only `cfg!(debug_assertions)`, true for
+`cargo test` too — every headless test engine got a real DevTools FAB
+overlay injected, and the process-global `DEVTOOLS_OPEN`/`DEVTOOLS_TAB`
+atoms it reads/writes leaked across tests sharing one test-binary process.
+Fixed: `devtools_fab_enabled()` also checks `!cfg!(test)`, scoped to
+`rosace`'s own test binary only — a downstream app's real debug build is a
+different compilation unit and is completely unaffected. `rosace` lib tests
+now 64/64 passing, confirmed stable across 4 repeated runs. Full workspace
+`cargo test --workspace --no-fail-fast` clean.
 
 ### 🟡 MEDIUM — flagged, deliberately not touched
 - **`rosace-hot-reload/src/watcher.rs:21`** — `FileWatcher`'s `sender` field
@@ -136,5 +134,4 @@ everything that wasn't already clean.
 - Live-verify `TextInput.scroll_x` in a real windowed app (scaffold via `rsc new`).
 - Live-verify net/ws hooks (`use_query`/`use_websocket`) — deferred "check later".
 - `rosace-style` integration (explicitly deferred by user).
-- **Investigate the 13 failing engine tests** (see HIGH PRIORITY above) — likely the single most important open item in this file right now.
 - Confirm/fix the `watcher.rs` unused `sender` field and `canvas.rs`'s `grow_segment` possible-missing-call-site (both MEDIUM above).
