@@ -20,6 +20,18 @@ rosace-theme   = { path = "../rosace-theme" }
 rosace-state   = { path = "../rosace-state" }
 rosace-compositor = { path = "../rosace-compositor" }
 rosace-trace   = { path = "../rosace-trace" }
+# Platform Channel's wire format (D127) — the app-facing method-call bridge
+# to native code. This codebase has otherwise deliberately avoided serde
+# (ureq/tungstenite were picked specifically to dodge an async-runtime
+# cascade), but that reasoning doesn't apply here: serde/serde_json is a
+# pure data-encoding library, not a runtime — it doesn't touch threading or
+# control flow. Native platforms (iOS/Android) already speak JSON natively
+# (`JSONSerialization`/`org.json`), so this is the wire format regardless of
+# what Rust-side tooling we pick; hand-rolling our own parser would just be
+# a worse, less-tested version of what serde_json already provides. Named,
+# explicit dependency decision (same discipline as `jni`/`ndk-sys` below).
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Only for the `wgpu::rwh` re-export of `raw-window-handle` — pinned to the
 # same version as `rosace-compositor` so `RawSurface` satisfies
 # `GpuPresenter::new`'s bound without a second raw-window-handle in the tree.

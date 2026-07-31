@@ -21,6 +21,7 @@ mod android;
 mod capability;
 mod engine;
 mod event;
+mod platform_channel;
 mod surface;
 
 #[cfg(target_os = "android")]
@@ -32,6 +33,10 @@ pub use capability::{
 };
 pub use engine::Engine;
 pub use event::{focused_keyboard_type, text_input_active, RscInputEventFfi};
+pub use platform_channel::{
+    clear_method_call_handler, dispatch_call, invoke_method, report_call_error, report_call_result,
+    set_method_call_handler, take_outgoing_calls, ChannelCallState, MethodHandler, OutgoingCall,
+};
 pub use surface::RawSurface;
 
 /// Point asset resolution at a host-provided directory (A6). A native host
