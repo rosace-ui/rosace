@@ -26,5 +26,3 @@ Cargo.lock
 # Scratch/test apps — not workspace members, carry their own build output
 /hotreload_test/
 /mobile_journey/
-# Independent sub-project with its own git repo, not a workspace member
-/rosace-page/

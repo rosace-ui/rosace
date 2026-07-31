@@ -82,12 +82,11 @@ everything that wasn't already clean.
   should exist but currently doesn't. Reads like a latent gap rather than
   confirmed-intentional dead code — needs someone who knows this path to
   confirm whether a call site is actually missing.
-- **`rosace-page/`** — an empty, no-commits nested `.git` clone sitting in
-  the workspace root (remote `rosace-ui/rosace-page.git`, no `Cargo.toml`,
-  no `src/`). It's explicitly listed in `.gitignore` (not accidentally
-  untracked), which reads as intentional local scratch space rather than
-  junk — left alone. **Ask the user directly** what this is for and whether
-  it should stay, be finished, or be deleted; don't guess.
+- ✅ **`rosace-page/`** — RESOLVED 2026-07-31. Asked the user directly: the
+  project has been moved to its own outer repo (its remote,
+  `rosace-ui/rosace-page.git`, has one real commit — this local clone had
+  just never fetched it). Confirmed fine to remove; deleted the local
+  directory and its now-stale `.gitignore` entry.
 - **Library/dev-tooling code bypassing the `rosace-trace` logging
   framework** — `rosace-hot-reload/src/rebuild.rs`, `rosace/src/dev_host.rs`,
   `rosace/src/dev_reload.rs`, `rosace-ffi/src/engine.rs:73`,
@@ -139,4 +138,3 @@ everything that wasn't already clean.
 - `rosace-style` integration (explicitly deferred by user).
 - **Investigate the 13 failing engine tests** (see HIGH PRIORITY above) — likely the single most important open item in this file right now.
 - Confirm/fix the `watcher.rs` unused `sender` field and `canvas.rs`'s `grow_segment` possible-missing-call-site (both MEDIUM above).
-- Ask the user what `rosace-page/` is for.
