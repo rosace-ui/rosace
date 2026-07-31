@@ -282,7 +282,7 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
     write(dir.join("rsc.toml"), &rsc_toml(name, &bundle_id, &opts))?;
     write(
         dir.join(".gitignore"),
-        "# Rust build\n/target\n/dist\n*.app\n\n# macOS\n.DS_Store\n\n# Mobile build outputs\n/android/**/build/\n/android/.gradle/\n/ios/build/\n**/xcuserdata/\n",
+        "# Rust build\n/target\n/dist\n*.app\n\n# macOS\n.DS_Store\n\n# Mobile build outputs\n/android/**/build/\n/android/.gradle/\n/android/**/jniLibs/\n/ios/build/\n**/xcuserdata/\n",
     )?;
     write(dir.join("README.md"), &readme(name, &opts))?;
     // Assets dir (declared in rsc.toml [assets]); .gitkeep so the empty dir is
