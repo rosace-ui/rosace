@@ -1,36 +1,47 @@
-//! Platform-capability request/result plumbing (D106 Phase 24 Step 5).
+//! Platform-capability request/result plumbing (D106 Phase 24 Step 5;
+//! request discovery unified onto Platform Channel, D127).
 //!
 //! Proves the native-host model actually reaches things Info.plist-only
 //! (winit-owned) apps structurally couldn't: a real permission prompt, with
 //! the result flowing back into Rust app code and driving a UI re-render.
-//! Deliberately ONE capability (camera), not a general `Permission`/
-//! `Haptics`/`Biometrics`/`use_sensor()` surface — see `.steering/
-//! PHASE_24.md`'s Step 5 scope note: "one proof is enough to validate the
-//! model; a fuller capabilities surface is later work once real apps show
-//! which capabilities are actually needed first." A second capability
-//! would follow this exact same three-piece shape (request queue + result
-//! atom + host-side native call), not a new architecture.
 //!
 //! Flow: app code (e.g. a button's `on_press`) calls [`request_camera`],
-//! which queues the request. The native host polls
-//! [`take_camera_request`] once per frame tick (same polling shape
-//! `Engine::frame` already uses for input events — see `engine.rs`), and if
-//! `true`, triggers its own native permission API (`AVCaptureDevice.
-//! requestAccess` on iOS). When that resolves, the host calls
-//! [`report_camera_result`], which writes [`CAMERA_PERMISSION`] — app code
-//! reads it via `CAMERA_PERMISSION.get()`, and `GlobalAtom::set` notifies
-//! subscribers, so a widget reading it re-renders automatically.
+//! which queues a Platform Channel call on the well-known `"rosace/camera"`
+//! channel (see `platform_channel::outgoing`). The native host's ONE generic
+//! per-frame poll (`take_outgoing_calls`, alongside `rsc_engine_frame`) sees
+//! it, recognizes the channel, and triggers the real permission API
+//! (`AVCaptureDevice.requestAccess` on iOS). When that resolves, the host
+//! calls [`report_camera_result`], which writes [`CAMERA_PERMISSION`] — app
+//! code reads it via `CAMERA_PERMISSION.get()`, and `GlobalAtom::set`
+//! notifies subscribers, so a widget reading it re-renders automatically.
+//!
+//! Camera/push deliberately do NOT correlate by `call_id` the way an
+//! arbitrary Platform Channel caller would (`outgoing::invoke_method`'s
+//! returned `Atom` is queued and then dropped here) — each is a singleton
+//! capability (never more than one camera permission in flight at once), so
+//! a plain boolean result-setter is simpler and sufficient. An app-defined
+//! channel that might have several concurrent calls in flight should use
+//! `invoke_method` directly and keep its returned `Atom` instead.
 //!
 //! These are plain functions, not `#[no_mangle] extern "C"` themselves —
 //! same reasoning as `Engine`: the FFI symbols crossing the boundary are
 //! per-app generated (`rsc new`'s `ffi_rs`) so an app that never asks for
 //! camera access doesn't get an unused `NSCameraUsageDescription` baked
-//! into its Info.plist as a side effect of the framework existing.
+//! into its Info.plist as a side effect of the framework existing (the
+//! generated template's default tick loop does NOT special-case
+//! `"rosace/camera"` for exactly this reason — only `"rosace/push"` is
+//! handled unconditionally, since every app already gets push-permission
+//! polling; camera wiring is opt-in native code an app adds itself,
+//! recognizing the channel via the same generic `take_outgoing_calls`
+//! every custom Platform Channel channel uses).
 
 use std::sync::Mutex;
 
 use rosace_state::GlobalAtom;
 use rosace_trace::event::AtomId;
+use serde_json::Value;
+
+use crate::platform_channel::invoke_method;
 
 /// Whether the camera permission has been requested, and if resolved, the
 /// native host's answer. `None` = never requested (or still pending: the
@@ -48,11 +59,10 @@ const CAMERA_PERMISSION_ATOM_ID: AtomId = AtomId(0xFFFC);
 pub static CAMERA_PERMISSION: GlobalAtom<Option<bool>> =
     GlobalAtom::new(CAMERA_PERMISSION_ATOM_ID, || None);
 
-/// Whether a request is queued but not yet delivered to the host via
-/// [`take_camera_request`]. A `bool`, not a counter — duplicate requests
-/// (e.g. impatient double-taps before the first prompt resolves) collapse
-/// into one, matching how a real permission prompt can't be shown twice at
-/// once anyway.
+/// Whether a request has been queued but not yet resolved. A `bool`, not a
+/// counter — duplicate requests (e.g. impatient double-taps before the
+/// first prompt resolves) collapse into one, matching how a real permission
+/// prompt can't be shown twice at once anyway.
 static CAMERA_REQUEST_PENDING: Mutex<bool> = Mutex::new(false);
 
 /// Called by app code (e.g. a button's `on_press`) to ask the native host
@@ -63,16 +73,15 @@ pub fn request_camera() {
     if CAMERA_PERMISSION.get().is_some() {
         return; // already resolved, nothing to re-request
     }
-    *CAMERA_REQUEST_PENDING.lock().unwrap_or_else(|e| e.into_inner()) = true;
-}
-
-/// Polled by the native host once per frame tick (alongside
-/// `rsc_engine_frame`). Returns `true` at most once per [`request_camera`]
-/// call — the host is expected to act on it immediately (trigger the real
-/// permission API), not to hold a `true` result and ask again later.
-pub fn take_camera_request() -> bool {
     let mut pending = CAMERA_REQUEST_PENDING.lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::take(&mut *pending)
+    if *pending {
+        return; // already queued, don't double up
+    }
+    *pending = true;
+    // The returned Atom is intentionally dropped — see the module doc on
+    // why camera/push report results via a plain setter instead of
+    // correlating by call_id.
+    invoke_method("rosace/camera", "requestPermission", Value::Null);
 }
 
 /// Called by the native host once its permission API resolves (e.g.
@@ -81,16 +90,19 @@ pub fn take_camera_request() -> bool {
 /// it re-renders with the real answer.
 pub fn report_camera_result(granted: bool) {
     CAMERA_PERMISSION.set(Some(granted));
+    *CAMERA_REQUEST_PENDING.lock().unwrap_or_else(|e| e.into_inner()) = false;
 }
 
 // ── Push notifications (D110 Phase 29 Step 2) ────────────────────────────
 //
-// The second capability over the bridge — the exact three-piece shape the
-// camera proof above established (request queue + result/state atoms +
-// host-side native call), NOT a new architecture; see this module's doc.
-// Two extra pieces camera didn't need: a device TOKEN (APNs/FCM
-// registration outcome) and a foreground-delivery channel (the host
-// reports a received notification; a widget reading it re-renders).
+// The second capability over the bridge — the exact shape the camera proof
+// above established (request queue + result/state atoms + host-side native
+// call), NOT a new architecture; see this module's doc. Two extra pieces
+// camera didn't need: a device TOKEN (APNs/FCM registration outcome) and a
+// foreground-delivery channel (the host reports a received notification; a
+// widget reading it re-renders). Both of those are native pushing
+// unprompted data INTO Rust, not a request/result round-trip, so they stay
+// plain setters — there's nothing to "queue" or "discover" about them.
 
 /// Push permission state — same `Option<bool>` semantics as
 /// [`CAMERA_PERMISSION`] (`None` = never requested or still pending).
@@ -136,20 +148,20 @@ static PUSH_SEQ: Mutex<u64> = Mutex::new(0);
 
 /// Called by app code to ask the native host to request push permission
 /// (and, on grant, register for a device token). Same collapse-duplicates
-/// semantics as [`request_camera`].
+/// semantics as [`request_camera`]; queues on the well-known `"rosace/push"`
+/// Platform Channel — the generated tick loop recognizes this one
+/// unconditionally (unlike camera, every app already carries push-permission
+/// polling, so there's no new per-app cost to special-casing it by default).
 pub fn request_push_permission() {
     if PUSH_PERMISSION.get().is_some() {
         return; // already resolved, nothing to re-request
     }
-    *PUSH_REQUEST_PENDING.lock().unwrap_or_else(|e| e.into_inner()) = true;
-}
-
-/// Polled by the native host once per frame tick — `true` at most once per
-/// [`request_push_permission`] call, same contract as
-/// [`take_camera_request`].
-pub fn take_push_request() -> bool {
     let mut pending = PUSH_REQUEST_PENDING.lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::take(&mut *pending)
+    if *pending {
+        return;
+    }
+    *pending = true;
+    invoke_method("rosace/push", "requestPermission", Value::Null);
 }
 
 /// Called by the host when its permission API resolves
@@ -157,6 +169,7 @@ pub fn take_push_request() -> bool {
 /// `POST_NOTIFICATIONS` on Android 13+).
 pub fn report_push_result(granted: bool) {
     PUSH_PERMISSION.set(Some(granted));
+    *PUSH_REQUEST_PENDING.lock().unwrap_or_else(|e| e.into_inner()) = false;
 }
 
 /// Called by the host once registration yields a device token
@@ -191,34 +204,56 @@ pub fn report_push_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform_channel::take_outgoing_calls;
     use std::sync::Mutex as StdMutex;
 
-    // `CAMERA_PERMISSION`/`CAMERA_REQUEST_PENDING` are process-global
-    // statics — tests touching them must be serialized against each other,
-    // same reasoning as `rosace-cli`'s `CWD_LOCK` (`test_support.rs`).
+    // `CAMERA_PERMISSION`/`CAMERA_REQUEST_PENDING` (and push's equivalents)
+    // are process-global statics — tests touching them must be serialized
+    // against each other, same reasoning as `rosace-cli`'s `CWD_LOCK`
+    // (`test_support.rs`). Also serialized against `platform_channel`'s own
+    // tests, since both share the one process-global outgoing-call queue.
     static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     #[test]
-    fn request_then_take_returns_true_once() {
+    fn request_camera_queues_a_platform_channel_call() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         CAMERA_PERMISSION.set(None);
         *CAMERA_REQUEST_PENDING.lock().unwrap() = false;
+        take_outgoing_calls(); // drain anything left over from another test
 
         request_camera();
-        assert!(take_camera_request(), "first poll should see the request");
-        assert!(!take_camera_request(), "second poll should not see it again");
+        let calls = take_outgoing_calls();
+        assert!(
+            calls.iter().any(|c| c.channel == "rosace/camera" && c.method == "requestPermission"),
+            "request_camera must queue a rosace/camera Platform Channel call"
+        );
+
+        // A second request before resolution must not queue a duplicate.
+        request_camera();
+        let calls = take_outgoing_calls();
+        assert!(
+            !calls.iter().any(|c| c.channel == "rosace/camera"),
+            "a pending camera request must not be queued twice"
+        );
+
+        CAMERA_PERMISSION.set(None);
+        *CAMERA_REQUEST_PENDING.lock().unwrap() = false;
     }
 
     #[test]
-    fn report_result_updates_the_atom() {
+    fn report_result_updates_the_atom_and_clears_pending() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         CAMERA_PERMISSION.set(None);
+        *CAMERA_REQUEST_PENDING.lock().unwrap() = true;
 
         report_camera_result(true);
         assert_eq!(CAMERA_PERMISSION.get(), Some(true));
+        assert!(!*CAMERA_REQUEST_PENDING.lock().unwrap(), "reporting a result must clear the pending flag");
 
         report_camera_result(false);
         assert_eq!(CAMERA_PERMISSION.get(), Some(false));
+
+        CAMERA_PERMISSION.set(None);
     }
 
     #[test]
@@ -226,9 +261,14 @@ mod tests {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         *CAMERA_REQUEST_PENDING.lock().unwrap() = false;
         CAMERA_PERMISSION.set(Some(true));
+        take_outgoing_calls();
 
         request_camera();
-        assert!(!take_camera_request(), "already-resolved permission shouldn't re-queue a request");
+        let calls = take_outgoing_calls();
+        assert!(
+            !calls.iter().any(|c| c.channel == "rosace/camera"),
+            "already-resolved permission shouldn't re-queue a request"
+        );
 
         CAMERA_PERMISSION.set(None); // reset for other tests
     }
@@ -236,14 +276,18 @@ mod tests {
     // ── Push (D110 Phase 29 Step 2) — mirrors the camera tests above ─────
 
     #[test]
-    fn push_request_then_take_returns_true_once() {
+    fn push_request_queues_a_platform_channel_call() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         PUSH_PERMISSION.set(None);
         *PUSH_REQUEST_PENDING.lock().unwrap() = false;
+        take_outgoing_calls();
 
         request_push_permission();
-        assert!(take_push_request(), "first poll should see the request");
-        assert!(!take_push_request(), "second poll should not see it again");
+        let calls = take_outgoing_calls();
+        assert!(calls.iter().any(|c| c.channel == "rosace/push" && c.method == "requestPermission"));
+
+        PUSH_PERMISSION.set(None);
+        *PUSH_REQUEST_PENDING.lock().unwrap() = false;
     }
 
     #[test]
@@ -251,9 +295,11 @@ mod tests {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         *PUSH_REQUEST_PENDING.lock().unwrap() = false;
         PUSH_PERMISSION.set(Some(false));
+        take_outgoing_calls();
 
         request_push_permission();
-        assert!(!take_push_request(), "already-resolved permission shouldn't re-queue a request");
+        let calls = take_outgoing_calls();
+        assert!(!calls.iter().any(|c| c.channel == "rosace/push"), "already-resolved permission shouldn't re-queue a request");
 
         PUSH_PERMISSION.set(None); // reset for other tests
     }

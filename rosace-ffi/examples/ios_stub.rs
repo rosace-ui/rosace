@@ -130,12 +130,11 @@ pub unsafe extern "C" fn rsc_engine_shutdown(engine: *mut Engine) {
 }
 
 // -- Platform capabilities (D106 Phase 24 Step 5) ----------------------------
-// Engine-independent by design — see rsc_engine.h's doc comment on these two.
-
-#[no_mangle]
-pub extern "C" fn rsc_camera_permission_take_request() -> u8 {
-    rosace_ffi::take_camera_request() as u8
-}
+// Engine-independent by design — see rsc_engine.h's doc comment. Request
+// DISCOVERY goes through the generic Platform Channel poll below (D127),
+// not a dedicated take_request per capability — see rosace_ffi::capability's
+// module doc. Result-reporting stays a plain setter (no call_id correlation
+// needed for a singleton capability).
 
 #[no_mangle]
 pub extern "C" fn rsc_camera_permission_report_result(granted: u8) {
@@ -146,13 +145,85 @@ pub extern "C" fn rsc_camera_permission_report_result(granted: u8) {
 // a token report and a foreground-delivery report (both C strings).
 
 #[no_mangle]
-pub extern "C" fn rsc_push_permission_take_request() -> u8 {
-    rosace_ffi::take_push_request() as u8
-}
-
-#[no_mangle]
 pub extern "C" fn rsc_push_permission_report_result(granted: u8) {
     rosace_ffi::report_push_result(granted != 0);
+}
+
+// -- Platform Channel (D127) --------------------------------------------------
+// The generic bidirectional method-call bridge — see rsc-cli's `ffi_rs`
+// generator (rosace-cli/src/commands/new.rs) for the canonical, fully
+// commented version this mirrors; kept brief here since this file is a
+// reference stub, not the actual per-app generated glue.
+
+#[no_mangle]
+pub extern "C" fn rsc_platform_channel_take_outgoing() -> *mut std::os::raw::c_char {
+    let calls: Vec<serde_json::Value> = rosace_ffi::take_outgoing_calls()
+        .into_iter()
+        .map(|c| {
+            serde_json::json!({
+                "call_id": c.call_id,
+                "channel": c.channel,
+                "method": c.method,
+                "args": serde_json::from_str::<serde_json::Value>(&c.args_json)
+                    .unwrap_or(serde_json::Value::Null),
+            })
+        })
+        .collect();
+    let text = serde_json::Value::Array(calls).to_string();
+    std::ffi::CString::new(text).unwrap_or_default().into_raw()
+}
+
+/// # Safety
+/// `ptr` must be either null (a no-op) or a pointer this crate returned
+/// across the FFI boundary, not yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn rsc_string_free(ptr: *mut std::os::raw::c_char) {
+    if ptr.is_null() { return; }
+    drop(unsafe { std::ffi::CString::from_raw(ptr) });
+}
+
+/// # Safety
+/// `result_json` must be a valid NUL-terminated C string or null (a no-op).
+#[no_mangle]
+pub unsafe extern "C" fn rsc_platform_channel_report_result(
+    call_id: u64,
+    result_json: *const std::os::raw::c_char,
+) {
+    if result_json.is_null() { return; }
+    let json = unsafe { std::ffi::CStr::from_ptr(result_json) }.to_string_lossy();
+    rosace_ffi::report_call_result(call_id, &json);
+}
+
+/// # Safety
+/// `message` must be a valid NUL-terminated C string or null (a no-op).
+#[no_mangle]
+pub unsafe extern "C" fn rsc_platform_channel_report_error(
+    call_id: u64,
+    message: *const std::os::raw::c_char,
+) {
+    if message.is_null() { return; }
+    let msg = unsafe { std::ffi::CStr::from_ptr(message) }.to_string_lossy().into_owned();
+    rosace_ffi::report_call_error(call_id, msg);
+}
+
+/// # Safety
+/// Each argument must be a valid NUL-terminated C string or null. The
+/// returned pointer is owned — pass it to `rsc_string_free` when done.
+#[no_mangle]
+pub unsafe extern "C" fn rsc_platform_channel_dispatch(
+    channel: *const std::os::raw::c_char,
+    method: *const std::os::raw::c_char,
+    args_json: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let read = |p: *const std::os::raw::c_char| -> String {
+        if p.is_null() {
+            String::new()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        }
+    };
+    let result = rosace_ffi::dispatch_call(&read(channel), &read(method), &read(args_json));
+    std::ffi::CString::new(result).unwrap_or_default().into_raw()
 }
 
 /// # Safety

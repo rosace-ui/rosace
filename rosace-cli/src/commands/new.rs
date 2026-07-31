@@ -493,8 +493,12 @@ fn cargo_toml(name: &str, crate_name: &str, framework: &str, opts: &NewOptions) 
     // Build-time asset codegen: `build.rs` scans `assets/` → a typed `assets`
     // module of `Asset` handles. A build-dependency so it never ships in the app.
     let asset_codegen_dep = framework_dep("rosace-asset-codegen", framework);
+    // `ffi.rs`'s Platform Channel section (D127) uses `serde_json::json!`/
+    // `Value` directly (not just via `rosace_ffi::` calls) to encode the
+    // outgoing-call queue as JSON for the native host — needs its own
+    // dependency, same reasoning as `android_jni_dep` below.
     let rosace_ffi_dep = if native_bridge {
-        format!("{}\n", framework_dep("rosace-ffi", framework))
+        format!("{}\nserde_json = \"1\"\n", framework_dep("rosace-ffi", framework))
     } else {
         String::new()
     };
@@ -1429,6 +1433,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
     private external fun nativeText(handle: Long, character: Int)
     private external fun nativeTextInputActive(): Boolean
     private external fun nativeFocusedKeyboardType(): Int
+    // Platform Channel (D127) — the generic bidirectional method-call bridge
+    // to native code, mirroring the plain-C exports iOS's EngineViewController
+    // declares via @_silgen_name. take_outgoing is the host's ONE per-frame
+    // poll (see pollPlatformChannel below); dispatch is the reverse direction
+    // (native calling a Rust-registered handler), included for completeness
+    // even though this template doesn't call it itself.
+    private external fun nativeTakeOutgoingPlatformCalls(): String?
+    private external fun nativePlatformChannelReportResult(callId: Long, resultJson: String)
+    private external fun nativePlatformChannelReportError(callId: Long, message: String)
+    private external fun nativePlatformChannelDispatch(channel: String, method: String, argsJson: String): String?
     private external fun nativeLifecycle(handle: Long, kind: Int)
     private external fun nativeFrame(handle: Long)
     private external fun nativeShutdown(handle: Long)
@@ -1440,6 +1454,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
         override fun doFrame(frameTimeNanos: Long) {{
             if (engineHandle != 0L) {{
                 nativeFrame(engineHandle)
+                pollPlatformChannel()
                 syncSoftKeyboard()
                 Choreographer.getInstance().postFrameCallback(this)
             }}
@@ -1482,6 +1497,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
             }}
         }} else if (surfaceView.isFocused) {{
             imm.hideSoftInputFromWindow(surfaceView.windowToken, 0)
+        }}
+    }}
+
+    /// The host's ONE per-frame poll for outgoing Platform Channel calls
+    /// (D127). Unlike iOS (which already had a real push-permission flow to
+    /// migrate onto this), Android push permission (`POST_NOTIFICATIONS`,
+    /// API 33+) was never wired here — so `"rosace/push"` is deliberately
+    /// NOT recognized below yet (a named follow-up, not a regression: there
+    /// was nothing to preserve). An app wanting its own channel (camera, a
+    /// custom native SDK, or building out real Android push support) adds a
+    /// case here for its own channel name and reports back via
+    /// `nativePlatformChannelReportResult`/`_ReportError`.
+    private fun pollPlatformChannel() {{
+        val json = nativeTakeOutgoingPlatformCalls() ?: return
+        val calls = try {{ org.json.JSONArray(json) }} catch (e: org.json.JSONException) {{ return }}
+        for (i in 0 until calls.length()) {{
+            val call = calls.optJSONObject(i) ?: continue
+            val channel = call.optString("channel")
+            val method = call.optString("method")
+            // (no built-in channels recognized yet — see the doc above;
+            // logged so a custom channel's calls are visible during dev)
+            android.util.Log.d("rosace", "Platform Channel call: $channel/$method (unhandled)")
         }}
     }}
 
@@ -1733,9 +1770,6 @@ func rsc_engine_frame(_ engine: RscEngine?)
 @_silgen_name("rsc_engine_shutdown")
 func rsc_engine_shutdown(_ engine: RscEngine?)
 
-@_silgen_name("rsc_push_permission_take_request")
-func rsc_push_permission_take_request() -> UInt8
-
 @_silgen_name("rsc_push_permission_report_result")
 func rsc_push_permission_report_result(_ granted: UInt8)
 
@@ -1744,6 +1778,31 @@ func rsc_text_input_active() -> UInt8
 
 @_silgen_name("rsc_focused_keyboard_type")
 func rsc_focused_keyboard_type() -> UInt32
+
+// MARK: - Platform Channel (D127) — the generic bidirectional method-call
+// bridge to native code. `take_outgoing`/`report_result`/`report_error`
+// replace the old dedicated push-permission-only poll — that discovery now
+// goes through this same generic queue, alongside anything an app registers
+// itself. `dispatch` is the reverse direction (native calling a
+// Rust-registered handler), included for completeness
+// even though this template doesn't call it itself.
+
+@_silgen_name("rsc_platform_channel_take_outgoing")
+func rsc_platform_channel_take_outgoing() -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("rsc_string_free")
+func rsc_string_free(_ ptr: UnsafeMutablePointer<CChar>?)
+
+@_silgen_name("rsc_platform_channel_report_result")
+func rsc_platform_channel_report_result(_ callId: UInt64, _ resultJson: UnsafePointer<CChar>?)
+
+@_silgen_name("rsc_platform_channel_report_error")
+func rsc_platform_channel_report_error(_ callId: UInt64, _ message: UnsafePointer<CChar>?)
+
+@_silgen_name("rsc_platform_channel_dispatch")
+func rsc_platform_channel_dispatch(
+    _ channel: UnsafePointer<CChar>?, _ method: UnsafePointer<CChar>?, _ argsJson: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>?
 
 // MARK: - View
 
@@ -1905,14 +1964,27 @@ final class EngineViewController: UIViewController, UIKeyInput {
     @objc private func tick() {
         guard let engine else { return }
         rsc_engine_frame(engine)
-
-        // Capability polling (D110 Phase 29 Step 2) — the same
-        // once-per-frame-tick shape rsc_engine.h documents for camera.
-        if rsc_push_permission_take_request() != 0 {
-            requestPushPermission()
-        }
-
+        pollPlatformChannel()
         syncSoftKeyboard()
+    }
+
+    /// The host's ONE per-frame poll for outgoing Platform Channel calls
+    /// (D127) — push-permission discovery included, alongside anything an
+    /// app registers itself. Recognizes `"rosace/push"` unconditionally
+    /// (every app already carries push-permission polling, so there's no
+    /// new per-app cost); an app wanting its own channel (camera, a custom
+    /// native SDK, …) adds a case here for its own channel name.
+    private func pollPlatformChannel() {
+        guard let ptr = rsc_platform_channel_take_outgoing() else { return }
+        defer { rsc_string_free(ptr) }
+        guard let data = String(cString: ptr).data(using: .utf8),
+              let calls = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        for call in calls {
+            guard let channel = call["channel"] as? String, let method = call["method"] as? String else { continue }
+            if channel == "rosace/push" && method == "requestPermission" {
+                requestPushPermission()
+            }
+        }
     }
 
     /// Real OS permission prompt + APNs registration. The result flows back
@@ -2460,13 +2532,10 @@ pub unsafe extern "C" fn rsc_engine_shutdown(engine: *mut Engine) {
 }
 
 // -- Push notifications (D110 Phase 29 Step 2) --------------------------------
-// Engine-independent, same as the camera capability (see rsc_engine.h's doc)
-// — the host polls take_request once per frame tick and reports back.
-
-#[no_mangle]
-pub extern "C" fn rsc_push_permission_take_request() -> u8 {
-    rosace_ffi::take_push_request() as u8
-}
+// Discovery ("is a permission request pending?") goes through the generic
+// Platform Channel poll below, not a dedicated take_request — see D127 and
+// rosace_ffi::capability's module doc. Result-reporting stays a plain
+// setter (no call_id correlation needed for a singleton capability).
 
 #[no_mangle]
 pub extern "C" fn rsc_push_permission_report_result(granted: u8) {
@@ -2499,6 +2568,104 @@ pub unsafe extern "C" fn rsc_push_report_notification(
         }
     };
     rosace_ffi::report_push_notification(read(title), read(body), read(payload_json));
+}
+
+// -- Platform Channel (D127) ---------------------------------------------------
+// The generic bidirectional method-call bridge to native code — named
+// channels + methods + JSON payloads, instead of a bespoke FFI function per
+// platform feature. Two directions, four exports:
+//   - Rust calls native, async: `rsc_platform_channel_take_outgoing` (the
+//     host's ONE per-frame poll — this is what push permission discovery
+//     above now goes through, alongside anything an app registers itself)
+//     + `rsc_platform_channel_report_result`/`_report_error` (the host
+//     answers once its native-side work finishes, which may be many frames
+//     later — a system dialog, a slow SDK call).
+//   - Native calls Rust, sync: `rsc_platform_channel_dispatch` — one
+//     blocking call, answered inline by whatever handler the app registered
+//     via `rosace_ffi::set_method_call_handler`. For fast work only.
+// `rsc_string_free` pairs with every owned string this crate returns across
+// the boundary (`take_outgoing`'s JSON array, `dispatch`'s JSON result) —
+// the receiver must call it exactly once after copying the bytes into its
+// own native string, same discipline `AndroidSurfaceHandle`'s `Drop`
+// already follows for the native-window reference.
+
+/// # Safety
+/// The returned pointer is an owned, NUL-terminated JSON string (a `[]`
+/// array of `{call_id, channel, method, args}` objects) that the caller
+/// MUST pass to `rsc_string_free` exactly once when done reading it.
+#[no_mangle]
+pub extern "C" fn rsc_platform_channel_take_outgoing() -> *mut std::os::raw::c_char {
+    let calls: Vec<serde_json::Value> = rosace_ffi::take_outgoing_calls()
+        .into_iter()
+        .map(|c| {
+            serde_json::json!({
+                "call_id": c.call_id,
+                "channel": c.channel,
+                "method": c.method,
+                "args": serde_json::from_str::<serde_json::Value>(&c.args_json)
+                    .unwrap_or(serde_json::Value::Null),
+            })
+        })
+        .collect();
+    let text = serde_json::Value::Array(calls).to_string();
+    std::ffi::CString::new(text).unwrap_or_default().into_raw()
+}
+
+/// Frees a string previously returned by `rsc_platform_channel_take_outgoing`
+/// or `rsc_platform_channel_dispatch`.
+///
+/// # Safety
+/// `ptr` must be either null (a no-op) or a pointer this crate returned
+/// across the FFI boundary, not yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn rsc_string_free(ptr: *mut std::os::raw::c_char) {
+    if ptr.is_null() { return; }
+    drop(unsafe { std::ffi::CString::from_raw(ptr) });
+}
+
+/// # Safety
+/// `result_json` must be a valid NUL-terminated C string or null (a no-op).
+#[no_mangle]
+pub unsafe extern "C" fn rsc_platform_channel_report_result(
+    call_id: u64,
+    result_json: *const std::os::raw::c_char,
+) {
+    if result_json.is_null() { return; }
+    let json = unsafe { std::ffi::CStr::from_ptr(result_json) }.to_string_lossy();
+    rosace_ffi::report_call_result(call_id, &json);
+}
+
+/// # Safety
+/// `message` must be a valid NUL-terminated C string or null (a no-op).
+#[no_mangle]
+pub unsafe extern "C" fn rsc_platform_channel_report_error(
+    call_id: u64,
+    message: *const std::os::raw::c_char,
+) {
+    if message.is_null() { return; }
+    let msg = unsafe { std::ffi::CStr::from_ptr(message) }.to_string_lossy().into_owned();
+    rosace_ffi::report_call_error(call_id, msg);
+}
+
+/// # Safety
+/// Each argument must be a valid NUL-terminated C string or null (null
+/// reads as the empty string). The returned pointer is owned — see the
+/// module doc's note on `rsc_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn rsc_platform_channel_dispatch(
+    channel: *const std::os::raw::c_char,
+    method: *const std::os::raw::c_char,
+    args_json: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let read = |p: *const std::os::raw::c_char| -> String {
+        if p.is_null() {
+            String::new()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        }
+    };
+    let result = rosace_ffi::dispatch_call(&read(channel), &read(method), &read(args_json));
+    std::ffi::CString::new(result).unwrap_or_default().into_raw()
 }
 
 // -- Soft-keyboard sync (D116 Step 6) -----------------------------------------
@@ -2715,6 +2882,82 @@ pub extern "system" fn Java_{jni_prefix}_nativeFocusedKeyboardType(
     rosace_ffi::focused_keyboard_type() as jni::sys::jint
 }}
 
+// -- Platform Channel (D127) — JNI wrappers around the same rosace_ffi
+// primitives the iOS plain-C exports above use. JNI strings are JVM-managed
+// (`env.new_string`/`get_string`), unlike iOS's C strings — no
+// `rsc_string_free` equivalent is needed here; the JVM garbage-collects
+// `JString`s normally.
+
+/// The host's ONE per-frame poll (alongside `nativeFrame`) — drains every
+/// queued Platform Channel call (push-permission discovery included) as a
+/// JSON array of `{{call_id, channel, method, args}}` objects.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeTakeOutgoingPlatformCalls(
+    env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+) -> jni::sys::jstring {{
+    let calls: Vec<serde_json::Value> = rosace_ffi::take_outgoing_calls()
+        .into_iter()
+        .map(|c| {{
+            serde_json::json!({{
+                "call_id": c.call_id,
+                "channel": c.channel,
+                "method": c.method,
+                "args": serde_json::from_str::<serde_json::Value>(&c.args_json)
+                    .unwrap_or(serde_json::Value::Null),
+            }})
+        }})
+        .collect();
+    let text = serde_json::Value::Array(calls).to_string();
+    env.new_string(text).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}}
+
+/// Called once `call_id`'s native-side work finishes successfully.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativePlatformChannelReportResult(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    call_id: jni::sys::jlong,
+    result_json: jni::objects::JString,
+) {{
+    let json: String = env.get_string(&result_json).map(String::from).unwrap_or_default();
+    rosace_ffi::report_call_result(call_id as u64, &json);
+}}
+
+/// Called when `call_id`'s native-side work fails.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativePlatformChannelReportError(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    call_id: jni::sys::jlong,
+    message: jni::objects::JString,
+) {{
+    let msg: String = env.get_string(&message).map(String::from).unwrap_or_default();
+    rosace_ffi::report_call_error(call_id as u64, msg);
+}}
+
+/// Native calls INTO Rust, synchronously — one blocking call answered
+/// inline by whatever handler the app registered via
+/// `rosace_ffi::set_method_call_handler`. For fast work only.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativePlatformChannelDispatch(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    channel: jni::objects::JString,
+    method: jni::objects::JString,
+    args_json: jni::objects::JString,
+) -> jni::sys::jstring {{
+    let channel: String = env.get_string(&channel).map(String::from).unwrap_or_default();
+    let method: String = env.get_string(&method).map(String::from).unwrap_or_default();
+    let args: String = env.get_string(&args_json).map(String::from).unwrap_or_default();
+    let result = rosace_ffi::dispatch_call(&channel, &method, &args);
+    env.new_string(result).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}}
+
 /// One app-lifecycle transition per call (D110 Phase 29 Step 1) — `kind`
 /// is a `RSC_EVENT_LIFECYCLE_*` constant (8 = active, 9 = inactive,
 /// 10 = background). `Engine::input` applies lifecycle immediately (see
@@ -2852,5 +3095,34 @@ mod ffi_codegen_tests {
         assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("rsc_text_input_active"));
         assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("rsc_focused_keyboard_type"));
         assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("syncSoftKeyboard"));
+    }
+
+    #[test]
+    fn ffi_rs_embeds_the_platform_channel_bridge_for_both_platforms() {
+        let src = ffi_rs("dev.rosace.myapp");
+        // Shared (iOS via @_silgen_name, Android via the JNI wrappers below).
+        assert!(src.contains("fn rsc_platform_channel_take_outgoing"));
+        assert!(src.contains("fn rsc_platform_channel_report_result"));
+        assert!(src.contains("fn rsc_platform_channel_report_error"));
+        assert!(src.contains("fn rsc_platform_channel_dispatch"));
+        assert!(src.contains("fn rsc_string_free"));
+        // Push permission discovery must go through the generic poll now,
+        // not a dedicated take_request.
+        assert!(!src.contains("rsc_push_permission_take_request"));
+        assert!(src.contains("fn rsc_push_permission_report_result"));
+        // Android JNI Platform Channel bridge.
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativeTakeOutgoingPlatformCalls"));
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativePlatformChannelReportResult"));
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativePlatformChannelReportError"));
+        assert!(src.contains("Java_dev_rosace_myapp_MainActivity_nativePlatformChannelDispatch"));
+    }
+
+    #[test]
+    fn ios_swift_template_polls_platform_channel_instead_of_the_old_dedicated_push_poll() {
+        assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("rsc_platform_channel_take_outgoing"));
+        assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("pollPlatformChannel"));
+        assert!(!IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("rsc_push_permission_take_request"));
+        // Result-reporting stays a plain setter, unchanged.
+        assert!(IOS_ENGINE_VIEW_CONTROLLER_SWIFT.contains("rsc_push_permission_report_result"));
     }
 }
