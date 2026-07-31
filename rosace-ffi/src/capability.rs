@@ -59,6 +59,19 @@ const CAMERA_PERMISSION_ATOM_ID: AtomId = AtomId(0xFFFC);
 pub static CAMERA_PERMISSION: GlobalAtom<Option<bool>> =
     GlobalAtom::new(CAMERA_PERMISSION_ATOM_ID, || None);
 
+/// Read [`CAMERA_PERMISSION`] from a component's `build()`, subscribing the
+/// component so it re-renders when the permission resolves — the explicit
+/// `subscribe` is required, `GlobalAtom`s aren't auto-subscribed by
+/// `ctx.state`'s hook machinery (same convention as
+/// `rosace_core::use_app_lifecycle`). Prefer this over
+/// `CAMERA_PERMISSION.get()` directly inside a widget; use the bare `.get()`
+/// only outside the component tree (e.g. engine/host code), where there's
+/// no component to subscribe.
+pub fn use_camera_permission(ctx: &rosace_core::Context) -> Option<bool> {
+    CAMERA_PERMISSION.get_or_init().subscribe(ctx.component_id());
+    CAMERA_PERMISSION.get()
+}
+
 /// Whether a request has been queued but not yet resolved. A `bool`, not a
 /// counter — duplicate requests (e.g. impatient double-taps before the
 /// first prompt resolves) collapse into one, matching how a real permission
@@ -140,6 +153,30 @@ pub struct PushMessage {
 /// (`seq` makes gaps detectable).
 pub static PUSH_MESSAGE: GlobalAtom<Option<PushMessage>> =
     GlobalAtom::new(AtomId(0xFFF6), || None);
+
+/// Read [`PUSH_PERMISSION`] from a component's `build()`, subscribing the
+/// component — see [`use_camera_permission`]'s doc for why the explicit
+/// subscribe is required.
+pub fn use_push_permission(ctx: &rosace_core::Context) -> Option<bool> {
+    PUSH_PERMISSION.get_or_init().subscribe(ctx.component_id());
+    PUSH_PERMISSION.get()
+}
+
+/// Read [`PUSH_TOKEN`] from a component's `build()`, subscribing the
+/// component — see [`use_camera_permission`]'s doc for why the explicit
+/// subscribe is required.
+pub fn use_push_token(ctx: &rosace_core::Context) -> Option<String> {
+    PUSH_TOKEN.get_or_init().subscribe(ctx.component_id());
+    PUSH_TOKEN.get()
+}
+
+/// Read [`PUSH_MESSAGE`] from a component's `build()`, subscribing the
+/// component — see [`use_camera_permission`]'s doc for why the explicit
+/// subscribe is required.
+pub fn use_push_message(ctx: &rosace_core::Context) -> Option<PushMessage> {
+    PUSH_MESSAGE.get_or_init().subscribe(ctx.component_id());
+    PUSH_MESSAGE.get()
+}
 
 static PUSH_REQUEST_PENDING: Mutex<bool> = Mutex::new(false);
 

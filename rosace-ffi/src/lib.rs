@@ -26,10 +26,11 @@ mod surface;
 
 #[cfg(target_os = "android")]
 pub use android::AndroidSurfaceHandle;
-pub use capability::{report_camera_result, request_camera, CAMERA_PERMISSION};
+pub use capability::{report_camera_result, request_camera, use_camera_permission, CAMERA_PERMISSION};
 pub use capability::{
     report_push_notification, report_push_result, report_push_token, request_push_permission,
-    PushMessage, PUSH_MESSAGE, PUSH_PERMISSION, PUSH_TOKEN,
+    use_push_message, use_push_permission, use_push_token, PushMessage, PUSH_MESSAGE,
+    PUSH_PERMISSION, PUSH_TOKEN,
 };
 pub use engine::Engine;
 pub use event::{focused_keyboard_type, text_input_active, RscInputEventFfi};
