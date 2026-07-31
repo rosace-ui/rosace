@@ -174,8 +174,18 @@ fn draw_dev_inspector(
 /// Whether the DevTools FAB is shown — dev builds only (never ships in
 /// release). A tap on it opens the DevTools panel; no keyboard needed, so it
 /// works on mobile too.
+///
+/// Excluded from `rosace`'s OWN unit tests (`cfg!(test)`, scoped to this
+/// crate's test binary — a downstream app's debug build is unaffected, since
+/// `cfg!(test)` there is a different compilation unit entirely). Without
+/// this, every headless test engine got a real FAB overlay injected, and its
+/// hit region — plus the process-global `DEVTOOLS_OPEN`/`DEVTOOLS_TAB` atoms
+/// it reads/writes — leaked across tests sharing the same test-binary
+/// process, making a cluster of typing/focus tests order- and state-
+/// dependent (root-caused 2026-07-31; tracked since 2026-07-24 in
+/// project_dev_release_state.md as "isolate global state per test").
 fn devtools_fab_enabled() -> bool {
-    cfg!(debug_assertions)
+    cfg!(debug_assertions) && !cfg!(test)
 }
 
 
