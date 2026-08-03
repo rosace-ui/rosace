@@ -37,22 +37,43 @@ fn poke() {
 pub fn devtools_overlay(rows: Vec<String>) -> OverlayEntry {
     let open = DEVTOOLS_OPEN.get();
 
-    let mut stack = Stack::new();
+    // This overlay is `LayerPosition::Fill` — the FULL viewport, including
+    // any platform-reserved edge (iOS home indicator, Android nav bar). A
+    // fixed pixel offset from the raw edge can land the FAB inside that
+    // reserved strip, where the OS's own gesture recognizer eats the tap
+    // before it ever reaches the app (read as "the FAB doesn't respond" —
+    // 2026-07-31 user report on a real iOS device).
+    let sa = rosace_core::use_safe_area();
+
+    // `Stack::new()` defaults to `StackFit::Loose` (shrink to the largest
+    // child) — under that fit it ignores the TIGHT win_w×win_h constraints
+    // the engine deliberately passes a `Fill` overlay (see the comment at
+    // its `entry.widget.layout` call site) and collapses to the FAB's own
+    // 40×40 size instead. `Positioned`'s `.bottom()/.left()` then resolve
+    // against that tiny collapsed rect pinned at the window's top-left,
+    // not the real window — the FAB rendered top-left over the traffic
+    // lights instead of bottom-left. `Expand` makes this Stack actually
+    // fill the tight constraints it's given.
+    let mut stack = Stack::new().fit(rosace_widgets::tree::stack::StackFit::Expand);
 
     // The panel (only when open), docked top-right.
     if open {
         stack = stack.child(
             Positioned::new(panel(rows))
-                .top(12.0)
-                .right(12.0)
+                .top(12.0 + sa.top)
+                .right(12.0 + sa.right)
                 .width(440.0)
                 .height(460.0),
         );
     }
 
-    // The FAB, bottom-right — a real widget with its own elevation + press anim.
+    // The FAB — bottom-left (D123, moved off the bottom-right corner some
+    // apps' own primary FAB occupies), small enough to stay out of the way
+    // of real app content.
+    const FAB_SIZE: f32 = 40.0;
     let label = if open { "\u{00d7}" } else { "</>" }; // × when open
     let fab = FloatingActionButton::new()
+        .size(FAB_SIZE)
         .label(label)
         .background(accent())
         .on_press(|| {
@@ -60,7 +81,11 @@ pub fn devtools_overlay(rows: Vec<String>) -> OverlayEntry {
             poke();
         });
     stack = stack.child(
-        Positioned::new(fab).right(20.0).bottom(20.0).width(56.0).height(56.0),
+        Positioned::new(fab)
+            .left(14.0 + sa.left)
+            .bottom(14.0 + sa.bottom)
+            .width(FAB_SIZE)
+            .height(FAB_SIZE),
     );
 
     OverlayEntry::new(LayerPosition::Fill, stack)

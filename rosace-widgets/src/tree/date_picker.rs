@@ -173,9 +173,14 @@ pub struct DatePicker {
     /// The single selection callback. Fires with `(start, end)`: `Single` mode
     /// always passes `end = None`; `Range` passes `(start, None)` when the start
     /// is picked and `(start, Some(end))` once the range completes.
-    on_select: Option<Arc<dyn Fn(SimpleDate, Option<SimpleDate>) + Send + Sync>>,
+    on_select: Option<OnSelectFn>,
     on_month_change: Option<Arc<dyn Fn(SimpleDate) + Send + Sync>>,
 }
+
+/// Fires with `(start, end)`: `Single` mode always passes `end = None`;
+/// `Range` passes `(start, None)` when the start is picked and
+/// `(start, Some(end))` once the range completes.
+type OnSelectFn = Arc<dyn Fn(SimpleDate, Option<SimpleDate>) + Send + Sync>;
 
 const HEADER_H: f32 = 36.0;
 const WEEKDAY_ROW_H: f32 = 24.0;

@@ -21,12 +21,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use rosace_core::types::{Point, Rect, Size};
-use rosace_render::{fontdue, Color};
+use rosace_render::{Color, OwnedFace};
 use super::{Widget, LayoutCtx, PaintCtx};
 
 /// Bundled Material Symbols Outlined variable font (Apache 2.0 — see
-/// `assets/LICENSE-MaterialSymbols.txt`). fontdue renders its default
-/// instance (FILL 0, wght 400): the standard outlined style.
+/// `assets/LICENSE-MaterialSymbols.txt`). `OwnedFace::from_bytes` instances
+/// its default `wght: 400` (FILL 0, standard outlined style) via the real
+/// variable-font support the fontdue -> swash migration (D127, 2026-08-03)
+/// added — previously (fontdue) this rendered whatever un-instanced default
+/// the font happened to store, not a real explicit weight.
 const ICON_FONT_BYTES: &[u8] =
     include_bytes!("../../assets/MaterialSymbolsOutlined.ttf");
 
@@ -37,15 +40,12 @@ const ICON_CODEPOINTS: &str =
 
 /// The parsed icon face, shared process-wide (parsed once — the variable
 /// font is ~10 MB; every `FontCache` gets a clone of this one `Arc`).
-fn icon_font() -> &'static Arc<fontdue::Font> {
-    static FONT: OnceLock<Arc<fontdue::Font>> = OnceLock::new();
+fn icon_font() -> &'static Arc<OwnedFace> {
+    static FONT: OnceLock<Arc<OwnedFace>> = OnceLock::new();
     FONT.get_or_init(|| {
         Arc::new(
-            fontdue::Font::from_bytes(
-                ICON_FONT_BYTES,
-                fontdue::FontSettings::default(),
-            )
-            .expect("bundled Material Symbols font parses"),
+            OwnedFace::from_bytes(ICON_FONT_BYTES)
+                .expect("bundled Material Symbols font parses"),
         )
     })
 }
@@ -316,17 +316,18 @@ mod tests {
 
     #[test]
     fn bundled_font_parses_and_covers_every_mapped_kind() {
-        let font = icon_font();
+        // Routed through a real `FontCache` (matching the canvas text path)
+        // rather than calling the rasterizer directly — `OwnedFace` itself
+        // is intentionally a thin byte-owning wrapper with no glyph-lookup
+        // API of its own; `FontCache` is the one place that talks to swash.
+        let cache = rosace_render::FontCache::embedded();
+        cache.set_icon_face(Arc::clone(icon_font()));
         for kind in IconKind::ALL {
             let Some(cp) = kind.codepoint() else { continue };
-            assert_ne!(
-                font.lookup_glyph_index(cp), 0,
-                "{kind:?} ({cp:?}) missing from the bundled icon font"
-            );
-            let (metrics, bitmap) = font.rasterize(cp, 24.0);
+            let (metrics, bitmap) = cache.rasterize(cp, 24.0);
             assert!(
                 metrics.width > 0 && bitmap.iter().any(|&b| b > 0),
-                "{kind:?} ({cp:?}) rasterized empty"
+                "{kind:?} ({cp:?}) rasterized empty — missing from the bundled icon font or a real rendering regression"
             );
         }
     }

@@ -29,7 +29,10 @@ pub struct Snackbar {
     text_color: Option<Color>,
     action_color: Option<Color>,
     radius: f32,
-    font_size: f32,
+    /// `None` = read from the active theme's `typography.body_medium`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    font_size: Option<f32>,
 }
 
 impl Snackbar {
@@ -43,7 +46,7 @@ impl Snackbar {
             text_color: None,
             action_color: None,
             radius: 0.0,
-            font_size: 13.0,
+            font_size: None,
         }
     }
     /// The action button ("UNDO", "RETRY") and its callback.
@@ -61,7 +64,11 @@ impl Snackbar {
     /// Action label color — defaults to the theme's `primary`.
     pub fn action_color(mut self, c: Color) -> Self { self.action_color = Some(c); self }
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
-    pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
+    pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.body_medium.size)
+    }
 
     /// Present as a floating overlay pinned bottom-center, above ALL
     /// content (the Scaffold-level surface the platform convention
@@ -100,11 +107,12 @@ impl Widget for Snackbar {
         // A snackbar is a BAR, not a pill (user-reported: intrinsic width
         // read as a Toast): fill the available width minus margins,
         // capped for very wide windows, never narrower than its content.
-        let text_w = ctx.font.measure_text(&self.message, self.font_size);
+        let font_size = self.resolved_font_size(ctx.theme);
+        let text_w = ctx.font.measure_text(&self.message, font_size);
         let action_w = self
             .action_label
             .as_ref()
-            .map(|a| GAP + ctx.font.measure_text(a, self.font_size))
+            .map(|a| GAP + ctx.font.measure_text(a, font_size))
             .unwrap_or(0.0);
         let content_w = PAD_H * 2.0 + text_w + action_w;
         let avail = ctx.constraints.max_width_f32();
@@ -129,17 +137,18 @@ impl Widget for Snackbar {
         ctx.semantics(super::Semantics::new(rosace_core::Role::Alert).label(&self.message));
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
 
-        let line_h = ctx.font.line_height(self.font_size);
+        let font_size = self.resolved_font_size(&ctx.theme);
+        let line_h = ctx.font.line_height(font_size);
         let ty = r.origin.y + (r.size.height - line_h) / 2.0;
         ctx.draw_text_at(
             &self.message,
             Point { x: r.origin.x + PAD_H, y: ty },
             fg,
-            self.font_size,
+            font_size,
         );
 
         if let Some(label) = &self.action_label {
-            let aw = ctx.font.measure_text(label, self.font_size);
+            let aw = ctx.font.measure_text(label, font_size);
             let ax = r.origin.x + r.size.width - PAD_H - aw;
             // The action gets its own hit slot (a button inside an alert).
             let hit = Rect {
@@ -148,7 +157,7 @@ impl Widget for Snackbar {
             };
             let mut action_ctx = ctx.child(hit);
             action_ctx.semantics(super::Semantics::new(rosace_core::Role::Button).label(label));
-            action_ctx.draw_text_at(label, Point { x: ax, y: ty }, action_fg, self.font_size);
+            action_ctx.draw_text_at(label, Point { x: ax, y: ty }, action_fg, font_size);
             if let Some(cb) = &self.on_action {
                 action_ctx.register_hit(Arc::clone(cb));
             }

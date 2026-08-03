@@ -147,7 +147,7 @@ pub use shader_paint::ShaderPaint;
 pub use date_picker::{DatePicker, SimpleDate, SelectionMode, PageAxis};
 pub use time_picker::{TimePicker, SimpleTime, TimeUnit};
 pub use data_table::{DataTable, DataTableColumn, SortDirection};
-pub use render_tree::{HitHandler, InspectNode, NodeId, RenderTree, ScrollAxes, TreeNode};
+pub use render_tree::{HitHandler, InspectNode, NodeId, RenderTree, ScrollAxes, ScrollHandler, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use row::Row;
 pub use scaffold::Scaffold;
@@ -425,6 +425,27 @@ impl<'a> PaintCtx<'a> {
         }
     }
 
+    /// Like [`Self::child`], but the child's node is found by an explicit
+    /// stable `key` (`RenderTree::keyed_slot`) instead of positional call
+    /// order — used ONLY by `ScreenTransitionView` so a screen keeps its
+    /// own scroll position/animation state across navigation instead of
+    /// aliasing onto whatever screen last occupied that tree position. See
+    /// `render_tree.rs`'s module doc ("Identity" section) for the full story.
+    pub fn child_keyed(&mut self, rect: Rect, key: u64) -> PaintCtx<'_> {
+        let node = self.tree.borrow_mut().keyed_slot(self.node, key);
+        self.tree.borrow_mut().node_mut(node).cached_rect = Some(rect);
+        PaintCtx {
+            recorder: self.recorder,
+            rect,
+            font: self.font,
+            theme: self.theme.clone(),
+            tree: Rc::clone(&self.tree),
+            node,
+            owner: self.owner,
+            clip_rect: self.clip_rect,
+        }
+    }
+
     /// Register a scroll viewport so the event router can dispatch wheel events
     /// to the correct `ScrollView`. Called from `ScrollView::paint`. The
     /// callback receives `(delta_x, delta_y)` in logical pixels.
@@ -537,6 +558,25 @@ impl<'a> PaintCtx<'a> {
             self.rect
         };
         self.tree.borrow_mut().node_mut(self.node).hits_at.push((hit_rect, Arc::new(f)));
+    }
+
+    /// Declares a nested-scroll chain link over this widget's rect (see
+    /// `render_tree::ScrollHandler`'s doc for the full contract) — what
+    /// `ScrollView`'s own drag-to-pan registers instead of
+    /// [`Self::on_press_at`], so a gesture that starts on a plain-hit
+    /// child inside it (or on an inner nested `ScrollView`) can still
+    /// reach it, and it in turn can hand off to whatever encloses IT once
+    /// exhausted.
+    pub fn register_nested_scroll(&mut self, f: impl Fn(f32, f32) -> bool + Send + Sync + 'static) {
+        let hit_rect = if let Some(clip) = self.clip_rect {
+            match intersect_rect(self.rect, clip) {
+                Some(r) => r,
+                None    => return,
+            }
+        } else {
+            self.rect
+        };
+        self.tree.borrow_mut().node_mut(self.node).nested_scrolls.push((hit_rect, Arc::new(f)));
     }
 
     /// Declare that this widget's rect responds to scroll wheel/trackpad.
@@ -774,29 +814,48 @@ impl<'a> PaintCtx<'a> {
         });
     }
 
+    /// Promotes `weight` one step toward bold when the OS accessibility
+    /// "bold text" setting is on (`mq.bold_text`) — leaves anything already
+    /// SemiBold/Bold alone, since it's already at or past that intent.
+    fn bold_text_weight(mq: rosace_core::MediaQuery, weight: rosace_render::FontWeight) -> rosace_render::FontWeight {
+        use rosace_render::FontWeight;
+        if mq.bold_text && matches!(weight, FontWeight::Light | FontWeight::Regular | FontWeight::Medium) {
+            FontWeight::SemiBold
+        } else {
+            weight
+        }
+    }
+
     /// Draw text at an absolute position (not relative to `self.rect`).
     pub fn draw_text_at(&mut self, text: &str, origin: Point, color: Color, px: f32) {
+        let mq = rosace_core::media_query::use_media_query();
+        let px = px * mq.text_scale;
         self.recorder.push(DrawCommand::DrawText {
             text: text.to_string(),
             origin,
             color,
             px,
-            weight: rosace_render::FontWeight::Regular,
+            weight: Self::bold_text_weight(mq, rosace_render::FontWeight::Regular),
         });
     }
 
     /// Draw text at `(self.rect.origin + (dx, dy))`.
     pub fn text(&mut self, s: &str, dx: f32, dy: f32, color: Color, px: f32) {
+        let mq = rosace_core::media_query::use_media_query();
+        let px = px * mq.text_scale;
         let origin = Point { x: self.rect.origin.x + dx, y: self.rect.origin.y + dy };
         self.recorder.push(DrawCommand::DrawText {
             text: s.to_string(), origin, color, px,
-            weight: rosace_render::FontWeight::Regular,
+            weight: Self::bold_text_weight(mq, rosace_render::FontWeight::Regular),
         });
     }
 
     /// Draw text at `(self.rect.origin + (dx, dy))` with an explicit weight —
     /// SemiBold/Bold route to the real bold face.
     pub fn text_styled(&mut self, s: &str, dx: f32, dy: f32, color: Color, px: f32, weight: rosace_render::FontWeight) {
+        let mq = rosace_core::media_query::use_media_query();
+        let px = px * mq.text_scale;
+        let weight = Self::bold_text_weight(mq, weight);
         let origin = Point { x: self.rect.origin.x + dx, y: self.rect.origin.y + dy };
         self.recorder.push(DrawCommand::DrawText { text: s.to_string(), origin, color, px, weight });
     }
@@ -831,6 +890,20 @@ impl<'a> PaintCtx<'a> {
     /// this each paint so the frame loop keeps repainting them.
     pub fn request_animation(&self) { crate::tree::request_animation(); }
 
+    /// The theme's [`AnimationConfig`], with `enabled` forced `false` when
+    /// the OS accessibility "reduce motion" setting is on
+    /// (`rosace_core::media_query().reduce_motion`) — same choke-point
+    /// pattern as `text_scale`: override at the point the raw theme value is
+    /// about to be used, no signature changes, no per-widget edits.
+    fn reduce_motion_animation_cfg(&self) -> rosace_theme::AnimationConfig {
+        let cfg = self.theme.animation;
+        if rosace_core::media_query::use_media_query().reduce_motion {
+            rosace_theme::AnimationConfig { enabled: false, ..cfg }
+        } else {
+            cfg
+        }
+    }
+
     /// Ease this node's persistent scalar toward `target` and return the
     /// current value. Honors the theme's global [`AnimationConfig`]: when
     /// disabled it snaps; otherwise it exponentially eases over the theme's
@@ -839,7 +912,7 @@ impl<'a> PaintCtx<'a> {
     /// widget state — the animation policy is global (theme), the value is
     /// per-node. First observation snaps (no appear-animation).
     pub fn animate_to(&self, target: f32, duration_ms: f32) -> f32 {
-        let cfg = self.theme.animation;
+        let cfg = self.reduce_motion_animation_cfg();
         if !cfg.enabled {
             self.tree.borrow_mut().node_mut(self.node).anim = Some(target);
             return target;
@@ -896,7 +969,7 @@ impl<'a> PaintCtx<'a> {
     /// if > 0), first observation snaps (no appear-pop), and keeps requesting
     /// frames until settled.
     pub fn animate_channel(&self, channel: usize, target: f32, duration_ms: f32) -> f32 {
-        let cfg = self.theme.animation;
+        let cfg = self.reduce_motion_animation_cfg();
         let mut tree = self.tree.borrow_mut();
         let node = tree.node_mut(self.node);
         if node.anim_channels.len() <= channel {

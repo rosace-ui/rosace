@@ -174,11 +174,16 @@ impl App {
             }
         }
 
-        // The bundled Inter face (Phase 32, user-decided): one pleasant,
-        // screen-tuned font with real weight contrast on EVERY platform,
-        // instead of whatever the OS ships. `FontCache::system_ui()`
-        // remains available for apps that want the native look.
-        let font = rosace_render::FontCache::bundled();
+        // Real OS system font (D127 "environment" track, user-decided —
+        // reverses Phase 32's bundled-Inter default): native look per
+        // platform (San Francisco-family/Segoe UI/Ubuntu on desktop, real
+        // on-device Roboto on Android) instead of one face everywhere.
+        // Falls back to bundled Inter wherever no system font is reachable
+        // (iOS has no filesystem-readable system font; web has no
+        // filesystem at all — see project memory on web font/emoji tofu).
+        let font = rosace_render::FontCache::system_ui()
+            .or_else(rosace_render::FontCache::system_mono)
+            .unwrap_or_else(rosace_render::FontCache::bundled);
         // Platform resolution (D105 Phase 23 Step 1): forced override, else
         // the real detected platform. Themes::resolve (Step 2) reads this to
         // pick the active theme; widgets never see the platform directly.
@@ -506,7 +511,7 @@ fn walk_element(
 /// block every app was writing. Lives in the facade because it needs both
 /// `AppBar` (widgets) and `ScreenNav` (nav).
 pub trait AppBarNavExt {
-    /// Add a `← Back` leading button that pops `nav` — only when there is
+    /// Add a `‹ Back` leading button that pops `nav` — only when there is
     /// somewhere to pop to.
     fn back_button<R: Clone + Send + Sync + 'static>(self, nav: &rosace_nav::ScreenNav<R>) -> Self;
 }
@@ -518,8 +523,10 @@ impl AppBarNavExt for AppBar {
         }
         let nav = nav.clone();
         self.leading(
-            Button::new("← Back")
-                .variant(ButtonVariant::Ghost)
+            // `Link` — no fill, no border. A nav back control reads as part
+            // of the bar chrome, not as a standalone bordered button.
+            Button::new("\u{2039} Back")
+                .variant(ButtonVariant::Link)
                 .on_press(move || { nav.pop(); }),
         )
     }
@@ -534,6 +541,9 @@ struct OverlayRoute {
     rect: rosace_core::types::Rect,
     input: rosace_widgets::tree::InputBehavior,
     on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// A rect exempt from `on_tap` (see `ScrimConfig::exclude_rect`) — a
+    /// click there falls through instead of dismissing this overlay.
+    on_tap_exclude: Option<rosace_core::types::Rect>,
     hits: Vec<(rosace_core::types::Rect, Arc<dyn Fn() + Send + Sync>)>,
     scrolls: Vec<(rosace_core::types::Rect, rosace_widgets::tree::ScrollAxes, rosace_widgets::tree::HitHandler)>,
 }
@@ -647,6 +657,13 @@ pub use rosace_render::{FontCache, SkiaCanvas};
 // Namespaced sub-system access
 pub mod widgets   { pub use rosace_widgets::*; }
 pub mod theme     { pub use rosace_theme::*; }
+/// OS/accessibility signals (dark mode, text scale, bold text, reduce
+/// motion, 24-hour clock) — `rosace::media_query::use_media_query()`,
+/// same reactive-atom pattern as `rosace::theme::use_theme()`. A cheap
+/// cached read, not a live OS query (see `rosace_core::media_query`'s
+/// own doc comment) — the platform layer pushes a new value only when
+/// the OS setting actually changes.
+pub mod media_query { pub use rosace_core::media_query::*; }
 pub mod layout    { pub use rosace_layout::*; }
 pub mod render    { pub use rosace_render::*; }
 pub mod core      { pub use rosace_core::*; }
@@ -667,6 +684,9 @@ pub mod shaping   { pub use rosace_shaping::*; }
 pub mod style     { pub use rosace_style::*; }
 pub mod i18n      { pub use rosace_i18n::*; }
 pub mod net       { pub use rosace_net::*; }
+/// App-local file storage (Documents/Cache/Temp) + native OS file/save
+/// picker dialogs (D125) — see `rosace-file`'s own crate doc.
+pub mod file      { pub use rosace_file::*; }
 /// Direct access to the on-disk key-value store (D114) — for data that
 /// is not atom-shaped (caches, blobs). Persistent ATOMS should prefer
 /// ctx.state_permanent, which reads/writes this same store.

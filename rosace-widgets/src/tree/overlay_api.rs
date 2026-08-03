@@ -120,6 +120,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                         .scrim(ScrimConfig {
                             color: Color::TRANSPARENT,
                             on_tap: Some(dismiss),
+                        exclude_rect: None,
                         })
                 }
 
@@ -131,6 +132,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                         .scrim(ScrimConfig {
                             color: Color::rgba(0, 0, 0, 100),
                             on_tap: Some(dismiss),
+                        exclude_rect: None,
                         })
                 }
 
@@ -142,6 +144,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                         .scrim(ScrimConfig {
                             color: Color::rgba(0, 0, 0, 160),
                             on_tap: Some(dismiss),
+                        exclude_rect: None,
                         })
                 }
 

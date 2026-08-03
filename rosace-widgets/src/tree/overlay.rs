@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::sync::Arc;
-use rosace_core::types::Point;
+use rosace_core::types::{Point, Rect};
 use rosace_render::Color;
 use super::BoxedWidget;
 
@@ -67,6 +67,13 @@ pub struct ScrimConfig {
     pub color:  Color,
     /// If `Some`, called when a tap lands outside the overlay widget's rect.
     pub on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// A rect (in window space) that is exempt from `on_tap` even though
+    /// it's outside the overlay widget itself — e.g. a Dropdown's own
+    /// trigger button. Without this, clicking the trigger that opened the
+    /// overlay both fires `on_tap` (closing it) AND falls through to the
+    /// trigger's own base-tree click handler (reopening it) in the same
+    /// event, so the dropdown could never close via its own trigger.
+    pub exclude_rect: Option<Rect>,
 }
 
 impl std::fmt::Debug for ScrimConfig {
@@ -74,6 +81,7 @@ impl std::fmt::Debug for ScrimConfig {
         f.debug_struct("ScrimConfig")
             .field("color", &self.color)
             .field("on_tap", &self.on_tap.as_ref().map(|_| "<Fn>"))
+            .field("exclude_rect", &self.exclude_rect)
             .finish()
     }
 }

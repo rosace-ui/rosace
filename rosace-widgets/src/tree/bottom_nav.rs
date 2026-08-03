@@ -56,7 +56,10 @@ pub struct BottomNavigationBar {
     /// Corner radius for the bar's TOP corners (a floating/inset bar look);
     /// `0.0` = the classic edge-to-edge flat bar.
     radius: f32,
-    font_size: f32,
+    /// `None` = read from the active theme's `typography.label_small`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    font_size: Option<f32>,
     /// `0.0` hides the top hairline divider.
     divider_width: f32,
     material: Option<ShaderMaterial>,
@@ -71,7 +74,7 @@ impl BottomNavigationBar {
             active_color: None,
             inactive_color: None,
             radius: 0.0,
-            font_size: 10.5,
+            font_size: None,
             divider_width: 1.0,
             material: None,
         }
@@ -85,7 +88,11 @@ impl BottomNavigationBar {
     /// Unselected tint — defaults to the theme's `on_surface` dimmed.
     pub fn inactive_color(mut self, c: Color) -> Self { self.inactive_color = Some(c); self }
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
-    pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
+    pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.label_small.size)
+    }
     pub fn no_divider(mut self) -> Self { self.divider_width = 0.0; self }
     /// Per-instance shader material — replaces the bar fill when resolved.
     /// Beats the theme's `BottomNavMaterial` default (D124 Step 5).
@@ -180,7 +187,8 @@ impl Widget for BottomNavigationBar {
             let tint = if item.active { active }
                        else if hov { super::lerp_color(inactive, active, 0.5) }
                        else { inactive };
-            let line_h = slot_ctx.font.line_height(self.font_size);
+            let font_size = self.resolved_font_size(&slot_ctx.theme);
+            let line_h = slot_ctx.font.line_height(font_size);
 
             // Icon above label when present; label alone centers vertically.
             let mut label_y = slot.origin.y + (slot.size.height - line_h) / 2.0;
@@ -196,13 +204,13 @@ impl Widget for BottomNavigationBar {
                 label_y = top + icon_box + 3.0;
             }
 
-            let text_w = slot_ctx.font.measure_text(&item.label, self.font_size);
+            let text_w = slot_ctx.font.measure_text(&item.label, font_size);
             let label_x = slot.origin.x + (slot.size.width - text_w) / 2.0;
             slot_ctx.draw_text_at(
                 &item.label,
                 Point { x: label_x, y: label_y },
                 tint,
-                self.font_size,
+                font_size,
             );
 
             if let Some(n) = item.badge {

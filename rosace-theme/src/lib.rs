@@ -29,7 +29,7 @@ pub mod typography;
 
 // Flat re-exports for convenience.
 pub use color::{Color, ColorScheme};
-pub use provider::{set_theme, use_theme, set_animations};
+pub use provider::{set_theme, use_theme, set_animations, ThemeMode, use_theme_mode, set_theme_mode, sync_system_theme, register_theme_pair};
 pub use radius::BorderRadius;
 pub use shadow::{ShadowLayer, Shadows};
 pub use spacing::Spacing;

@@ -148,4 +148,4 @@ On desktop, the first call starts a lightweight background prober (a periodic TC
 
 **Under the hood:** the on-disk store, the persist-tier seams `#[persist]` is built on, and the platform-specific networking backends are covered in the architecture book — see `../architecture/core.md`.
 
-Next: [Multi-Platform & the rsc CLI](multi-platform.md).
+Next: [Platform Channel](platform-channel.md).

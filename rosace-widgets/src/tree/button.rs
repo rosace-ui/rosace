@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use rosace_core::types::Size;
+use rosace_core::types::{Point, Rect, Size};
+use rosace_layout::Constraints;
 use rosace_render::Color;
 use super::{Widget, LayoutCtx, PaintCtx};
 
@@ -26,7 +27,10 @@ pub struct Button {
     pub icon: Option<Box<dyn Widget>>,
     pub width: Option<f32>,
     pub height: f32,
-    pub font_size: f32,
+    /// `None` = read from the active theme's `typography.label_large`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    pub font_size: Option<f32>,
     pub radius: f32,
     background: Option<Color>,
     color: Option<Color>,
@@ -42,7 +46,7 @@ impl Button {
             icon: None,
             width: None,
             height: 34.0,
-            font_size: 11.0,
+            font_size: None,
             radius: 6.0,
             background: None,
             color: None,
@@ -61,7 +65,11 @@ impl Button {
     }
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
-    pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
+    pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.label_large.size)
+    }
     /// Overrides the variant's own fill color — for a one-off custom color
     /// outside the Primary/Secondary/Ghost/Danger/Success/Link palette.
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
@@ -81,8 +89,15 @@ impl Button {
 impl Widget for Button {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
-        let text_w = self.label.len() as f32 * self.font_size * 0.6;
-        let w = self.width.unwrap_or(text_w + 32.0);
+        let font_size = self.resolved_font_size(ctx.theme);
+        let text_w = self.label.len() as f32 * font_size * 0.6;
+        // Same rough per-char estimate `layout()` already used for the
+        // label — an icon's own reported size is available at `paint()`
+        // time via a real `LayoutCtx`, unavailable here without one; the
+        // fixed `font_size + 4.0` box matches what `paint()` lays it out
+        // at, plus the same gap.
+        let icon_w = if self.icon.is_some() { font_size + 4.0 + 6.0 } else { 0.0 };
+        let w = self.width.unwrap_or(text_w + icon_w + 32.0);
         constraints.constrain(Size { width: w, height: self.height })
     }
 
@@ -126,11 +141,29 @@ impl Widget for Button {
             ctx.stroke_rrect(r, self.radius, bc, 1.0);
         }
 
-        let text_w = ctx.font.measure_text(&self.label, self.font_size);
-        let tx = ((r.size.width - text_w) / 2.0).max(4.0);
-        let line_h = ctx.font.line_height(self.font_size);
+        let font_size = self.resolved_font_size(&ctx.theme);
+        let text_w = ctx.font.measure_text(&self.label, font_size);
+        let line_h = ctx.font.line_height(font_size);
         let ty = ((r.size.height - line_h) / 2.0).max(0.0);
-        ctx.text(&self.label, tx, ty, fg, self.font_size);
+
+        // `.icon()` was settable but never actually painted — the field
+        // existed, `paint()` just never read it (found live: a showcase
+        // AppBar button set one and nothing showed).
+        const ICON_GAP: f32 = 6.0;
+        if let Some(icon) = &self.icon {
+            let is = icon.layout(&ctx.layout_ctx(Constraints::loose(font_size + 4.0, font_size + 4.0)));
+            let content_w = is.width + ICON_GAP + text_w;
+            let start_x = ((r.size.width - content_w) / 2.0).max(4.0);
+            let iy = r.origin.y + (r.size.height - is.height) / 2.0;
+            icon.paint(&mut ctx.child(Rect {
+                origin: Point { x: r.origin.x + start_x, y: iy },
+                size: is,
+            }));
+            ctx.text(&self.label, start_x + is.width + ICON_GAP, ty, fg, font_size);
+        } else {
+            let tx = ((r.size.width - text_w) / 2.0).max(4.0);
+            ctx.text(&self.label, tx, ty, fg, font_size);
+        }
 
         // Interactive-by-identity (Phase 32, user directive): a Button
         // ALWAYS owns its hit region, wired or not — a click on it must

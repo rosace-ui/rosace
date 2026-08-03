@@ -145,7 +145,7 @@ It must be lean, fast, and stable.
 - Alignment, Baseline alignment
 - Overlay system (layers 0-5)
 - Directionality
-- Text layout via cosmic-text + HarfBuzz + fontdue
+- Text layout via cosmic-text + HarfBuzz + fontdue (historical; real stack is `swash` + `ttf-parser` + ROSACE's own FallbackShaper, see GLOSSARY.md)
 - RTL support
 
 **Must NOT**:

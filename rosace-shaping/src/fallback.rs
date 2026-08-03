@@ -4,7 +4,7 @@ use crate::engine::ShapingEngine;
 use crate::glyph::{GlyphRun, ShapedGlyph};
 use crate::script::Script;
 
-/// Fallback shaper backed by fontdue.
+/// Fallback shaper backed by `FontCache` (swash).
 ///
 /// Produces one glyph per character using `FontCache::rasterize()` advance widths.
 /// No ligature substitution, no kerning — pure character-to-glyph mapping.
@@ -22,7 +22,7 @@ impl FallbackShaper {
 }
 
 impl ShapingEngine for FallbackShaper {
-    fn name(&self) -> &'static str { "FallbackShaper (fontdue)" }
+    fn name(&self) -> &'static str { "FallbackShaper (swash)" }
 
     fn shape(&self, text: &str, font_size: f32, direction: TextDirection) -> GlyphRun {
         let script = Script::detect(text);
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn fallback_name() {
         if let Some(shaper) = get_shaper() {
-            assert_eq!(shaper.name(), "FallbackShaper (fontdue)");
+            assert_eq!(shaper.name(), "FallbackShaper (swash)");
         }
     }
 

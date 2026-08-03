@@ -332,19 +332,8 @@ fn run_macos(app: &App) -> Result<(), String> {
     // file existed, or one that dropped macOS support after the fact.
     if Path::new("macos/Info.plist").exists() {
         let bin_src = format!("target/debug/{}", app.crate_name);
-        match crate::commands::package::assemble_macos_app(
-            &app.name, &app.crate_name, "target/rsc-run", Path::new(&bin_src), None,
-        ) {
-            Ok(app_dir) => {
-                let exe = format!("{}/Contents/MacOS/{}", app_dir, app.crate_name);
-                let status = Command::new(&exe)
-                    .status()
-                    .map_err(|e| format!("failed to launch {}: {}", exe, e))?;
-                return if status.success() { Ok(()) } else { Err("app exited with an error".to_string()) };
-            }
-            Err(e) => {
-                println!("  Note: couldn't assemble a .app bundle ({e}) — running the bare binary instead");
-            }
+        if let Some(result) = assemble_and_launch_mac_bundle(app, &bin_src) {
+            return result;
         }
     }
 
@@ -353,6 +342,37 @@ fn run_macos(app: &App) -> Result<(), String> {
         .status()
         .map_err(|e| format!("failed to invoke cargo: {}", e))?;
     if status.success() { Ok(()) } else { Err("app exited with an error".to_string()) }
+}
+
+/// `assemble_macos_app` (in `package.rs`) is `#[cfg(target_os = "macos")]`
+/// — it shells out to macOS-only tooling. `run_macos` above only reaches
+/// this at runtime when actually on macOS (see its own early `cfg!` guard),
+/// but Rust still type-checks this file on every host OS, so the call
+/// itself needs the same cfg gate. Returns `None` to fall through to the
+/// bare-binary run, exactly like the "couldn't assemble a bundle" case.
+#[cfg(target_os = "macos")]
+fn assemble_and_launch_mac_bundle(app: &App, bin_src: &str) -> Option<Result<(), String>> {
+    match crate::commands::package::assemble_macos_app(
+        &app.name, &app.crate_name, "target/rsc-run", Path::new(bin_src), None,
+    ) {
+        Ok(app_dir) => {
+            let exe = format!("{}/Contents/MacOS/{}", app_dir, app.crate_name);
+            Some(match Command::new(&exe).status() {
+                Ok(status) if status.success() => Ok(()),
+                Ok(_) => Err("app exited with an error".to_string()),
+                Err(e) => Err(format!("failed to launch {}: {}", exe, e)),
+            })
+        }
+        Err(e) => {
+            println!("  Note: couldn't assemble a .app bundle ({e}) — running the bare binary instead");
+            None
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn assemble_and_launch_mac_bundle(_app: &App, _bin_src: &str) -> Option<Result<(), String>> {
+    None
 }
 
 /// Cross-compiles for Windows; never attempts to run the result (no Windows

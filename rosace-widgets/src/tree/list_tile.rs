@@ -14,11 +14,15 @@ pub struct ListTile {
     pub padding_h: f32,
     pub title_size: f32,
     pub subtitle_size: f32,
+    /// `TRANSPARENT` (alpha 0) = use the active theme's `on_surface`.
     pub title_color: Color,
     press: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    /// `TRANSPARENT` (alpha 0) = use the active theme's `secondary`.
     pub subtitle_color: Color,
     pub bg: Color,
+    /// `TRANSPARENT` (alpha 0) = use the active theme's `primary_container`.
     pub selected_bg: Color,
+    /// `TRANSPARENT` (alpha 0) = use the active theme's `primary`.
     pub selected_accent: Color,
     pub divider: bool,
 }
@@ -35,11 +39,11 @@ impl ListTile {
             padding_h: 14.0,
             title_size: 11.0,
             subtitle_size: 9.0,
-            title_color: Color::rgb(220, 222, 240),
-            subtitle_color: Color::rgb(140, 144, 175),
+            title_color: Color::TRANSPARENT,
+            subtitle_color: Color::TRANSPARENT,
             bg: Color::rgba(0, 0, 0, 0),
-            selected_bg: Color::rgb(26, 29, 50),
-            selected_accent: Color::rgb(110, 75, 210),
+            selected_bg: Color::TRANSPARENT,
+            selected_accent: Color::TRANSPARENT,
             divider: true,
             press: None,
         }
@@ -58,12 +62,37 @@ impl ListTile {
         self.press = Some(std::sync::Arc::new(f));
         self
     }
+
+    /// Greedy word-wrap, same primitive the `Text` widget uses.
+    fn wrap_subtitle(&self, font: &rosace_render::FontCache, sub: &str, max_w: f32) -> Vec<String> {
+        rosace_text::word_wrap(sub, max_w, |s| font.measure_text(s, self.subtitle_size))
+    }
 }
 
 impl Widget for ListTile {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
-        Size { width: avail_w(constraints), height: self.height }
+        let width = avail_w(constraints);
+        // A subtitle wider than the row (leading/trailing/padding already
+        // eat into it) used to just get clipped by the row's edge instead
+        // of wrapping — `_text_w` sitting unused right below in `paint` was
+        // the tell. Reserve the same leading/trailing budget `paint` uses
+        // so the wrap width and the drawn width agree, then grow the row
+        // past `self.height` when the wrapped subtitle needs more room.
+        let height = match &self.subtitle {
+            Some(sub) => {
+                let lead_w = if self.leading.is_some() { 32.0 + 10.0 } else { 0.0 };
+                let trail_w = if self.trailing.is_some() { 60.0 + self.padding_h } else { self.padding_h };
+                let text_w = (width - self.padding_h - lead_w - trail_w).max(1.0);
+                let sub_lines = self.wrap_subtitle(ctx.font, sub, text_w).len().max(1);
+                let line_h_title = ctx.font.line_height(self.title_size);
+                let line_h_sub = ctx.font.line_height(self.subtitle_size);
+                let content_h = line_h_title + 2.0 + line_h_sub * sub_lines as f32;
+                self.height.max(content_h + 12.0)
+            }
+            None => self.height,
+        };
+        Size { width, height }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -85,15 +114,22 @@ impl Widget for ListTile {
                 ctx.fill_rect(ctx.rect, rosace_render::Color::rgba(255, 255, 255, a));
             }
         }
+        let t = &ctx.theme.colors;
+        let title_color = if self.title_color.a == 0 { ctx.tc(t.on_surface) } else { self.title_color };
+        let subtitle_color = if self.subtitle_color.a == 0 { ctx.tc(t.secondary) } else { self.subtitle_color };
+        let selected_bg = if self.selected_bg.a == 0 { ctx.tc(t.primary_container) } else { self.selected_bg };
+        let selected_accent = if self.selected_accent.a == 0 { ctx.tc(t.primary) } else { self.selected_accent };
+        let divider_color = ctx.tc(t.outline);
+
         let r = ctx.rect;
-        let bg = if self.selected { self.selected_bg } else { self.bg };
+        let bg = if self.selected { selected_bg } else { self.bg };
         if bg.a > 0 { ctx.fill_rect(r, bg); }
 
         if self.selected {
             ctx.fill_rect(Rect {
                 origin: r.origin,
                 size: Size { width: 2.5, height: r.size.height },
-            }, self.selected_accent);
+            }, selected_accent);
         }
 
         let mut x = r.origin.x + self.padding_h;
@@ -119,28 +155,31 @@ impl Widget for ListTile {
         } else { self.padding_h };
 
         // Title + subtitle
-        let _text_w = r.size.width - x + r.origin.x - trailing_w;
+        let text_w = r.size.width - x + r.origin.x - trailing_w;
         let line_h_title = ctx.font.line_height(self.title_size);
-        let has_sub = self.subtitle.is_some();
-        let total_text_h = if has_sub {
-            line_h_title + ctx.font.line_height(self.subtitle_size) + 2.0
-        } else {
+        let line_h_sub = ctx.font.line_height(self.subtitle_size);
+        let sub_lines = self.subtitle.as_ref()
+            .map(|sub| self.wrap_subtitle(ctx.font, sub, text_w.max(1.0)))
+            .unwrap_or_default();
+        let total_text_h = if sub_lines.is_empty() {
             line_h_title
+        } else {
+            line_h_title + 2.0 + line_h_sub * sub_lines.len() as f32
         };
         let text_y = r.origin.y + (r.size.height - total_text_h) / 2.0;
 
-        ctx.draw_text_at(&self.title, Point { x, y: text_y }, self.title_color, self.title_size);
+        ctx.draw_text_at(&self.title, Point { x, y: text_y }, title_color, self.title_size);
 
-        if let Some(sub) = &self.subtitle {
-            let sub_y = text_y + line_h_title + 2.0;
-            ctx.draw_text_at(sub, Point { x, y: sub_y }, self.subtitle_color, self.subtitle_size);
+        for (i, line) in sub_lines.iter().enumerate() {
+            let sub_y = text_y + line_h_title + 2.0 + line_h_sub * i as f32;
+            ctx.draw_text_at(line, Point { x, y: sub_y }, subtitle_color, self.subtitle_size);
         }
 
         if self.divider {
             ctx.fill_rect(Rect {
                 origin: Point { x: r.origin.x + self.padding_h, y: r.origin.y + r.size.height - 1.0 },
                 size: Size { width: r.size.width - self.padding_h, height: 1.0 },
-            }, Color::rgb(24, 26, 44));
+            }, divider_color);
         }
     }
 }

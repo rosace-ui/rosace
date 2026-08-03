@@ -39,7 +39,10 @@ pub struct TextArea {
     pub focused: bool,
     pub width: Option<f32>,
     pub height: f32,
-    pub font_size: f32,
+    /// `None` = read from the active theme's `typography.body_medium`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    pub font_size: Option<f32>,
     pub radius: f32,
     background: Option<Color>,
     border_color: Option<Color>,
@@ -62,7 +65,7 @@ impl TextArea {
             focused: false,
             width: None,
             height: 160.0,
-            font_size: 11.0,
+            font_size: None,
             radius: 6.0,
             background: None,
             border_color: None,
@@ -128,6 +131,10 @@ impl TextArea {
     /// — same convention). Content still scrolls; only the indicator is gone.
     pub fn no_scrollbar(mut self) -> Self { self.show_scrollbar = false; self }
     pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar_color = c; self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.body_medium.size)
+    }
 }
 
 impl Default for TextArea {
@@ -206,6 +213,7 @@ impl Widget for TextArea {
     fn paint(&self, ctx: &mut PaintCtx) {
         ctx.semantics(super::Semantics::new(rosace_core::Role::TextInput)
             .label(&self.placeholder).value(&self.value));
+        let font_size = self.resolved_font_size(&ctx.theme);
 
         let focus = ctx.focus_node_seeded(self.focused);
         ctx.register_focus(focus.clone());
@@ -226,12 +234,12 @@ impl Widget for TextArea {
         ctx.stroke_rrect(r, self.radius, border, if is_focused { 1.5 } else { 1.0 });
 
         const PAD: f32 = 10.0;
-        let line_h = ctx.font.line_height(self.font_size);
+        let line_h = ctx.font.line_height(font_size);
         let max_w = (r.size.width - PAD * 2.0).max(1.0);
         let has_value = !self.value.is_empty();
 
         let chars: Vec<char> = self.value.chars().collect();
-        let ranges = wrap_char_ranges(&chars, max_w, &|s: &str| ctx.font.measure_text(s, self.font_size));
+        let ranges = wrap_char_ranges(&chars, max_w, &|s: &str| ctx.font.measure_text(s, font_size));
         let n_lines = ranges.len();
         let content_h = n_lines as f32 * line_h;
         // The scrollable extent is the text PLUS the top and bottom padding
@@ -307,7 +315,7 @@ impl Widget for TextArea {
             let lb = char_byte_offset(&self.value, ls);
             let bx: Vec<f32> = bchars.iter().map(|&c| {
                 let cb = char_byte_offset(&self.value, c);
-                r.origin.x + PAD + ctx.font.measure_text(&self.value[lb..cb], self.font_size)
+                r.origin.x + PAD + ctx.font.measure_text(&self.value[lb..cb], font_size)
             }).collect();
             lines.push(LineLayout { char_range: (ls, le), y, height: line_h, boundary_chars: bchars, boundary_x: bx });
 
@@ -386,14 +394,14 @@ impl Widget for TextArea {
                             text: self.value[rb..reb].to_string(),
                             origin: Point { x: ll.x_at(rs), y },
                             color: color.unwrap_or(text_color),
-                            px: self.font_size,
+                            px: font_size,
                             weight: weight.unwrap_or(FontWeight::Regular),
                         });
                     }
                 } else {
                     let ub = char_byte_offset(&self.value, le);
                     let line_text = &self.value[lb..ub];
-                    ctx.draw_text_at(line_text, Point { x: r.origin.x + PAD, y }, text_color, self.font_size);
+                    ctx.draw_text_at(line_text, Point { x: r.origin.x + PAD, y }, text_color, font_size);
                 }
             }
 
@@ -412,14 +420,14 @@ impl Widget for TextArea {
                     let t = super::anim_clock() - state.last_edit_at;
                     let blink_on = t < 0.5 || (((t - 0.5) / cursor_style.blink_rate) as i64 % 2 == 0);
                     if blink_on {
-                        paint_caret(ctx, &cursor_style, cx, y, line_h, self.font_size, ll, cursor);
+                        paint_caret(ctx, &cursor_style, cx, y, line_h, font_size, ll, cursor);
                     }
                 }
             }
         }
 
         if !has_value {
-            ctx.text(&self.placeholder, PAD, PAD, text_color, self.font_size);
+            ctx.text(&self.placeholder, PAD, PAD, text_color, font_size);
         }
         if is_focused {
             super::request_animation();

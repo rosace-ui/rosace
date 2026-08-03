@@ -310,7 +310,7 @@ impl Widget for TimePicker {
                 };
                 let is_sel = match self.editing {
                     TimeUnit::Hour => (self.value.hour_12().0 % 12) as i32 == i,
-                    TimeUnit::Minute => (self.value.minute as i32 / 5) == i && self.value.minute % 5 == 0,
+                    TimeUnit::Minute => (self.value.minute as i32 / 5) == i && self.value.minute.is_multiple_of(5),
                 };
                 num_at(ctx, nx, ny, &label, is_sel);
             }

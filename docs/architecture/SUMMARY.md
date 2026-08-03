@@ -7,6 +7,7 @@
 - [Render Pipeline](render-pipeline.md)
 - [Widget Protocol](widget-protocol.md)
 - [Platform & the App Loop](platform-and-app-loop.md)
+- [Platform Channel](platform-channel.md)
 - [The rsc CLI](cli.md)
 - [Hot Reload](hot-reload.md)
 

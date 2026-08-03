@@ -20,22 +20,29 @@ pub struct Radio {
     disabled: bool,
     label: Option<String>,
     size: f32,
-    font_size: f32,
+    /// `None` = read from the active theme's `typography.body_medium`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    font_size: Option<f32>,
     color: Option<Color>,
     on_select: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Radio {
     pub fn new(selected: bool) -> Self {
-        Self { selected, disabled: false, label: None, size: 20.0, font_size: 13.0, color: None, on_select: None }
+        Self { selected, disabled: false, label: None, size: 20.0, font_size: None, color: None, on_select: None }
     }
-    pub fn size(mut self, s: f32) -> Self { self.size = s; self.font_size = s * 0.65; self }
+    pub fn size(mut self, s: f32) -> Self { self.size = s; self.font_size = Some(s * 0.65); self }
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
     pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
     pub fn disabled(mut self) -> Self { self.disabled = true; self }
     pub fn disabled_if(mut self, c: bool) -> Self { if c { self.disabled = true; } self }
     pub fn on_select(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_select = Some(Arc::new(f)); self
+    }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.body_medium.size)
     }
 }
 
@@ -44,11 +51,12 @@ fn with_alpha(c: Color, a: f32) -> Color {
 }
 
 impl Widget for Radio {
-    fn layout(&self, _ctx: &LayoutCtx) -> Size {
+    fn layout(&self, ctx: &LayoutCtx) -> Size {
+        let font_size = self.resolved_font_size(ctx.theme);
         let label_w = self.label.as_ref()
-            .map(|l| l.len() as f32 * self.font_size * 0.6 + 10.0)
+            .map(|l| l.len() as f32 * font_size * 0.6 + 10.0)
             .unwrap_or(0.0);
-        Size { width: self.size + label_w, height: self.size.max(self.font_size * 1.4) }
+        Size { width: self.size + label_w, height: self.size.max(font_size * 1.4) }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -56,6 +64,7 @@ impl Widget for Radio {
             .value(if self.selected { "selected" } else { "not selected" });
         if let Some(l) = &self.label { sem = sem.label(l); }
         ctx.semantics(sem);
+        let font_size = self.resolved_font_size(&ctx.theme);
 
         // Interactive-by-identity: always own the hit region.
         match (&self.on_select, self.disabled) {
@@ -105,9 +114,9 @@ impl Widget for Radio {
 
         // Label.
         if let Some(label) = &self.label {
-            let line_h = ctx.font.line_height(self.font_size);
+            let line_h = ctx.font.line_height(font_size);
             let ty = ((ctx.rect.size.height - line_h) / 2.0).max(0.0);
-            ctx.text(label, bs + 10.0, ty, with_alpha(label_color, dim), self.font_size);
+            ctx.text(label, bs + 10.0, ty, with_alpha(label_color, dim), font_size);
         }
     }
 }

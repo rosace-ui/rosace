@@ -6,8 +6,6 @@
 //! `NavigatorAnimated` (unwired to anything real, kept as-is) still
 //! compiles against the same public names.
 
-use rosace_animate::Spring;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum SlideDirection {
     Left,
@@ -51,17 +49,28 @@ pub enum TransitionStyle {
     Scale,
 }
 
+/// Cubic ease-out: fast start, smooth deceleration into the settled value —
+/// no overshoot, no oscillation. Replaced the earlier spring-physics driver
+/// (2026-07-31 user feedback: the spring's underdamped settle read as a
+/// "shake" on a real device).
+fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let inv = 1.0 - t;
+    1.0 - inv * inv * inv
+}
+
+/// How long a transition takes to settle, in seconds.
+const DURATION_S: f32 = 0.3;
+
 /// Manages the animation state for a screen transition.
 pub struct ScreenTransition {
     style: TransitionStyle,
-    /// Spring for enter screen (moves from offset → 0).
-    enter_spring_x: Spring,
-    enter_spring_y: Spring,
-    /// Spring for exit screen (moves from 0 → offset).
-    exit_spring_x: Spring,
-    exit_spring_y: Spring,
-    /// 0.0 = fully entering, 1.0 = fully entered (for fade/scale).
-    progress_spring: Spring,
+    elapsed: f32,
+    /// Enter-screen start offset (multiplier × viewport, captured at trigger
+    /// time so a mid-flight viewport resize doesn't retroactively change it).
+    enter_start: (f32, f32),
+    /// Exit-screen end offset.
+    exit_end: (f32, f32),
     active: bool,
     viewport_w: f32,
     viewport_h: f32,
@@ -69,14 +78,11 @@ pub struct ScreenTransition {
 
 impl ScreenTransition {
     pub fn new(viewport_w: f32, viewport_h: f32) -> Self {
-        let make_spring = || Spring::new(0.0, 0.0).stiffness(280.0).damping(26.0).mass(1.0);
         Self {
             style: TransitionStyle::None,
-            enter_spring_x: make_spring(),
-            enter_spring_y: make_spring(),
-            exit_spring_x: make_spring(),
-            exit_spring_y: make_spring(),
-            progress_spring: Spring::new(0.0, 0.0).stiffness(200.0).damping(20.0).mass(1.0),
+            elapsed: 0.0,
+            enter_start: (0.0, 0.0),
+            exit_end: (0.0, 0.0),
             active: false,
             viewport_w,
             viewport_h,
@@ -86,27 +92,24 @@ impl ScreenTransition {
     /// Start a transition. Call when pushing or popping a route.
     pub fn trigger(&mut self, style: TransitionStyle) {
         self.style = style.clone();
+        self.elapsed = 0.0;
         self.active = true;
 
         match &style {
-            TransitionStyle::None => { self.active = false; }
+            TransitionStyle::None => {
+                self.active = false;
+                self.enter_start = (0.0, 0.0);
+                self.exit_end = (0.0, 0.0);
+            }
             TransitionStyle::Slide(dir) => {
                 let (ex, ey) = dir.enter_from();
                 let (ox, oy) = dir.exit_to();
-                // Enter: start offset, target 0
-                self.enter_spring_x = Spring::new(ex * self.viewport_w, 0.0).stiffness(280.0).damping(26.0).mass(1.0);
-                self.enter_spring_y = Spring::new(ey * self.viewport_h, 0.0).stiffness(280.0).damping(26.0).mass(1.0);
-                // Exit: start 0, target offset
-                self.exit_spring_x = Spring::new(0.0, ox * self.viewport_w).stiffness(280.0).damping(26.0).mass(1.0);
-                self.exit_spring_y = Spring::new(0.0, oy * self.viewport_h).stiffness(280.0).damping(26.0).mass(1.0);
-                self.progress_spring = Spring::new(0.0, 1.0).stiffness(200.0).damping(20.0).mass(1.0);
+                self.enter_start = (ex * self.viewport_w, ey * self.viewport_h);
+                self.exit_end = (ox * self.viewport_w, oy * self.viewport_h);
             }
             TransitionStyle::Fade | TransitionStyle::Scale => {
-                self.enter_spring_x = Spring::new(0.0, 0.0).stiffness(1.0).damping(1.0).mass(1.0);
-                self.enter_spring_y = Spring::new(0.0, 0.0).stiffness(1.0).damping(1.0).mass(1.0);
-                self.exit_spring_x = Spring::new(0.0, 0.0).stiffness(1.0).damping(1.0).mass(1.0);
-                self.exit_spring_y = Spring::new(0.0, 0.0).stiffness(1.0).damping(1.0).mass(1.0);
-                self.progress_spring = Spring::new(0.0, 1.0).stiffness(200.0).damping(20.0).mass(1.0);
+                self.enter_start = (0.0, 0.0);
+                self.exit_end = (0.0, 0.0);
             }
         }
     }
@@ -118,19 +121,19 @@ impl ScreenTransition {
             return (0.0, 0.0, 0.0, 0.0, 1.0, true);
         }
 
-        let ex = self.enter_spring_x.update(dt);
-        let ey = self.enter_spring_y.update(dt);
-        let ox = self.exit_spring_x.update(dt);
-        let oy = self.exit_spring_y.update(dt);
-        let progress = self.progress_spring.update(dt);
+        self.elapsed += dt;
+        let t = self.elapsed / DURATION_S;
+        let eased = ease_out_cubic(t);
+        let complete = t >= 1.0;
 
-        let complete = self.enter_spring_x.is_settled()
-            && self.enter_spring_y.is_settled()
-            && self.progress_spring.is_settled();
+        let ex = self.enter_start.0 * (1.0 - eased);
+        let ey = self.enter_start.1 * (1.0 - eased);
+        let ox = self.exit_end.0 * eased;
+        let oy = self.exit_end.1 * eased;
 
         if complete { self.active = false; }
 
-        (ex, ey, ox, oy, progress, complete)
+        (ex, ey, ox, oy, eased, complete)
     }
 
     pub fn is_active(&self) -> bool { self.active }

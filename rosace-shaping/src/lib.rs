@@ -1,6 +1,6 @@
 //! Text shaping for ROSACE — HarfBuzz prep stub.
 //!
-//! Provides the `ShapingEngine` trait and `FallbackShaper` (fontdue-backed,
+//! Provides the `ShapingEngine` trait and `FallbackShaper` (swash-backed,
 //! one glyph per character). In v1.0, a `HarfBuzzShaper` implementing
 //! `ShapingEngine` will be slotted in to provide ligatures, kerning, and
 //! GSUB/GPOS OpenType features without changing any call sites.

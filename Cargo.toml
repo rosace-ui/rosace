@@ -24,6 +24,7 @@ members = [
     "rosace-a11y",
     "rosace-gesture",
     "rosace-net",
+    "rosace-file",
     "rosace-storage",
     "rosace-text",
     "rosace-shader",

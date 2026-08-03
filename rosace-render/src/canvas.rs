@@ -119,8 +119,15 @@ pub fn text_gamma_lut() -> &'static [u8; 256] {
     static LUT: OnceLock<[u8; 256]> = OnceLock::new();
     LUT.get_or_init(|| {
         let mut t = [0u8; 256];
+        // Bumped 1.22 -> 1.55 (2026-08-03, user-reported: body text reads
+        // thin next to native chrome even at the correct font/weight/size —
+        // this is the one central "how bold does AA coverage read" lever;
+        // stronger gamma correction darkens partially-covered edge pixels,
+        // which is exactly the classic "why does my custom renderer look
+        // thinner than CoreText" fix. EXPERIMENTAL: needs live visual
+        // confirmation, not yet locked in.
         for (i, v) in t.iter_mut().enumerate() {
-            *v = ((i as f32 / 255.0).powf(1.0 / 1.22) * 255.0).round() as u8;
+            *v = ((i as f32 / 255.0).powf(1.0 / 1.55) * 255.0).round() as u8;
         }
         t
     })

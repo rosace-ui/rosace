@@ -101,9 +101,38 @@ impl Widget for AppBar {
             None => ctx.fill_rect(r, bg),
         }
 
-        // Separating edge — theme-controlled (elevation > 0 draws it; 0 omits
-        // it entirely, e.g. the flat Cupertino look).
+        // Elevation — theme-controlled (elevation > 0 draws it; 0 omits it
+        // entirely, e.g. the flat Cupertino look). A real Gaussian-blurred
+        // shadow (`ctx.fill_shadow_rrect`, the same primitive Card/
+        // Container/FAB use), not the previous hand-rolled 4-band linear
+        // gradient PLUS a hard 1px line — that hard line was unconditional
+        // whenever elevation was on, which is what read as "a stroke, not
+        // a shadow" (2026-08-01 user feedback on a real Android device).
+        // Content paints after the bar, so a shadow that bled downward
+        // past this rect would get covered — clip to the bar's own bounds
+        // and cast the shadow from a hairline strip AT the bottom edge:
+        // half its blur bleeds down (clipped away, harmless), half bleeds
+        // up into the bar's own bottom region as a soft falloff — genuinely
+        // self-contained, no dependency on paint order.
         if style.elevation > 0.0 {
+            let shadow = ctx.tc(ctx.theme.colors.shadow);
+            ctx.record(DrawCommand::PushClip { rect: r });
+            let blur = (3.0 * style.elevation).clamp(2.0, 14.0);
+            let alpha = (70.0 * style.elevation).clamp(0.0, 130.0) as u8;
+            ctx.fill_shadow_rrect(
+                Rect {
+                    origin: Point { x: r.origin.x, y: r.origin.y + r.size.height },
+                    size: Size { width: r.size.width, height: 1.0 },
+                },
+                0.0,
+                Color::rgba(shadow.r, shadow.g, shadow.b, alpha),
+                blur,
+            );
+            ctx.record(DrawCommand::PopClip);
+        } else {
+            // Flat style (elevation == 0, e.g. Cupertino's flat look) — a
+            // hairline separator instead of nothing, so the bar still
+            // reads as distinct from the content below it.
             ctx.fill_rect(Rect {
                 origin: Point { x: r.origin.x, y: r.origin.y + r.size.height - 1.0 },
                 size: Size { width: r.size.width, height: 1.0 },

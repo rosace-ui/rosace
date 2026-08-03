@@ -265,6 +265,34 @@ pub struct FrameEngine {
     /// Long-press: cancel token for the in-flight press timer + press origin.
     lp_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     press_origin: Option<(f32, f32)>,
+    /// A plain (non-positional) tap callback captured on MouseDown but not
+    /// yet fired — clicks/taps must resolve on release, not on touch-down,
+    /// so a scroll/drag that starts on top of a Button doesn't also fire
+    /// its `on_press`. Cleared without firing if the pointer moves past
+    /// `press_origin`'s slop (same cancellation `lp_cancel` already uses);
+    /// invoked on `MouseUp` otherwise. Positional hits (sliders, on_press_at)
+    /// are unaffected — those still fire immediately on down, see
+    /// `active_drag`'s doc comment.
+    pending_press: Option<Arc<dyn Fn(f32, f32) + Send + Sync>>,
+    /// Same deferral as `pending_press`, for overlay-hosted widgets
+    /// (buttons inside a Dialog/Drawer/Dropdown/menu overlay).
+    pending_overlay_press: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Nested-scroll chain captured on MouseDown (D-NESTED-SCROLL,
+    /// 2026-08-02) — every enclosing `ScrollView` (or other nested-scroll
+    /// participant) along the touched point, innermost first; see
+    /// `rosace_widgets::tree::ScrollHandler`'s own doc for the full
+    /// contract. Always captured (even when `pending_press`/`active_drag`
+    /// also got set), but only WALKED on `MouseMove` once there's no
+    /// competing `pending_press` still waiting to see if this is a tap —
+    /// see the `MouseMove` handler. Empty when nothing scrollable is near
+    /// the touch point.
+    pending_scroll_chain: Vec<rosace_widgets::tree::ScrollHandler>,
+    /// The point `pending_scroll_chain` was last walked from — each
+    /// `MouseMove` feeds the chain `(x, y) - last_chain_point`, since
+    /// `ScrollHandler` links take a DELTA, not an absolute position (see
+    /// its own doc comment). Set to the touch-down point when a new chain
+    /// is captured, then to the current point after every walk.
+    last_chain_point: Option<(f32, f32)>,
     /// Desktop right-click context menu (D116 Step 7): the editable node
     /// it's open for and the click position it opened at (menu anchor).
     /// `None` when closed. Re-pushed as an overlay every frame while
@@ -337,6 +365,10 @@ impl FrameEngine {
             forced_repaint: false,
             lp_cancel: None,
             press_origin: None,
+            pending_press: None,
+            pending_overlay_press: None,
+            pending_scroll_chain: Vec::new(),
+            last_chain_point: None,
             context_menu: None,
             context_menu_actions: Arc::new(std::sync::Mutex::new(Vec::new())),
             pending_long_press_select: Arc::new(std::sync::Mutex::new(None)),
@@ -420,7 +452,7 @@ impl FrameEngine {
     // `TextInput::paint` can't mutate its own render-tree node (`paint`
     // takes `&self`) and a click/key callback can't capture the render
     // tree or `FontCache` (both fail `on_press_at`'s `Send + Sync` bound —
-    // `Rc<RefCell<_>>` and fontdue's internal `RefCell` caches are
+    // `Rc<RefCell<_>>` and `FontCache`'s own internal `RefCell` caches are
     // neither). So, like `pressed`/`hovered` before it, real text editing
     // is DISPATCHER-owned: the engine looks up the focused editable node
     // directly and mutates its persistent `text_edit` state here.
@@ -922,6 +954,7 @@ impl FrameEngine {
                             on_tap: Some(Arc::new(move || {
                                 dismiss_actions.lock().unwrap().push(ContextMenuAction::Dismiss);
                             })),
+                            exclude_rect: None,
                         }),
                 );
             } else {
@@ -1069,6 +1102,7 @@ impl FrameEngine {
                         rect: widget_rect,
                         input: entry.input,
                         on_tap: entry.scrim.as_ref().and_then(|s| s.on_tap.clone()),
+                        on_tap_exclude: entry.scrim.as_ref().and_then(|s| s.exclude_rect),
                         hits: ov_tree.collect_hits(),
                         scrolls: ov_tree.collect_scrolls(),
                     });
@@ -1299,7 +1333,10 @@ impl FrameEngine {
                         if let Some((_, cb)) = route.hits.iter().rev()
                             .find(|(r, _)| rect_contains(r, *x, *y))
                         {
-                            cb();
+                            // Deferred to MouseUp (see `pending_overlay_press`'s
+                            // doc comment) — a button inside a Dialog/Dropdown/
+                            // menu overlay must not fire on touch-down either.
+                            self.pending_overlay_press = Some(cb.clone());
                             handled = true;
                             break;
                         }
@@ -1310,9 +1347,21 @@ impl FrameEngine {
                             break;          // PassThrough (e.g. the DevTools FAB
                         }                   // overlay) must let misses fall through
                         if let Some(on_tap) = &route.on_tap {
-                            on_tap();
-                            handled = true;
-                            break;
+                            let excluded = route.on_tap_exclude
+                                .is_some_and(|r| rect_contains(&r, *x, *y));
+                            if !excluded {
+                                on_tap();
+                                if route.input == rosace_widgets::tree::InputBehavior::Block {
+                                    handled = true;
+                                    break;
+                                }
+                                // PassThrough: dismissing this overlay does
+                                // NOT consume the click — e.g. clicking a
+                                // different Dropdown's trigger while this
+                                // one is open must both close this one AND
+                                // still reach that trigger's own hit region
+                                // below, in the same click.
+                            }
                         }
                         if route.input == rosace_widgets::tree::InputBehavior::Block {
                             handled = true;
@@ -1379,11 +1428,25 @@ impl FrameEngine {
                     // which node/position to select if the press holds.
                     let mut editable_press: Option<(NodeId, usize)> = None;
                     if !handled {
-                        let hit = self.render_tree.borrow().hit_test(*x, *y);
-                        if let Some((cb, positional)) = hit {
-                            cb(*x, *y);
+                        let (leaf, chain) = self.render_tree.borrow().hit_test(*x, *y);
+                        // Always captured, regardless of what the leaf
+                        // resolves to — see `pending_scroll_chain`'s own
+                        // doc comment for why (blank scrollable space has
+                        // no leaf at all but must still be draggable).
+                        self.pending_scroll_chain = chain;
+                        self.last_chain_point = Some((*x, *y));
+                        if let Some((cb, positional)) = leaf {
                             if positional {
+                                // Positional hits (slider thumbs, pickers)
+                                // are drag gestures, not taps — they jump to
+                                // the touch point immediately and stream
+                                // MouseMove, same as before this fix.
+                                cb(*x, *y);
                                 self.active_drag = Some(cb);
+                            } else {
+                                // Plain click/tap (Button, ListTile, FAB, …):
+                                // deferred to MouseUp, see `pending_press`.
+                                self.pending_press = Some(cb);
                             }
                         }
                         // Click-to-focus for editable widgets (D112/Phase
@@ -1602,26 +1665,69 @@ impl FrameEngine {
                         self.forced_repaint = true;
                         rosace_state::request_frame();
                     }
-                    // Movement past the slop cancels a pending long-press.
+                    // Movement past the slop cancels a pending long-press AND
+                    // a pending plain click/tap — this is what lets a scroll
+                    // or drag that starts on top of a Button/ListTile win
+                    // over that widget's on_press instead of also firing it.
                     if let Some((ox, oy)) = self.press_origin {
                         if (x - ox).abs() > 8.0 || (y - oy).abs() > 8.0 {
                             if let Some(c) = &self.lp_cancel { c.store(true, Ordering::Relaxed); }
                             self.lp_cancel = None;
                             self.press_origin = None;
+                            self.pending_press = None;
+                            self.pending_overlay_press = None;
                         }
                     }
+                    // Nested-scroll chain walk (D-NESTED-SCROLL, 2026-08-02):
+                    // only once there's no competing tap still waiting to
+                    // see if it survives (the block above just resolved
+                    // that, same event) and no unrelated positional grab
+                    // (slider) already owns this gesture. Tries the
+                    // innermost scrollable ancestor first each move; a
+                    // link only gets a turn once every link before it in
+                    // the chain declined (already exhausted in this exact
+                    // direction) — see `ScrollHandler`'s own doc for the
+                    // full contract.
+                    if self.pending_press.is_none() && self.active_drag.is_none() && !self.pending_scroll_chain.is_empty() {
+                        let (lx, ly) = self.last_chain_point.unwrap_or((*x, *y));
+                        let (dx, dy) = (x - lx, y - ly);
+                        if dx != 0.0 || dy != 0.0 {
+                            for handler in &self.pending_scroll_chain {
+                                if handler(dx, dy) {
+                                    break;
+                                }
+                            }
+                            self.forced_repaint = true;
+                            rosace_state::request_frame();
+                        }
+                        self.last_chain_point = Some((*x, *y));
+                    }
                 }
-                rosace_platform::InputEvent::MouseUp { .. } => {
+                rosace_platform::InputEvent::MouseUp { x, y, .. } => {
                     use std::sync::atomic::Ordering;
                     self.active_drag = None;
                     self.text_drag = None;
                     self.handle_drag = None;
+                    self.pending_scroll_chain.clear();
+                    self.last_chain_point = None;
                     if let Some(c) = &self.lp_cancel { c.store(true, Ordering::Relaxed); }
                     self.lp_cancel = None;
                     self.press_origin = None;
                     if self.render_tree.borrow_mut().set_pressed(None) {
                         self.forced_repaint = true;
                         rosace_state::request_frame();
+                    }
+                    // Click/tap fires HERE, on release — not on MouseDown —
+                    // so scrolling or dragging past a Button/ListTile never
+                    // also triggers its on_press. Survives only if the
+                    // pointer stayed within the slop the whole time (see
+                    // the MouseMove cancellation above); otherwise this is
+                    // already `None`.
+                    if let Some(cb) = self.pending_press.take() {
+                        cb(*x, *y);
+                    }
+                    if let Some(cb) = self.pending_overlay_press.take() {
+                        cb();
                     }
                 }
                 rosace_platform::InputEvent::Scroll { x, y, delta_x, delta_y } => {
@@ -2226,13 +2332,15 @@ mod tests {
 
     // ── D108/Phase 26 Step 3: nav transitions ──────────────────────────────
 
-    #[derive(Clone, Copy, PartialEq)]
+    #[derive(Clone, Copy, PartialEq, Hash)]
     enum NavScreen { A, B }
 
     /// Root with a two-screen `ScreenNav`, matching the real `rsc new`
-    /// codegen shape exactly (`ScreenTransitionView::new(body, outgoing,
-    /// nav.transition_handle())` in place of handing `body` straight to a
-    /// container) — the real integration point for Step 3. Both screens are
+    /// codegen shape exactly (`ScreenTransitionView::new(body,
+    /// nav.current_key(), outgoing, nav.previous_key(),
+    /// nav.transition_handle(), nav.stack_keys())` in place of handing
+    /// `body` straight to a container) — the real integration point for
+    /// Step 3. Both screens are
     /// `Button`s (not bare `Text`) so both always declare real `Semantics`
     /// regardless of `on_press`, giving the test a reliable signal for
     /// "is this screen's content actually painted this frame."
@@ -2255,14 +2363,161 @@ mod tests {
             let screen = nav.current().unwrap_or(NavScreen::A);
             let body = build_screen(screen);
             let outgoing = nav.previous().map(build_screen);
-            rosace_widgets::tree::ScreenTransitionView::new(body, outgoing, nav.transition_handle())
-                .into_element()
+            rosace_widgets::tree::ScreenTransitionView::new(
+                body, nav.current_key(), outgoing, nav.previous_key(),
+                nav.transition_handle(), nav.stack_keys(),
+            ).into_element()
         }
     }
 
     fn headless_nav_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas) {
         let engine = FrameEngine::new(Box::new(NavRoot), rosace_render::FontCache::embedded());
         (engine, SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200))
+    }
+
+    /// Regression coverage for the keyed-persistence fix (2026-08-01,
+    /// real navigation + trackpad testing): Screen A has a real
+    /// `ScrollView` (implicit per-node controller, exactly the path a real
+    /// app uses — NOT an app-owned `ScrollController` threaded down, which
+    /// would trivially survive regardless and not exercise the bug at all).
+    /// Screen B is scrollable too, so both screens have a `scroll_ctrl` in
+    /// the arena simultaneously — proof the fix doesn't just avoid a crash,
+    /// it keeps each screen's position independently correct.
+    #[derive(Clone, Copy, PartialEq, Hash)]
+    enum ScrollNavScreen { A, B }
+
+    struct ScrollNavRoot;
+    impl Component for ScrollNavRoot {
+        fn build(&self, ctx: &mut Context) -> Element {
+            let nav = rosace_nav::ScreenNav::new(ctx, ScrollNavScreen::A);
+            // The nav button sits OUTSIDE the ScrollView (a fixed-position
+            // sibling, like a real app's persistent AppBar/nav button) so
+            // its on-screen position — and thus the click test coordinate
+            // below — never shifts as the sibling ScrollView's content
+            // scrolls. Content is a real 2000px-tall Container, so the
+            // resulting offset is a genuine steady scroll position, not a
+            // transient `Bounce` overscroll that would spring back to 0 on
+            // its own before the click ever lands (this content is short
+            // enough to overflow the 200px test viewport either way).
+            let build_screen = {
+                let nav = nav.clone();
+                move |s: ScrollNavScreen| -> rosace_widgets::tree::BoxedWidget {
+                    match s {
+                        ScrollNavScreen::A => {
+                            let nav = nav.clone();
+                            Box::new(Column::new()
+                                .child(Button::new("Go to B").on_press(move || { nav.push(ScrollNavScreen::B); }))
+                                .child(rosace_widgets::tree::Expanded::new(
+                                    rosace_widgets::tree::ScrollView::new(Container::new().height(2000.0)),
+                                )))
+                        }
+                        ScrollNavScreen::B => {
+                            let nav = nav.clone();
+                            Box::new(Column::new()
+                                .child(Button::new("Back to A").on_press(move || { nav.pop(); }))
+                                .child(rosace_widgets::tree::Expanded::new(
+                                    rosace_widgets::tree::ScrollView::new(Container::new().height(2000.0)),
+                                )))
+                        }
+                    }
+                }
+            };
+            let screen = nav.current().unwrap_or(ScrollNavScreen::A);
+            let body = build_screen(screen);
+            let outgoing = nav.previous().map(build_screen);
+            rosace_widgets::tree::ScreenTransitionView::new(
+                body, nav.current_key(), outgoing, nav.previous_key(),
+                nav.transition_handle(), nav.stack_keys(),
+            ).into_element()
+        }
+    }
+
+    fn headless_scroll_nav_engine() -> (FrameEngine, SkiaCanvas, SkiaCanvas) {
+        let engine = FrameEngine::new(Box::new(ScrollNavRoot), rosace_render::FontCache::embedded());
+        (engine, SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200))
+    }
+
+    /// Unlike `scroll_offset` (which grabs the FIRST `scroll_ctrl` found by
+    /// raw arena order — ambiguous once more than one screen has one, as in
+    /// the keyed-persistence test below), this walks from the root through
+    /// `children` only — the same traversal hit-testing/semantics/painting
+    /// all use. Since `ScreenTransitionView` only places the CURRENTLY
+    /// showing screen's key into its own positional child slot each frame
+    /// (steady state), an inactive-but-still-cached screen's subtree is
+    /// simply unreachable this way — so this always returns at most the
+    /// active screen's own offset, never a stale/inactive one.
+    fn reachable_scroll_offsets(engine: &FrameEngine) -> Vec<[f32; 2]> {
+        fn walk(tree: &rosace_widgets::tree::RenderTree, id: rosace_widgets::tree::NodeId, out: &mut Vec<[f32; 2]>) {
+            let n = tree.node(id);
+            if let Some(c) = &n.scroll_ctrl { out.push(c.offset()); }
+            for &child in &n.children { walk(tree, child, out); }
+        }
+        let tree = engine.render_tree.borrow();
+        let mut out = Vec::new();
+        walk(&tree, rosace_widgets::tree::RenderTree::ROOT, &mut out);
+        out
+    }
+
+    #[test]
+    fn scroll_position_survives_navigating_away_and_back() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        rosace_theme::provider::set_animations(false); // settle transitions instantly
+        rosace_animate::set_frame_dt(1.0 / 60.0);
+        let (mut engine, mut canvas, mut overlay) = headless_scroll_nav_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert_eq!(reachable_scroll_offsets(&engine), vec![[0.0, 0.0]]);
+
+        // Scroll Screen A's ScrollView down — target point is well inside
+        // its viewport (below the fixed nav button at the top of the Column).
+        for _ in 0..10 {
+            let scroll = rosace_platform::InputEvent::Scroll {
+                x: 100.0, y: 150.0, delta_x: 0.0, delta_y: -80.0,
+            };
+            engine.paint(&mut canvas, &mut overlay, &[scroll]);
+        }
+        let a_offset = reachable_scroll_offsets(&engine)[0];
+        assert!(a_offset[1] > 0.0, "scrolling A must have moved its offset, got {a_offset:?}");
+
+        // Navigate to B — click the fixed nav button at the TOP of the
+        // Column, a position the sibling ScrollView's own scrolling never
+        // shifts. Down then up, per this session's click-on-release fix. A
+        // click's event dispatch only marks the nav route dirty; the actual
+        // rebuild (swapping in Screen B) happens on the FOLLOWING paint —
+        // same two-step pattern every other nav-transition test above uses.
+        let click = || {
+            [
+                rosace_platform::InputEvent::MouseDown {
+                    x: 50.0, y: 15.0, button: rosace_platform::MouseButton::Left,
+                },
+                rosace_platform::InputEvent::MouseUp {
+                    x: 50.0, y: 15.0, button: rosace_platform::MouseButton::Left,
+                },
+            ]
+        };
+        engine.paint(&mut canvas, &mut overlay, &click());
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let on_b = semantic_labels(&engine);
+        assert!(on_b.iter().any(|l| l == "Back to A"), "must have navigated to Screen B, got {on_b:?}");
+
+        // Screen B starts unscrolled — its OWN scroll_ctrl, not A's leftover
+        // offset aliased onto it (the actual bug this test guards against).
+        // A's subtree is offstage right now (see `reachable_scroll_offsets`'
+        // own doc comment), so this is unambiguously B's.
+        assert_eq!(
+            reachable_scroll_offsets(&engine), vec![[0.0, 0.0]],
+            "Screen B must start fresh, not inherit A's offset"
+        );
+
+        // Navigate back to A.
+        engine.paint(&mut canvas, &mut overlay, &click());
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let back_on_a = semantic_labels(&engine);
+        assert!(back_on_a.iter().any(|l| l == "Go to B"), "must be back on Screen A, got {back_on_a:?}");
+
+        assert_eq!(
+            reachable_scroll_offsets(&engine), vec![a_offset],
+            "Screen A's scroll position must survive the round trip, not reset to the top"
+        );
     }
 
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
@@ -2397,7 +2652,7 @@ mod tests {
 
     // ── D108/Phase 26 Step 5: Hero/shared-element transitions ──────────────
 
-    #[derive(Clone, Copy, PartialEq)]
+    #[derive(Clone, Copy, PartialEq, Hash)]
     enum HeroScreen { List, Detail }
 
     /// A blue square hero-tagged "cover" — small (20x20) on `List`, large
@@ -2441,8 +2696,10 @@ mod tests {
             let screen = nav.current().unwrap_or(HeroScreen::List);
             let body = build_screen(screen);
             let outgoing = nav.previous().map(build_screen);
-            rosace_widgets::tree::ScreenTransitionView::new(body, outgoing, nav.transition_handle())
-                .into_element()
+            rosace_widgets::tree::ScreenTransitionView::new(
+                body, nav.current_key(), outgoing, nav.previous_key(),
+                nav.transition_handle(), nav.stack_keys(),
+            ).into_element()
         }
     }
 
@@ -2750,8 +3007,18 @@ mod tests {
     // click x for a known char index, then assert dispatch lands on that
     // exact index — not an approximate/eyeballed position.
 
+    /// `TextInput`/`TextArea`'s font size when neither widget nor test
+    /// overrides it (D127 typography routing, 2026-08-03): resolved from
+    /// the default light theme's `typography.body_medium`, NOT a hardcoded
+    /// literal — these tests must track whatever the real widget actually
+    /// measures/paints at, or a future typography-scale tweak silently
+    /// desyncs them from the code they're supposed to be verifying.
+    fn default_text_input_px() -> f32 {
+        rosace_theme::built_in::light_theme().typography.body_medium.size
+    }
+
     fn embedded_x_for(prefix: &str) -> f32 {
-        10.0 + rosace_render::FontCache::embedded().measure_text(prefix, 11.0)
+        10.0 + rosace_render::FontCache::embedded().measure_text(prefix, default_text_input_px())
     }
 
     fn mouse_move(x: f32, y: f32) -> rosace_platform::InputEvent {
@@ -3370,7 +3637,7 @@ mod tests {
         engine.paint(&mut canvas, &mut overlay, &[]);
 
         const PAD: f32 = 10.0; // TextArea's internal text padding
-        let line_h = rosace_render::FontCache::embedded().line_height(11.0);
+        let line_h = rosace_render::FontCache::embedded().line_height(default_text_input_px());
         let n_lines = 20.0_f32;
         let expected_max = n_lines * line_h + PAD * 2.0 - height;
         let offset = scroll_offset(&engine).expect("TextArea registers a scroll controller");
@@ -3927,8 +4194,9 @@ mod tests {
         // it back to the very start of the field — extends the selection
         // to cover "hello world" entirely.
         let handle_x = embedded_x_for("hello ");
-        let line_h = rosace_render::FontCache::embedded().line_height(11.0);
-        let handle_y = 18.0 - (11.0 / 2.0) + line_h; // matches TextInput's own ty + line_h
+        let px = default_text_input_px();
+        let line_h = rosace_render::FontCache::embedded().line_height(px);
+        let handle_y = 18.0 - (px / 2.0) + line_h; // matches TextInput's own ty + line_h
         engine.paint(&mut canvas, &mut overlay, &[
             rosace_platform::InputEvent::MouseDown { x: handle_x, y: handle_y, button: rosace_platform::MouseButton::Left },
         ]);
@@ -4068,14 +4336,16 @@ mod tests {
         let mut overlay = SkiaCanvas::new(300, 120);
         engine.paint(&mut canvas, &mut overlay, &[]);
 
-        // The submit button sits below the 36px-tall TextInput.
+        // The submit button sits below the 36px-tall TextInput. A real
+        // click resolves on release (see `pending_press`), so tests must
+        // send MouseUp too, not just MouseDown.
         let submit_y = 50.0;
-        engine.paint(&mut canvas, &mut overlay, &[click(60.0, submit_y)]);
+        engine.paint(&mut canvas, &mut overlay, &[click(60.0, submit_y), mouse_up(60.0, submit_y)]);
         assert!(!submitted.load(std::sync::atomic::Ordering::Relaxed), "a disabled button (empty Required field) must not register the click at all");
 
-        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0), mouse_up(20.0, 18.0)]);
         type_str(&mut engine, &mut canvas, &mut overlay, "alice");
-        engine.paint(&mut canvas, &mut overlay, &[click(60.0, submit_y)]);
+        engine.paint(&mut canvas, &mut overlay, &[click(60.0, submit_y), mouse_up(60.0, submit_y)]);
         assert!(submitted.load(std::sync::atomic::Ordering::Relaxed), "a real click on a now-enabled submit button must run Form::submit's callback");
     }
 }

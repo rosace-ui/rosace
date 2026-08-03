@@ -60,7 +60,10 @@ pub fn run(title: &str, width: u32, height: u32, module: PathBuf) {
     // Turn crashes into readable reports instead of a silent process death.
     install_crash_handlers();
 
-    let font = rosace_render::FontCache::bundled();
+    // Same default-font resolution as `App::launch` (D127 "environment" track).
+    let font = rosace_render::FontCache::system_ui()
+        .or_else(rosace_render::FontCache::system_mono)
+        .unwrap_or_else(rosace_render::FontCache::bundled);
     // A sane default theme; the app's own root sets its real theme in `build()`.
     rosace_theme::set_theme(crate::dark_theme());
 

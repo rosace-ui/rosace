@@ -143,6 +143,7 @@ impl Dialog {
                     .scrim(ScrimConfig {
                         color: Color::rgba(0, 0, 0, 160),
                         on_tap: Some(Arc::new(on_dismiss)),
+                        exclude_rect: None,
                     })
             }
             DialogPresentation::NonModal => {
@@ -161,6 +162,7 @@ impl Dialog {
                     .scrim(ScrimConfig {
                         color: Color::TRANSPARENT,
                         on_tap: Some(Arc::new(on_dismiss)),
+                        exclude_rect: None,
                     })
             }
         }

@@ -24,7 +24,12 @@ pub struct Checkbox {
     disabled: bool,
     label: Option<String>,
     box_size: f32,
-    font_size: f32,
+    /// `None` = read from the active theme's `typography.body_medium`
+    /// (D127 "environment" track: one canonical size source instead of a
+    /// hardcoded literal, so the accessibility text-scale multiplier — and
+    /// any future theme-wide size tuning — apply here for free). `Some` is
+    /// an explicit per-instance override, e.g. from `.size()`.
+    font_size: Option<f32>,
     on_change: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     color: Option<Color>,
 }
@@ -37,7 +42,7 @@ impl Checkbox {
             disabled: false,
             label: None,
             box_size: 18.0,
-            font_size: 13.0,
+            font_size: None,
             on_change: None,
             color: None,
         }
@@ -58,7 +63,11 @@ impl Checkbox {
     /// Override the checked fill color (default: theme `primary`).
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
 
-    pub fn size(mut self, s: f32) -> Self { self.box_size = s; self.font_size = s * 0.72; self }
+    pub fn size(mut self, s: f32) -> Self { self.box_size = s; self.font_size = Some(s * 0.72); self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.body_medium.size)
+    }
 }
 
 fn with_alpha(c: Color, a: f32) -> Color {
@@ -66,12 +75,13 @@ fn with_alpha(c: Color, a: f32) -> Color {
 }
 
 impl Widget for Checkbox {
-    fn layout(&self, _ctx: &LayoutCtx) -> Size {
+    fn layout(&self, ctx: &LayoutCtx) -> Size {
+        let font_size = self.resolved_font_size(ctx.theme);
         let label_w = self.label.as_ref()
-            .map(|l| l.len() as f32 * self.font_size * 0.6 + 10.0)
+            .map(|l| l.len() as f32 * font_size * 0.6 + 10.0)
             .unwrap_or(0.0);
         // Height clears the state-layer halo so neighbours aren't clipped.
-        Size { width: self.box_size + label_w, height: self.box_size.max(self.font_size * 1.4) }
+        Size { width: self.box_size + label_w, height: self.box_size.max(font_size * 1.4) }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -80,6 +90,7 @@ impl Widget for Checkbox {
             .value(if self.indeterminate { "mixed" } else if self.checked { "checked" } else { "unchecked" });
         if let Some(l) = &self.label { sem = sem.label(l); }
         ctx.semantics(sem);
+        let font_size = self.resolved_font_size(&ctx.theme);
 
         // ── Interactivity (identity) + focus ─────────────────────────────────
         match (&self.on_change, self.disabled) {
@@ -140,10 +151,17 @@ impl Widget for Checkbox {
                 }, with_alpha(ink, dim));
             } else {
                 let px = bs * 0.9 * (0.6 + 0.4 * t); // scale-in pop
-                let tw = ctx.font.measure_text("\u{2713}", px);
+                // The bundled Material Symbols icon face's check glyph
+                // (`IconKind::Check`'s codepoint), not the raw Unicode
+                // U+2713 CHECK MARK — that renders as a tofu box on Android
+                // (found live: no OS-level font fallback there, and the body
+                // face doesn't carry it), same class of bug already fixed
+                // for Dropdown's/Expander's chevrons.
+                let glyph = "\u{e668}";
+                let tw = ctx.font.measure_text(glyph, px);
                 let lh = ctx.font.line_height(px);
                 ctx.draw_text_at(
-                    "\u{2713}",
+                    glyph,
                     Point { x: cx - tw / 2.0, y: cy - lh / 2.0 },
                     with_alpha(ink, t * dim),
                     px,
@@ -162,9 +180,9 @@ impl Widget for Checkbox {
 
         // ── Label ──────────────────────────────────────────────────────────────
         if let Some(label) = &self.label {
-            let line_h = ctx.font.line_height(self.font_size);
+            let line_h = ctx.font.line_height(font_size);
             let ty = ((ctx.rect.size.height - line_h) / 2.0).max(0.0);
-            ctx.text(label, bs + 10.0, ty, with_alpha(label_color, dim), self.font_size);
+            ctx.text(label, bs + 10.0, ty, with_alpha(label_color, dim), font_size);
         }
     }
 }
@@ -216,8 +234,10 @@ mod tests {
 
     #[test]
     fn checked_draws_a_tick_glyph() {
-        assert!(paint(true, false).iter().any(|c| matches!(c, DrawCommand::DrawText { text, .. } if text == "\u{2713}")),
-            "checked box must draw a ✓");
+        // The icon face's check codepoint, not raw Unicode U+2713 — see the
+        // paint()-site comment for why (tofu on Android with no icon face).
+        assert!(paint(true, false).iter().any(|c| matches!(c, DrawCommand::DrawText { text, .. } if text == "\u{e668}")),
+            "checked box must draw the icon-face check glyph");
     }
 
     #[test]

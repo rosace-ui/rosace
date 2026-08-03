@@ -29,7 +29,10 @@ pub struct TextInput {
     pub obscure: bool,
     pub width: Option<f32>,
     pub height: f32,
-    pub font_size: f32,
+    /// `None` = read from the active theme's `typography.body_medium`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    pub font_size: Option<f32>,
     pub radius: f32,
     background: Option<Color>,
     border_color: Option<Color>,
@@ -55,7 +58,7 @@ impl TextInput {
             obscure: false,
             width: None,
             height: 36.0,
-            font_size: 11.0,
+            font_size: None,
             radius: 6.0,
             background: None,
             border_color: None,
@@ -181,6 +184,10 @@ impl TextInput {
         self.filters = filters;
         self
     }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.body_medium.size)
+    }
 }
 
 impl Default for TextInput {
@@ -205,6 +212,7 @@ impl Widget for TextInput {
     fn paint(&self, ctx: &mut PaintCtx) {
         ctx.semantics(super::Semantics::new(rosace_core::Role::TextInput)
             .label(&self.placeholder).value(&self.value));
+        let font_size = self.resolved_font_size(&ctx.theme);
 
         // Own persistent FocusNode (D112) — click-to-focus/Tab work with
         // zero required wiring; `.focused()` seeds ONLY the first paint.
@@ -244,7 +252,7 @@ impl Widget for TextInput {
             Color::rgb(80, 85, 118)
         };
 
-        let line_h = ctx.font.line_height(self.font_size);
+        let line_h = ctx.font.line_height(font_size);
         let ty = ((r.size.height - line_h) / 2.0).max(0.0);
 
         // Horizontal scroll-into-view (D116 Step 3 — the `scroll_x` field's
@@ -270,8 +278,8 @@ impl Widget for TextInput {
         let inset = left_inset;
         let visible_w = (r.size.width - left_inset - right_inset).max(0.0);
         let cursor_byte = char_byte_offset(&display, state.cursor());
-        let caret_rel = ctx.font.measure_text(&display[..cursor_byte], self.font_size);
-        let total_w = ctx.font.measure_text(&display, self.font_size);
+        let caret_rel = ctx.font.measure_text(&display[..cursor_byte], font_size);
+        let total_w = ctx.font.measure_text(&display, font_size);
         let mut scroll_x = state.scroll_x;
         if is_focused {
             if caret_rel < scroll_x {
@@ -299,7 +307,7 @@ impl Widget for TextInput {
             .iter()
             .map(|&c| {
                 let bx = char_byte_offset(&display, c);
-                r.origin.x + inset - scroll_x + ctx.font.measure_text(&display[..bx], self.font_size)
+                r.origin.x + inset - scroll_x + ctx.font.measure_text(&display[..bx], font_size)
             })
             .collect();
         let layout = TextLayoutSnapshot {
@@ -387,12 +395,12 @@ impl Widget for TextInput {
                     text: self.value[rb..reb].to_string(),
                     origin: Point { x: run_x, y: r.origin.y + ty },
                     color: color.unwrap_or(text_color),
-                    px: self.font_size,
+                    px: font_size,
                     weight: weight.unwrap_or(FontWeight::Regular),
                 });
             }
         } else {
-            ctx.text(&display, inset - scroll_x, ty, text_color, self.font_size);
+            ctx.text(&display, inset - scroll_x, ty, text_color, font_size);
         }
 
         // Caret (content — inside the clip so it's trimmed at the field
@@ -411,7 +419,7 @@ impl Widget for TextInput {
                 let line = &layout.lines[0];
                 let cursor_x = line.x_at(state.cursor());
                 let cy = r.origin.y + ty;
-                paint_caret(ctx, &style, cursor_x, cy, line_h, self.font_size, line, state.cursor());
+                paint_caret(ctx, &style, cursor_x, cy, line_h, font_size, line, state.cursor());
             }
         }
 

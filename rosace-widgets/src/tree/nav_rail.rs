@@ -17,7 +17,10 @@ pub struct NavItem {
     pub active: bool,
     pub leading: Option<BoxedWidget>,
     pub height: f32,
-    pub font_size: f32,
+    /// `None` = read from the active theme's `typography.label_medium`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    pub font_size: Option<f32>,
     on_press: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -29,7 +32,7 @@ impl NavItem {
             active: false,
             leading: None,
             height: 36.0,
-            font_size: 12.0,
+            font_size: None,
             on_press: None,
         }
     }
@@ -38,6 +41,10 @@ impl NavItem {
     pub fn badge(mut self, n: u32) -> Self { self.badge = Some(n); self }
     pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Box::new(w)); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.label_medium.size)
+    }
     /// Navigate on tap. Without it the item still absorbs (interactive-by-identity).
     pub fn on_press(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_press = Some(Arc::new(f)); self
@@ -95,9 +102,10 @@ impl Widget for NavItem {
         let label_color = if self.active { on_surf }
             else if hovered { super::lerp_color(with_alpha(on_surf, 0.6), on_surf, 0.5) }
             else { with_alpha(on_surf, 0.6) };
-        let line_h = ctx.font.line_height(self.font_size);
+        let font_size = self.resolved_font_size(&ctx.theme);
+        let line_h = ctx.font.line_height(font_size);
         let ty = r.origin.y + (r.size.height - line_h) / 2.0;
-        ctx.draw_text_at(&self.label, Point { x: lx, y: ty }, label_color, self.font_size);
+        ctx.draw_text_at(&self.label, Point { x: lx, y: ty }, label_color, font_size);
 
         if let Some(n) = self.badge {
             let ns = n.to_string();

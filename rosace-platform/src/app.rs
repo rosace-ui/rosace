@@ -22,7 +22,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::keyboard::{KeyCode, PhysicalKey};
 #[cfg(not(target_arch = "wasm32"))]
-use winit::window::{Window as WinitWindow, WindowAttributes, WindowId};
+use winit::window::{Theme, Window as WinitWindow, WindowAttributes, WindowId};
 
 /// Sent to the winit event loop from any thread to wake it from `Wait` sleep.
 ///
@@ -616,6 +616,36 @@ fn run_web_native(
         onresize.forget();
     }
 
+    // Live OS light/dark + reduce-motion (D127 "environment" track) via
+    // `matchMedia` — same shape as the resize closure above: read once at
+    // startup, then a "change" listener keeps it live with no reload. Web
+    // has no OS-wide accessibility text-scale/bold-text concept exposed to
+    // the page (unlike iOS/Android), so those `MediaQuery` fields stay at
+    // their documented default here.
+    {
+        fn push_web_media_query() {
+            let Some(w) = web_sys::window() else { return };
+            let is_dark = w.match_media("(prefers-color-scheme: dark)").ok().flatten()
+                .map(|m| m.matches()).unwrap_or(false);
+            let reduce_motion = w.match_media("(prefers-reduced-motion: reduce)").ok().flatten()
+                .map(|m| m.matches()).unwrap_or(false);
+            let mut mq = rosace_core::media_query::use_media_query();
+            mq.is_dark = is_dark;
+            mq.reduce_motion = reduce_motion;
+            rosace_core::set_media_query(mq);
+            rosace_theme::sync_system_theme();
+        }
+        push_web_media_query();
+
+        let onchange = Closure::<dyn FnMut()>::new(push_web_media_query);
+        for query in ["(prefers-color-scheme: dark)", "(prefers-reduced-motion: reduce)"] {
+            if let Ok(Some(mql)) = web_win.match_media(query) {
+                let _ = mql.add_event_listener_with_callback("change", onchange.as_ref().unchecked_ref());
+            }
+        }
+        onchange.forget();
+    }
+
     // THE loop: our own rAF, self-rescheduling. This is the whole point of
     // dropping winit — the frame runs every tick, so queued input always drains.
     let cb: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
@@ -1037,6 +1067,8 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         #[cfg(target_os = "ios")]
         sync_ios_safe_area(&window);
 
+        push_desktop_theme(window.theme());
+
         // Try GPU compositor (D072). Fall back to softbuffer if unavailable.
         let presenter = rosace_compositor::GpuPresenter::new(
             window.clone(),
@@ -1115,6 +1147,11 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::RedrawRequested => self.redraw(),
+
+            WindowEvent::ThemeChanged(theme) => {
+                push_desktop_theme(Some(theme));
+                if let Some(w) = &self.window { w.request_redraw(); }
+            }
 
             WindowEvent::Resized(size) => {
                 // On iOS, winit's event payload is the safe-area-reduced size;
@@ -1435,4 +1472,27 @@ fn sync_ios_safe_area(window: &winit::window::Window) {
         bottom: (bottom / scale) as f32,
         left: (left / scale) as f32,
     });
+}
+
+/// Pushes the OS light/dark setting from winit's own `Window::theme()` /
+/// `WindowEvent::ThemeChanged` (macOS/Windows/Linux all report this
+/// natively through winit — no platform-specific code or new dependency
+/// needed) and re-syncs the active theme. `None` (theme undetermined,
+/// reported by some window managers) leaves `is_dark` at its current value
+/// rather than guessing.
+///
+/// Desktop has no OS-wide accessibility text-scale/bold-text/reduce-motion
+/// concept exposed through winit, so every other `MediaQuery` field stays
+/// at its documented default here — not a gap, see `media_query.rs`'s doc.
+#[cfg(not(target_arch = "wasm32"))]
+fn push_desktop_theme(theme: Option<Theme>) {
+    let Some(theme) = theme else { return };
+    let mut mq = rosace_core::media_query::use_media_query();
+    mq.is_dark = theme == Theme::Dark;
+    rosace_core::set_media_query(mq);
+    rosace_theme::sync_system_theme();
+    rosace_trace::debug!(
+        "OS theme -> {theme:?} (mode={:?}, active_theme.is_dark={})",
+        rosace_theme::use_theme_mode(), rosace_theme::use_theme().is_dark,
+    );
 }

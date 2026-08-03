@@ -251,7 +251,7 @@ fn collect_view_bodies(tokens: TokenStream, out: &mut Vec<(usize, usize, TokenSt
     let mut i = 0;
     while i < tts.len() {
         if let TokenTree::Ident(id) = &tts[i] {
-            let is_view = id.to_string() == "view";
+            let is_view = id == "view";
             let bang = matches!(tts.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!');
             if is_view && bang {
                 if let Some(TokenTree::Group(g)) = tts.get(i + 2) {

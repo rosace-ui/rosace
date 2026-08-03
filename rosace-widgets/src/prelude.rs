@@ -7,7 +7,7 @@ pub use crate::{
     TextAlign, FontWeight,
     AppBar, Avatar, Badge, BottomNavItem, BottomNavigationBar, Button, ButtonVariant, FloatingActionButton, SearchBar, Snackbar,
     Carousel, PageView, RatingBar, Stepper, Table, TableColumn,
-    InteractiveViewer, DatePicker, SimpleDate, TimePicker, SimpleTime, DataTable, DataTableColumn, SortDirection,
+    InteractiveViewer, DatePicker, SimpleDate, SelectionMode, PageAxis, TimePicker, SimpleTime, TimeUnit, DataTable, DataTableColumn, SortDirection,
     ShaderPaint, ContainerMaterial, CardMaterial,
     DialogMaterial, SheetMaterial, DrawerMaterial, AppBarMaterial, BottomNavMaterial,
     SelectionKind, SelectionStyle,
@@ -16,7 +16,7 @@ pub use crate::{
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
     AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
     Positioned, Radio, Row, Scaffold, ScreenTransitionView, SegmentedControl, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,
-    Skeleton, Tab, TabBar, Wrap, Text, TextArea, TextInput, Toast, ToastKind, Tooltip, TooltipStyle, WidgetExt,
+    Skeleton, Tab, TabBar, Tabs, TabView, Wrap, Text, TextArea, TextInput, Toast, ToastKind, Tooltip, TooltipStyle, WidgetExt,
     CursorShape, CursorStyle, EditController, InputFilter, Span,
     Image, ImageCache, ImageFit, ImageSource, ImageWidget,
 };

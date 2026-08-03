@@ -673,7 +673,7 @@ use rosace::theme::set_theme;
 use crate::screens::{{counter_screen, home_screen}};
 
 /// Every screen in the app. Add a variant + a match arm to add a route.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Hash)]
 pub enum Screen {{
     Home,
     Counter,
@@ -717,7 +717,9 @@ impl Component for AppRoot {{
         let screen = nav.current().unwrap_or(Screen::Home);
         let body = build_screen(screen);
         let outgoing = nav.previous().map(build_screen);
-        let view = ScreenTransitionView::new(body, outgoing, nav.transition_handle());
+        let view = ScreenTransitionView::new(
+            body, nav.current_key(), outgoing, nav.previous_key(), nav.transition_handle(), nav.stack_keys(),
+        );
 
         // App bar: a back button appears off Home; a theme toggle on the right.
         let mut bar = AppBar::new(screen.title()).back_button(&nav);
@@ -1322,7 +1324,7 @@ fn android_manifest_xml(name: &str) -> String {
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|fontScale"
             android:windowSoftInputMode="adjustNothing"
             android:label="{name}">
             <intent-filter>
@@ -1359,7 +1361,9 @@ fn android_main_activity_kt(bundle_id: &str, crate_lib_name: &str) -> String {
 
 import android.app.Activity
 import android.content.Context
+import android.content.res.Configuration
 import android.os.Bundle
+import android.provider.Settings
 import android.text.InputType
 import android.view.Choreographer
 import android.view.KeyEvent
@@ -1441,6 +1445,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
     private external fun nativeResize(
         handle: Long, width: Int, height: Int, scale: Float,
         safeTop: Float, safeRight: Float, safeBottom: Float, safeLeft: Float,
+    )
+    // D127 "environment" track — live OS brightness/accessibility push,
+    // called once from surfaceCreated and again from every
+    // onConfigurationChanged.
+    private external fun nativeSetMediaQuery(
+        handle: Long, isDark: Boolean, textScale: Float,
+        boldText: Boolean, reduceMotion: Boolean, always24HourFormat: Boolean,
     )
     private external fun nativeTouch(handle: Long, kind: Int, x: Float, y: Float)
     private external fun nativeKey(handle: Long, key: Int)
@@ -1563,6 +1574,34 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
         val height = surfaceView.height
         engineHandle = nativeInit(holder.surface, width, height, scale)
         Choreographer.getInstance().postFrameCallback(frameCallback)
+        syncMediaQuery()
+    }}
+
+    // MARK: Environment (D127) — OS brightness/font-scale/reduce-motion,
+    // pushed live via nativeSetMediaQuery whenever the OS reports a change.
+    // `android:configChanges` in AndroidManifest.xml lists `uiMode|fontScale`
+    // so this Activity survives the change and gets the live callback below,
+    // instead of being torn down and recreated (which would lose in-memory
+    // engine state on every dark-mode toggle).
+
+    /// No clean OS-wide "bold text everywhere" source on Android (unlike
+    /// iOS's `UIAccessibility.isBoldTextEnabled`) — stays `false`, a
+    /// documented platform gap (see `rosace_core::media_query`'s doc).
+    private fun syncMediaQuery() {{
+        if (engineHandle == 0L) return
+        val uiMode = resources.configuration.uiMode
+        val isDark = (uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        val textScale = resources.configuration.fontScale
+        val reduceMotion = Settings.Global.getFloat(
+            contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
+        ) == 0f
+        val always24Hour = android.text.format.DateFormat.is24HourFormat(this)
+        nativeSetMediaQuery(engineHandle, isDark, textScale, false, reduceMotion, always24Hour)
+    }}
+
+    override fun onConfigurationChanged(newConfig: Configuration) {{
+        super.onConfigurationChanged(newConfig)
+        syncMediaQuery()
     }}
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {{
@@ -1793,6 +1832,14 @@ func rsc_text_input_active() -> UInt8
 @_silgen_name("rsc_focused_keyboard_type")
 func rsc_focused_keyboard_type() -> UInt32
 
+// D127 "environment" track — live OS brightness/accessibility push, same
+// shape as `rsc_engine_resize`'s safe-area push above.
+@_silgen_name("rsc_engine_set_media_query")
+func rsc_engine_set_media_query(
+    _ engine: RscEngine?, _ isDark: UInt8, _ textScale: Float,
+    _ boldText: UInt8, _ reduceMotion: UInt8, _ always24HourFormat: UInt8
+)
+
 // MARK: - Platform Channel (D127) — the generic bidirectional method-call
 // bridge to native code. `take_outgoing`/`report_result`/`report_error`
 // replace the old dedicated push-permission-only poll — that discovery now
@@ -1946,6 +1993,15 @@ final class EngineViewController: UIViewController, UIKeyInput {
                        name: UIApplication.didEnterBackgroundNotification, object: nil)
         nc.addObserver(self, selector: #selector(lifecycleSuspended),
                        name: UIApplication.willTerminateNotification, object: nil)
+
+        // Bold Text / Reduce Motion are `UIAccessibility` settings, not
+        // `UITraitCollection` traits — they don't fire `traitCollectionDidChange`,
+        // so they need their own notifications.
+        nc.addObserver(self, selector: #selector(syncMediaQuery),
+                       name: UIAccessibility.boldTextStatusDidChangeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(syncMediaQuery),
+                       name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
+        syncMediaQuery()
     }
 
     @objc private func lifecycleActive() { sendLifecycle(RSC_EVENT_LIFECYCLE_ACTIVE) }
@@ -1973,6 +2029,55 @@ final class EngineViewController: UIViewController, UIKeyInput {
             engine, width, height, scale,
             Float(insets.top), Float(insets.right), Float(insets.bottom), Float(insets.left)
         )
+    }
+
+    // MARK: Environment (D127) — OS brightness/Dynamic-Type/accessibility,
+    // pushed live via `rsc_engine_set_media_query` whenever the OS reports a
+    // change, mirroring how safe-area is pushed on every layout pass above.
+
+    /// Apple's documented default point size for `UIFont.TextStyle.body` at
+    /// each `UIContentSizeCategory`, expressed as a ratio against `.large`
+    /// (17pt — the non-accessibility system default) — the standard
+    /// technique for turning Dynamic Type's category enum into the single
+    /// float multiplier `rosace_core::MediaQuery.text_scale` expects.
+    private func textScale(for category: UIContentSizeCategory) -> Float {
+        switch category {
+        case .extraSmall:                       return 14.0 / 17.0
+        case .small:                             return 15.0 / 17.0
+        case .medium:                            return 16.0 / 17.0
+        case .large:                             return 1.0
+        case .extraLarge:                        return 19.0 / 17.0
+        case .extraExtraLarge:                   return 21.0 / 17.0
+        case .extraExtraExtraLarge:              return 23.0 / 17.0
+        case .accessibilityMedium:               return 28.0 / 17.0
+        case .accessibilityLarge:                return 33.0 / 17.0
+        case .accessibilityExtraLarge:           return 40.0 / 17.0
+        case .accessibilityExtraExtraLarge:      return 47.0 / 17.0
+        case .accessibilityExtraExtraExtraLarge: return 53.0 / 17.0
+        default:                                 return 1.0
+        }
+    }
+
+    @objc private func syncMediaQuery() {
+        guard let engine else { return }
+        let isDark = traitCollection.userInterfaceStyle == .dark
+        let scale = textScale(for: traitCollection.preferredContentSizeCategory)
+        rsc_engine_set_media_query(
+            engine,
+            isDark ? 1 : 0,
+            scale,
+            UIAccessibility.isBoldTextEnabled ? 1 : 0,
+            UIAccessibility.isReduceMotionEnabled ? 1 : 0,
+            0 // always_24_hour_format: no clean UIKit source — left undetected on iOS for now
+        )
+    }
+
+    /// Fires live for BOTH userInterfaceStyle (dark mode) and
+    /// preferredContentSizeCategory (Dynamic Type) changes — both are
+    /// `UITraitCollection` traits.
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        syncMediaQuery()
     }
 
     @objc private func tick() {
@@ -2519,6 +2624,30 @@ pub unsafe extern "C" fn rsc_engine_resize(
 }
 
 /// # Safety
+/// `engine` must be a live pointer previously returned by `rsc_engine_init`
+/// (or null, which is a no-op). Called by the native host whenever the OS
+/// reports an appearance/accessibility change.
+#[no_mangle]
+pub unsafe extern "C" fn rsc_engine_set_media_query(
+    engine: *mut Engine,
+    is_dark: u8,
+    text_scale: f32,
+    bold_text: u8,
+    reduce_motion: u8,
+    always_24_hour_format: u8,
+) {
+    if engine.is_null() { return; }
+    let mq = rosace::core::MediaQuery {
+        text_scale,
+        is_dark: is_dark != 0,
+        bold_text: bold_text != 0,
+        reduce_motion: reduce_motion != 0,
+        always_24_hour_format: always_24_hour_format != 0,
+    };
+    unsafe { (*engine).set_media_query(mq) };
+}
+
+/// # Safety
 /// `engine` must be a live pointer from `rsc_engine_init`; `events` must
 /// point to at least `count` valid `RscInputEvent`s.
 #[no_mangle]
@@ -2809,6 +2938,32 @@ pub extern "system" fn Java_{jni_prefix}_nativeResize(
     let ptr = handle as *mut AndroidEngine;
     let safe_area = rosace::core::SafeArea {{ top: safe_top, right: safe_right, bottom: safe_bottom, left: safe_left }};
     unsafe {{ (*ptr).engine.resize(width as u32, height as u32, scale, safe_area) }};
+}}
+
+/// Called once from `nativeInit` and again from every
+/// `onConfigurationChanged` (uiMode/fontScale changes) — see `MainActivity.kt`.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeSetMediaQuery(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+    is_dark: jni::sys::jboolean,
+    text_scale: jni::sys::jfloat,
+    bold_text: jni::sys::jboolean,
+    reduce_motion: jni::sys::jboolean,
+    always_24_hour_format: jni::sys::jboolean,
+) {{
+    if handle == 0 {{ return; }}
+    let ptr = handle as *mut AndroidEngine;
+    let mq = rosace::core::MediaQuery {{
+        text_scale,
+        is_dark: is_dark != 0,
+        bold_text: bold_text != 0,
+        reduce_motion: reduce_motion != 0,
+        always_24_hour_format: always_24_hour_format != 0,
+    }};
+    unsafe {{ (*ptr).engine.set_media_query(mq) }};
 }}
 
 /// One touch/pointer event per call — `kind` is `0` = move, `1` = down,

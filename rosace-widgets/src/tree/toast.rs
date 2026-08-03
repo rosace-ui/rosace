@@ -25,7 +25,10 @@ pub enum ToastKind {
 pub struct Toast {
     pub message: String,
     pub kind: ToastKind,
-    pub font_size: f32,
+    /// `None` = read from the active theme's `typography.body_medium`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    pub font_size: Option<f32>,
     background: Option<Color>,
     color: Option<Color>,
     accent: Option<Color>,
@@ -34,15 +37,15 @@ pub struct Toast {
 
 impl Toast {
     pub fn info(message: impl Into<String>) -> Self {
-        Self { message: message.into(), kind: ToastKind::Info, font_size: 13.0, background: None, color: None, accent: None, radius: None }
+        Self { message: message.into(), kind: ToastKind::Info, font_size: None, background: None, color: None, accent: None, radius: None }
     }
 
     pub fn success(message: impl Into<String>) -> Self {
-        Self { message: message.into(), kind: ToastKind::Success, font_size: 13.0, background: None, color: None, accent: None, radius: None }
+        Self { message: message.into(), kind: ToastKind::Success, font_size: None, background: None, color: None, accent: None, radius: None }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
-        Self { message: message.into(), kind: ToastKind::Error, font_size: 13.0, background: None, color: None, accent: None, radius: None }
+        Self { message: message.into(), kind: ToastKind::Error, font_size: None, background: None, color: None, accent: None, radius: None }
     }
 
     /// Pill fill color (theme's `surface_variant` if unset).
@@ -53,6 +56,10 @@ impl Toast {
     pub fn accent(mut self, c: Color) -> Self { self.accent = Some(c); self }
     /// Corner radius (half the pill's height — a full pill shape — if unset).
     pub fn radius(mut self, r: f32) -> Self { self.radius = Some(r); self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.body_medium.size)
+    }
 
     /// Open the toast and auto-dismiss after `secs` seconds.
     ///
@@ -87,8 +94,9 @@ const GAP: f32 = 10.0;
 
 impl Widget for Toast {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let text_w = ctx.font.measure_text(&self.message, self.font_size);
-        let line_h = ctx.font.line_height(self.font_size);
+        let font_size = self.resolved_font_size(ctx.theme);
+        let text_w = ctx.font.measure_text(&self.message, font_size);
+        let line_h = ctx.font.line_height(font_size);
         ctx.constraints.constrain(Size {
             width: PAD_H * 2.0 + DOT + GAP + text_w,
             height: PAD_V * 2.0 + line_h.max(DOT),
@@ -113,7 +121,8 @@ impl Widget for Toast {
             y: r.origin.y + r.size.height / 2.0,
         }, DOT / 2.0, accent);
 
-        let line_h = ctx.font.line_height(self.font_size);
+        let font_size = self.resolved_font_size(&ctx.theme);
+        let line_h = ctx.font.line_height(font_size);
         ctx.draw_text_at(
             &self.message,
             Point {
@@ -121,7 +130,7 @@ impl Widget for Toast {
                 y: r.origin.y + (r.size.height - line_h) / 2.0,
             },
             fg,
-            self.font_size,
+            font_size,
         );
     }
 }

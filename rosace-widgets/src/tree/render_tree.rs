@@ -12,7 +12,20 @@
 //! only the element walker may skip a subtree (picture cache hit), and it
 //! consumes the child slot *without* resetting it, keeping siblings aligned
 //! and the skipped subtree's state intact.
+//!
+//! The one place positional identity is NOT safe: [`ScreenTransitionView`]
+//! (`screen_transition_view.rs`), where the exact same tree position holds a
+//! completely different, unrelated screen's subtree every time navigation
+//! changes. Positional reuse there silently aliased one screen's scroll
+//! offset/animation state onto the next screen that happened to land on the
+//! same `NodeId` (2026-08-01, real trackpad + navigation testing). Its child
+//! is addressed through [`RenderTree::keyed_slot`] instead of the ordinary
+//! [`RenderTree::slot`] — a small, explicitly-keyed side table scoped to
+//! that one call site, not a general per-widget keying system.
+//!
+//! [`ScreenTransitionView`]: super::ScreenTransitionView
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use rosace_core::types::{Rect, Size};
@@ -27,6 +40,20 @@ pub type NodeId = usize;
 /// A resolved hit/scroll handler — invoked with the event's (x, y) in
 /// window-space logical pixels.
 pub type HitHandler = Arc<dyn Fn(f32, f32) + Send + Sync>;
+
+/// A nested-scroll chain link (D-NESTED-SCROLL, 2026-08-02) — takes a
+/// `(dx, dy)` DELTA (not an absolute position, unlike [`HitHandler`]) and
+/// returns whether it actually moved: `true` if it consumed some or all of
+/// the delta, `false` if it's already fully exhausted in that exact
+/// direction (hard-clamped, or stretched to `Bounce`'s own overscroll
+/// limit) and had NO effect. A gesture starting inside nested scrollable
+/// regions (an inner `ScrollView`/carousel sitting inside an outer one, or
+/// a plain-hit `Button`/`ListTile` sitting inside any `ScrollView`) tries
+/// the innermost link first each move and only offers the SAME delta to
+/// the next link outward once the current one declines — so scrolling
+/// naturally "hands off" to an enclosing scrollable ancestor exactly when,
+/// and only when, the inner one has nothing left to give.
+pub type ScrollHandler = Arc<dyn Fn(f32, f32) -> bool + Send + Sync>;
 
 /// A click callback with its hit rect in window-space logical pixels.
 pub type HitRegion = (Rect, Arc<dyn Fn() + Send + Sync>);
@@ -66,12 +93,25 @@ pub struct TreeNode {
     pub children: Vec<NodeId>,
     /// Child slot cursor for the current paint of this node.
     cursor: usize,
+    /// Children addressed by [`RenderTree::keyed_slot`] instead of position
+    /// — see the module doc's "Identity" section. Only [`ScreenTransitionView`]
+    /// (`screen_transition_view.rs`) uses this; every other widget's children
+    /// live in `children`/`cursor` above, untouched.
+    ///
+    /// [`ScreenTransitionView`]: super::ScreenTransitionView
+    pub keyed_children: HashMap<u64, NodeId>,
     /// True if this node was begun (repainted) in the current frame.
     begun: bool,
 
     // ── Declared per-paint data (D091) ────────────────────────────────────
     pub hits:       Vec<HitRegion>,
     pub hits_at:    Vec<HitRegionAt>,
+    /// Nested-scroll chain links declared this node (D-NESTED-SCROLL) —
+    /// see [`ScrollHandler`]'s own doc. Separate from `hits_at`: a plain
+    /// slider-style positional drag always fully "consumes" a gesture by
+    /// definition, but a `ScrollView`'s pan needs to report exhaustion so
+    /// an enclosing scrollable ancestor gets a turn.
+    pub nested_scrolls: Vec<(Rect, ScrollHandler)>,
     pub scrolls:    Vec<ScrollRegion>,
     pub zooms:      Vec<ZoomRegion>,
     pub focus:      Vec<rosace_a11y::FocusNode>,
@@ -180,6 +220,7 @@ impl RenderTree {
         n.begun = true;
         n.hits.clear();
         n.hits_at.clear();
+        n.nested_scrolls.clear();
         n.scrolls.clear();
         n.zooms.clear();
         n.focus.clear();
@@ -216,6 +257,60 @@ impl RenderTree {
             self.begin(child);
         }
         child
+    }
+
+    /// Like [`Self::slot`], but the returned `NodeId` is resolved by an
+    /// explicit stable `key` instead of "whatever was previously at this
+    /// position" — see the module doc's "Identity" section. Reusing an
+    /// existing key's node preserves ALL its sticky state (`scroll_ctrl`,
+    /// `anim_channels`, hover/press, and everything underneath it in the
+    /// subtree, however deep) exactly like an ordinary same-position
+    /// repaint does; a new key gets a brand-new node with empty
+    /// `children`/`keyed_children`, so nothing nested under it — however
+    /// many `ScrollView`s/`Tabs`/`TextArea`s it contains — can possibly
+    /// alias whatever a DIFFERENT key's subtree left behind.
+    ///
+    /// The resolved node is ALSO written into `parent`'s ordinary
+    /// `children`/`cursor` slot, same as `slot()` — the key only changes
+    /// which `NodeId` ends up at that position, not how it's found
+    /// afterward. This matters: hit-testing, hover, semantics/accessibility,
+    /// and the picture-cache walk all traverse `children`, not
+    /// `keyed_children` — a node reachable ONLY through the keyed map would
+    /// be invisible to all of them (found via a real test failure —
+    /// `semantic_labels` came back empty for a screen reached this way).
+    pub fn keyed_slot(&mut self, parent: NodeId, key: u64) -> NodeId {
+        let child = match self.nodes[parent].keyed_children.get(&key) {
+            Some(&id) => id,
+            None => {
+                let id = self.nodes.len();
+                self.nodes.push(TreeNode::default());
+                self.nodes[parent].keyed_children.insert(key, id);
+                id
+            }
+        };
+
+        let cursor = self.nodes[parent].cursor;
+        self.nodes[parent].cursor += 1;
+        if cursor < self.nodes[parent].children.len() {
+            self.nodes[parent].children[cursor] = child;
+        } else {
+            self.nodes[parent].children.push(child);
+        }
+
+        self.begin(child);
+        child
+    }
+
+    /// Drop any of `parent`'s keyed children whose key is no longer in
+    /// `valid_keys` — called once per frame by `ScreenTransitionView` with
+    /// the navigation stack's current keys, so a screen's cached subtree
+    /// (scroll position, animation state, everything) is released once
+    /// it's actually been popped, not retained forever. The dropped node's
+    /// arena slot itself isn't reclaimed (this arena never frees — same
+    /// tradeoff `slot()`'s positional children already have for any widget
+    /// that stops being painted), only the reference to it.
+    pub fn prune_keyed_children(&mut self, parent: NodeId, valid_keys: &[u64]) {
+        self.nodes[parent].keyed_children.retain(|k, _| valid_keys.contains(k));
     }
 
     /// End of frame: drop unused child slots of every node repainted this
@@ -256,11 +351,29 @@ impl RenderTree {
 
     /// Hit-test walk: children before own regions, later siblings first —
     /// paint order is z-order, so the topmost match wins structurally (D092).
-    /// Returns the topmost hit callback and whether it is POSITIONAL —
+    /// Returns the topmost hit callback, whether it is POSITIONAL —
     /// positional hits become the active drag grab (streamed MouseMove
-    /// positions until release); plain hits fire once.
-    pub fn hit_test(&self, x: f32, y: f32) -> Option<(HitHandler, bool)> {
-        self.hit_test_node(Self::ROOT, x, y)
+    /// positions until release); plain hits fire once — and, when the
+    /// winner is a plain hit, so a touch/mouse gesture that starts on a
+    /// plain-hit child (Button, ListTile, …) sitting inside e.g. a
+    /// `ScrollView` can still fall back to dragging that ancestor once
+    /// movement shows it's a scroll, not a tap (2026-08-02, real Android
+    /// touch testing — without this a plain-hit child sitting anywhere in
+    /// a scrollable page permanently shadowed the ScrollView's own drag
+    /// region, so touch-drag scrolling silently did nothing on any page
+    /// with interactive content — desktop was unaffected since
+    /// wheel/trackpad scroll is a wholly separate `InputEvent::Scroll`
+    /// path).
+    ///
+    /// The chain is the SECOND return value, always present — collected
+    /// independently of what the leaf hit resolves to (`None`, a plain
+    /// tap, or even a positional widget like a `Slider`), so touching
+    /// blank scrollable space directly (no leaf hit at all) still yields
+    /// a usable chain even though the first value is `None`.
+    pub fn hit_test(&self, x: f32, y: f32) -> (Option<(HitHandler, bool)>, Vec<ScrollHandler>) {
+        let mut chain = Vec::new();
+        let leaf = self.hit_test_node(Self::ROOT, x, y, &mut chain);
+        (leaf, chain)
     }
 
     /// Map screen coords into the content space of a node hosting a placed
@@ -284,7 +397,14 @@ impl RenderTree {
         ((x - vp.origin.x) / z + off[0], (y - vp.origin.y) / z + off[1], false)
     }
 
-    fn hit_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<(HitHandler, bool)> {
+    /// Walks the SAME recursion `hit_test`/`nested_scroll_chain` both need,
+    /// so the two stay perfectly in sync by construction (one traversal,
+    /// not two): returns the leaf hit exactly like the old two-element
+    /// version did, and — independently of what that leaf is, or even
+    /// whether one was found at all — pushes every node's own
+    /// `nested_scrolls` entry covering `(x, y)` onto `chain` as the
+    /// recursion unwinds, innermost first.
+    fn hit_test_node(&self, id: NodeId, x: f32, y: f32, chain: &mut Vec<ScrollHandler>) -> Option<(HitHandler, bool)> {
         let n = &self.nodes[id];
         // Pointer interceptors (IgnorePointer / AbsorbPointer widgets):
         // 1 = subtree transparent to hits; 2 = consume everything in rect.
@@ -301,9 +421,10 @@ impl RenderTree {
         // Descend into children in the content space of a placed scroll layer
         // (screen coords elsewhere). Outside the viewport, content is clipped.
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
+        let mut leaf = None;
         if !clipped {
             for &child in n.children.iter().rev() {
-                if let Some((cb, positional)) = self.hit_test_node(child, cx, cy) {
+                if let Some((cb, positional)) = self.hit_test_node(child, cx, cy, chain) {
                     // Wrap so LATER invocations are remapped too, not just this
                     // one. `child_coords` only converts the coordinates used to
                     // find the hit; the returned callback was previously handed
@@ -318,7 +439,7 @@ impl RenderTree {
                     // self-corrects on every future invocation, not just the
                     // first. Composes for nested transforms: each ancestor
                     // wraps once more as the recursion unwinds.
-                    let wrapped: Arc<dyn Fn(f32, f32) + Send + Sync> = match n.transforms.first() {
+                    let wrapped: HitHandler = match n.transforms.first() {
                         Some(entry) => {
                             let vp = entry.viewport_rect;
                             let z = entry.zoom;
@@ -329,23 +450,49 @@ impl RenderTree {
                         }
                         None => cb,
                     };
-                    return Some((wrapped, positional));
+                    leaf = Some((wrapped, positional));
+                    break;
                 }
             }
         }
-        // Positional regions first within a node (more specific intent).
-        for (rect, cb) in n.hits_at.iter().rev() {
-            if contains(rect, x, y) {
-                return Some((cb.clone(), true));
+        if leaf.is_none() {
+            // Only reached when no child matched — same order as before:
+            // positional own-regions first (more specific intent), then
+            // plain ones.
+            for (rect, cb) in n.hits_at.iter().rev() {
+                if contains(rect, x, y) {
+                    leaf = Some((cb.clone(), true));
+                    break;
+                }
+            }
+            if leaf.is_none() {
+                for (rect, cb) in n.hits.iter().rev() {
+                    if contains(rect, x, y) {
+                        let cb = cb.clone();
+                        leaf = Some((Arc::new(move |_, _| cb()), false));
+                        break;
+                    }
+                }
             }
         }
-        for (rect, cb) in n.hits.iter().rev() {
-            if contains(rect, x, y) {
-                let cb = cb.clone();
-                return Some((Arc::new(move |_, _| cb()), false));
-            }
+        // Collect THIS node's own nested-scroll region, remapped the same
+        // way a hit callback would be if this node hosts a transform —
+        // unconditional (runs whether or not a leaf was found above, and
+        // regardless of what it was), so the chain always reflects every
+        // scrollable ancestor along the real visual path, not just the
+        // ones "under" wherever the leaf tap/drag happened to resolve.
+        if let Some((_, handler)) = n.nested_scrolls.iter().rev().find(|(r, _)| contains(r, x, y)) {
+            let handler = handler.clone();
+            let wrapped: ScrollHandler = match n.transforms.first() {
+                Some(entry) => {
+                    let z = entry.zoom;
+                    Arc::new(move |dx: f32, dy: f32| handler(dx / z, dy / z))
+                }
+                None => handler,
+            };
+            chain.push(wrapped);
         }
-        None
+        leaf
     }
 
     /// Topmost node under the cursor that owns any interactive or hover
@@ -371,6 +518,7 @@ impl RenderTree {
             .chain(n.hits_at.iter().map(|(r, _)| r))
             .chain(n.long_hits.iter().map(|(r, _)| r))
             .chain(n.hover_regions.iter())
+            .chain(n.nested_scrolls.iter().map(|(r, _)| r))
             .any(|r| contains(r, x, y));
         if owns { Some(id) } else { None }
     }
@@ -860,7 +1008,7 @@ mod tests {
         t.finalize();
 
         assert_eq!(a, a2);
-        assert!(t.hit_test(5.0, 5.0).is_some(), "hit must survive the clean frame");
+        assert!(t.hit_test(5.0, 5.0).0.is_some(), "hit must survive the clean frame");
     }
 
     #[test]
@@ -897,7 +1045,7 @@ mod tests {
         let _a = t.slot(RenderTree::ROOT, true); // fresh repaint, declares nothing
         t.finalize();
 
-        assert!(t.hit_test(5.0, 5.0).is_none(), "repaint must clear stale hits");
+        assert!(t.hit_test(5.0, 5.0).0.is_none(), "repaint must clear stale hits");
     }
 
     #[test]
@@ -915,7 +1063,7 @@ mod tests {
         t.finalize();
 
         // Overlapping rects: the later sibling (painted on top) must win.
-        let (cb, _) = t.hit_test(5.0, 5.0).unwrap();
+        let (cb, _) = t.hit_test(5.0, 5.0).0.unwrap();
         cb(0.0, 0.0);
         assert!(!hit_first.load(std::sync::atomic::Ordering::SeqCst));
     }
@@ -981,12 +1129,12 @@ mod tests {
 
         // Screen (75,90): inside the viewport (50..150); content y = 90-50+200
         // = 240, which lands in the child's [220,260) region → hits.
-        let (cb, _) = t.hit_test(75.0, 90.0).expect("content region must be hit through the offset");
+        let (cb, _) = t.hit_test(75.0, 90.0).0.expect("content region must be hit through the offset");
         cb(0.0, 0.0);
         assert!(hit.load(Ordering::SeqCst), "click mapped into scrolled content");
 
         // Screen (75, 40): ABOVE the viewport → clipped, no hit.
-        assert!(t.hit_test(75.0, 40.0).is_none(), "clicks outside the viewport are clipped");
+        assert!(t.hit_test(75.0, 40.0).0.is_none(), "clicks outside the viewport are clipped");
 
         rosace_state::clear_scroll_offset(tl as u64);
     }
@@ -1022,7 +1170,7 @@ mod tests {
         rosace_state::set_scroll_offset(tl as u64, [0.0, 200.0]);
 
         // Screen (75,90): content = (75-50+0, 90-50+200) = (25, 240) → inside [220,260).
-        let (cb, positional) = t.hit_test(75.0, 90.0).expect("must hit the positional region");
+        let (cb, positional) = t.hit_test(75.0, 90.0).0.expect("must hit the positional region");
         assert!(positional, "hits_at region must report positional=true");
         cb(75.0, 90.0); // initial press — dispatch calls back with the same raw coords used to find it
 
@@ -1108,7 +1256,7 @@ mod tests {
         let _a = t.slot(RenderTree::ROOT, true);
         t.finalize();
 
-        assert!(t.hit_test(25.0, 5.0).is_none(), "removed child left a ghost hit");
+        assert!(t.hit_test(25.0, 5.0).0.is_none(), "removed child left a ghost hit");
     }
 
     #[test]

@@ -69,7 +69,7 @@ impl Drawer {
             })
                 .input(InputBehavior::Block)
                 .focus(FocusBehavior::Trap)
-                .scrim(ScrimConfig { color: self.scrim_color, on_tap: Some(Arc::new(move || close.set(false))) }),
+                .scrim(ScrimConfig { color: self.scrim_color, on_tap: Some(Arc::new(move || close.set(false))), exclude_rect: None }),
         );
     }
 }

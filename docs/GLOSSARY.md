@@ -15,7 +15,7 @@ This glossary has two parts:
 
 > **Accuracy note (2026-07-24):** some older entries described an *intended*
 > stack that was never built (e.g. Skia/cosmic-text/HarfBuzz). Those have been
-> corrected to the real dependencies (`tiny-skia`, `fontdue`, `wgpu`). If an
+> corrected to the real dependencies (`tiny-skia`, `swash`, `wgpu`). If an
 > entry and the code ever disagree, the code wins — file the entry as a bug.
 
 ---
@@ -126,8 +126,10 @@ The build context passed to [`Component::build()`](#component)
 
 ### cosmic-text
 *NOT used (historical).* An early design named `cosmic-text` as the
-text-layout library; it was never adopted. The real stack is `fontdue`
-(glyph rasterization) + `ttf-parser` (font parsing) with ROSACE's own
+text-layout library; it was never adopted. The real stack is `swash`
+(glyph rasterization, since Phase 30 — `fontdue` before that, swapped for
+real variable-font support) + `ttf-parser` (font parsing, kerning) with
+ROSACE's own
 [glyph](#glyph)-placement walk
 ([`layout_glyphs`](../rosace-render/src/font.rs)) and a first-fit
 `FallbackShaper` (one glyph per character — full shaping deferred, D014).
@@ -202,7 +204,7 @@ sparingly — only for truly global state.
 ### Glyph Cache
 The cache of rasterized [glyphs](#glyph) — on GPU it's a
 [glyph atlas](GLOSSARY.md#glyph-atlas) with [LRU](GLOSSARY.md#lru-cache)
-eviction; each distinct glyph is rasterized once (`fontdue`). See the
+eviction; each distinct glyph is rasterized once (`swash`). See the
 graphics primer for the full mechanism.
 
 ---
@@ -507,7 +509,7 @@ rects, text, and shadows are all anti-aliased.
 ### Coverage mask
 A grayscale image where each pixel's value (0.0–1.0) says *how much of
 that pixel a shape covers* — the raw ingredient of [**anti-aliasing**](#anti-aliasing-aa).
-A glyph rasterized by `fontdue` is a coverage mask: the letter's body is
+A glyph rasterized by `swash` is a coverage mask: the letter's body is
 1.0, its soft edges are fractional, everything else is 0.0. To draw it,
 you multiply the mask by the text colour. Color-emoji glyphs skip the
 mask (they're already full RGBA), which is why the render pipeline treats
@@ -671,7 +673,7 @@ adapter path for importing arbitrary vector art (charts, maps).
 The actual drawn shape of a character in a specific font — the letter "a"
 in Helvetica Bold at 16px is one glyph. A character (the abstract "a") is
 not a glyph; the font maps characters to glyphs. ROSACE rasterizes each
-distinct glyph once with `fontdue` and caches it (see below).
+distinct glyph once with `swash` and caches it (see below).
 *📖 [Wikipedia — Glyph](https://en.wikipedia.org/wiki/Glyph).*
 
 ### Glyph atlas

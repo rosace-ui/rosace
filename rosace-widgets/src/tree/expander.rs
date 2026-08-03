@@ -80,17 +80,13 @@ impl Widget for Expander {
         // body fade and the chevron rotation together.
         let t = ctx.animate_to(if open { 1.0 } else { 0.0 }, 0.0);
 
+        // Real blurred drop shadow (`ctx.fill_shadow_rrect`, same primitive
+        // Card/Container/FAB use) — this used to be a single flat,
+        // hard-edged rounded rect offset below the panel, which reads as a
+        // second solid gray box stacked behind it rather than a soft
+        // shadow (2026-08-01 user feedback: "looks like another grey box").
         if self.elevation > 0.0 {
-            let spread = 3.0 * self.elevation;
-            draw_rounded_rect_pub(
-                ctx,
-                Rect {
-                    origin: Point { x: r.origin.x - spread / 2.0, y: r.origin.y + spread },
-                    size: Size { width: r.size.width + spread, height: r.size.height },
-                },
-                Color::rgba(shadow.r, shadow.g, shadow.b, 50),
-                self.radius + spread / 2.0,
-            );
+            ctx.fill_shadow_rrect(r, self.radius, Color::rgba(shadow.r, shadow.g, shadow.b, 90), 3.0 * self.elevation);
         }
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
         if outline.1 > 0.0 {
@@ -106,19 +102,31 @@ impl Widget for Expander {
             fg,
             self.title_size,
         );
-        // Chevron "rotates" through the eased factor — cross-fading ▸ into
-        // ▾ (no glyph-rotation primitive yet; the cross-fade tracks the
-        // exact same animation curve the body reveal uses, so the two read
-        // as one motion).
-        let cx = r.origin.x + r.size.width - PAD_H - ctx.font.measure_text("\u{25be}", self.title_size);
-        let cy = r.origin.y + (HEADER_H - lh) / 2.0;
+        // Chevron "rotates" through the eased factor — cross-fading
+        // ChevronRight into ChevronDown (no glyph-rotation primitive yet;
+        // the cross-fade tracks the exact same animation curve the body
+        // reveal uses, so the two read as one motion). Real Icons (bundled
+        // Material Symbols font, baked into the binary) instead of raw
+        // Unicode ▸/▾ drawn through the body-text font — that font (Inter)
+        // has no glyph for them, which rendered as a garbled/tofu box on
+        // Android (no OS-level font-fallback there, unlike desktop).
+        let chev_size = self.title_size + 2.0;
+        let cx = r.origin.x + r.size.width - PAD_H - chev_size;
+        let cy = r.origin.y + (HEADER_H - chev_size) / 2.0;
+        let chev_rect = Rect { origin: Point { x: cx, y: cy }, size: Size { width: chev_size, height: chev_size } };
         if t < 1.0 {
             let a = (255.0 * (1.0 - t)) as u8;
-            ctx.draw_text_at("\u{25b8}", Point { x: cx, y: cy }, Color::rgba(fg.r, fg.g, fg.b, a), self.title_size);
+            super::Icon::new(super::IconKind::ChevronRight)
+                .size(chev_size)
+                .color(Color::rgba(fg.r, fg.g, fg.b, a))
+                .paint(&mut ctx.child(chev_rect));
         }
         if t > 0.0 {
             let a = (255.0 * t) as u8;
-            ctx.draw_text_at("\u{25be}", Point { x: cx, y: cy }, Color::rgba(fg.r, fg.g, fg.b, a), self.title_size);
+            super::Icon::new(super::IconKind::ChevronDown)
+                .size(chev_size)
+                .color(Color::rgba(fg.r, fg.g, fg.b, a))
+                .paint(&mut ctx.child(chev_rect));
         }
 
         let atom = self.expanded.clone();

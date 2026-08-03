@@ -10,25 +10,60 @@ use super::{BoxedWidget, LayoutCtx, PaintCtx, Widget, avail_h, avail_w, intersec
 /// is in progress — the previous screen too, each offset by the shared
 /// `ScreenTransition`'s spring-eased enter/exit values (D108/Phase 26 Step
 /// 3). Not generic over the app's route enum: it only needs already-built
-/// widgets plus the transition handle `ScreenNav::transition_handle()`
-/// returns, the same way `ScrollView` needs only a `ScrollController`, not
-/// the app's own types.
+/// widgets plus opaque `u64` identity keys (`ScreenNav::current_key`/
+/// `previous_key`/`stack_keys`) and the transition handle
+/// `ScreenNav::transition_handle()` returns — the same way `ScrollView`
+/// needs only a `ScrollController`, not the app's own types.
+///
+/// # Per-screen persistence (2026-08-01)
+/// Each screen's subtree is addressed by its `incoming_key`/`outgoing_key`
+/// through `PaintCtx::child_keyed`, not positionally — see
+/// `render_tree.rs`'s module doc ("Identity" section) for the full story.
+/// Without this, two different screens landing at the same tree position
+/// (which they always do here — every screen paints as "the incoming
+/// child") would alias scroll offset, animation state, and everything else
+/// sticky onto whatever screen last occupied that position: navigating to a
+/// new screen could inherit a stale, out-of-bounds scroll offset (visibly
+/// springing back to valid bounds on arrival), and navigating back would
+/// find its OWN position reset instead of where it was left. With keys,
+/// each screen gets its own permanent slot, reused (state intact, exactly
+/// where it was left) whenever that screen becomes current again, and
+/// released via `valid_keys`/`prune_keyed_children` only once it's actually
+/// popped off the nav stack — mirroring Flutter's `Navigator`, which keeps
+/// every pushed route's Element tree alive in its `Overlay` until popped,
+/// not just the current one.
 ///
 /// `rsc new`'s generated `app.rs` uses this in place of handing the
 /// current screen's widget straight to `Scaffold::new(...)`.
 pub struct ScreenTransitionView {
     incoming: BoxedWidget,
+    incoming_key: u64,
     outgoing: Option<BoxedWidget>,
+    outgoing_key: Option<u64>,
     transition: Arc<Mutex<ScreenTransition>>,
+    /// Every route currently on the nav stack (`ScreenNav::stack_keys()`) —
+    /// anything cached under a key NOT in this list gets released this
+    /// frame (see `RenderTree::prune_keyed_children`).
+    valid_keys: Vec<u64>,
 }
 
 impl ScreenTransitionView {
     pub fn new(
         incoming: impl Widget + 'static,
+        incoming_key: u64,
         outgoing: Option<BoxedWidget>,
+        outgoing_key: Option<u64>,
         transition: Arc<Mutex<ScreenTransition>>,
+        valid_keys: Vec<u64>,
     ) -> Self {
-        Self { incoming: Box::new(incoming), outgoing, transition }
+        Self {
+            incoming: Box::new(incoming),
+            incoming_key,
+            outgoing,
+            outgoing_key,
+            transition,
+            valid_keys,
+        }
     }
 }
 
@@ -41,6 +76,10 @@ impl Widget for ScreenTransitionView {
     fn paint(&self, ctx: &mut PaintCtx) {
         let vp = ctx.rect;
         let dt = rosace_animate::frame_dt().max(0.0001);
+
+        // Release any screen no longer on the nav stack — see this struct's
+        // own doc comment and `RenderTree::prune_keyed_children`.
+        ctx.tree.borrow_mut().prune_keyed_children(ctx.node, &self.valid_keys);
 
         let (ex, ey, ox, oy, progress, is_complete) = {
             let mut t = self.transition.lock().unwrap_or_else(|e| e.into_inner());
@@ -65,14 +104,17 @@ impl Widget for ScreenTransitionView {
             if let Some(outgoing) = &self.outgoing {
                 hero::set_active_role(Some(HeroRole::Outgoing));
                 let rect = Rect { origin: Point { x: vp.origin.x + ox, y: vp.origin.y + oy }, size: vp.size };
-                let mut child_ctx = ctx.child(rect);
+                let mut child_ctx = match self.outgoing_key {
+                    Some(key) => ctx.child_keyed(rect, key),
+                    None => ctx.child(rect),
+                };
                 child_ctx.clip_rect = Some(effective_clip);
                 outgoing.paint(&mut child_ctx);
             }
 
             hero::set_active_role(Some(HeroRole::Incoming));
             let rect = Rect { origin: Point { x: vp.origin.x + ex, y: vp.origin.y + ey }, size: vp.size };
-            let mut child_ctx = ctx.child(rect);
+            let mut child_ctx = ctx.child_keyed(rect, self.incoming_key);
             child_ctx.clip_rect = Some(effective_clip);
             self.incoming.paint(&mut child_ctx);
             hero::set_active_role(None);
@@ -92,7 +134,7 @@ impl Widget for ScreenTransitionView {
             // Steady state — paint only the incoming screen at zero offset,
             // identical output to handing it straight to Scaffold::new(...).
             // No active role: `Hero`-tagged widgets are plain pass-throughs.
-            self.incoming.paint(&mut ctx.child(vp));
+            self.incoming.paint(&mut ctx.child_keyed(vp, self.incoming_key));
         }
     }
 }

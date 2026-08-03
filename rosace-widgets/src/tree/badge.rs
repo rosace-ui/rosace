@@ -9,7 +9,10 @@ pub struct Badge {
     pub dot: bool,
     pub color: Color,
     pub text_color: Color,
-    pub font_size: f32,
+    /// `None` = read from the active theme's `typography.label_small`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    pub font_size: Option<f32>,
 }
 
 impl Badge {
@@ -28,25 +31,30 @@ impl Badge {
             dot: false,
             color: Color::rgb(110, 75, 210),
             text_color: Color::rgb(230, 232, 245),
-            font_size: 8.5,
+            font_size: None,
         }
     }
 
     pub fn dot() -> Self {
         Self { dot: true, label: String::new(), color: Color::rgb(235, 75, 75),
-               text_color: Color::rgb(255,255,255), font_size: 8.5 }
+               text_color: Color::rgb(255,255,255), font_size: None }
     }
 
     pub fn color(mut self, c: Color) -> Self { self.color = c; self }
     pub fn text_color(mut self, c: Color) -> Self { self.text_color = c; self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.label_small.size)
+    }
 }
 
 impl Widget for Badge {
-    fn layout(&self, _ctx: &LayoutCtx) -> Size {
+    fn layout(&self, ctx: &LayoutCtx) -> Size {
         if self.dot {
             return Size { width: 8.0, height: 8.0 };
         }
-        let w = self.label.len() as f32 * self.font_size * 0.6 + 12.0;
+        let font_size = self.resolved_font_size(ctx.theme);
+        let w = self.label.len() as f32 * font_size * 0.6 + 12.0;
         Size { width: w.max(16.0), height: 16.0 }
     }
 
@@ -59,12 +67,13 @@ impl Widget for Badge {
             return;
         }
         ctx.semantics(super::Semantics::new(rosace_core::Role::Text).label(&self.label));
+        let font_size = self.resolved_font_size(&ctx.theme);
         let r = ctx.rect;
         draw_rounded_rect_pub(ctx, r, self.color, r.size.height / 2.0);
-        let text_w = ctx.font.measure_text(&self.label, self.font_size);
+        let text_w = ctx.font.measure_text(&self.label, font_size);
         let tx = ((r.size.width - text_w) / 2.0).max(0.0);
-        let line_h = ctx.font.line_height(self.font_size);
+        let line_h = ctx.font.line_height(font_size);
         let ty = ((r.size.height - line_h) / 2.0).max(0.0);
-        ctx.text(&self.label, tx, ty, self.text_color, self.font_size);
+        ctx.text(&self.label, tx, ty, self.text_color, font_size);
     }
 }

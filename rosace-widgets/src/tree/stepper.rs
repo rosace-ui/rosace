@@ -33,7 +33,10 @@ pub struct Stepper {
     max: i64,
     step: i64,
     height: f32,
-    font_size: f32,
+    /// `None` = read from the active theme's `typography.body_medium`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    font_size: Option<f32>,
     radius: f32,
     background: Option<Color>,
     foreground: Option<Color>,
@@ -50,7 +53,7 @@ impl Stepper {
             max: i64::MAX,
             step: 1,
             height: 32.0,
-            font_size: 13.0,
+            font_size: None,
             radius: 6.0,
             background: None,
             foreground: None,
@@ -66,8 +69,12 @@ impl Stepper {
     pub fn step(mut self, s: i64) -> Self { self.step = s.max(1); self }
     /// Control height in logical px (default `32.0`).
     pub fn height(mut self, h: f32) -> Self { self.height = h.max(0.0); self }
-    /// Value/glyph text size (default `13.0`).
-    pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
+    /// Value/glyph text size (default: theme `typography.body_medium`).
+    pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.body_medium.size)
+    }
     /// Corner radius of the track (default `6.0`).
     pub fn radius(mut self, r: f32) -> Self { self.radius = r.max(0.0); self }
     /// Track fill — defaults to the theme's `surface_variant`.
@@ -86,15 +93,16 @@ impl Stepper {
     fn button_width(&self) -> f32 { self.height }
 
     /// Width of the central value segment for the current value's text.
-    fn value_width(&self, ctx_font: &rosace_render::FontCache) -> f32 {
-        (ctx_font.measure_text(&self.value.to_string(), self.font_size) + 16.0)
+    fn value_width(&self, ctx_font: &rosace_render::FontCache, font_size: f32) -> f32 {
+        (ctx_font.measure_text(&self.value.to_string(), font_size) + 16.0)
             .max(MIN_VALUE_WIDTH)
     }
 }
 
 impl Widget for Stepper {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let w = self.button_width() * 2.0 + self.value_width(ctx.font);
+        let font_size = self.resolved_font_size(ctx.theme);
+        let w = self.button_width() * 2.0 + self.value_width(ctx.font, font_size);
         ctx.constraints.constrain(Size { width: w, height: self.height })
     }
 
@@ -108,6 +116,7 @@ impl Widget for Stepper {
             )
         };
         let dim = Color::rgba(fg.r, fg.g, fg.b, 90);
+        let font_size = self.resolved_font_size(&ctx.theme);
 
         let r = ctx.rect;
         ctx.semantics(
@@ -133,8 +142,8 @@ impl Widget for Stepper {
         };
 
         let value_text = self.value.to_string();
-        let tw = ctx.font.measure_text(&value_text, self.font_size);
-        let lh = ctx.font.line_height(self.font_size);
+        let tw = ctx.font.measure_text(&value_text, font_size);
+        let lh = ctx.font.line_height(font_size);
         ctx.draw_text_at(
             &value_text,
             Point {
@@ -142,7 +151,7 @@ impl Widget for Stepper {
                 y: r.origin.y + (r.size.height - lh) / 2.0,
             },
             fg,
-            self.font_size,
+            font_size,
         );
 
         for (rect, glyph, disabled, delta, sem_label) in [
@@ -165,8 +174,8 @@ impl Widget for Stepper {
             }
 
             let glyph_color = if disabled { dim } else { fg };
-            let gw = slot.font.measure_text(glyph, self.font_size);
-            let gh = slot.font.line_height(self.font_size);
+            let gw = slot.font.measure_text(glyph, font_size);
+            let gh = slot.font.line_height(font_size);
             slot.draw_text_at(
                 glyph,
                 Point {
@@ -174,7 +183,7 @@ impl Widget for Stepper {
                     y: rect.origin.y + (rect.size.height - gh) / 2.0,
                 },
                 glyph_color,
-                self.font_size,
+                font_size,
             );
 
             // Interactive-by-identity: the segment ALWAYS owns its hit

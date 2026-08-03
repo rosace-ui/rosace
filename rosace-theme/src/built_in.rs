@@ -122,8 +122,10 @@ pub fn cupertino() -> ThemeData {
         app_bar: crate::theme::AppBarStyle {
             title_align: crate::theme::TitleAlign::Center,
             show_traffic_lights: false,
-            height: 44.0,
-            elevation: 0.0,
+            height: 48.0,
+            // A soft shadow rather than pure-flat — 2026-07-31 user feedback
+            // that a hairline-only bar read as un-elevated on a real device.
+            elevation: 1.0,
         },
         ..light_theme()
     }
@@ -209,7 +211,7 @@ mod tests {
         assert_eq!(m.app_bar.title_align, crate::theme::TitleAlign::Leading);
         assert_eq!(c.app_bar.title_align, crate::theme::TitleAlign::Center);
         assert_eq!(m.app_bar.height, 56.0);
-        assert_eq!(c.app_bar.height, 44.0);
+        assert_eq!(c.app_bar.height, 48.0);
     }
 
     #[test]

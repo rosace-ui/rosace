@@ -1,0 +1,21 @@
+[package]
+name = "rosace-file"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rosace-core  = { path = "../rosace-core" }
+rosace-trace = { path = "../rosace-trace" }
+
+# File/save picker dialogs: real native AppKit/Win32/GTK UI on desktop —
+# see picker.rs's module doc for why iOS/Android/wasm32 are named gaps
+# instead (mobile needs a Swift/Kotlin-side picker through the existing
+# rosace-ffi Platform Channel bridge, not yet wired; wasm32 can't run a
+# blocking native dialog on a background thread at all — same
+# std::thread::spawn constraint rosace-net's HTTP client already
+# documents for that target).
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+rfd = "0.17"

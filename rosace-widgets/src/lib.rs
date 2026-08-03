@@ -76,6 +76,7 @@ pub use tree::Stack;
 pub use tree::Switch;
 pub use tree::Tab;
 pub use tree::TabBar;
+pub use tree::{Tabs, TabView};
 pub use tree::{Text, TextAlign, FontWeight};
 pub use tree::TextInput;
 pub use tree::TextArea;

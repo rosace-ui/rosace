@@ -19,7 +19,10 @@ pub struct Chip {
     label: String,
     selected: bool,
     disabled: bool,
-    font_size: f32,
+    /// `None` = read from the active theme's `typography.label_large`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    font_size: Option<f32>,
     height: f32,
     color: Option<Color>,          // selected fill override
     on_toggle: Option<Arc<dyn Fn(bool) + Send + Sync>>,
@@ -27,7 +30,11 @@ pub struct Chip {
 
 impl Chip {
     pub fn new(label: impl Into<String>) -> Self {
-        Self { label: label.into(), selected: false, disabled: false, font_size: 12.0, height: 30.0, color: None, on_toggle: None }
+        Self { label: label.into(), selected: false, disabled: false, font_size: None, height: 30.0, color: None, on_toggle: None }
+    }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.label_large.size)
     }
     pub fn selected(mut self) -> Self { self.selected = true; self }
     pub fn selected_if(mut self, c: bool) -> Self { self.selected = c; self }
@@ -46,7 +53,7 @@ fn with_alpha(c: Color, a: f32) -> Color {
 
 impl Widget for Chip {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let w = ctx.font.measure_text(&self.label, self.font_size) + 28.0;
+        let w = ctx.font.measure_text(&self.label, self.resolved_font_size(ctx.theme)) + 28.0;
         Size { width: w, height: self.height }
     }
 
@@ -93,11 +100,12 @@ impl Widget for Chip {
         }
 
         let fg = super::lerp_color(unsel_text, sel_text, t);
-        let text_w = ctx.font.measure_text(&self.label, self.font_size);
+        let font_size = self.resolved_font_size(&ctx.theme);
+        let text_w = ctx.font.measure_text(&self.label, font_size);
         let tx = ((r.size.width - text_w) / 2.0).max(0.0);
-        let line_h = ctx.font.line_height(self.font_size);
+        let line_h = ctx.font.line_height(font_size);
         let ty = ((r.size.height - line_h) / 2.0).max(0.0);
-        ctx.text(&self.label, tx, ty, with_alpha(fg, dim), self.font_size);
+        ctx.text(&self.label, tx, ty, with_alpha(fg, dim), font_size);
     }
 }
 

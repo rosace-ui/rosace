@@ -97,18 +97,17 @@ impl Widget for FloatingActionButton {
         let sem_label = self.label.clone().unwrap_or_else(|| "action".to_string());
         ctx.semantics(super::Semantics::new(rosace_core::Role::Button).label(&sem_label));
 
-        // Soft drop shadow (cheap two-layer wash — real elevation shadows
-        // are tracked later work, same note as AppBarStyle::elevation).
+        // Real blurred drop shadow (`ctx.fill_shadow_rrect`, same Gaussian
+        // primitive `Container`'s `.elevation()`/`.shadow()` use) — this
+        // used to be a single flat, hard-edged rect offset below the
+        // button, which reads as a solid gray blob rather than a soft
+        // shadow, especially at the FAB's small 40px default size.
         if self.elevation > 0.0 && !self.disabled {
-            let spread = 3.0 * self.elevation;
-            draw_rounded_rect_pub(
-                ctx,
-                Rect {
-                    origin: Point { x: r.origin.x - spread / 2.0, y: r.origin.y + spread },
-                    size: Size { width: r.size.width + spread, height: r.size.height },
-                },
-                Color::rgba(shadow.r, shadow.g, shadow.b, 60),
-                radius + spread / 2.0,
+            ctx.fill_shadow_rrect(
+                r,
+                radius,
+                Color::rgba(shadow.r, shadow.g, shadow.b, 90),
+                3.0 * self.elevation,
             );
         }
 

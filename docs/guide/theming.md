@@ -153,4 +153,6 @@ Today the platform-adaptive surface is `AppBarStyle` — `title_align` (`Leading
 
 **Under the hood:** why theme reads auto-subscribe, and how the reactive atom under `use_theme`/`set_theme` triggers rebuilds, is covered in [Core: Component, Element, Context](../architecture/core.md).
 
-Next: [Forms & Text Input](forms-and-text.md).
+For following the OS's dark-mode setting automatically (and the other OS accessibility signals — text scale, bold text, reduce motion), see [System Environment](environment.md).
+
+Next: [System Environment](environment.md).

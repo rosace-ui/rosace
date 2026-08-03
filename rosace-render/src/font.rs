@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fontdue::{Font, FontSettings};
+use swash::scale::{Render, ScaleContext, Source};
+use swash::{CacheKey, FontRef, GlyphId};
 
 /// Text weight. Maps onto real font faces: `SemiBold`/`Bold` use the bold
 /// face when one was found; `Light`/`Regular`/`Medium` use the regular face.
@@ -33,26 +34,101 @@ const FACE_BOLD: FaceKey = 1;
 const FACE_ICON: FaceKey = 2;
 const FACE_FALLBACK_BASE: FaceKey = 128;
 
-type GlyphKey = (FaceKey, char, u32); // (face, char, px.to_bits())
+type GlyphCacheKey = (FaceKey, char, u32); // (face, char, px.to_bits())
 type ColorGlyphKey = (char, u32); // (char, px.to_bits())
+type KernKey = (FaceKey, char, char);
+/// `(raw kern value in design units, units_per_em)` — `None` = no kerning
+/// for this pair (still a cached, not-yet-parsed-again fact).
+type KernEntry = Option<(i16, u16)>;
+
+/// Rasterized glyph metrics — deliberately the SAME shape/field names
+/// `fontdue::Metrics` had (D127 rasterizer migration, 2026-08-03): every
+/// consumer (`canvas.rs`'s CPU blit and GPU-atlas paths) reads `.width`/
+/// `.height`/`.xmin`/`.ymin`/`.advance_width` off this — keeping the shape
+/// identical meant the whole blit/atlas pipeline needed ZERO changes for
+/// the fontdue -> swash swap, only this file (glyph PRODUCTION) changed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GlyphMetrics {
+    pub xmin: i32,
+    pub ymin: i32,
+    pub width: usize,
+    pub height: usize,
+    pub advance_width: f32,
+}
 
 /// Shared rasterized glyph: metrics + coverage bitmap.
-pub type CachedGlyph = Arc<(fontdue::Metrics, Vec<u8>)>;
+pub type CachedGlyph = Arc<(GlyphMetrics, Vec<u8>)>;
+
+/// An owned font face. `swash::FontRef` only ever BORROWS a byte slice —
+/// it's not meant to be stored long-term — so we keep the bytes ourselves
+/// and reconstruct a `FontRef` on demand via [`Self::as_ref`], preserving
+/// `offset`/`key` exactly as swash's own doc comment on `FontRef`
+/// recommends (a fresh `FontRef::from_index` call on every access would
+/// mint a new `CacheKey` each time and defeat swash's internal caching).
+pub struct OwnedFace {
+    data: Arc<Vec<u8>>,
+    offset: u32,
+    key: CacheKey,
+    /// `Some(weight)` when this face is a variable font that needs an
+    /// explicit `wght` axis instanced to render at all correctly — see
+    /// `system_ui()`'s doc for why (fontdue, the previous rasterizer,
+    /// couldn't do this at all; this is the whole reason for this
+    /// migration). `None` for an ordinary static face — no variation
+    /// settings needed, and passing an empty settings list is harmless
+    /// either way.
+    variable_weight: Option<f32>,
+}
+
+impl OwnedFace {
+    /// Load an in-memory face at `wght: 400` if variable — the right
+    /// default for icon fonts (`icon.rs`'s own bundled Material Symbols
+    /// face is itself variable, "FILL 0, wght 400" being its documented
+    /// intended default instance) and any other single-weight custom face.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        Self::new(bytes.to_vec(), 0, 400.0)
+    }
+
+    /// `weight` is the `wght` axis value to request IF this turns out to be
+    /// a variable font (e.g. `400.0` for a "regular" candidate, `700.0` for
+    /// a "bold" one) — ignored entirely for static faces.
+    fn new(bytes: Vec<u8>, index: u32, weight: f32) -> Option<Self> {
+        let data = Arc::new(bytes);
+        let (offset, key, is_variable) = {
+            let font = FontRef::from_index(&data, index as usize)?;
+            (font.offset, font.key, font.variations().len() > 0)
+        };
+        Some(Self {
+            data,
+            offset,
+            key,
+            variable_weight: is_variable.then_some(weight),
+        })
+    }
+
+    /// Reconstructs a cheap `swash::FontRef` borrowing this face's bytes,
+    /// preserving `offset`/`key` (see this struct's doc). Named `font_ref`,
+    /// not `as_ref`, to avoid silently resolving to `Arc<OwnedFace>`'s OWN
+    /// unrelated `as_ref()` (`AsRef<OwnedFace>`) at call sites that hold an
+    /// `&Arc<OwnedFace>` — a real footgun caught by the compiler once, not
+    /// worth re-risking with a same-named method.
+    fn font_ref(&self) -> FontRef<'_> {
+        FontRef { data: &self.data, offset: self.offset, key: self.key }
+    }
+}
 
 enum Fallback {
     Untried(&'static str),
     Missing,
-    Loaded(Font),
+    Loaded(OwnedFace),
 }
 
-/// Color-emoji fallback face (Phase 32 Step 4, D115): raw bytes retained
-/// (unlike the plain-text `Fallback` above, which discards them once
-/// `fontdue::Font` parses them) — `fontdue` only rasterizes vector
-/// OUTLINES, but color emoji glyphs live in a bitmap table (`sbix` on
-/// macOS: literally an embedded PNG per glyph per size, "up to the caller
-/// to decode" per `ttf-parser`'s own doc comment), so decoding needs
+/// Color-emoji fallback face (Phase 32 Step 4, D115): raw bytes retained —
+/// swash only rasterizes vector OUTLINES via the `Source::Outline` path we
+/// use, but color emoji glyphs live in a bitmap table (`sbix` on macOS:
+/// literally an embedded PNG per glyph per size, "up to the caller to
+/// decode" per `ttf-parser`'s own doc comment), so decoding needs
 /// `ttf_parser::Face` directly, re-parsed from these bytes on each lookup
-/// (parsing itself is cheap — no re-reading the outline tables fontdue
+/// (parsing itself is cheap — no re-reading the outline tables swash
 /// already indexed).
 enum EmojiFallback {
     Untried,
@@ -105,32 +181,50 @@ fn is_emoji_codepoint(c: char) -> bool {
 }
 
 pub struct FontCache {
-    pub(crate) font: Font,
+    font: OwnedFace,
     /// Real bold face when the platform provides one; None → bold renders
     /// with the regular face (as before).
-    bold: Option<Font>,
+    bold: Option<OwnedFace>,
     /// In-memory icon face (D115/Phase 32 Step 2) — registered once by the
     /// widget layer, consulted when the primary faces miss a codepoint and
     /// BEFORE the disk fallback chain: icon fonts live in the Private Use
     /// Area, where system fallback faces (Apple Symbols et al.) carry their
     /// own unrelated glyphs.
-    icon: RefCell<Option<Arc<Font>>>,
+    icon: RefCell<Option<Arc<OwnedFace>>>,
     /// Unicode fallback faces, loaded lazily on the first glyph miss —
     /// Arial Unicode alone is ~20 MB, so we don't parse it until a CJK or
     /// symbol codepoint actually appears.
     fallbacks: RefCell<Vec<Fallback>>,
     /// (char, wants_bold) → resolved face. Routing is per-character.
     route_cache: RefCell<HashMap<(char, bool), FaceKey>>,
-    glyph_cache: RefCell<HashMap<GlyphKey, CachedGlyph>>,
-    metrics_cache: RefCell<HashMap<GlyphKey, f32>>,
+    glyph_cache: RefCell<HashMap<GlyphCacheKey, CachedGlyph>>,
+    metrics_cache: RefCell<HashMap<GlyphCacheKey, f32>>,
     /// Color-emoji fallback face (Phase 32 Step 4) — raw bytes, loaded
     /// lazily on the first emoji-range character (same "don't pay for it
     /// until needed" principle as `fallbacks` above).
     emoji: RefCell<EmojiFallback>,
     /// Decoded color glyphs, keyed like `glyph_cache` — PNG decode is real
-    /// work (unlike a cached fontdue rasterize, which is already cheap),
-    /// so this cache matters more, not less.
+    /// work (unlike a cached rasterize, which is already cheap), so this
+    /// cache matters more, not less.
     color_glyph_cache: RefCell<HashMap<ColorGlyphKey, Option<Arc<ColorGlyph>>>>,
+    /// Raw (design-units, NOT px-scaled) kern value per `(face, left, right)`
+    /// pair — `None` means "no kerning for this pair" (still cached, so a
+    /// miss doesn't re-parse every call). Design-units instead of px-keyed
+    /// like `metrics_cache`/`glyph_cache`: kerning is size-independent
+    /// until the final `/ units_per_em * px` scale, so one cache entry
+    /// serves EVERY font size a pair is ever asked about, not just one.
+    /// Exists because `kern_weighted` re-parses the whole font's `kern`
+    /// table via `ttf_parser::Face::parse` on every call — found live
+    /// (2026-08-03): with no caching at all, that ran on every character
+    /// pair of every string on every single paint frame and made the app
+    /// "super slow" — a real regression this cache fixes, not a
+    /// premature optimization.
+    kern_cache: RefCell<HashMap<KernKey, KernEntry>>,
+    /// swash's scaling context — owns its own internal LRU caches/scratch
+    /// buffers (per swash's own docs: "keep one instance per thread"). One
+    /// per `FontCache`, `RefCell`-wrapped to match every other cache field
+    /// here (`FontCache` is already `!Sync` via those).
+    scale_ctx: RefCell<ScaleContext>,
 }
 
 /// Unicode fallback candidates per platform. Order = priority. Coverage:
@@ -157,10 +251,13 @@ const BOLD_PATHS: &[&str] = &[
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "C:\\Windows\\Fonts\\segoeuib.ttf",
     "C:\\Windows\\Fonts\\arialbd.ttf",
+    // Android — stable AOSP path since Android 4.x on every stock/AOSP-based
+    // device (D127 "environment" track: real system font, read not bundled).
+    "/system/fonts/Roboto-Bold.ttf",
 ];
 
 impl FontCache {
-    fn build(font: Font, bold: Option<Font>) -> Self {
+    fn build(font: OwnedFace, bold: Option<OwnedFace>) -> Self {
         Self {
             font,
             bold,
@@ -173,11 +270,13 @@ impl FontCache {
             metrics_cache: RefCell::new(HashMap::new()),
             emoji: RefCell::new(EmojiFallback::Untried),
             color_glyph_cache: RefCell::new(HashMap::new()),
+            kern_cache: RefCell::new(HashMap::new()),
+            scale_ctx: RefCell::new(ScaleContext::new()),
         }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        let font = Font::from_bytes(bytes, FontSettings::default())
+        let font = OwnedFace::new(bytes.to_vec(), 0, 400.0)
             .expect("invalid font bytes");
         Self::build(font, None)
     }
@@ -193,7 +292,7 @@ impl FontCache {
     /// ```
     pub fn from_asset(name: impl rosace_core::asset::AssetRef) -> Option<Self> {
         let bytes = rosace_core::asset::bytes(name)?;
-        let font = Font::from_bytes(bytes.as_slice(), FontSettings::default()).ok()?;
+        let font = OwnedFace::new(bytes, 0, 400.0)?;
         Some(Self::build(font, None))
     }
 
@@ -223,17 +322,17 @@ impl FontCache {
             include_bytes!("../../assets/fonts/inter/Inter-Regular.ttf");
         const INTER_BOLD: &[u8] =
             include_bytes!("../../assets/fonts/inter/Inter-Bold.ttf");
-        let regular = Font::from_bytes(INTER_REGULAR, FontSettings::default())
+        let regular = OwnedFace::new(INTER_REGULAR.to_vec(), 0, 400.0)
             .expect("bundled Inter Regular is valid");
-        let bold = Font::from_bytes(INTER_BOLD, FontSettings::default())
+        let bold = OwnedFace::new(INTER_BOLD.to_vec(), 0, 700.0)
             .expect("bundled Inter Bold is valid");
         Self::build(regular, Some(bold))
     }
 
-    fn load_first(paths: &[&str]) -> Option<Font> {
+    fn load_first(paths: &[&str], weight: f32) -> Option<OwnedFace> {
         for path in paths {
             if let Ok(bytes) = std::fs::read(path) {
-                if let Ok(f) = Font::from_bytes(bytes.as_slice(), FontSettings::default()) {
+                if let Some(f) = OwnedFace::new(bytes, 0, weight) {
                     return Some(f);
                 }
             }
@@ -247,16 +346,15 @@ impl FontCache {
     ///
     /// This exists because `.ttc` collections (how macOS ships every UI
     /// family — Avenir Next, Helvetica Neue, ...) do NOT put the Regular
-    /// face at index 0. `fontdue::Font::from_bytes` defaults to index 0,
-    /// so naively loading a `.ttc` silently picks WHATEVER face happens to
-    /// be first — on Avenir Next.ttc that's actually "Avenir Next Bold".
-    /// Loading that as "regular" and then falling back to an unrelated
-    /// Arial Bold for "bold" produces two different type families where
-    /// the nominal "bold" face is visually THINNER than the nominal
-    /// "regular" one — bold becomes visually indistinguishable (or
-    /// reversed) from regular. Real fix: read the name table and pick the
-    /// actual matching face for each weight, from the same family when
-    /// possible.
+    /// face at index 0. Naively loading a `.ttc` at index 0 silently picks
+    /// WHATEVER face happens to be first — on Avenir Next.ttc that's
+    /// actually "Avenir Next Bold". Loading that as "regular" and then
+    /// falling back to an unrelated Arial Bold for "bold" produces two
+    /// different type families where the nominal "bold" face is visually
+    /// THINNER than the nominal "regular" one — bold becomes visually
+    /// indistinguishable (or reversed) from regular. Real fix: read the
+    /// name table and pick the actual matching face for each weight, from
+    /// the same family when possible.
     fn weight_score(name: &str, want_bold: bool) -> Option<i32> {
         let n = name.to_ascii_lowercase();
         if n.contains("italic") || n.contains("oblique") {
@@ -306,8 +404,8 @@ impl FontCache {
         best.map(|(_, i)| i)
     }
 
-    fn load_face(bytes: &[u8], index: u32) -> Option<Font> {
-        Font::from_bytes(bytes, FontSettings { collection_index: index, ..FontSettings::default() }).ok()
+    fn load_face(bytes: &[u8], index: u32, weight: f32) -> Option<OwnedFace> {
+        OwnedFace::new(bytes.to_vec(), index, weight)
     }
 
     /// Load a system proportional / UI font plus (when available) a real
@@ -319,7 +417,14 @@ impl FontCache {
     /// face and needs the separate `Arial Bold.ttf`).
     pub fn system_ui() -> Option<Self> {
         let candidates = [
-            // macOS — clean proportional faces
+            // macOS — the REAL San Francisco file. Previously excluded here
+            // (fontdue, the old rasterizer, had zero variable-font support
+            // and rendered this as broken hairlines) — the whole point of
+            // the fontdue -> swash migration (D127, 2026-08-03) was to make
+            // this candidate usable: `OwnedFace` detects the variable `wght`
+            // axis and `glyph_weighted` instances it explicitly (400/700)
+            // instead of reading swash's/skrifa's un-instanced default.
+            "/System/Library/Fonts/SFNS.ttf",
             "/System/Library/Fonts/Avenir Next.ttc",
             "/System/Library/Fonts/HelveticaNeue.ttc",
             "/System/Library/Fonts/Helvetica.ttc",
@@ -331,14 +436,19 @@ impl FontCache {
             // Windows
             "C:\\Windows\\Fonts\\segoeui.ttf",
             "C:\\Windows\\Fonts\\arial.ttf",
+            // Android — Roboto has shipped at this exact path on every
+            // stock/AOSP-based device since Android 4.x (D127 "environment"
+            // track). A real system-font read, not a bundled/redistributed
+            // copy — same reasoning as the desktop paths above.
+            "/system/fonts/Roboto-Regular.ttf",
         ];
         for path in candidates {
             let Ok(bytes) = std::fs::read(path) else { continue };
             let reg_idx = Self::best_face_index(&bytes, false).unwrap_or(0);
-            let Some(regular) = Self::load_face(&bytes, reg_idx) else { continue };
+            let Some(regular) = Self::load_face(&bytes, reg_idx, 400.0) else { continue };
             let bold = Self::best_face_index(&bytes, true)
-                .and_then(|i| Self::load_face(&bytes, i))
-                .or_else(|| Self::load_first(BOLD_PATHS));
+                .and_then(|i| Self::load_face(&bytes, i, 700.0))
+                .or_else(|| Self::load_first(BOLD_PATHS, 700.0));
             return Some(Self::build(regular, bold));
         }
         None
@@ -354,8 +464,9 @@ impl FontCache {
             "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
             "C:\\Windows\\Fonts\\consola.ttf",
+            "/system/fonts/DroidSansMono.ttf",
         ];
-        let regular = Self::load_first(&candidates)?;
+        let regular = Self::load_first(&candidates, 400.0)?;
         Some(Self::build(regular, None))
     }
 
@@ -369,7 +480,7 @@ impl FontCache {
     /// Idempotent: the first registration wins; later calls are no-ops.
     /// Registration clears the route cache so codepoints resolved earlier
     /// (as tofu) re-route to the new face.
-    pub fn set_icon_face(&self, font: Arc<Font>) {
+    pub fn set_icon_face(&self, font: Arc<OwnedFace>) {
         {
             let mut slot = self.icon.borrow_mut();
             if slot.is_some() {
@@ -398,15 +509,15 @@ impl FontCache {
             return f;
         }
 
-        let face = if wants_bold && self.bold.as_ref().unwrap().lookup_glyph_index(c) != 0 {
+        let face = if wants_bold && self.bold.as_ref().unwrap().font_ref().charmap().map(c) != 0 {
             FACE_BOLD
-        } else if self.font.lookup_glyph_index(c) != 0 {
+        } else if self.font.font_ref().charmap().map(c) != 0 {
             FACE_REGULAR
         } else if self
             .icon
             .borrow()
             .as_ref()
-            .is_some_and(|f| f.lookup_glyph_index(c) != 0)
+            .is_some_and(|f| f.font_ref().charmap().map(c) != 0)
         {
             FACE_ICON
         } else {
@@ -414,16 +525,13 @@ impl FontCache {
             let mut fallbacks = self.fallbacks.borrow_mut();
             for (i, slot) in fallbacks.iter_mut().enumerate() {
                 if let Fallback::Untried(path) = slot {
-                    *slot = match std::fs::read(&path)
-                        .ok()
-                        .and_then(|b| Font::from_bytes(b.as_slice(), FontSettings::default()).ok())
-                    {
+                    *slot = match std::fs::read(path).ok().and_then(|b| OwnedFace::new(b, 0, 400.0)) {
                         Some(f) => Fallback::Loaded(f),
                         None => Fallback::Missing,
                     };
                 }
                 if let Fallback::Loaded(f) = slot {
-                    if f.lookup_glyph_index(c) != 0 {
+                    if f.font_ref().charmap().map(c) != 0 {
                         found = FACE_FALLBACK_BASE + i as FaceKey;
                         break;
                     }
@@ -436,8 +544,8 @@ impl FontCache {
         face
     }
 
-    /// Run `f` with the resolved face's Font.
-    fn with_face<R>(&self, face: FaceKey, f: impl FnOnce(&Font) -> R) -> R {
+    /// Run `f` with the resolved face's `OwnedFace`.
+    fn with_face<R>(&self, face: FaceKey, f: impl FnOnce(&OwnedFace) -> R) -> R {
         if face == FACE_BOLD {
             if let Some(b) = &self.bold {
                 return f(b);
@@ -458,6 +566,42 @@ impl FontCache {
 
     // ── Glyphs ────────────────────────────────────────────────────────────
 
+    /// Rasterizes `c` from `owned` at `px` — the one place that actually
+    /// talks to swash's scaler, producing metrics and the coverage bitmap
+    /// from the SAME `Render` call (a second call would re-rasterize the
+    /// same glyph twice for no reason). Applies the face's `wght` variation
+    /// axis when it's a variable font (see `OwnedFace::variable_weight`'s doc).
+    fn rasterize_glyph(&self, owned: &OwnedFace, c: char, px: f32) -> (GlyphMetrics, Vec<u8>) {
+        let font_ref = owned.font_ref();
+        let glyph_id: GlyphId = font_ref.charmap().map(c);
+        let advance = font_ref.glyph_metrics(&[]).scale(px).advance_width(glyph_id);
+        let mut ctx = self.scale_ctx.borrow_mut();
+        let mut builder = ctx.builder(font_ref).size(px).hint(true);
+        if let Some(w) = owned.variable_weight {
+            builder = builder.variations(&[("wght", w)]);
+        }
+        let mut scaler = builder.build();
+        let Some(image) = Render::new(&[Source::Outline]).render(&mut scaler, glyph_id) else {
+            return (GlyphMetrics { advance_width: advance, ..Default::default() }, Vec::new());
+        };
+        let metrics = GlyphMetrics {
+            xmin: image.placement.left,
+            // swash's `Placement.top` is the offset from the glyph origin
+            // (baseline) to the bitmap's top edge, positive = ABOVE the
+            // baseline (font/outline Y-up convention) — opposite of
+            // fontdue's `ymin` (bottom-edge offset). `ymin` here is
+            // reconstructed as `top - height` so downstream code
+            // (`layout_glyphs`'s `base_y - ymin - height`) keeps working
+            // unchanged. Verified against real rendered output, not just
+            // read from swash's source — see this migration's live-test step.
+            ymin: image.placement.top - image.placement.height as i32,
+            width: image.placement.width as usize,
+            height: image.placement.height as usize,
+            advance_width: advance,
+        };
+        (metrics, image.data)
+    }
+
     /// Shared handle to the cached glyph for `c` at `px`/`weight` —
     /// routed through the bold face and Unicode fallbacks.
     pub fn glyph_weighted(&self, c: char, px: f32, weight: FontWeight) -> CachedGlyph {
@@ -469,7 +613,8 @@ impl FontCache {
                 return Arc::clone(entry);
             }
         }
-        let entry = Arc::new(self.with_face(face, |f| f.rasterize(c, px)));
+        let (metrics, bytes) = self.with_face(face, |f| self.rasterize_glyph(f, c, px));
+        let entry = Arc::new((metrics, bytes));
         self.glyph_cache.borrow_mut().insert(key, Arc::clone(&entry));
         entry
     }
@@ -481,7 +626,7 @@ impl FontCache {
 
     /// Rasterize a single character (copies the bitmap — prefer
     /// [`FontCache::glyph`] in hot paths).
-    pub fn rasterize(&self, c: char, px: f32) -> (fontdue::Metrics, Vec<u8>) {
+    pub fn rasterize(&self, c: char, px: f32) -> (GlyphMetrics, Vec<u8>) {
         let glyph = self.glyph(c, px);
         (glyph.0, glyph.1.clone())
     }
@@ -510,7 +655,7 @@ impl FontCache {
     /// emoji fallback face actually has a color bitmap for it (`sbix` only
     /// today — see `EMOJI_FALLBACK_PATHS`'s doc for the Windows/Linux gap).
     /// `None` for anything else, including a plain character that happens
-    /// to fail this lookup — callers fall through to the normal fontdue path.
+    /// to fail this lookup — callers fall through to the normal outline path.
     pub fn color_glyph_rgba(&self, c: char, px: f32) -> Option<Arc<ColorGlyph>> {
         if !is_emoji_codepoint(c) { return None; }
 
@@ -555,13 +700,40 @@ impl FontCache {
     }
 
     /// Kerning between `left` and `right` at `px`/`weight`. Zero when the
-    /// pair spans different faces (fallback boundaries have no kern data).
+    /// pair spans different faces (fallback boundaries have no kern data),
+    /// or when the face has no `kern` table. Reads the `kern` table
+    /// directly via `ttf_parser` (already a dependency here for name-table/
+    /// collection-index introspection) — swash's own shaping module targets
+    /// full GPOS-based complex-script shaping, a bigger API than the simple
+    /// pairwise advance this UI-text layout model needs.
     pub fn kern_weighted(&self, left: char, right: char, px: f32, weight: FontWeight) -> f32 {
         let fl = self.resolve(left, weight);
         if fl != self.resolve(right, weight) {
             return 0.0;
         }
-        self.with_face(fl, |f| f.horizontal_kern(left, right, px).unwrap_or(0.0))
+        let cache_key = (fl, left, right);
+        let cached = {
+            let cache = self.kern_cache.borrow();
+            cache.get(&cache_key).copied()
+        };
+        let entry = match cached {
+            Some(v) => v,
+            None => {
+                let v = self.with_face(fl, |owned| {
+                    let Ok(face) = ttf_parser::Face::parse(&owned.data, 0) else { return None };
+                    let (Some(l), Some(r)) = (face.glyph_index(left), face.glyph_index(right)) else { return None };
+                    let upem = face.units_per_em();
+                    let table = face.tables().kern?;
+                    let raw = table.subtables.into_iter().find_map(|st| st.glyphs_kerning(l, r))?;
+                    Some((raw, upem))
+                });
+                self.kern_cache.borrow_mut().insert(cache_key, v);
+                v
+            }
+        };
+        let Some((raw, units_per_em)) = entry else { return 0.0 };
+        if units_per_em == 0 { return 0.0; }
+        raw as f32 / units_per_em as f32 * px
     }
 
     pub fn kern(&self, left: char, right: char, px: f32) -> f32 {
@@ -578,7 +750,11 @@ impl FontCache {
                 return w;
             }
         }
-        let w = self.with_face(face, |f| f.metrics(c, px).advance_width);
+        let w = self.with_face(face, |owned| {
+            let font_ref = owned.font_ref();
+            let glyph_id = font_ref.charmap().map(c);
+            font_ref.glyph_metrics(&[]).scale(px).advance_width(glyph_id)
+        });
         self.metrics_cache.borrow_mut().insert(key, w);
         w
     }
@@ -591,6 +767,7 @@ impl FontCache {
     /// kerning, in lockstep with `SkiaCanvas::draw_text_weighted` so
     /// measured and painted widths agree.
     pub fn measure_text_weighted(&self, text: &str, px: f32, weight: FontWeight) -> f32 {
+        let px = px * rosace_core::media_query::use_media_query().text_scale;
         let mut width = 0.0;
         let mut prev: Option<char> = None;
         for c in text.chars() {
@@ -610,18 +787,17 @@ impl FontCache {
     /// Distance from the top of the line box to the baseline, in pixels.
     /// Always from the primary face — mixed-face runs share one baseline.
     pub fn ascender(&self, px: f32) -> i32 {
-        self.font
-            .horizontal_line_metrics(px)
-            .map(|m| m.ascent.round() as i32)
-            .unwrap_or((px * 0.78) as i32)
+        let font_ref = self.font.font_ref();
+        let m = font_ref.metrics(&[]).scale(px);
+        if m.ascent > 0.0 { m.ascent.round() as i32 } else { (px * 0.78) as i32 }
     }
 
     /// Full line height (ascender + descender + gap) in pixels.
     pub fn line_height(&self, px: f32) -> f32 {
-        self.font
-            .horizontal_line_metrics(px)
-            .map(|m| m.new_line_size)
-            .unwrap_or(px * 1.2)
+        let font_ref = self.font.font_ref();
+        let m = font_ref.metrics(&[]).scale(px);
+        let total = m.ascent + m.descent + m.leading;
+        if total > 0.0 { total } else { px * 1.2 }
     }
 }
 
@@ -685,14 +861,14 @@ pub fn layout_glyphs(
         prev = Some(ch);
 
         // Color-emoji check first: a real emoji codepoint should never fall
-        // through to fontdue's outline rasterizer (the primary UI font has
-        // no glyph for it at all, or — worse — a plain monochrome fallback
+        // through to the outline rasterizer (the primary UI font has no
+        // glyph for it at all, or — worse — a plain monochrome fallback
         // shape that isn't the real emoji).
         if let Some(cg) = font.color_glyph_rgba(ch, px) {
             let gx = cursor_x.round() as i32;
             let gy = base_y - cg.height as i32; // bottom-aligned to baseline, left-aligned to cursor
             let key = ((px.to_bits() as u64) << 32) | ((ch as u64) << 1) | bold | (1 << 63);
-            let placeholder: CachedGlyph = Arc::new((fontdue::Metrics::default(), Vec::new()));
+            let placeholder: CachedGlyph = Arc::new((GlyphMetrics::default(), Vec::new()));
             let advance = cg.advance;
             out.push(PlacedGlyph { glyph: placeholder, x: gx, y: gy, key, color_rgba: Some(cg) });
             cursor_x += advance;

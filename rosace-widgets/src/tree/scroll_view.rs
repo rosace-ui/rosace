@@ -34,6 +34,78 @@ pub enum ScrollAxis {
 /// GPU-accelerated.
 pub const MAX_TL_DIM: f32 = 4096.0;
 
+/// How strongly the `Bounce` spring recovers WHILE wheel/trackpad momentum
+/// events are still arriving (as opposed to full-strength once they've
+/// truly gone idle) — a fraction applied to `dt` before calling
+/// `settle_bounce`, not a separate physics constant, so it reuses the exact
+/// same spring math just running "in slow motion" relative to real time.
+/// 0.15 was chosen empirically (real trackpad testing) to sit comfortably
+/// below the pull each individual resisted wheel push contributes (`bounce_
+/// axis` already resists those to 35% of their raw delta) — high enough to
+/// visibly close most of the gap before the events truly stop (cutting the
+/// old unbounded freeze down to a brief, subtle glide), low enough that the
+/// two don't visibly fight each other frame-to-frame (full strength here
+/// oscillated: push out, spring back further, push out again).
+const CONCURRENT_BOUNCE_DT_SCALE: f32 = 0.15;
+
+/// When the scrollbar thumb/track is drawn at all (D-SCROLLBAR-1 — user-
+/// reported: during a screen-transition slide, an always-drawn thumb reads
+/// as a small opaque box detached from the rest of the sliding UI; fading
+/// it away when idle/off-screen sidesteps that entirely, not just on
+/// transitions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollbarVisibility {
+    /// Always visible whenever there's overflow to scroll.
+    #[default]
+    Always,
+    /// Hidden until a drag, wheel, or momentum-coast gesture is active;
+    /// fades out shortly after the content settles.
+    WhileScrolling,
+    /// Visible while the pointer hovers the track, OR while actively
+    /// scrolling (falls back to `WhileScrolling`'s behavior with no mouse
+    /// — touch/mobile has no hover to trigger on).
+    OnHover,
+    /// Never drawn — same effect as [`ScrollView::no_scrollbar`].
+    Hidden,
+}
+
+/// Full scrollbar appearance + behavior, set with [`ScrollView::scrollbar_style`].
+/// The individual `.scrollbar_color()`/`.no_scrollbar()` shorthands still work
+/// and just edit this struct's fields.
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollbarStyle {
+    pub visibility: ScrollbarVisibility,
+    /// Thumb fill.
+    pub color: Color,
+    /// Track background drawn behind the thumb along the whole scrollable
+    /// edge. `None` (default) draws no track, matching the previous
+    /// thumb-only look.
+    pub track_color: Option<Color>,
+    /// Thumb (and track) thickness in logical px.
+    pub thickness: f32,
+    /// Corner radius — `0.0` for the previous square-cornered look.
+    pub radius: f32,
+    /// Gap between the thumb and the viewport's far edge.
+    pub inset: f32,
+    /// Floor on the thumb's drawn length so a huge content/viewport ratio
+    /// never shrinks it down to an unclickable sliver.
+    pub min_thumb_length: f32,
+}
+
+impl Default for ScrollbarStyle {
+    fn default() -> Self {
+        Self {
+            visibility: ScrollbarVisibility::Always,
+            color: Color::rgb(50, 55, 85),
+            track_color: None,
+            thickness: 3.0,
+            radius: 1.5,
+            inset: 4.0,
+            min_thumb_length: 24.0,
+        }
+    }
+}
+
 /// A scrollable viewport. The child can exceed the available size; content
 /// is painted at the scroll offset and clipped to the viewport bounds.
 ///
@@ -58,8 +130,7 @@ pub struct ScrollView {
     /// Explicit controller override (D101). `None` = implicit node controller.
     controller: Option<ScrollController>,
     pub axis: ScrollAxis,
-    pub show_scrollbar: bool,
-    pub scrollbar_color: Color,
+    pub scrollbar: ScrollbarStyle,
     /// Force the GPU-layer path on even when the automatic heuristic
     /// (`should_auto_gpu`) would not have chosen it (e.g. content smaller
     /// than the viewport that the app still wants pre-composited). The
@@ -95,8 +166,7 @@ impl ScrollView {
             fixed_offset: None,
             controller: None,
             axis: ScrollAxis::Vertical,
-            show_scrollbar: true,
-            scrollbar_color: Color::rgb(50, 55, 85),
+            scrollbar: ScrollbarStyle::default(),
             gpu_layer: false,
             physics: None,
         }
@@ -150,8 +220,14 @@ impl ScrollView {
     pub fn offset(mut self, o: f32) -> Self { self.fixed_offset = Some(o); self }
 
     pub fn axis(mut self, a: ScrollAxis) -> Self { self.axis = a; self }
-    pub fn no_scrollbar(mut self) -> Self { self.show_scrollbar = false; self }
-    pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar_color = c; self }
+    pub fn no_scrollbar(mut self) -> Self { self.scrollbar.visibility = ScrollbarVisibility::Hidden; self }
+    pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar.color = c; self }
+    /// Full scrollbar style (visibility mode, color, track, thickness,
+    /// radius, inset, minimum thumb length) in one call.
+    pub fn scrollbar_style(mut self, s: ScrollbarStyle) -> Self { self.scrollbar = s; self }
+    /// Just the visibility mode — shorthand for `.scrollbar_style(..)` when
+    /// only that needs to change.
+    pub fn scrollbar_visibility(mut self, v: ScrollbarVisibility) -> Self { self.scrollbar.visibility = v; self }
 
     /// Content constraints (unbounded-axis doctrine, API_DESIGN §6): on the
     /// scroll axis min = viewport, max = Unbounded. Shared by both the GPU
@@ -248,6 +324,18 @@ impl ScrollView {
         if is_pressed {
             ctrl.track_velocity(dt);
         } else if ctrl.wheel_recently_active() {
+            // A `Bounce` spring must keep recovering even while the OS's
+            // native momentum-phase wheel events are still arriving — see
+            // the long comment on this same branch in `paint_base` for why
+            // waiting for them to stop first produced a visible "pause,
+            // then snap back" that grew with flick speed. Heavily damped
+            // (`CONCURRENT_BOUNCE_DT_SCALE`) — see that constant's own doc
+            // comment for why a full-strength spring here visibly vibrated.
+            if let ScrollPhysics::Bounce { spring_stiffness, .. } = physics {
+                if ctrl.is_overscrolled() {
+                    ctrl.settle_bounce(spring_stiffness, dt * CONCURRENT_BOUNCE_DT_SCALE);
+                }
+            }
             ctx.request_animation();
         } else {
             if was_pressed { ctrl.end_drag(); }
@@ -301,37 +389,16 @@ impl ScrollView {
         // Touch/mouse drag-to-pan (GPU-path parity): a finger produces no
         // wheel event, so without this the GPU scroll path could not scroll on
         // touch devices at all (the gallery was frozen on iOS, fine on the
-        // Mac trackpad). Streams absolute drag position → delta →
-        // `apply_momentum`, which also feeds the velocity the flick coasts on.
+        // Mac trackpad). Nested-scroll-chain-aware (D-NESTED-SCROLL,
+        // 2026-08-02) — see the base path's own registration for why this
+        // is `register_nested_scroll`, not `on_press_at`.
         let pan_ctrl = ctrl.clone();
-        ctx.on_press_at(move |x, y| {
-            let (dx, dy) = pan_ctrl.drag_delta(x, y);
-            pan_ctrl.apply_momentum(if ax { -dx } else { 0.0 }, if ay { -dy } else { 0.0 }, physics);
+        ctx.register_nested_scroll(move |dx, dy| {
+            pan_ctrl.try_apply_delta(if ax { -dx } else { 0.0 }, if ay { -dy } else { 0.0 }, physics)
         });
 
         // Scrollbar drawn into the base canvas from the live channel offset.
-        if self.show_scrollbar && matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both)
-            && child_size.height > vp.size.height
-        {
-            let ratio = (vp.size.height / child_size.height).min(1.0);
-            let bar_h = vp.size.height * ratio;
-            let bar_y = vp.origin.y + (off[1] / child_size.height) * vp.size.height;
-            ctx.fill_rect(Rect {
-                origin: Point { x: vp.origin.x + vp.size.width - 4.0, y: bar_y },
-                size: Size { width: 3.0, height: bar_h },
-            }, self.scrollbar_color);
-        }
-        if self.show_scrollbar && matches!(self.axis, ScrollAxis::Horizontal | ScrollAxis::Both)
-            && child_size.width > vp.size.width
-        {
-            let ratio = (vp.size.width / child_size.width).min(1.0);
-            let bar_w = vp.size.width * ratio;
-            let bar_x = vp.origin.x + (off[0] / child_size.width) * vp.size.width;
-            ctx.fill_rect(Rect {
-                origin: Point { x: bar_x, y: vp.origin.y + vp.size.height - 4.0 },
-                size: Size { width: bar_w, height: 3.0 },
-            }, self.scrollbar_color);
-        }
+        self.draw_scrollbars(ctx, vp, child_size, off, Some(&ctrl), is_pressed);
     }
 
     /// Base (CPU-painted) path: content painted directly into the main
@@ -398,19 +465,25 @@ impl ScrollView {
 
             let physics = resolve_physics(&ctx.theme, self.physics);
 
-            // Drag-to-pan (D108/Phase 26 Step 2): streams absolute drag
-            // position via the same positional-hit mechanism sliders use,
-            // axis-clamped like wheel input above. Registering this also
-            // makes the viewport a `hits_at` region, so `ctx.pressed()`
-            // below picks it up for free via the same `hover_test` walk
-            // Step 1's press state already resolves through.
+            // Drag-to-pan (D108/Phase 26 Step 2; nested-scroll-chain-aware
+            // since D-NESTED-SCROLL, 2026-08-02): a `ScrollHandler` link
+            // via `register_nested_scroll`, not the flat always-consumes
+            // `on_press_at` sliders use — reports whether the delta
+            // actually moved the offset, so once this view is exhausted
+            // in the drag's direction (hard-clamped, or stretched to its
+            // own `Bounce` limit), the SAME delta falls through to
+            // whatever scrollable ancestor encloses it, instead of the
+            // gesture just silently doing nothing. Registering this also
+            // makes the viewport a `nested_scrolls` region, so
+            // `ctx.pressed()` below picks it up for free via the same
+            // `hover_test` walk Step 1's press state already resolves
+            // through (`hover_test_node` checks `nested_scrolls` too).
             let drag_ctrl = ctrl.clone();
-            ctx.on_press_at(move |x, y| {
-                let (dx, dy) = drag_ctrl.drag_delta(x, y);
+            ctx.register_nested_scroll(move |dx, dy| {
                 // Content follows the finger: dragging up (dy < 0) reveals
                 // what's below, i.e. INCREASES the offset — negate, exactly
                 // like the wheel-scroll callback above already does.
-                drag_ctrl.apply_momentum(if ax { -dx } else { 0.0 }, if ay { -dy } else { 0.0 }, physics);
+                drag_ctrl.try_apply_delta(if ax { -dx } else { 0.0 }, if ay { -dy } else { 0.0 }, physics)
             });
 
             // Momentum/bounce drive (D108/Phase 26 Step 2): tracks the REAL
@@ -452,6 +525,35 @@ impl ScrollView {
             if is_pressed {
                 ctrl.track_velocity(dt);
             } else if ctrl.wheel_recently_active() {
+                // Real trackpad testing (2026-08-01): a fast flick's native
+                // momentum-phase wheel-event tail can run for a while — this
+                // branch stays active that whole time, and previously did
+                // nothing but wait, so an ALREADY-overscrolled `Bounce` view
+                // sat frozen at the rubber-band limit until the OS finally
+                // stopped sending events, then sprang back — a pause whose
+                // length scaled directly with flick speed (longer flick =
+                // longer native momentum tail = longer freeze). The spring
+                // must keep recovering concurrently with those still-
+                // arriving events, not wait for them to end; the wheel
+                // callback's own `apply_momentum` (via `bounce_axis`) still
+                // resists any further push deeper into overscroll, so this
+                // doesn't fight it, it just lets the recoil run at the same
+                // time — matching real trackpad/UIScrollView feel, where you
+                // can feel resistance AND a slight recoil simultaneously.
+                // Heavily damped (`CONCURRENT_BOUNCE_DT_SCALE`) — a full-
+                // strength spring here fought each still-arriving resisted
+                // push hard enough to visibly vibrate (real trackpad
+                // testing, 2026-08-01 follow-up): push out 35%-resisted,
+                // spring pulls back a large fraction of that same distance,
+                // next event pushes again — a sawtooth. Damping the spring's
+                // own effective time step keeps its pull well below what a
+                // single resisted push contributes, so it net-decays smoothly
+                // toward the bound instead of visibly fighting each event.
+                if let ScrollPhysics::Bounce { spring_stiffness, .. } = physics {
+                    if ctrl.is_overscrolled() {
+                        ctrl.settle_bounce(spring_stiffness, dt * CONCURRENT_BOUNCE_DT_SCALE);
+                    }
+                }
                 ctx.request_animation(); // keep the loop alive so coast resumes once wheel events truly stop
             } else {
                 if was_pressed { ctrl.end_drag(); }
@@ -512,44 +614,131 @@ impl ScrollView {
         // above, so the thumb would lag a full frame behind the content
         // it's supposed to track (most visible during a fast momentum
         // coast, where a frame's movement is largest).
-        let (fresh_x, fresh_y) = match &ctrl {
-            Some(c) => { let [x, y] = c.offset.get(); (x, y) }
-            None => (scroll_x, scroll_y),
+        let fresh = match &ctrl {
+            Some(c) => c.offset.get(),
+            None => [scroll_x, scroll_y],
         };
-        if self.show_scrollbar && matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both) {
+        self.draw_scrollbars(ctx, vp, child_size, fresh, ctrl.as_ref(), ctx.pressed());
+    }
+
+    /// Shared by both the GPU and base paint paths — draws the thumb (and
+    /// optional track), governed by `self.scrollbar`'s visibility mode.
+    /// `off` is this frame's freshly-read scroll offset (not a value
+    /// captured earlier in the same paint call — see the callers' own
+    /// comments on why "fresh" matters for `Bounce` overscroll).
+    fn draw_scrollbars(
+        &self,
+        ctx: &mut PaintCtx,
+        vp: Rect,
+        child_size: Size,
+        off: [f32; 2],
+        ctrl: Option<&ScrollController>,
+        is_pressed: bool,
+    ) {
+        let st = &self.scrollbar;
+        if st.visibility == ScrollbarVisibility::Hidden {
+            return;
+        }
+
+        let show_v = matches!(self.axis, ScrollAxis::Vertical | ScrollAxis::Both)
+            && child_size.height > vp.size.height.max(1.0);
+        let show_h = matches!(self.axis, ScrollAxis::Horizontal | ScrollAxis::Both)
+            && child_size.width > vp.size.width.max(1.0);
+        if !show_v && !show_h {
+            return;
+        }
+
+        // A generous strip along the scrollable edge, not just the exact
+        // thumb rect — real scrollbars reveal on hovering anywhere near the
+        // edge, not only when the cursor lands precisely on the (possibly
+        // short) thumb.
+        const HOVER_STRIP: f32 = 14.0;
+        let (px, py) = super::current_pointer();
+        let in_rect = |r: Rect| px >= r.origin.x && px <= r.origin.x + r.size.width
+            && py >= r.origin.y && py <= r.origin.y + r.size.height;
+
+        let mut v_thumb = None;
+        if show_v {
             let ratio = (vp.size.height / child_size.height.max(1.0)).min(1.0);
-            if ratio < 1.0 {
-                let bar_h = vp.size.height * ratio;
-                // Clamp the THUMB's visible position to the track — under
-                // `Bounce`, `fresh_y` can go negative or past the max
-                // during an overscroll, which without this would push the
-                // thumb (or its rect) off the visible track entirely,
-                // looking like the scrollbar "isn't responding" (found via
-                // real trackpad testing). The content itself still tracks
-                // the real (unclamped) offset; only the thumb's on-screen
-                // position is clamped.
-                let max_bar_y = vp.origin.y + vp.size.height - bar_h;
-                let bar_y = (vp.origin.y + (fresh_y / child_size.height) * vp.size.height)
-                    .clamp(vp.origin.y, max_bar_y.max(vp.origin.y));
-                ctx.fill_rect(Rect {
-                    origin: Point { x: vp.origin.x + vp.size.width - 4.0, y: bar_y },
-                    size: Size { width: 3.0, height: bar_h },
-                }, self.scrollbar_color);
-            }
+            let bar_h = (vp.size.height * ratio).max(st.min_thumb_length);
+            // Clamp the THUMB's visible position to the track — under
+            // `Bounce`, `off[1]` can go negative or past the max during an
+            // overscroll, which without this would push the thumb off the
+            // visible track entirely, looking like the scrollbar "isn't
+            // responding" (found via real trackpad testing). The content
+            // itself still tracks the real (unclamped) offset; only the
+            // thumb's on-screen position is clamped.
+            let max_bar_y = vp.origin.y + vp.size.height - bar_h;
+            let bar_y = (vp.origin.y + (off[1] / child_size.height) * vp.size.height)
+                .clamp(vp.origin.y, max_bar_y.max(vp.origin.y));
+            let bar_x = vp.origin.x + vp.size.width - st.inset - st.thickness;
+            v_thumb = Some(Rect {
+                origin: Point { x: bar_x, y: bar_y },
+                size: Size { width: st.thickness, height: bar_h },
+            });
         }
-        if self.show_scrollbar && matches!(self.axis, ScrollAxis::Horizontal | ScrollAxis::Both) {
+        let mut h_thumb = None;
+        if show_h {
             let ratio = (vp.size.width / child_size.width.max(1.0)).min(1.0);
-            if ratio < 1.0 {
-                let bar_w = vp.size.width * ratio;
-                let max_bar_x = vp.origin.x + vp.size.width - bar_w;
-                let bar_x = (vp.origin.x + (fresh_x / child_size.width) * vp.size.width)
-                    .clamp(vp.origin.x, max_bar_x.max(vp.origin.x));
-                ctx.fill_rect(Rect {
-                    origin: Point { x: bar_x, y: vp.origin.y + vp.size.height - 4.0 },
-                    size: Size { width: bar_w, height: 3.0 },
-                }, self.scrollbar_color);
+            let bar_w = (vp.size.width * ratio).max(st.min_thumb_length);
+            let max_bar_x = vp.origin.x + vp.size.width - bar_w;
+            let bar_x = (vp.origin.x + (off[0] / child_size.width) * vp.size.width)
+                .clamp(vp.origin.x, max_bar_x.max(vp.origin.x));
+            let bar_y = vp.origin.y + vp.size.height - st.inset - st.thickness;
+            h_thumb = Some(Rect {
+                origin: Point { x: bar_x, y: bar_y },
+                size: Size { width: bar_w, height: st.thickness },
+            });
+        }
+
+        let hovered = st.visibility == ScrollbarVisibility::OnHover && {
+            let v_strip = show_v.then_some(Rect {
+                origin: Point { x: vp.origin.x + vp.size.width - st.inset - st.thickness - HOVER_STRIP, y: vp.origin.y },
+                size: Size { width: st.thickness + st.inset + HOVER_STRIP, height: vp.size.height },
+            });
+            let h_strip = show_h.then_some(Rect {
+                origin: Point { x: vp.origin.x, y: vp.origin.y + vp.size.height - st.inset - st.thickness - HOVER_STRIP },
+                size: Size { width: vp.size.width, height: st.thickness + st.inset + HOVER_STRIP },
+            });
+            v_strip.is_some_and(in_rect) || h_strip.is_some_and(in_rect)
+        };
+        let active = is_pressed
+            || ctrl.is_some_and(|c| c.wheel_recently_active()
+                || c.velocity_magnitude() > rosace_scroll::controller::COAST_STOP_THRESHOLD);
+
+        let target = match st.visibility {
+            ScrollbarVisibility::Hidden => 0.0,
+            ScrollbarVisibility::Always => 1.0,
+            ScrollbarVisibility::WhileScrolling => if active { 1.0 } else { 0.0 },
+            ScrollbarVisibility::OnHover => if hovered || active { 1.0 } else { 0.0 },
+        };
+        // Channel 0 — nothing else on a ScrollView's own node animates
+        // today, but reserved via `animate_channel` (not `animate_to`) so a
+        // future per-node animation here doesn't silently collide.
+        let opacity = ctx.animate_channel(0, target, 0.0);
+        if opacity <= 0.001 {
+            return;
+        }
+        let with_alpha = |c: Color| Color::rgba(c.r, c.g, c.b, (c.a as f32 * opacity).round() as u8);
+
+        if let Some(track_color) = st.track_color {
+            if let Some(r) = v_thumb {
+                let track = Rect {
+                    origin: Point { x: r.origin.x, y: vp.origin.y },
+                    size: Size { width: st.thickness, height: vp.size.height },
+                };
+                ctx.fill_rrect(track, st.radius, with_alpha(track_color));
+            }
+            if let Some(r) = h_thumb {
+                let track = Rect {
+                    origin: Point { x: vp.origin.x, y: r.origin.y },
+                    size: Size { width: vp.size.width, height: st.thickness },
+                };
+                ctx.fill_rrect(track, st.radius, with_alpha(track_color));
             }
         }
+        if let Some(r) = v_thumb { ctx.fill_rrect(r, st.radius, with_alpha(st.color)); }
+        if let Some(r) = h_thumb { ctx.fill_rrect(r, st.radius, with_alpha(st.color)); }
     }
 }
 

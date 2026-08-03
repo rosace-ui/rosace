@@ -51,44 +51,48 @@ impl TextStyle {
     }
 }
 
-/// The complete Material Design 3–inspired type scale.
+/// The complete Material Design 3–inspired type scale, bumped +1px across
+/// every step (2026-08-03, user-requested: the MD3 baseline still read
+/// small in practice) — the whole point of routing widgets through this
+/// ONE scale (D127) instead of their own literals is that a tweak like
+/// this now takes effect everywhere at once, with zero widget-file edits.
 #[derive(Debug, Clone)]
 pub struct Typography {
-    pub display_large: TextStyle,   // 57 px
-    pub display_medium: TextStyle,  // 45 px
-    pub display_small: TextStyle,   // 36 px
-    pub headline_large: TextStyle,  // 32 px
-    pub headline_medium: TextStyle, // 28 px
-    pub headline_small: TextStyle,  // 24 px
-    pub title_large: TextStyle,     // 22 px
-    pub title_medium: TextStyle,    // 16 px, medium weight
-    pub title_small: TextStyle,     // 14 px, medium weight
-    pub body_large: TextStyle,      // 16 px
-    pub body_medium: TextStyle,     // 14 px
-    pub body_small: TextStyle,      // 12 px
-    pub label_large: TextStyle,     // 14 px, medium
-    pub label_medium: TextStyle,    // 12 px, medium
-    pub label_small: TextStyle,     // 11 px, medium
+    pub display_large: TextStyle,   // 58 px
+    pub display_medium: TextStyle,  // 46 px
+    pub display_small: TextStyle,   // 37 px
+    pub headline_large: TextStyle,  // 33 px
+    pub headline_medium: TextStyle, // 29 px
+    pub headline_small: TextStyle,  // 25 px
+    pub title_large: TextStyle,     // 23 px
+    pub title_medium: TextStyle,    // 17 px, medium weight
+    pub title_small: TextStyle,     // 15 px, medium weight
+    pub body_large: TextStyle,      // 17 px
+    pub body_medium: TextStyle,     // 15 px
+    pub body_small: TextStyle,      // 13 px
+    pub label_large: TextStyle,     // 15 px, medium
+    pub label_medium: TextStyle,    // 13 px, medium
+    pub label_small: TextStyle,     // 12 px, medium
 }
 
 impl Default for Typography {
     fn default() -> Self {
         Self {
-            display_large:   TextStyle::new(57.0, FontWeight::Regular),
-            display_medium:  TextStyle::new(45.0, FontWeight::Regular),
-            display_small:   TextStyle::new(36.0, FontWeight::Regular),
-            headline_large:  TextStyle::new(32.0, FontWeight::Regular),
-            headline_medium: TextStyle::new(28.0, FontWeight::Regular),
-            headline_small:  TextStyle::new(24.0, FontWeight::Regular),
-            title_large:     TextStyle::new(22.0, FontWeight::Regular),
-            title_medium:    TextStyle::new(16.0, FontWeight::Medium),
-            title_small:     TextStyle::new(14.0, FontWeight::Medium),
-            body_large:      TextStyle::new(16.0, FontWeight::Regular),
-            body_medium:     TextStyle::new(14.0, FontWeight::Regular),
-            body_small:      TextStyle::new(12.0, FontWeight::Regular),
-            label_large:     TextStyle::new(14.0, FontWeight::Medium),
-            label_medium:    TextStyle::new(12.0, FontWeight::Medium),
-            label_small:     TextStyle::new(11.0, FontWeight::Medium),
+            display_large:   TextStyle::new(58.0, FontWeight::Regular),
+            display_medium:  TextStyle::new(46.0, FontWeight::Regular),
+            display_small:   TextStyle::new(37.0, FontWeight::Regular),
+            headline_large:  TextStyle::new(33.0, FontWeight::Regular),
+            headline_medium: TextStyle::new(29.0, FontWeight::Regular),
+            headline_small:  TextStyle::new(25.0, FontWeight::Regular),
+            title_large:     TextStyle::new(23.0, FontWeight::Regular),
+            title_medium:    TextStyle::new(17.0, FontWeight::Medium),
+            title_small:     TextStyle::new(15.0, FontWeight::Medium),
+            body_large:      TextStyle::new(17.0, FontWeight::Regular),
+            body_medium:     TextStyle::new(15.0, FontWeight::Regular),
+            body_small:      TextStyle::new(13.0, FontWeight::Regular),
+            label_large:     TextStyle::new(15.0, FontWeight::Medium),
+            label_medium:    TextStyle::new(13.0, FontWeight::Medium),
+            label_small:     TextStyle::new(12.0, FontWeight::Medium),
         }
     }
 }
@@ -113,9 +117,9 @@ mod tests {
     }
 
     #[test]
-    fn typography_default_display_large_is_57px() {
+    fn typography_default_display_large_is_58px() {
         let t = Typography::default();
-        assert_eq!(t.display_large.size, 57.0);
+        assert_eq!(t.display_large.size, 58.0);
     }
 
     #[test]

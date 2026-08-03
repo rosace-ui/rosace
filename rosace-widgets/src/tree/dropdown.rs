@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use rosace_core::types::{Point, Size};
+use rosace_core::types::{Point, Rect, Size};
 use rosace_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx};
 use super::overlay::{OverlayEntry, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig, push_overlay};
@@ -76,14 +76,26 @@ impl Widget for Dropdown {
         ctx.stroke_rrect(r, self.radius, with_alpha(ring, dim), if focused || is_open { 1.5 } else { self.border_width });
         let lh = ctx.font.line_height(13.0);
         ctx.draw_text_at(selected_label, Point { x: r.origin.x + 12.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, with_alpha(fg, dim), 13.0);
-        // Chevron flips ▾→▴ when open.
-        let chev = if is_open { "\u{25b4}" } else { "\u{25be}" };
-        let cw = ctx.font.measure_text(chev, 13.0);
-        ctx.draw_text_at(chev, Point { x: r.origin.x + r.size.width - cw - 10.0, y: r.origin.y + (r.size.height - lh) / 2.0 }, with_alpha(fg, dim), 13.0);
+        // Chevron flips down/up when open. A real Icon (bundled Material
+        // Symbols font, baked into the binary) instead of a raw Unicode
+        // ▾/▴ character drawn through the body-text font — that font
+        // (Inter) has no glyph for it, which rendered as a garbled/tofu
+        // box on Android (no OS-level font-fallback there, unlike desktop).
+        let chev_kind = if is_open { super::IconKind::ChevronUp } else { super::IconKind::ChevronDown };
+        let chev = super::Icon::new(chev_kind).size(14.0).color(with_alpha(fg, dim));
+        let cy = r.origin.y + (r.size.height - chev.size) / 2.0;
+        chev.paint(&mut ctx.child(Rect {
+            origin: Point { x: r.origin.x + r.size.width - chev.size - 8.0, y: cy },
+            size: Size { width: chev.size, height: chev.size },
+        }));
 
         if !self.disabled {
             let open = self.open.clone();
-            ctx.register_hit(Arc::new(move || open.set(true)));
+            // Toggle, not just open — the trigger doubles as its own
+            // close button once the menu is showing (see the scrim's
+            // `exclude_rect` below, which keeps outside-tap dismiss from
+            // fighting this on the same click).
+            ctx.register_hit(Arc::new(move || open.set(!open.get())));
         } else {
             ctx.register_hit(Arc::new(|| {}));
         }
@@ -104,7 +116,14 @@ impl Widget for Dropdown {
                 OverlayEntry::new(LayerPosition::Absolute(pos), menu)
                     .input(InputBehavior::PassThrough)
                     .focus(FocusBehavior::PassThrough)
-                    .scrim(ScrimConfig { color: Color::TRANSPARENT, on_tap: Some(Arc::new(move || open2.set(false))) }),
+                    .scrim(ScrimConfig {
+                        color: Color::TRANSPARENT,
+                        on_tap: Some(Arc::new(move || open2.set(false))),
+                        // Own trigger's rect — a click there is handled by
+                        // this widget's `register_hit` toggle above, not
+                        // by outside-tap dismiss.
+                        exclude_rect: Some(r),
+                    }),
             );
         }
     }

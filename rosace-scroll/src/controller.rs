@@ -258,6 +258,27 @@ impl ScrollController {
         self.wheel_idle_time.get() < WHEEL_IDLE_GRACE
     }
 
+    /// Current drag/momentum speed (px/s), for callers that just need "is
+    /// this still visibly moving" (e.g. an auto-hiding scrollbar) without
+    /// caring about direction. Zero once `coast` has fully settled.
+    pub fn velocity_magnitude(&self) -> f32 {
+        let [vx, vy] = self.velocity.get();
+        (vx * vx + vy * vy).sqrt()
+    }
+
+    /// Whether the current offset sits past either bound — used by `coast`
+    /// and by callers that need to keep a `Bounce` spring recovering even
+    /// while something else (e.g. a still-live wheel-idle gate) is holding
+    /// off the rest of `coast`'s own logic.
+    pub fn is_overscrolled(&self) -> bool {
+        let [ox, oy] = self.offset.get();
+        let [cw, ch] = self.content_size.get();
+        let [vw, vh] = self.viewport_size.get();
+        let max_x = (cw - vw).max(0.0);
+        let max_y = (ch - vh).max(0.0);
+        ox < 0.0 || ox > max_x || oy < 0.0 || oy > max_y
+    }
+
     /// Advances one frame of post-release momentum/bounce, using the real
     /// velocity `track_velocity`/`set_velocity` measured from actual input.
     /// Returns `true` while still moving/settling (caller should keep
@@ -275,12 +296,7 @@ impl ScrollController {
         // view sat frozen mid-overscroll. Matches real trackpad testing:
         // "scroll, blank space, ~1 second pause, then springs back."
         if let ScrollPhysics::Bounce { spring_stiffness, .. } = physics {
-            let [ox, oy] = self.offset.get();
-            let [cw, ch] = self.content_size.get();
-            let [vw, vh] = self.viewport_size.get();
-            let max_x = (cw - vw).max(0.0);
-            let max_y = (ch - vh).max(0.0);
-            if ox < 0.0 || ox > max_x || oy < 0.0 || oy > max_y {
+            if self.is_overscrolled() {
                 self.velocity.set([0.0, 0.0]);
                 return self.settle_bounce(spring_stiffness, dt);
             }
@@ -348,6 +364,21 @@ impl ScrollController {
                 self.offset.set([nx, ny]);
             }
         }
+    }
+
+    /// Like [`Self::apply_momentum`], but reports whether the offset
+    /// actually moved — `false` means this scroll is already fully
+    /// exhausted in this exact direction (hard-clamped with nothing left,
+    /// or already stretched to `MAX_OVERSCROLL` under `Bounce`) and the
+    /// delta was NOT applied at all. Callers driving nested scroll
+    /// chains (an inner `ScrollView` sitting inside an outer one) use
+    /// this to decide whether to also offer the same delta to an
+    /// enclosing scrollable ancestor: keep walking outward until one
+    /// reports `true`, or the chain runs out.
+    pub fn try_apply_delta(&self, dx: f32, dy: f32, physics: ScrollPhysics) -> bool {
+        let before = self.offset.get();
+        self.apply_momentum(dx, dy, physics);
+        self.offset.get() != before
     }
 
     /// Eases an out-of-bounds offset back to the nearest valid bound —
@@ -514,6 +545,47 @@ mod tests {
         assert!(!c.was_pressed());
         c.set_was_pressed(true);
         assert!(c.was_pressed());
+    }
+
+    #[test]
+    fn try_apply_delta_reports_true_while_room_remains() {
+        let c = controller_with_size(500.0, 800.0, 300.0, 400.0);
+        let moved = c.try_apply_delta(0.0, 50.0, ScrollPhysics::Momentum { friction: 0.92 });
+        assert!(moved, "there's 400px of room (max_y=400), a 50px step must move it");
+        assert_eq!(c.offset(), [0.0, 50.0]);
+    }
+
+    #[test]
+    fn try_apply_delta_reports_false_once_hard_clamped_and_exhausted() {
+        let c = controller_with_size(500.0, 800.0, 300.0, 400.0);
+        c.scroll_by(0.0, 400.0); // already at max_y
+        let moved = c.try_apply_delta(0.0, 50.0, ScrollPhysics::Momentum { friction: 0.92 });
+        assert!(!moved, "already at the hard bound with no Bounce give — nothing left to absorb");
+        assert_eq!(c.offset(), [0.0, 400.0], "the declined delta must not have been applied");
+    }
+
+    #[test]
+    fn try_apply_delta_still_reports_true_for_resisted_bounce_overscroll() {
+        let c = controller_with_size(500.0, 800.0, 300.0, 400.0);
+        c.scroll_by(0.0, 400.0); // already at max_y
+        let physics = ScrollPhysics::Bounce { friction: 0.92, spring_stiffness: 12.0 };
+        let moved = c.try_apply_delta(0.0, 50.0, physics);
+        assert!(moved, "Bounce still has overscroll room even at the hard bound — must consume it");
+        assert!(c.offset()[1] > 400.0, "must have stretched past the hard bound, got {:?}", c.offset());
+    }
+
+    #[test]
+    fn try_apply_delta_reports_false_once_bounce_overscroll_is_also_maxed_out() {
+        let c = controller_with_size(500.0, 800.0, 300.0, 400.0);
+        let physics = ScrollPhysics::Bounce { friction: 0.92, spring_stiffness: 12.0 };
+        // Push well past MAX_OVERSCROLL with repeated large deltas.
+        for _ in 0..50 {
+            c.try_apply_delta(0.0, 500.0, physics);
+        }
+        let before = c.offset();
+        let moved = c.try_apply_delta(0.0, 500.0, physics);
+        assert!(!moved, "fully stretched to MAX_OVERSCROLL — genuinely exhausted, must decline");
+        assert_eq!(c.offset(), before);
     }
 
     #[test]

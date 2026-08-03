@@ -100,8 +100,14 @@ impl Engine {
         #[cfg(all(feature = "rsc-hot", any(target_os = "android", target_os = "ios")))]
         rosace::dev_reload::serve_hot_reload_socket(rosace::dev_reload::DEFAULT_HOT_RELOAD_PORT);
 
-        // Bundled Inter — the same default face as `App::launch` (Phase 32).
-        let font = rosace_render::FontCache::bundled();
+        // Real OS system font — the same default as `App::launch` (D127
+        // "environment" track, reversing Phase 32's bundled-Inter default).
+        // iOS has no filesystem-readable system font (`system_ui()` only
+        // probes desktop/Android paths), so it falls through to bundled
+        // Inter there; Android reads the real on-device Roboto.
+        let font = rosace_render::FontCache::system_ui()
+            .or_else(rosace_render::FontCache::system_mono)
+            .unwrap_or_else(rosace_render::FontCache::bundled);
 
         Some(Box::new(Engine {
             frame_engine: rosace::FrameEngine::new(root, font),
@@ -149,6 +155,19 @@ impl Engine {
         self.canvas = SkiaCanvas::new_hidpi(width, height, scale);
         self.canvas.set_gpu_shapes(gpu_shapes);
         self.overlay_canvas = SkiaCanvas::new_hidpi(width, height, scale);
+    }
+
+    /// Publishes a live OS "environment" push (brightness, accessibility
+    /// text scale, bold text, reduce motion, 24-hour format) — called from
+    /// the native host whenever the OS reports a change (iOS
+    /// `traitCollectionDidChange`, Android `onConfigurationChanged`, desktop
+    /// `WindowEvent::ThemeChanged`, web `matchMedia` `"change"`), same shape
+    /// as [`Self::resize`]'s safe-area push. Also re-syncs the active theme
+    /// (`rosace_theme::sync_system_theme`) so brightness changes take visual
+    /// effect immediately, unless the app pinned a `ThemeMode`.
+    pub fn set_media_query(&mut self, mq: rosace_core::MediaQuery) {
+        rosace_core::set_media_query(mq);
+        rosace_theme::sync_system_theme();
     }
 
     /// Queues input events for the next `frame()` call — mirrors how the

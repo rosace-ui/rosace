@@ -1,9 +1,21 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use rosace_core::Context;
 use rosace_state::Atom;
 
 use crate::transition::{ScreenTransition, SlideDirection, TransitionStyle};
+
+/// Stable identity for a route value — backs `ScreenTransitionView`'s
+/// per-screen keyed persistence (see `rosace-widgets`'s `render_tree.rs`
+/// module doc, "Identity" section). Plain `Hash`, not anything route-enum-
+/// specific, so any app's route type qualifies by just deriving `Hash`.
+fn hash_route<R: Hash>(r: &R) -> u64 {
+    let mut h = DefaultHasher::new();
+    r.hash(&mut h);
+    h.finish()
+}
 
 /// Default screen-transition style, keyed by platform (D108/Phase 26 Step
 /// 3) — mirrors `rosace-scroll::ScrollStyle`'s shape exactly. This is the
@@ -196,6 +208,28 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
     /// transition. `None` before any navigation.
     pub fn previous(&self) -> Option<R> {
         self.previous.get()
+    }
+
+    /// Stable identity for the current screen (`R: Hash`) —
+    /// `ScreenTransitionView`'s `incoming_key`. Every distinct route on the
+    /// stack needs a distinct key, which is why this requires `Hash`; `rsc
+    /// new`'s scaffolded route enum already derives it.
+    pub fn current_key(&self) -> u64 where R: Hash {
+        hash_route(&self.current().expect("ScreenNav's stack is never empty"))
+    }
+
+    /// Stable identity for `previous()` — `ScreenTransitionView`'s
+    /// `outgoing_key`. `None` exactly when `previous()` is `None`.
+    pub fn previous_key(&self) -> Option<u64> where R: Hash {
+        self.previous().as_ref().map(hash_route)
+    }
+
+    /// Every route currently on the stack, hashed the same way as
+    /// `current_key`/`previous_key` — `ScreenTransitionView` uses this to
+    /// release a popped screen's cached subtree (scroll position,
+    /// animation state) once it's actually gone, not keep it forever.
+    pub fn stack_keys(&self) -> Vec<u64> where R: Hash {
+        self.atom.get().iter().map(hash_route).collect()
     }
 
     /// `true` when back navigation is possible (depth > 1).

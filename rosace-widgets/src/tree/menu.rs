@@ -25,7 +25,10 @@ pub struct Menu {
     items: Vec<Item>,
     pub min_width: f32,
     pub row_height: f32,
-    pub font_size: f32,
+    /// `None` = read from the active theme's `typography.body_medium`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    pub font_size: Option<f32>,
     pub radius: f32,
     background: Option<Color>,
     color: Option<Color>,
@@ -37,7 +40,7 @@ impl Menu {
             items: Vec::new(),
             min_width: 180.0,
             row_height: 34.0,
-            font_size: 13.0,
+            font_size: None,
             radius: 14.0,
             background: None,
             color: None,
@@ -51,6 +54,10 @@ impl Menu {
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
     /// Item label color (theme's `on_surface` if unset).
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.body_medium.size)
+    }
 
     /// Append a pressable row. The callback fires on click; close the menu
     /// yourself by setting the `open` atom false inside it.
@@ -69,8 +76,9 @@ const PAD_H: f32 = 14.0;
 
 impl Widget for Menu {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
+        let font_size = self.resolved_font_size(ctx.theme);
         let widest = self.items.iter()
-            .map(|(label, _)| ctx.font.measure_text(label, self.font_size))
+            .map(|(label, _)| ctx.font.measure_text(label, font_size))
             .fold(0.0_f32, f32::max);
         let width = (widest + PAD_H * 2.0).max(self.min_width);
         let height = self.items.len() as f32 * self.row_height + PAD_V * 2.0;
@@ -99,7 +107,8 @@ impl Widget for Menu {
         ctx.fill_shadow_rrect(r, self.radius, Color::rgba(0, 0, 0, 90), 10.0);
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
         ctx.stroke_rrect(r, self.radius, Color { a: 120, ..outline }, 1.0);
-        let line_h = ctx.font.line_height(self.font_size);
+        let font_size = self.resolved_font_size(&ctx.theme);
+        let line_h = ctx.font.line_height(font_size);
         let hi = ctx.tc(ctx.theme.colors.on_surface);
         let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
 
@@ -124,7 +133,7 @@ impl Widget for Menu {
                 child.fill_rrect(inset, 8.0, with_alpha(hi, if prs { 0.16 } else { 0.09 }));
             }
             let ty = row.origin.y + (self.row_height - line_h) / 2.0;
-            child.draw_text_at(label, rosace_core::types::Point { x: row.origin.x + PAD_H, y: ty }, fg, self.font_size);
+            child.draw_text_at(label, rosace_core::types::Point { x: row.origin.x + PAD_H, y: ty }, fg, font_size);
             child.semantics(super::Semantics::new(rosace_core::Role::MenuItem).label(label));
             child.register_hit(Arc::clone(cb));
         }

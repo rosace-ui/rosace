@@ -1,9 +1,10 @@
 use rosace_render::FontCache;
 
-/// Measure the pixel width of a string using fontdue glyph advance widths.
-/// Falls back to the monospace heuristic if no font is available.
+/// Measure the pixel width of a string using `FontCache`'s glyph advance
+/// widths (swash-backed). Falls back to the monospace heuristic if no font
+/// is available.
 pub fn measure_text(text: &str, font_size: f32, font: &FontCache) -> f32 {
-    // fontdue uses float px sizes — ceil so small sizes still rasterize
+    // Float px sizes — ceil so small sizes still rasterize
     let px = font_size.ceil();
     text.chars()
         .map(|ch| {

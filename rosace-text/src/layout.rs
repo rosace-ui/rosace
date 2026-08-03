@@ -92,7 +92,7 @@ impl TextLayout {
     ///
     /// `measure(text, font_size)` must return the pixel width of `text` at the
     /// given font size.  Use `rosace_text::metrics::measure_text` for real
-    /// fontdue metrics or any closure for testing.
+    /// font metrics or any closure for testing.
     pub fn layout_with_measure<F>(spans: &[TextSpan], max_width: f32, measure: F) -> Self
     where
         F: Fn(&str, f32) -> f32,
@@ -178,7 +178,7 @@ fn theme_color_to_render(c: ThemeColor) -> Color {
 /// Greedy word wrapper — returns wrapped lines for plain text.
 ///
 /// `measure(s)` returns the pixel width of the string `s`.  This lets callers
-/// supply real fontdue metrics, a custom closure, or the simple heuristic.
+/// supply real font metrics, a custom closure, or the simple heuristic.
 pub fn word_wrap<F>(text: &str, max_width: f32, measure: F) -> Vec<String>
 where
     F: Fn(&str) -> f32,

@@ -30,7 +30,10 @@ pub struct TabBar {
     indicator_color: Option<Color>,
     border_color: Option<Color>,
     height: f32,
-    font_size: f32,
+    /// `None` = read from the active theme's `typography.label_large`
+    /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
+    /// for the reasoning).
+    font_size: Option<f32>,
     animated: bool,
     on_change: Option<Arc<dyn Fn(usize) + Send + Sync>>,
 }
@@ -46,7 +49,7 @@ impl TabBar {
             indicator_color: None,
             border_color: None,
             height: 40.0,
-            font_size: 13.0,
+            font_size: None,
             animated: true,
             on_change: None,
         }
@@ -54,7 +57,11 @@ impl TabBar {
     pub fn tab(mut self, t: Tab) -> Self { self.tabs.push(t); self }
     pub fn selected(mut self, i: usize) -> Self { self.selected = i; self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
-    pub fn font_size(mut self, s: f32) -> Self { self.font_size = s; self }
+    pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
+
+    fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.font_size.unwrap_or(theme.typography.label_large.size)
+    }
     /// Bar background — theme `surface` if unset.
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
     /// Selected-tab label color — theme `on_surface` if unset.
@@ -126,6 +133,7 @@ impl Widget for TabBar {
         ctx.fill_rect(underline, indicator);
 
         let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let font_size = self.resolved_font_size(&ctx.theme);
         for (i, tab) in self.tabs.iter().enumerate() {
             let tab_x = r.origin.x + i as f32 * tab_w;
             let tab_rect = Rect { origin: Point { x: tab_x, y: r.origin.y }, size: Size { width: tab_w, height: r.size.height } };
@@ -145,11 +153,11 @@ impl Widget for TabBar {
             let nearness = (1.0 - (pos - i as f32).abs()).clamp(0.0, 1.0);
             let mut label_color = super::lerp_color(inactive, active, nearness);
             if hov { label_color = super::lerp_color(label_color, active, 0.6); }
-            let text_w = child.font.measure_text(&tab.label, self.font_size);
-            let line_h = child.font.line_height(self.font_size);
+            let text_w = child.font.measure_text(&tab.label, font_size);
+            let line_h = child.font.line_height(font_size);
             let tx = tab_x + (tab_w - text_w) / 2.0;
             let ty = r.origin.y + (r.size.height - line_h) / 2.0;
-            child.draw_text_at(&tab.label, Point { x: tx, y: ty }, label_color, self.font_size);
+            child.draw_text_at(&tab.label, Point { x: tx, y: ty }, label_color, font_size);
 
             child.semantics(
                 super::Semantics::new(rosace_core::Role::Tab)
