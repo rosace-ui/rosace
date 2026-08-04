@@ -16,19 +16,23 @@ deliberate, named deferrals. Update as holes are closed or new ones surface.
 |------|-------|--------------------|
 | `rosace-forms` | P28 | ✅ CLOSED — wired into text_edit/input/area + engine |
 | `state_permanent` | P31 | ✅ CLOSED — wired through core/persist/context, used by cli/dev |
-| `rosace-net` hooks (`use_query`, `use_network_status`) | P30 | ⚠️ Reachable via `rosace::net::*`; unit-tested against real TCP; **never live-verified in a running app** (no on-screen Loading→Loaded proof). DEFERRED "check later" (user, 2026-07-24) |
-| `rosace-ws` (`use_websocket`) | P30 | ⚠️ Same as above — exists + reachable, not live-verified |
+| `rosace-net` hooks (`use_query`, `use_network_status`) | P30 | ✅ CLOSED 2026-08-04 — live-verified via `examples/src/bin/http_demo.rs` (its own pre-existing exit-bar demo, just needed a broken `examples/Cargo.toml` build config fixed to run — see below). Real HTTPS request to `httpbin.org/json` through `use_query` over rustls/ureq: went Loading → Loaded, rendered the real response (`HTTP 503` — httpbin's own transient error, not ours; proves the round-trip + state transitions + render all work regardless of the upstream status code) |
+| `rosace-ws` (`use_websocket`) | P30 | ✅ CLOSED 2026-08-04 — live-verified via `examples/src/bin/ws_demo.rs`. Real `wss://ws.postman-echo.com/raw` connection over tungstenite: reached `Open`, sent messages once/second, received real echoes back, UI updated live (32 echoes rendered and counting) |
 | `rosace-style` | pre-P23 | ❌ 37-line crate, only re-exported from umbrella, no consumer. Explicitly deferred by user |
 
 ## Named feature deferrals (deliberate, still open)
 - **Mobile native-host IME** (P28 Step 6) — desktop IME works; mobile cannot type via OS IME.
 - **Magnifier loupe** for text selection (P28 Step 7) — needs P27 offscreen/shader.
-- ✅ **`TextInput.scroll_x`** (P28) — CLOSED 2026-07-24. Was declared but never
-  assigned (stuck at 0.0). Now computed each paint from the caret, written
-  back via new `PaintCtx::set_scroll_x`, `-scroll_x` baked into `boundary_x`
-  (so caret/selection/spans/IME/hit-test all shift as one), content clipped
-  to the field via PushClip/PopClip. Headless-tested (overflow→scroll_x>0+clip;
-  short value→0). NOT yet live-verified in a windowed app.
+- ✅ **`TextInput.scroll_x`** (P28) — CLOSED 2026-07-24, LIVE-VERIFIED
+  2026-08-04. Was declared but never assigned (stuck at 0.0). Now computed
+  each paint from the caret, written back via new `PaintCtx::set_scroll_x`,
+  `-scroll_x` baked into `boundary_x` (so caret/selection/spans/IME/hit-test
+  all shift as one), content clipped to the field via PushClip/PopClip.
+  Headless-tested (overflow→scroll_x>0+clip; short value→0). Live-verified
+  in the real running showcase app: typed a string long enough to overflow
+  the field — content correctly scrolled to keep the caret visible (text
+  clipped from the left edge, caret visible at the right), full value still
+  correctly captured in app state via `on_change`.
 - ✅ **Mouse-drag text selection** (P28) — Already CLOSED. `engine.rs` has
   `text_drag` (D116 Step 3) + `handle_drag` (Step 7); the register's earlier
   "not implemented" note was based on stale mid-phase P28 text.
@@ -80,16 +84,26 @@ now 64/64 passing, confirmed stable across 4 repeated runs. Full workspace
 `cargo test --workspace --no-fail-fast` clean.
 
 ### 🟡 MEDIUM — flagged, deliberately not touched
-- **`rosace-hot-reload/src/watcher.rs:21`** — `FileWatcher`'s `sender` field
-  is `#[allow(dead_code)]` with no comment explaining why it's kept-but-
-  unused. Plausible reason (holds a channel sender open so the receiver
-  doesn't see a spurious disconnect) but unconfirmed — worth a second look.
-- **`rosace-render/src/canvas.rs:519`** — `grow_segment`'s doc comment says
-  code that skips a GPU pipeline "must call this before rasterizing... or
-  `cut_segment` will silently drop its pixels," implying a call site that
-  should exist but currently doesn't. Reads like a latent gap rather than
-  confirmed-intentional dead code — needs someone who knows this path to
-  confirm whether a call site is actually missing.
+- ✅ **`rosace-hot-reload/src/watcher.rs:21`** — RESOLVED 2026-08-04.
+  Traced it: the background thread `move`s its OWN clone of `tx` and uses
+  that to send every event; the struct's separate `sender` field was never
+  read anywhere (confirmed by grep — no `self.sender` call site exists),
+  and the "keeps the channel open" theory doesn't actually hold either,
+  since (a) the thread's own clone already keeps the channel alive for the
+  thread's whole lifetime regardless, and (b) no consumer anywhere
+  distinguishes a disconnected channel from an empty one (`while let
+  Ok(e) = rx.try_recv()` treats both identically). Genuinely dead —
+  removed the field.
+- ✅ **`rosace-render/src/canvas.rs:519`** — RESOLVED 2026-08-04. Verified
+  against the current code, not just the comment's claim: every
+  `DrawCommand` variant in `play_picture`'s GPU branch now pushes its own
+  typed `CanvasFrameItem` (Shader/Backdrop/Glyphs/Image) instead of falling
+  through to the generic CPU-segment bbox tracker — confirmed by reading
+  all 13 match arms. No variant left needs `grow_segment`, so the "no
+  caller" claim is accurate today, not stale. Genuinely a deliberate
+  extension seam for a future GPU-less command, not a latent gap — left
+  as `#[allow(dead_code)]` with its existing comment, no code change
+  needed.
 - ✅ **`rosace-page/`** — RESOLVED 2026-07-31. Asked the user directly: the
   project has been moved to its own outer repo (its remote,
   `rosace-ui/rosace-page.git`, has one real commit — this local clone had
@@ -140,8 +154,21 @@ now 64/64 passing, confirmed stable across 4 repeated runs. Full workspace
   from_scrolled_top` test — a self-labeled "TEMP diagnostic probe" with
   zero assertions, superseded by the real regression test right above it.
 
+## Closed this session (2026-08-04)
+- `TextInput.scroll_x` — live-verified in the real showcase app (see above).
+- `rosace-net`/`rosace-ws` hooks — live-verified via their own pre-existing
+  exit-bar demos (see above), which required fixing a broken build first:
+  `examples/Cargo.toml` used `version.workspace = true` etc. with no
+  `[workspace]` table of its own and no membership in the root workspace
+  (it's supposed to be its own separate repo per 2026-07-29's nesting
+  decision) — `cargo build` failed outright. Fixed by giving it literal
+  `[package]` metadata values and an empty `[workspace]` table instead of
+  inheriting. Pure build-config fix, no app code touched.
+- `rosace-hot-reload/src/watcher.rs`'s `sender` field and
+  `rosace-render/src/canvas.rs`'s `grow_segment` — both resolved, see the
+  MEDIUM section above (one removed as genuinely dead, one confirmed
+  intentional and left as-is).
+
 ## Next candidates
-- Live-verify `TextInput.scroll_x` in a real windowed app (scaffold via `rsc new`).
-- Live-verify net/ws hooks (`use_query`/`use_websocket`) — deferred "check later".
 - `rosace-style` integration (explicitly deferred by user).
-- Confirm/fix the `watcher.rs` unused `sender` field and `canvas.rs`'s `grow_segment` possible-missing-call-site (both MEDIUM above).
+- Nothing else currently open in this register.

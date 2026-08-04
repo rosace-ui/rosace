@@ -25,12 +25,14 @@ pub struct Chip {
     font_size: Option<f32>,
     height: f32,
     color: Option<Color>,          // selected fill override
+    /// `None` = fully rounded pill (`height / 2`, the default look).
+    radius: Option<f32>,
     on_toggle: Option<Arc<dyn Fn(bool) + Send + Sync>>,
 }
 
 impl Chip {
     pub fn new(label: impl Into<String>) -> Self {
-        Self { label: label.into(), selected: false, disabled: false, font_size: None, height: 30.0, color: None, on_toggle: None }
+        Self { label: label.into(), selected: false, disabled: false, font_size: None, height: 30.0, color: None, radius: None, on_toggle: None }
     }
 
     fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
@@ -41,6 +43,9 @@ impl Chip {
     pub fn disabled(mut self) -> Self { self.disabled = true; self }
     /// Override the selected fill (default: theme `primary`).
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
+    /// Corner radius — defaults to a fully rounded pill (`height / 2`).
+    /// `0.0` gives square corners; anything in between is a rounded rect.
+    pub fn radius(mut self, r: f32) -> Self { self.radius = Some(r.max(0.0)); self }
     /// Called with the NEW selected value when tapped.
     pub fn on_toggle(mut self, f: impl Fn(bool) + Send + Sync + 'static) -> Self {
         self.on_toggle = Some(Arc::new(f)); self
@@ -83,7 +88,7 @@ impl Widget for Chip {
         let dim = if self.disabled { 0.4 } else { 1.0 };
 
         let r = ctx.rect;
-        let radius = r.size.height / 2.0;
+        let radius = self.radius.unwrap_or(r.size.height / 2.0);
 
         // Fill eases unselected→selected. Wash lightens it on hover/press.
         let mut fill = super::lerp_color(unsel_fill, sel_fill, t);

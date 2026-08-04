@@ -301,6 +301,90 @@ mod tests {
         assert!(canvas.take_frame_items().is_empty());
     }
 
+    // ── `take_frame_dirty` gates `take_frame_items` (D109 overlay-GPU
+    // support, 2026-08-04): `rosace-platform` only refreshes its retained
+    // `overlay_frame_items` when `take_frame_dirty()` reports true —
+    // otherwise it keeps whatever was captured on the last frame the
+    // overlay actually repainted (the overlay is cleared+replayed only
+    // when something opens/closes/changes, not every present, same
+    // retention contract the base canvas's `frame_items` already relies
+    // on). This locks in the exact contract that gating depends on, since
+    // neither `take_frame_dirty` nor this retention pattern had a test
+    // before this pass despite already being load-bearing for the base
+    // canvas's own frame_items. ─────────────────────────────────────────
+
+    #[test]
+    fn take_frame_dirty_requires_an_explicit_mark_paint_alone_does_not_set_it() {
+        // `frame_dirty` is NOT a side effect of `clear`/`play_picture` — it
+        // is only ever set by an explicit `mark_frame_dirty()` call from
+        // the frame loop (found the hard way: a first draft of the
+        // overlay-GPU-support test above assumed painting alone dirtied
+        // the flag, and failed — `rosace/src/engine.rs` only called
+        // `mark_frame_dirty()` for the BASE canvas at its own paint site;
+        // nothing called it for `overlay_canvas`, so a gated caller like
+        // `rosace-platform`'s retained-items pattern would have populated
+        // its retained overlay items ONCE ever, then silently frozen —
+        // every dialog/menu/drawer after the first would render stale
+        // content forever, with no crash or warning. Fixed by adding the
+        // missing `overlay_canvas.mark_frame_dirty()` call at the engine's
+        // own overlay-clear site, same altitude as the base canvas's.)
+        use crate::draw_command::DrawCommand;
+        use crate::font::FontCache;
+        use crate::picture::PictureRecorder;
+
+        let mut canvas = SkiaCanvas::new(20, 20);
+        canvas.set_gpu_shapes(true);
+        assert!(canvas.take_frame_dirty(), "a freshly constructed canvas starts dirty (so the first frame always uploads) — consume that before testing paint's own effect");
+
+        canvas.clear(Color::WHITE);
+        let mut rec = PictureRecorder::new();
+        rec.push(DrawCommand::FillRect { rect: rect(0.0, 0.0, 10.0, 10.0), color: Color::BLUE });
+        canvas.play_picture(&rec.finish(), &FontCache::embedded());
+        assert!(!canvas.take_frame_dirty(), "painting alone must NOT set frame_dirty — only mark_frame_dirty() does");
+
+        canvas.mark_frame_dirty();
+        assert!(canvas.take_frame_dirty(), "an explicit mark must report dirty exactly once");
+        assert!(!canvas.take_frame_dirty(), "consuming the flag must reset it — a second call with no new mark must be false");
+    }
+
+    #[test]
+    fn frame_items_are_retrievable_exactly_once_per_dirty_paint_gate() {
+        // Models `rosace-platform`'s exact usage: `if take_frame_dirty() {
+        // retained = take_frame_items() }` — a caller that (correctly)
+        // skips calling `take_frame_items` on a non-dirty frame keeps
+        // whatever it captured last time, at the CALLER level (this canvas
+        // API doesn't retain on its own — the retention is the caller's
+        // responsibility, which is exactly the bug class a caller that
+        // unconditionally calls `take_frame_items` every frame would hit:
+        // it would silently wipe its own retained set to empty).
+        use crate::draw_command::DrawCommand;
+        use crate::font::FontCache;
+        use crate::picture::PictureRecorder;
+
+        let mut canvas = SkiaCanvas::new(20, 20);
+        canvas.set_gpu_shapes(true);
+        canvas.clear(Color::WHITE);
+        let mut rec = PictureRecorder::new();
+        rec.push(DrawCommand::FillRect { rect: rect(0.0, 0.0, 10.0, 10.0), color: Color::BLUE });
+        canvas.play_picture(&rec.finish(), &FontCache::embedded());
+
+        // Simulate the app.rs retention pattern directly.
+        let mut retained = Vec::new();
+        if canvas.take_frame_dirty() {
+            retained = canvas.take_frame_items();
+        }
+        assert!(!retained.is_empty(), "the dirty frame must populate the retained set");
+        let captured_len = retained.len();
+
+        // A later frame where the overlay did NOT repaint: dirty is false,
+        // so the gated caller must NOT call take_frame_items — and if it
+        // correctly skips that call, `retained` must be untouched.
+        if canvas.take_frame_dirty() {
+            retained = canvas.take_frame_items();
+        }
+        assert_eq!(retained.len(), captured_len, "a non-dirty frame must leave the caller's retained set untouched");
+    }
+
     #[test]
     fn image_handle_from_valid_png() {
         let png_bytes: &[u8] = &[

@@ -15,7 +15,7 @@ use super::{BoxedWidget, LayoutCtx, PaintCtx, Widget};
 /// reveals with the theme-governed eased factor (`ctx.animate_to`, the
 /// same D108 machinery every toggle widget uses; disable animations
 /// globally and it snaps) and the chevron rotates through the same factor.
-pub struct Expander {
+pub struct Accordion {
     title: String,
     expanded: Atom<bool>,
     body: BoxedWidget,
@@ -27,7 +27,7 @@ pub struct Expander {
     title_size: f32,
 }
 
-impl Expander {
+impl Accordion {
     pub fn new(title: impl Into<String>, expanded: Atom<bool>, body: impl Widget + 'static) -> Self {
         Self {
             title: title.into(),
@@ -52,7 +52,7 @@ impl Expander {
 const HEADER_H: f32 = 44.0;
 const PAD_H: f32 = 14.0;
 
-impl Widget for Expander {
+impl Widget for Accordion {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let w = super::avail_w(ctx.constraints);
         let mut h = HEADER_H;

@@ -606,7 +606,7 @@ pub use rosace_widgets::{
     Button, ButtonVariant,
     Card, Checkbox, Chip,
     AspectRatio, BoxShape, CircularProgress, Column, Container, CustomPaint, Dialog, Divider, Grid, Positioned, Skeleton, Wrap,
-    Dropdown, Drawer, Expander, Radio, SegmentedControl,
+    Dropdown, Drawer, Accordion, Radio, SegmentedControl,
     EdgeInsets, Expanded, Icon, IconKind,
     Image, ListTile, ListView,
     Menu, NavItem, NavRail,

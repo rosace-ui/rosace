@@ -1,8 +1,61 @@
 # Phase 27 — GPU-Native Core Rendering (D109)
 
-> Status: Scoped, not started.
-> Started: —
-> Completed: —
+> Status: STEPS 1-5 LANDED, including the overlay canvas (base canvas,
+> scroll content C2, AND overlay canvas all GPU-shapes-native as of
+> 2026-08-04). This header said "not started" for a long time while the
+> code was actually ~90% there (base + scroll); corrected by re-auditing
+> the real code instead of trusting the doc, then finishing the one real
+> gap the audit found (overlay canvas).
+> Verified present: Step 1 (`rosace-shader` crate + `ShaderUniforms`
+> derive), Step 2 (`DrawCommand::ShaderFill` + registry +
+> `GpuPresenter::register_shader`), Step 3 (`rosace-render/src/gpu_shapes.rs`
+> — all 8 built-in shapes as SDF pipelines, gated behind
+> `SkiaCanvas::gpu_shapes`/`ROSACE_CPU_SHAPES=1` kill switch), Step 4
+> (`GlyphAtlas` in `rosace-compositor`, shelf-packed 2048² texture, matches
+> the Step 4 concrete design below exactly), Step 5 (`ShaderPaint` widget
+> in `rosace-widgets/src/tree/shader_paint.rs`). Constraint C2 (scroll
+> layers) is resolved — `rosace/src/engine.rs`'s scroll-content painting
+> propagates `canvas.gpu_shapes()` to the offscreen scroll texture and
+> branches `pixels()` vs `take_frame_items()` correctly.
+>
+> **Overlay-canvas gap (found in the 2026-08-04 audit, fixed same day)**:
+> `overlay_canvas` (every Dialog/Menu/Drawer/Sheet/Tooltip/Toast/Dropdown/
+> DevTools-panel paint) never got `set_gpu_shapes(true)` anywhere, and even
+> if it had, the desktop compositing consumer read `overlay_canvas.pixels()`
+> unconditionally — never updated to branch on `gpu_shapes()` the way the
+> scroll-layer code was for C2. Fixed on desktop (`rosace-platform/src/app.rs`):
+> `overlay_canvas.set_gpu_shapes(true)` alongside the base canvas in both
+> `resumed()` and the resize handler; its frame items are folded into the
+> SAME ordered compositor `items` list as base+scroll content (not a
+> separate present call), so a `Backdrop` glass material recorded in the
+> overlay pass still correctly samples "everything drawn before it" from
+> the real composited scene. A second, more subtle bug was caught by a new
+> unit test before ever running live: `frame_dirty` is not a side effect of
+> painting, only of an explicit `mark_frame_dirty()` call — nothing called
+> that for `overlay_canvas` specifically (unlike the base canvas, at its
+> own paint site), so the retained overlay items would have populated once
+> on the very first overlay ever shown and then frozen forever, silently,
+> with no crash. Fixed by adding `overlay_canvas.mark_frame_dirty()` in
+> `rosace/src/engine.rs` at the point the overlay actually repaints. Both
+> fixes covered by new tests in `rosace-render/src/lib.rs`
+> (`take_frame_dirty_requires_an_explicit_mark_paint_alone_does_not_set_it`,
+> `frame_items_are_retrievable_exactly_once_per_dirty_paint_gate`) AND
+> live-verified in the real running showcase app: opened the modal Dialog,
+> closed it, opened a DIFFERENT dialog instance (the styled one — different
+> title/colors/width/radius), confirmed it rendered its own correct content
+> (not stale/frozen from the first), closed it via its OK button. Process
+> stayed at 0% CPU idle throughout, no panics, no hang.
+> **Not done**: web (`rosace-platform/src/app.rs`'s wasm32 path) and mobile
+> (`rosace-ffi`) overlay canvases were deliberately left CPU-only — mobile's
+> compositing reads `.pixels()` unconditionally with no `gpu_shapes()`
+> branch at all, so flipping the flag there without also updating that
+> consumer would blank every overlay on a real phone, untestable from this
+> environment. Named, not silently skipped.
+> Started: (Steps 1-5, base+scroll) before 2026-08-04, exact date not
+> recorded in this doc's history — audited retroactively. Overlay-canvas
+> support: 2026-08-04.
+> Completed: Steps 1-5 for base canvas, scroll content, AND desktop overlay
+> canvas. Web/mobile overlay canvases: NOT done (named deferral above).
 > Decision: **D109** — move ROSACE's core rendering off `tiny-skia` (CPU
 > software rasterization) onto wgpu GPU shaders, for both built-in shapes
 > and custom effects, through one `PipelineRegistry` mechanism. Text moves

@@ -82,6 +82,13 @@ impl Carousel {
         self.children.extend(ws);
         self
     }
+    /// `count` pages, each built by calling `builder(i)` — the same
+    /// convenience constructor `Grid::builder`/`ListView::builder` have, so
+    /// callers don't hand-build a `Vec` first. Eager, not virtualized (all
+    /// `count` pages build up front).
+    pub fn builder(count: usize, builder: impl Fn(usize) -> BoxedWidget) -> Self {
+        Self::new().children((0..count).map(builder).collect())
+    }
     /// Control the current page from app state: swipes write the new index
     /// back to the atom; external writes ease the carousel to that page.
     pub fn page(mut self, page: Atom<usize>) -> Self { self.page = Some(page); self }
@@ -175,6 +182,13 @@ impl Widget for Carousel {
         let mut cur = self.current_page(&ctrl, n);
         if !is_pressed && was_pressed {
             let dx = ctrl.offset.get()[0];
+            // Seed the eased value to the CURRENT visual position (old page
+            // minus the live finger offset) before retargeting — otherwise
+            // `animate_to` below starts from the stale pre-drag page and the
+            // drag offset vanishes in the same frame, popping the page
+            // instead of continuing smoothly from the finger (user-reported
+            // flicker on release, most visible dragging backward).
+            ctx.set_anim(cur as f32 - dx / r.size.width);
             cur = snap_page(cur, dx, n, SWIPE_THRESHOLD);
             self.set_page(&ctrl, cur);
             ctrl.end_drag();
@@ -189,6 +203,7 @@ impl Widget for Carousel {
             let dx = ctrl.offset.get()[0];
             if dx != 0.0 {
                 if !ctrl.wheel_recently_active() {
+                    ctx.set_anim(cur as f32 - dx / r.size.width);
                     cur = snap_page(cur, dx, n, SWIPE_THRESHOLD);
                     self.set_page(&ctrl, cur);
                     ctrl.offset.set([0.0, ctrl.offset.get()[1]]);

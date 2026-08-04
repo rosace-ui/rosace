@@ -12,7 +12,7 @@ pub use crate::{
     DialogMaterial, SheetMaterial, DrawerMaterial, AppBarMaterial, BottomNavMaterial,
     SelectionKind, SelectionStyle,
     Card, Checkbox, Chip, Column, Container, CustomPaint,
-    AspectRatio, BoxShape, CircularProgress, Dropdown, Drawer, Expander, Dialog, DialogPresentation, Divider, EdgeInsets, Grid, Expanded, Hero, HeroApi, Icon, IconKind, register_icon, resolve_icon,
+    AspectRatio, BoxShape, CircularProgress, Dropdown, Drawer, Accordion, Dialog, DialogPresentation, Divider, EdgeInsets, Grid, Expanded, Hero, HeroApi, Icon, IconKind, register_icon, resolve_icon,
     ListTile, ListView, Menu, NavItem, NavRail, ProgressBar,
     AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
     Positioned, Radio, Row, Scaffold, ScreenTransitionView, SegmentedControl, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,

@@ -132,6 +132,7 @@ impl PlatformWindow {
                 scroll_layers: Vec::new(),
                 shader_quads: Vec::new(),
                 frame_items: Vec::new(),
+                overlay_frame_items: Vec::new(),
                 shader_fallback_warned: false,
                 ime_composing: false,
                 anim_epoch: Instant::now(),
@@ -182,6 +183,12 @@ struct AppState<F> {
     // the base canvas's quads + CPU segments, refreshed on painted frames,
     // reused across clean frames (same contract as shader_quads above).
     frame_items: Vec<rosace_render::canvas::CanvasFrameItem>,
+    // Same retention contract as `frame_items`, for the overlay canvas
+    // (D109 overlay-GPU support) — appended to the SAME ordered `items`
+    // list as the base/scroll content at present time, positioned last
+    // (top-most), so `Backdrop` items there still correctly sample
+    // "everything drawn before them" in one render pass.
+    overlay_frame_items: Vec<rosace_render::canvas::CanvasFrameItem>,
     // Warn-once flag: shader registrations/quads on the softbuffer fallback
     // path (no GPU) are dropped — loud the first time, silent after.
     shader_fallback_warned: bool,
@@ -736,6 +743,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
             self.canvas         = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
             self.canvas.set_gpu_shapes(gpu_shapes);
             self.overlay_canvas = SkiaCanvas::new_hidpi(phys_w, phys_h, scale);
+            self.overlay_canvas.set_gpu_shapes(gpu_shapes);
         }
 
         // Overlay clearing is ENGINE-owned (2026-07-19): the engine
@@ -797,18 +805,33 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                     self.shader_quads = self.canvas.take_shader_quads();
                 }
             }
-            // Overlay shader content is not supported yet (the overlay
-            // is replayed every frame; quads there would need their own
-            // altitude in the item order) — drain so they can't
-            // accumulate, loud once if anything shows up.
-            let overlay_quads = self.overlay_canvas.take_shader_quads();
-            if !overlay_quads.is_empty() && !self.shader_fallback_warned {
-                self.shader_fallback_warned = true;
-                log::warn!(
-                    "rosace-platform: {} ShaderFill command(s) recorded in the \
-                     OVERLAY pass are not supported yet and were dropped",
-                    overlay_quads.len(),
-                );
+            // Overlay frame items (D109 overlay-GPU support, 2026-08-04):
+            // same retention contract as the base canvas's `frame_items`
+            // above — refreshed only on frames the overlay pass actually
+            // repainted (`overlay_dirty`), retained across the frames it
+            // didn't (the overlay is cleared+replayed only when something
+            // opened/closed/changed, not every present). Pushed into the
+            // SAME ordered `items` list as base+scroll content, below.
+            let overlay_dirty = self.overlay_canvas.take_frame_dirty();
+            if self.overlay_canvas.gpu_shapes() {
+                if overlay_dirty {
+                    self.overlay_frame_items = self.overlay_canvas.take_frame_items();
+                }
+            } else {
+                self.overlay_frame_items.clear();
+                // No CPU-fallback rendering path for ShaderFill content
+                // recorded while the overlay canvas itself isn't in
+                // GPU-shapes mode (e.g. `ROSACE_CPU_SHAPES=1`) — drain so
+                // quads can't accumulate, loud once if anything shows up.
+                let overlay_quads = self.overlay_canvas.take_shader_quads();
+                if !overlay_quads.is_empty() && !self.shader_fallback_warned {
+                    self.shader_fallback_warned = true;
+                    log::warn!(
+                        "rosace-platform: {} ShaderFill command(s) recorded in the \
+                         OVERLAY pass were dropped (GPU shapes disabled)",
+                        overlay_quads.len(),
+                    );
+                }
             }
 
             // GPU-resident animation (D109 maturity): patch the live
@@ -831,6 +854,14 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                 if q.animate_time {
                     rosace_shader::materials::patch_time(&mut q.uniforms, now);
                     has_animated_quads = true;
+                }
+            }
+            for it in &mut self.overlay_frame_items {
+                if let rosace_render::canvas::CanvasFrameItem::Shader(q) = it {
+                    if q.animate_time {
+                        rosace_shader::materials::patch_time(&mut q.uniforms, now);
+                        has_animated_quads = true;
+                    }
                 }
             }
             // Animated quads INSIDE retained scroll layers (D109 C2): patch
@@ -934,11 +965,21 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                     ));
                 }
             }
-            // Skip the overlay layer entirely when nothing drew into it
-            // this frame. When it did draw, treat it as dirty — the
-            // overlay is cleared and replayed every frame, so its pixels
-            // may differ even when the base is clean.
-            if self.overlay_canvas.has_drawn() {
+            // Overlay, on top of everything (D090) — pushed into the SAME
+            // ordered `items` list (not a separate present call) so a
+            // `Backdrop` item recorded in the overlay pass (a glass
+            // Drawer/Sheet/Dialog material) still correctly samples
+            // "everything drawn before it" from the real composited scene,
+            // not an empty overlay-only pass.
+            if self.overlay_canvas.gpu_shapes() {
+                for it in &self.overlay_frame_items {
+                    items.push(canvas_item_to_frame(it, overlay_dirty));
+                }
+            } else if self.overlay_canvas.has_drawn() {
+                // Skip the layer entirely when nothing drew into it this
+                // frame. When it did draw, treat it as dirty — the overlay
+                // is cleared and replayed every frame it draws at all, so
+                // its pixels may differ even when the base is clean.
                 items.push(rosace_compositor::FrameItem::Pixels(
                     rosace_compositor::CompositorLayer::tracked(
                         self.overlay_canvas.pixels(), phys_w, phys_h, true,
@@ -1110,15 +1151,18 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         self.presenter = presenter;
         if let Some(p) = self.presenter.as_mut() {
             // GPU-shapes mode (D109/Phase 27 Step 3): built-in shape
-            // commands render as SDF pipelines on the BASE canvas only —
-            // scroll-content and overlay canvases stay tiny-skia until C2.
-            // `ROSACE_CPU_SHAPES=1` is the kill switch (and the A/B
-            // measurement lever): full tiny-skia path, as before Step 3.
+            // commands render as SDF pipelines. Scroll content (C2) and
+            // the overlay canvas (2026-08-04, this pass) both propagate
+            // the same flag — every canvas stays in sync, no silent
+            // per-canvas fallback to CPU. `ROSACE_CPU_SHAPES=1` is the
+            // kill switch (and the A/B measurement lever): full tiny-skia
+            // path everywhere, as before Step 3.
             if std::env::var_os("ROSACE_CPU_SHAPES").is_none() {
                 rosace_shader::builtin::register_builtins();
                 // One gamma curve for both text paths (D109 Step 4).
                 p.set_glyph_gamma(rosace_render::canvas::text_gamma_lut());
                 self.canvas.set_gpu_shapes(true);
+                self.overlay_canvas.set_gpu_shapes(true);
                 log::info!("rosace-platform: GPU shapes enabled (ROSACE_CPU_SHAPES=1 to disable)");
             }
             // Eager pipeline compilation (D109, the Impeller lesson):
@@ -1266,9 +1310,22 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
+                // `PixelDelta` (trackpad) is reported in PHYSICAL pixels,
+                // same as `CursorMoved`/`Touch` — dividing by scale_factor
+                // is what those two already do to land in the logical-pixel
+                // layout space the scroll controllers work in. Missing here
+                // made every trackpad scroll on a Retina/HiDPI display (any
+                // scale_factor > 1, i.e. most Macs) cover 2x the intended
+                // logical distance — user-reported as "scroll has a
+                // momentum issue" (it wasn't momentum, it was distance).
+                // `LineDelta` (a physical mouse wheel's "notches") is
+                // already device-independent and needs no such conversion.
+                let scale = self.window.as_ref()
+                    .map(|w| w.scale_factor())
+                    .unwrap_or(1.0);
                 let (dx, dy) = match delta {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
-                    winit::event::MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
+                    winit::event::MouseScrollDelta::PixelDelta(p) => ((p.x / scale) as f32, (p.y / scale) as f32),
                 };
                 self.pending_events.push(InputEvent::Scroll {
                     x: self.cursor_x,

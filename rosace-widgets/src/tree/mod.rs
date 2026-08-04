@@ -11,7 +11,7 @@
 pub mod app;
 pub mod drawer;
 pub mod dropdown;
-pub mod expander;
+pub mod accordion;
 mod hero;
 pub mod hero_tag;
 pub mod segmented;
@@ -101,7 +101,7 @@ pub use skeleton::Skeleton;
 pub use radio::Radio;
 pub use segmented::SegmentedControl;
 pub use tabs::{TabView, Tabs};
-pub use expander::Expander;
+pub use accordion::Accordion;
 pub use hero_tag::{Hero, HeroApi};
 pub use dropdown::Dropdown;
 pub use drawer::Drawer;
@@ -953,6 +953,21 @@ impl<'a> PaintCtx<'a> {
         if node.anim.is_none() {
             node.anim = Some(value);
         }
+    }
+
+    /// Unconditionally sets this node's persistent animated scalar (the same
+    /// one `animate_to` eases) to `value` — unlike `seed_anim_if_unset`, this
+    /// always overwrites. For a widget that renders its OWN live value
+    /// alongside `animate_to`'s eased one (a drag gesture's raw finger
+    /// offset, summed with the eased snap-to-page position — see
+    /// `Carousel`): call this right before switching `animate_to`'s target
+    /// so the eased value starts from wherever the combined visual position
+    /// actually was, instead of jumping from the stale pre-drag value and
+    /// losing the live offset in the same frame (found live: released a
+    /// carousel drag past the swipe threshold and the page visibly popped
+    /// before easing, instead of continuing smoothly from the finger).
+    pub fn set_anim(&self, value: f32) {
+        self.tree.borrow_mut().node_mut(self.node).anim = Some(value);
     }
 
     /// Ease the `channel`-th independent animated scalar of this node toward

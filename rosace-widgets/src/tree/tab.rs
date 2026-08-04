@@ -36,7 +36,15 @@ pub struct TabBar {
     font_size: Option<f32>,
     animated: bool,
     on_change: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    /// Size each tab to its natural label width instead of dividing the bar
+    /// equally — pair with wrapping the bar in a horizontal `ScrollView`
+    /// (which `Tabs::scrollable` does) when there are more tabs than fit.
+    scrollable: bool,
 }
+
+/// Horizontal padding either side of a tab's label in scrollable mode
+/// (logical px).
+const SCROLLABLE_TAB_PAD: f32 = 20.0;
 
 impl TabBar {
     pub fn new() -> Self {
@@ -52,6 +60,7 @@ impl TabBar {
             font_size: None,
             animated: true,
             on_change: None,
+            scrollable: false,
         }
     }
     pub fn tab(mut self, t: Tab) -> Self { self.tabs.push(t); self }
@@ -79,6 +88,21 @@ impl TabBar {
         self.on_change = Some(Arc::new(f));
         self
     }
+    /// Size each tab to its natural label width instead of dividing the bar
+    /// equally — for many/long tabs that need horizontal scrolling. Wrap the
+    /// bar in a `ScrollView` (or use `Tabs::scrollable`, which does this for
+    /// you) so overflow is actually reachable, not just clipped.
+    pub fn scrollable(mut self, on: bool) -> Self { self.scrollable = on; self }
+
+    /// Natural width of tab `i`'s label + padding, for `scrollable` mode.
+    fn natural_tab_width(&self, i: usize, font: &rosace_render::FontCache, font_size: f32) -> f32 {
+        font.measure_text(&self.tabs[i].label, font_size) + SCROLLABLE_TAB_PAD * 2.0
+    }
+
+    /// Total natural width of every tab, for `scrollable` mode's layout.
+    fn natural_total_width(&self, font: &rosace_render::FontCache, font_size: f32) -> f32 {
+        self.tabs.iter().map(|t| font.measure_text(&t.label, font_size) + SCROLLABLE_TAB_PAD * 2.0).sum()
+    }
 }
 
 impl Default for TabBar {
@@ -87,6 +111,15 @@ impl Default for TabBar {
 
 impl Widget for TabBar {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
+        if self.scrollable {
+            // Natural content width, un-clamped to the available width — a
+            // wrapping horizontal ScrollView (Tabs::scrollable) is what
+            // makes the overflow reachable; painted bare, it just overflows
+            // its parent like any other unbounded-width content.
+            let font_size = self.resolved_font_size(ctx.theme);
+            let w = self.natural_total_width(ctx.font, font_size).max(avail_w(ctx.constraints));
+            return Size { width: w, height: self.height };
+        }
         Size { width: avail_w(ctx.constraints), height: self.height }
     }
 
@@ -117,7 +150,21 @@ impl Widget for TabBar {
         );
 
         if self.tabs.is_empty() { return; }
-        let tab_w = r.size.width / self.tabs.len() as f32;
+        let font_size = self.resolved_font_size(&ctx.theme);
+
+        // Per-tab widths and their cumulative x offsets — uniform division
+        // normally, natural label width in `scrollable` mode. One array
+        // either way, so the underline/tap-region math below doesn't need
+        // to know which mode it's in.
+        let widths: Vec<f32> = if self.scrollable {
+            (0..self.tabs.len()).map(|i| self.natural_tab_width(i, ctx.font, font_size)).collect()
+        } else {
+            let w = r.size.width / self.tabs.len() as f32;
+            vec![w; self.tabs.len()]
+        };
+        let mut offsets = Vec::with_capacity(widths.len());
+        let mut acc = 0.0;
+        for w in &widths { offsets.push(acc); acc += w; }
 
         // Animated indicator position: eased toward the selected index, so the
         // underline slides. `animate_to` uses the theme's animation curve.
@@ -126,16 +173,26 @@ impl Widget for TabBar {
         } else {
             self.selected as f32
         };
+        // Interpolate the underline's x/width between its two neighboring
+        // tabs' real rects — exact for uniform widths (where they're all
+        // equal anyway) and correct for `scrollable`'s variable widths,
+        // unlike a single `pos * tab_w` which only works when every tab is
+        // the same size.
+        let lo = (pos.floor().max(0.0) as usize).min(widths.len() - 1);
+        let hi = (pos.ceil().max(0.0) as usize).min(widths.len() - 1);
+        let frac = pos - lo as f32;
+        let seg_x = offsets[lo] + (offsets[hi] - offsets[lo]) * frac;
+        let seg_w = widths[lo] + (widths[hi] - widths[lo]) * frac;
         let underline = Rect {
-            origin: Point { x: r.origin.x + pos * tab_w + tab_w * 0.15, y: r.origin.y + r.size.height - 2.5 },
-            size: Size { width: tab_w * 0.7, height: 2.5 },
+            origin: Point { x: r.origin.x + seg_x + seg_w * 0.15, y: r.origin.y + r.size.height - 2.5 },
+            size: Size { width: seg_w * 0.7, height: 2.5 },
         };
         ctx.fill_rect(underline, indicator);
 
         let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let font_size = self.resolved_font_size(&ctx.theme);
         for (i, tab) in self.tabs.iter().enumerate() {
-            let tab_x = r.origin.x + i as f32 * tab_w;
+            let tab_x = r.origin.x + offsets[i];
+            let tab_w = widths[i];
             let tab_rect = Rect { origin: Point { x: tab_x, y: r.origin.y }, size: Size { width: tab_w, height: r.size.height } };
             let mut child = ctx.child(tab_rect);
             let hov = child.hovered();

@@ -92,6 +92,16 @@ impl Table {
         self.cells.extend(cells);
         self
     }
+    /// `count` rows, each built by calling `builder(i)` for its cell
+    /// widgets (one per column, left to right) — the same convenience
+    /// constructor `Grid::builder`/`Carousel::builder`/`ListView::builder`
+    /// have. Eager, not virtualized.
+    pub fn row_builder(mut self, count: usize, builder: impl Fn(usize) -> Vec<BoxedWidget>) -> Self {
+        for i in 0..count {
+            self = self.row(builder(i));
+        }
+        self
+    }
     /// Horizontal gap between columns / vertical gap between rows.
     pub fn spacing(mut self, h: f32, v: f32) -> Self {
         self.h_spacing = h.max(0.0);

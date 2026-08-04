@@ -76,6 +76,15 @@ impl Grid {
         self.children.extend(ws);
         self
     }
+    /// A uniform `columns`-wide grid of `count` items, each built by calling
+    /// `builder(i)` — a convenience constructor for the common "N items from
+    /// a data source" case, so callers don't have to hand-build a `Vec`
+    /// first. Eager, not virtualized (all `count` children build up front;
+    /// for large counts where that matters, `ListView::builder` is the
+    /// virtualized one).
+    pub fn builder(columns: usize, count: usize, builder: impl Fn(usize) -> BoxedWidget) -> Self {
+        Self::new(columns).children((0..count).map(builder).collect())
+    }
 
     /// Switch to masonry placement: each child keeps its own measured
     /// height at the column width and is placed into the currently-shortest

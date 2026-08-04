@@ -81,6 +81,15 @@ impl DataTable {
         self.rows.push(cells.into_iter().map(Into::into).collect());
         self
     }
+    /// `count` rows, each built by calling `builder(i)` for its cell text
+    /// (one string per column, left to right) — the same convenience
+    /// constructor `Table::row_builder`/`Grid::builder` have.
+    pub fn row_builder<S: Into<String>>(mut self, count: usize, builder: impl Fn(usize) -> Vec<S>) -> Self {
+        for i in 0..count {
+            self.rows.push(builder(i).into_iter().map(Into::into).collect());
+        }
+        self
+    }
 
     /// Which column currently shows a sort indicator, and its direction —
     /// visual only; the app is responsible for actually sorting `rows`.

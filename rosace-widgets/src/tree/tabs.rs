@@ -12,6 +12,7 @@ use rosace_core::types::{Point, Rect, Size};
 use rosace_render::Color;
 use super::{BoxedWidget, Children, LayoutCtx, PaintCtx, Widget};
 use super::tab::{Tab, TabBar};
+use super::scroll_view::{ScrollAxis, ScrollView};
 
 type OnChange = Arc<dyn Fn(usize) + Send + Sync>;
 
@@ -61,8 +62,12 @@ pub struct Tabs {
     active: Option<Color>,
     inactive: Option<Color>,
     indicator: Option<Color>,
+    border: Option<Color>,
     font_size: Option<f32>,
     animated: bool,
+    /// Natural-width tabs in a horizontal `ScrollView` instead of the bar
+    /// dividing equally — for more tabs than comfortably fit.
+    scrollable: bool,
 }
 
 impl Tabs {
@@ -73,14 +78,16 @@ impl Tabs {
             selected,
             bar_height: 40.0,
             on_change: Some(Arc::new(on_change)),
-            background: None, active: None, inactive: None, indicator: None, font_size: None, animated: true,
+            background: None, active: None, inactive: None, indicator: None, border: None, font_size: None, animated: true,
+            scrollable: false,
         }
     }
     /// Non-interactive tabs (no selection callback).
     pub fn readonly(selected: usize) -> Self {
         Self {
             labels: Vec::new(), contents: Vec::new(), selected, bar_height: 40.0, on_change: None,
-            background: None, active: None, inactive: None, indicator: None, font_size: None, animated: true,
+            background: None, active: None, inactive: None, indicator: None, border: None, font_size: None, animated: true,
+            scrollable: false,
         }
     }
     pub fn tab(mut self, label: impl Into<String>, content: impl Widget + 'static) -> Self {
@@ -97,9 +104,15 @@ impl Tabs {
     pub fn inactive_color(mut self, c: Color) -> Self { self.inactive = Some(c); self }
     /// Sliding-underline color — theme `primary` if unset.
     pub fn indicator_color(mut self, c: Color) -> Self { self.indicator = Some(c); self }
+    /// Bottom-divider color — theme `outline` if unset.
+    pub fn border_color(mut self, c: Color) -> Self { self.border = Some(c); self }
     pub fn font_size(mut self, s: f32) -> Self { self.font_size = Some(s); self }
     /// Turn the sliding-underline animation off (on by default).
     pub fn animated(mut self, on: bool) -> Self { self.animated = on; self }
+    /// Size each tab to its natural label width and let the bar scroll
+    /// horizontally instead of squeezing every tab into the available
+    /// width — for a long/variable-count tab list.
+    pub fn scrollable(mut self, on: bool) -> Self { self.scrollable = on; self }
 }
 
 impl Widget for Tabs {
@@ -128,12 +141,18 @@ impl Widget for Tabs {
         if let Some(c) = self.active { bar = bar.active_color(c); }
         if let Some(c) = self.inactive { bar = bar.inactive_color(c); }
         if let Some(c) = self.indicator { bar = bar.indicator_color(c); }
+        if let Some(c) = self.border { bar = bar.border_color(c); }
         if let Some(s) = self.font_size { bar = bar.font_size(s); }
         if let Some(cb) = &self.on_change {
             let cb = cb.clone();
             bar = bar.on_change(move |i| cb(i));
         }
-        bar.paint(&mut ctx.child(bar_rect));
+        if self.scrollable {
+            bar = bar.scrollable(true);
+            ScrollView::new(bar).axis(ScrollAxis::Horizontal).paint(&mut ctx.child(bar_rect));
+        } else {
+            bar.paint(&mut ctx.child(bar_rect));
+        }
 
         // The active content.
         if let Some(content) = self.contents.get(self.selected) {

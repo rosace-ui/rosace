@@ -1000,6 +1000,17 @@ impl FrameEngine {
                 // The engine owns the overlay clear (2026-07-19): fresh
                 // entries repaint the canvas from scratch this frame.
                 overlay_canvas.clear_transparent();
+                // Tell the platform to refresh its retained GPU frame
+                // items / re-upload the CPU texture (D089/D109 overlay-GPU
+                // support, 2026-08-04) — without this, `frame_dirty` only
+                // has its initial `true` value from canvas construction
+                // and never flips again (nothing else calls
+                // `mark_frame_dirty` on the OVERLAY canvas specifically,
+                // unlike the base canvas at this function's own paint
+                // site), so a GPU-shapes platform would show only the
+                // very first overlay ever painted, frozen, forever after.
+                // Caught by a unit test before this ever ran live.
+                overlay_canvas.mark_frame_dirty();
                 let mut ov_recorder = rosace_render::PictureRecorder::new();
 
                 // Tree-attached entries carry their owning node so

@@ -74,6 +74,13 @@ impl Widget for Image {
             }
         };
 
+        // Real image data was requested (file/bytes/asset) but decode came
+        // back empty (missing file, corrupt data) — a BROKEN state,
+        // distinct from an intentional `Image::placeholder()`. Both used to
+        // render identically (found live: no way to tell "no image was
+        // ever asked for" from "the image failed to load").
+        let broken = decoded.is_none() && !matches!(self.inner.source, ImageSource::Placeholder);
+
         if let Some(img) = decoded {
             // No default load-in fade (D111 corrects D108/Phase 26 Step
             // 4): this widget has no stable per-image identity inside a
@@ -93,6 +100,24 @@ impl Widget for Image {
                 dest_rect,
                 opacity: 1.0,
             });
+            return;
+        }
+
+        if broken {
+            // Broken-image fallback: a red-tinted box with an X icon,
+            // visually distinct from the neutral "intentional placeholder"
+            // box below so a failed load doesn't masquerade as a
+            // deliberate one.
+            ctx.fill_rect(dest_rect, Color::rgb(60, 30, 30));
+            let icon_size = (w.min(h) * 0.4).clamp(16.0, 32.0);
+            let icon_rect = Rect {
+                origin: Point { x: x + (w - icon_size) / 2.0, y: y + (h - icon_size) / 2.0 },
+                size: Size { width: icon_size, height: icon_size },
+            };
+            super::Icon::new(super::IconKind::Close)
+                .size(icon_size)
+                .color(Color::rgb(200, 90, 90))
+                .paint(&mut ctx.child(icon_rect));
             return;
         }
 

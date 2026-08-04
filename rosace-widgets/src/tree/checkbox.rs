@@ -156,7 +156,7 @@ impl Widget for Checkbox {
                 // U+2713 CHECK MARK — that renders as a tofu box on Android
                 // (found live: no OS-level font fallback there, and the body
                 // face doesn't carry it), same class of bug already fixed
-                // for Dropdown's/Expander's chevrons.
+                // for Dropdown's/Accordion's chevrons.
                 let glyph = "\u{e668}";
                 let tw = ctx.font.measure_text(glyph, px);
                 let lh = ctx.font.line_height(px);
