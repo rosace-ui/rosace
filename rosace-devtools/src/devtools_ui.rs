@@ -24,6 +24,37 @@ pub static DEVTOOLS_TAB: GlobalAtom<usize> = GlobalAtom::new(AtomId(9102), || 0)
 /// Accent (ROSACE default #7C4DFF).
 fn accent() -> Color { Color::rgb(124, 77, 255) }
 
+/// Default row text color — routine activity (network, nav, ffi, mount/unmount).
+const ROW_DEFAULT: Color = Color::rgb(206, 214, 224);
+
+/// Pick a row's text color from its own formatted line (see
+/// `trace_panel::row`'s `NET `/`LOG `/`NAV `/`FFI `/`UI  ` prefixes and, for
+/// logs, the embedded level label). Reading the already-formatted string
+/// instead of the raw `RosaceTrace` keeps this purely a rendering concern —
+/// `trace_panel` stays a plain string formatter with no color/theme
+/// knowledge of its own.
+fn row_color(line: &str) -> Color {
+    if line.starts_with("LOG") {
+        if line.contains("ERROR") {
+            return Color::rgb(255, 99, 99);
+        }
+        if line.contains("WARN") {
+            return Color::rgb(255, 186, 84);
+        }
+        return ROW_DEFAULT;
+    }
+    if line.starts_with("FFI") && line.contains('\u{2717}') {
+        return Color::rgb(255, 99, 99); // FFI ✗ error
+    }
+    if line.starts_with("NET") {
+        return Color::rgb(110, 200, 255);
+    }
+    if line.starts_with("NAV") {
+        return Color::rgb(197, 158, 255);
+    }
+    ROW_DEFAULT
+}
+
 /// Toggle open / switch tab, then force a repaint so the engine re-injects the
 /// overlay with the new state (nothing "subscribes" to these from a Component).
 fn poke() {
@@ -107,10 +138,13 @@ fn panel(rows: Vec<String>) -> impl Widget {
         .iter()
         .fold(bar, |b, label| b.tab(Tab::new(*label)));
 
-    // Rows → Text lines, newest first, inside a scroll view.
+    // Rows → Text lines, newest first, inside a scroll view. Colored by
+    // severity/category (from the row's own prefix — see `row_color`) so an
+    // ERROR is visually distinct from routine NET/NAV noise at a glance,
+    // instead of every line rendering in the same flat gray.
     let mut list = Column::new().spacing(4.0);
     for line in rows.iter().rev() {
-        list = list.child(Text::new(line).size(12.5).color(Color::rgb(206, 214, 224)));
+        list = list.child(Text::new(line).size(12.5).color(row_color(line)));
     }
 
     Container::new()
@@ -125,4 +159,49 @@ fn panel(rows: Vec<String>) -> impl Widget {
                         .child(list),
                 )),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_log_is_red() {
+        assert_eq!(row_color("LOG  ERROR home boom"), Color::rgb(255, 99, 99));
+    }
+
+    #[test]
+    fn warn_log_is_amber() {
+        assert_eq!(row_color("LOG  WARN  home careful"), Color::rgb(255, 186, 84));
+    }
+
+    #[test]
+    fn info_log_is_default() {
+        assert_eq!(row_color("LOG  INFO  home loaded"), ROW_DEFAULT);
+    }
+
+    #[test]
+    fn network_is_blue() {
+        assert_eq!(row_color("NET  → Get https://x"), Color::rgb(110, 200, 255));
+    }
+
+    #[test]
+    fn ffi_error_is_red() {
+        assert_eq!(row_color("FFI  \u{2717} camera denied"), Color::rgb(255, 99, 99));
+    }
+
+    #[test]
+    fn ffi_success_is_default() {
+        assert_eq!(row_color("FFI  capture 12.0ms"), ROW_DEFAULT);
+    }
+
+    #[test]
+    fn nav_is_purple() {
+        assert_eq!(row_color("NAV  → route /home"), Color::rgb(197, 158, 255));
+    }
+
+    #[test]
+    fn placeholder_row_is_default() {
+        assert_eq!(row_color("(no activity yet)"), ROW_DEFAULT);
+    }
 }
