@@ -285,6 +285,10 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
         "# Rust build\n/target\n/dist\n*.app\n\n# macOS\n.DS_Store\n\n# Mobile build outputs\n/android/**/build/\n/android/.gradle/\n/android/**/jniLibs/\n/ios/build/\n**/xcuserdata/\n",
     )?;
     write(dir.join("README.md"), &readme(name, &opts))?;
+    // AI-context + CLI reference docs (D129) — bundled by default, not an
+    // opt-in flag, so every scaffolded app gets them.
+    write(dir.join("AGENTS.md"), &agents_md(name))?;
+    write(dir.join("CLI.md"), &cli_md(name, &opts))?;
     // Assets dir (declared in rsc.toml [assets]); .gitkeep so the empty dir is
     // committable in the pushable sample.
     fs::create_dir_all(dir.join("assets")).map_err(|e| format!("cannot create assets dir: {e}"))?;
@@ -419,6 +423,8 @@ pub fn run(opts: NewOptions) -> Result<(), String> {
         println!("    src/ffi.rs         native-host FFI glue (D106)");
     }
     println!("    src/screens/       home + counter screens");
+    println!("    AGENTS.md          framework context for AI assistants (and you)");
+    println!("    CLI.md             `rsc` command reference for this project");
     if has(Platform::Web) { println!("    web/index.html     web host page"); }
     if has(Platform::Ios) {
         println!("    ios/App.xcodeproj/ real Xcode project — open, build, run");
@@ -584,6 +590,204 @@ fn readme(name: &str, opts: &NewOptions) -> String {
         runs.push_str("- `rsc run --target ios` — iOS simulator\n");
     }
     format!("# {name}\n\nA ROSACE app.\n\n## Run\n\n{runs}")
+}
+
+/// AI-context capabilities doc, bundled into every scaffolded app so a human
+/// OR an AI assistant building `{name}` has ROSACE's essentials up front
+/// instead of burning tokens re-deriving them from the framework source.
+/// Named `AGENTS.md` — the emerging cross-tool convention (several AI coding
+/// assistants already look for this filename with zero extra config).
+///
+/// This used to be a deferred post-release idea (`.steering/POST_RELEASE_TODO.md`);
+/// promoted to shipping-by-default (D129, 2026-08-04) — every scaffolded app
+/// should get this, not just ones from some future CLI version. Content is a
+/// hand-maintained template (same pattern as `readme()`/`theme_rs()` below),
+/// version-stamped with `CARGO_PKG_VERSION` so a stale copy is obvious rather
+/// than silently misleading. Keep this in sync with the real widget catalog
+/// (`rosace-widgets/src/tree/`) and `.steering/WIDGET_QUALITY_BAR.md` each
+/// time either changes meaningfully — that's the "update the doc" half of
+/// the deal; the CLI half is that every `rsc new` after your edit picks it
+/// up automatically.
+fn agents_md(name: &str) -> String {
+    format!(
+        r#"# AGENTS.md — {name}
+
+Context for AI assistants (and humans) working on this ROSACE app. Generated
+by `rsc new` (rosace-cli v{version}) — regenerate by hand if the framework
+version you depend on has moved on since.
+
+## What ROSACE is
+
+A declarative, reactive UI framework in pure Rust: one codebase targets
+desktop (macOS/Windows/Linux), web (WASM), iOS, and Android. No garbage
+collector, no virtual-DOM diff — state changes repaint only the components
+that read the state that changed.
+
+## The core pattern
+
+```rust
+use rosace::prelude::*;
+
+struct Counter;
+
+impl Component for Counter {{
+    fn build(&self, ctx: &mut Context) -> Element {{
+        // ctx.state gives a reactive Atom; reading it subscribes THIS
+        // component, so set()/update() repaint exactly this widget.
+        let count = ctx.state(0i32);
+
+        Scaffold::new(
+            Column::new()
+                .child(Text::new(format!("Count: {{}}", count.get())))
+                .child(Button::new("Increment").on_press({{
+                    let count = count.clone();
+                    move || count.update(|n| n + 1)
+                }})),
+        )
+        .into_element()
+    }}
+}}
+```
+
+- `Component::build` returns a description of the UI, not the UI itself —
+  the framework diffs and repaints only what a changed `Atom` touched.
+- `ctx.state(default)` is per-instance state; `GlobalAtom` is app-wide.
+- Widgets are **theme-defaulted** (they read colors/spacing from the active
+  `ThemeData` unless overridden), **animated by default** where it matters
+  (state transitions ease, not snap), and **interactive-by-identity** (a
+  widget's identity — not its position in a list — is what focus/animation/
+  hit-testing track across rebuilds; keep stable `key`s on list items).
+- This project's own `src/app.rs`, `src/theme.rs`, and `src/screens/` are a
+  working example of all of the above — read them before reading the docs.
+
+## Theming
+
+Material 3 and Cupertino ship out of the box (`rosace::prelude::material()` /
+`cupertino()`), plus a compile-checked token system and runtime theme
+switching. `src/theme.rs` in this project wires light/dark and (if this app
+targets iOS/Android) a per-platform `Themes` bundle. A pluggable third-party
+skin registry (swap a widget's whole visual form, not just its colors) is
+planned but not yet built — for now, custom appearance means either theme
+tokens or a fully custom `Widget` impl.
+
+## Widget catalog
+
+One dedicated builder per widget, composed inside `Component::build`. Not
+exhaustive — see the [Guide](https://github.com/rosace-ui/rosace/wiki/Guide-Home)
+for the full list and every constructor's options.
+
+| Category | Widgets |
+|---|---|
+| Layout | `Column`, `Row`, `Stack`, `Grid`, `Wrap`, `Padding`, `Spacer`, `AspectRatio`, `Positioned`, `ScrollView`, `ListView` |
+| Structure | `Scaffold`, `AppBar`, `BottomNavigationBar`, `NavRail`, `Drawer`, `Tabs`, `Card`, `Container` |
+| Text & input | `Text`, `TextInput`, `TextArea`, `Button`, `Checkbox`, `Radio`, `Switch`, `Slider`, `Dropdown`, `Autocomplete`, `SearchBar`, `DatePicker`, `TimePicker`, `Stepper`, `RatingBar` |
+| Feedback | `Dialog`, `Sheet`, `Snackbar`, `Toast`, `Tooltip`, `Skeleton`, `ProgressBar`, `CircularProgress` |
+| Display | `Avatar`, `Badge`, `Chip`, `Divider`, `Icon`, `Image`, `ListTile`, `DataTable`, `Table` |
+| Interaction | `Pressable`, `Dismissible`, `PullToRefresh`, `InteractiveViewer`, `Carousel`, `Hero`, `Menu`, `Fab`, `Segmented` |
+| Custom drawing | `CustomPaint`, `ShaderPaint` (declarative GPU shader materials — gradients, glass, custom SDF effects) |
+
+## Where to look next
+
+- **[Guide](https://github.com/rosace-ui/rosace/wiki/Guide-Home)** — building
+  with ROSACE: components, state, layout, theming, navigation, animation,
+  hot reload.
+- **[Architecture](https://github.com/rosace-ui/rosace/wiki/Architecture-Home)** —
+  how it works inside: frame loop, reactive substrate, render pipeline,
+  widget protocol, platform layer.
+- **[Glossary](https://github.com/rosace-ui/rosace/wiki/Glossary)** — every
+  ROSACE term, plus a from-scratch graphics/GPU primer.
+- **`CLI.md`** (next to this file) — every `rsc` command this project uses.
+
+## Being honest about limits
+
+This is a `0.1.0` dev-preview framework: APIs can still move, some platforms
+(iOS/Android) have real native hosts but ongoing UI polish, and not every
+widget has a skinning hook yet. Don't assume feature parity with a mature
+framework without checking — when in doubt, check the two docs above or the
+framework source over guessing.
+"#,
+        version = env!("CARGO_PKG_VERSION"),
+    )
+}
+
+/// `rsc` CLI reference bundled alongside `AGENTS.md`. Mirrors `print_usage()`
+/// in `rosace-cli/src/main.rs` by hand — there's no single source of truth
+/// shared between a human-facing terminal message and a markdown file
+/// checked into someone else's repo, so keep the two in sync manually when
+/// commands/flags change (search this crate for `print_usage` when you do).
+/// `rsc help` always has the live, authoritative version for whatever CLI
+/// the reader has installed; this file is a snapshot at scaffold time.
+fn cli_md(name: &str, opts: &NewOptions) -> String {
+    let mut run_lines = String::new();
+    if opts.platforms.contains(&Platform::MacOs) {
+        run_lines.push_str("rsc run --mac           # macOS\n");
+    }
+    if opts.platforms.contains(&Platform::Windows) {
+        run_lines.push_str("rsc run --win           # Windows\n");
+    }
+    if opts.platforms.contains(&Platform::Linux) {
+        run_lines.push_str("rsc run --lnx           # Linux\n");
+    }
+    if opts.platforms.contains(&Platform::Web) {
+        run_lines.push_str("rsc run --target web    # browser (WebAssembly)\n");
+    }
+    if opts.platforms.contains(&Platform::Ios) {
+        run_lines.push_str("rsc run --target ios    # iOS simulator\n");
+    }
+    if opts.platforms.contains(&Platform::Android) {
+        run_lines.push_str("rsc run --target android # Android emulator/device\n");
+    }
+    format!(
+        r#"# CLI.md — `rsc` reference for {name}
+
+The commands most relevant to this project. Run `rsc help` any time for the
+full, authoritative list from the CLI you have installed — this file is a
+snapshot, not a replacement.
+
+## Day to day
+
+```
+rsc dev                 # desktop dev loop with hot reload
+rsc dev --target web    # web dev server (default port 3000)
+{run_lines}```
+
+## Building & shipping
+
+```
+rsc build --target desktop   # or web
+rsc package                  # bundle for distribution (.app / .deb / .exe)
+```
+
+## Project maintenance
+
+```
+rsc bundle-id            # print this app's bundle/package id
+rsc bundle-id <new-id>   # change it everywhere it's embedded
+rsc doctor                # check this machine's toolchains, per target
+rsc devices                # list run targets (id works with `run --device`)
+```
+
+## Quality checks
+
+```
+rsc check       # cargo check --workspace
+rsc test        # cargo test --workspace (optional filter arg)
+rsc lint        # cargo clippy --workspace -- -D warnings
+rsc fmt         # cargo fmt --workspace --check
+rsc analyze     # workspace health: crate count, member list
+rsc snapshot    # run an example binary, save its PNG output
+```
+
+## Scaffolding another app
+
+```
+rsc new <name> --platforms macos,web --bundle-id com.example.app
+```
+
+See `AGENTS.md` (next to this file) for the framework itself — widgets,
+patterns, theming, and docs links.
+"#,
+    )
 }
 
 fn main_rs(crate_name: &str) -> String {

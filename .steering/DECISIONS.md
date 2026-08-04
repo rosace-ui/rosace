@@ -1522,6 +1522,54 @@ Also export a per-route `llms.txt`/plain-text summary from the same semantic tre
 
 ---
 
+### D129 — `rsc new` bundles `AGENTS.md` + `CLI.md` into every scaffolded app, unconditionally (2026-08-04)
+
+`.steering/POST_RELEASE_TODO.md` had this recorded as a post-release nice-to-have
+(requested 2026-07-24): generate an AI-context file into new projects so a
+human or an AI assistant building WITH ROSACE doesn't burn tokens re-deriving
+the framework's basics from source. User call, ahead of the first crates.io
+publish: this should be the norm from the first scaffold onward, not a
+future-CLI-version perk — promoted out of deferred, implemented same day.
+
+**What ships**: two files, written unconditionally by `rsc new` (no flag to
+opt out — same tier as `README.md`/`rsc.toml`):
+- `AGENTS.md` — what ROSACE is, the `Component`/`ctx.state` core pattern with
+  a real code sample, the theme-defaulted/animated-by-default/interactive-
+  by-identity conventions, current (honest) theming/skinning status, a
+  widget catalog table grouped by category, links to the GitHub Wiki
+  (Guide/Architecture/Glossary), and an explicit "this is a 0.1.0 dev-preview,
+  don't assume feature parity" section — matches the project's existing
+  "be honest, don't exaggerate" bar (same review that trimmed an unsourced
+  perf claim from the root README the same day).
+- `CLI.md` — the `rsc` commands relevant to that specific project (platform-
+  filtered `run` invocations via `NewOptions.platforms`), pointing at `rsc
+  help` as the live source of truth rather than trying to be one itself.
+
+**Why `AGENTS.md` as the filename**: it's an emerging cross-tool convention —
+several AI coding assistants already look for exactly this filename with zero
+project-specific configuration, so it does useful work even for a developer
+who never reads it themselves.
+
+**"Keep it current" is a manual contract, not automation**: `agents_md()`/
+`cli_md()` (`rosace-cli/src/commands/new.rs`) are hand-maintained template
+functions, same pattern as `readme()`/`theme_rs()` next to them — there's no
+single source of truth shared between `main.rs`'s `print_usage()` (terminal
+help) and `CLI.md` (a markdown file scaffolded into someone else's repo), nor
+between the widget catalog table and `rosace-widgets/src/tree/`'s actual
+contents. Both generator functions carry a doc-comment pointing at what to
+re-check when it drifts. This is a deliberate choice, not an oversight — full
+auto-generation (e.g. deriving the widget table from crate metadata at
+scaffold time) is more machinery than a hand-audited table needs right now,
+and doc-comment cross-references cost nothing extra when a command or widget
+is added.
+
+**Affects**: `rosace-cli` (`new.rs`: two new generator functions, two new
+`write()` calls in `run()`, two new lines in the printed "Structure:" summary).
+Does not retrofit existing example apps (`examples/showcase` etc.) — this is
+scaffold-time-only, same as every other generated file.
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

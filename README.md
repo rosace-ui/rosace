@@ -6,7 +6,7 @@
   <p><strong>The UI framework Rust deserved from day one.</strong></p>
 
   ![Status](https://img.shields.io/badge/status-active-brightgreen)
-  ![Rendering](https://img.shields.io/badge/rendering-GPU--native%20(wgpu)-8A2BE2)
+  ![Rendering](https://img.shields.io/badge/rendering-GPU%2FCPU%20hybrid%20(wgpu)-8A2BE2)
   ![Performance](https://img.shields.io/badge/target-120fps-ff69b4)
   ![Platforms](https://img.shields.io/badge/platforms-desktop%20·%20web%20·%20iOS%20·%20Android-blue)
   ![Language](https://img.shields.io/badge/language-Rust-orange?logo=rust)
@@ -26,12 +26,13 @@ One Rust codebase → native-feeling apps on **desktop, web, iOS, and Android**.
 
 | | |
 |---|---|
-| 🎨 **Declarative GPU shaders** | Shapes, glassmorphism, backdrop blur and custom effects are **SDF shader pipelines on the GPU** — declared like any other widget. No manual draw calls, no `unsafe`. The renderer moved off CPU rasterization to wgpu for **~36× lower CPU per frame**. |
+| 🎨 **Declarative GPU shaders** | Shapes, glassmorphism, backdrop blur and custom effects are **SDF shader pipelines on the GPU** — declared like any other widget. No manual draw calls, no `unsafe`. Shape/effect rendering moved off CPU rasterization onto wgpu; general canvas drawing (text, paths) is still a CPU (tiny-skia) rasterizer composited onto the GPU layer — a hybrid pipeline, not fully GPU-native yet. |
 | 🌗 **Dynamic theming** | Material 3 **and** Cupertino out of the box, an exhaustive compile-checked token system, and **runtime theme switching** — change one atom and every subscribed widget repaints. Platform-adaptive by default. |
 | 🔥 **Hot reload + in-app DevTools** | A three-tier hot-reload engine (live data-swap → dylib code-swap → hot-restart) picks the fastest path per platform. A built-in **flight recorder** and trace bus record every frame, state change, and event for live debugging. |
 | ⚡ **Fine-grained reactivity** | `Atom<T>` state with **subscriber-precise rebuilds** — no virtual-DOM diff, no re-render-the-world. Change state, and only the components that read it repaint. |
 | ⌨️ **Real text stack** | `TextInput`/`TextArea` with true keyboard editing, selection, **OS IME** (CJK composition), context menus, and `rosace-forms` validation — not a painted-on illusion. |
 | ♿ **Accessible & discoverable** | One semantic tree feeds **platform accessibility** (VoiceOver/TalkBack/ARIA) *and* a **server-side HTML shadow for web SEO** — build it once, get both. |
+| 🤖 **Built for the AI-assisted era** | `rsc new` doesn't just scaffold code — it scaffolds *context*. Every new project ships an `AGENTS.md` (the framework's core patterns, widget catalog, and honest capability notes) and a `CLI.md` (the `rsc` commands that project actually uses), so the AI coding assistant sitting in your editor already knows Rosace instead of guessing at it from training data. Not a chatbot bolted on top — the docs your tools read are first-class scaffold output, generated fresh with every app. |
 
 ---
 
@@ -162,6 +163,10 @@ rsc run --ios                       # build + run on an iOS simulator
 rsc analyze                         # static analysis of your component tree
 rsc snapshot --package <pkg> --example <name>   # golden snapshot test
 ```
+
+`rsc new` drops an `AGENTS.md` and `CLI.md` straight into the new project —
+your editor's AI assistant reads the framework's own primer instead of
+hallucinating an API. Every app, every time, no flag required.
 
 ### Writing custom widgets
 
