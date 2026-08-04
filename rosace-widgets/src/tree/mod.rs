@@ -45,6 +45,7 @@ pub mod nav_rail;
 pub mod overlay;
 pub mod overlay_api;
 pub mod padding;
+pub mod autocomplete;
 pub mod pointer;
 pub mod pressable;
 pub mod progress_bar;
@@ -127,6 +128,7 @@ pub use overlay::{
 pub use overlay_api::{OverlayApi, OverlayKind, WithOverlay};
 pub use padding::EdgeInsets;
 pub use pointer::{AbsorbPointer, IgnorePointer};
+pub use autocomplete::Autocomplete;
 pub use pressable::{LongPressable, PressApi, Pressable};
 pub use progress_bar::ProgressBar;
 pub use pull_to_refresh::PullToRefresh;
