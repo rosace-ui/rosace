@@ -111,7 +111,7 @@ mod tests {
     fn scroll_produces_one_event() {
         let events = EventSim::scroll(0.0, 0.0, -3.0);
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], InputEvent::Scroll { delta_y: _, .. }));
+        assert!(matches!(events[0], InputEvent::Scroll { .. }));
     }
 
     #[test]
