@@ -1,4 +1,5 @@
 [package]
+description = "Headless test utilities for ROSACE widget and rendering tests"
 name = "rosace-test-utils"
 version.workspace = true
 edition.workspace = true

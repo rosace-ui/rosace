@@ -1,4 +1,5 @@
 [package]
+description = "Text shaping for ROSACE"
 name = "rosace-shaping"
 version.workspace = true
 edition.workspace = true

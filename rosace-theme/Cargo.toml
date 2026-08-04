@@ -1,4 +1,5 @@
 [package]
+description = "Platform theming for ROSACE: Material 3, Cupertino, and the design-token system"
 name = "rosace-theme"
 version.workspace = true
 edition.workspace = true

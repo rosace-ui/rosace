@@ -1,4 +1,5 @@
 [package]
+description = "Style primitive types for ROSACE (pre-integration)"
 name = "rosace-style"
 version.workspace = true
 edition.workspace = true

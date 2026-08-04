@@ -1,4 +1,5 @@
 [package]
+description = "Native input-method-engine integration for ROSACE"
 name = "rosace-ime"
 version.workspace = true
 edition.workspace = true

@@ -1,4 +1,5 @@
 [package]
+description = "Route transition animations for ROSACE navigation"
 name = "rosace-nav-anim"
 version.workspace = true
 edition.workspace = true

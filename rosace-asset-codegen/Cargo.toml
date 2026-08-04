@@ -1,4 +1,5 @@
 [package]
+description = "Build-time typed asset codegen for ROSACE apps"
 name = "rosace-asset-codegen"
 version.workspace = true
 edition.workspace = true

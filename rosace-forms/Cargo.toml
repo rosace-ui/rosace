@@ -1,4 +1,5 @@
 [package]
+description = "Form fields, validation, and submission for ROSACE"
 name = "rosace-forms"
 version.workspace = true
 edition.workspace = true

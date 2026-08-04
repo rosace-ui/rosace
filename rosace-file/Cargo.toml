@@ -1,4 +1,5 @@
 [package]
+description = "Filesystem access for ROSACE: app-local storage and native file pickers"
 name = "rosace-file"
 version.workspace = true
 edition.workspace = true

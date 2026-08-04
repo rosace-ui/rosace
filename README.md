@@ -10,7 +10,7 @@
   ![Performance](https://img.shields.io/badge/target-120fps-ff69b4)
   ![Platforms](https://img.shields.io/badge/platforms-desktop%20·%20web%20·%20iOS%20·%20Android-blue)
   ![Language](https://img.shields.io/badge/language-Rust-orange?logo=rust)
-  ![License](https://img.shields.io/badge/license-proprietary-red)
+  ![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)
 
 </div>
 
@@ -149,6 +149,8 @@ cargo build
 ```
 
 ### rsc CLI
+
+> Not yet on crates.io — for now, build `rsc` from a local checkout as below. Once published, `cargo install rosace-cli` will be the primary path.
 
 ```bash
 cargo install --path rosace-cli     # install the developer CLI
@@ -300,9 +302,9 @@ Architectural decisions that govern the project are recorded in [`.steering/DECI
 
 Copyright (c) 2026 Godwin Joseph.
 
-This source code is provided for viewing and personal exploration only. You may **not** use, copy, modify, merge, publish, distribute, sublicense, or sell copies of this software, or any derivative works, without explicit written permission from the author.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
 
-> **Note:** This license is a placeholder. Rosace will transition to an open-source license (MIT and/or Apache 2.0) prior to its first public release.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Rosace by you shall be dual licensed as above, without any additional terms or conditions.
 
 ---
 
