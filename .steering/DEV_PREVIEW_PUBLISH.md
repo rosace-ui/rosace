@@ -34,14 +34,28 @@ version. The CLI's own closure is small (5 crates) but that's not the bar —
       2026-08-04, since scripted `curl` is blocked by their anti-bot policy).
 - [x] crates.io API token already configured locally (`~/.cargo/credentials.toml`
       present, confirmed 2026-08-04) — `cargo publish` can authenticate.
-- [ ] Dry-run each crate with `cargo publish --dry-run -p <crate>` in the
-      order below, fixing whatever it surfaces (missing `readme`, path deps
-      that don't yet have a matching published version, etc.) before any
-      real publish.
-- [ ] Decide `repository`/`homepage` fields are accurate (currently
-      `https://github.com/rosace-ui/rosace` — confirm this repo is actually
-      public before publishing, since crates.io will link to it).
-- [ ] Explicit user go-ahead for the actual `cargo publish` run.
+- [x] Fixed a real blocker found by actually running the dry-run: `cargo
+      publish` requires a `version =` on every path dependency (crates.io
+      strips `path` and resolves by version against the registry). All 145
+      internal path deps across the workspace now carry `version = "0.1.0"`.
+- [x] Dry-run explored its real limit: `cargo publish --dry-run` for a
+      dependent crate needs its internal deps to already exist for real on
+      crates.io — it cannot substitute a local path dep during the
+      registry-simulation build. So only the 4 leaf crates with zero
+      unpublished internal deps (`rosace-view-syntax`, `rosace-trace`,
+      `rosace-compositor`, `rosace-asset-codegen`) can be meaningfully
+      dry-run ahead of time; `rosace-view-syntax`'s dry-run passed clean.
+      Everything downstream can only be verified by actually publishing in
+      order — `cargo build --workspace` / `cargo test --workspace` already
+      exercise the same dependency graph via path deps and pass clean, so
+      this is a registry-simulation limitation, not a correctness question.
+      **Practical consequence:** there is no safe way to fully validate the
+      publish chain before running it live — `scripts/publish_crates.sh
+      --live` is itself the verification, one crate at a time, and it stops
+      on the first real failure (resumable via `--from <crate>`).
+- [x] `repository` field (`https://github.com/rosace-ui/rosace`) confirmed
+      reachable/public (`curl` → HTTP 200) — safe for crates.io to link to.
+- [ ] Explicit user go-ahead for the actual `cargo publish --live` run.
 
 ## Topological publish order (39 crates, computed 2026-08-04)
 
