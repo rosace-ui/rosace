@@ -54,6 +54,7 @@ pub use tree::Menu;
 pub use tree::NavItem;
 pub use tree::NavRail;
 pub use tree::ProgressBar;
+pub use tree::PullToRefresh;
 pub use tree::RectReader;
 pub use tree::RepaintBoundary;
 pub use tree::TransformLayer;
