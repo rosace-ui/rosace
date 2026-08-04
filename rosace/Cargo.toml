@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+readme.workspace = true
 description = "ROSACE UI framework — single-crate SDK entry point"
 
 # ── Dependency layer rules ────────────────────────────────────────────────────

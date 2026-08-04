@@ -49,3 +49,4 @@ edition = "2021"
 authors = ["ROSACE Contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rosace-ui/rosace"
+readme = "README.md"
