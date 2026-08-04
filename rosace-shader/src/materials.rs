@@ -42,6 +42,7 @@ pub fn patch_time(uniforms: &mut [u8], time: f32) {
 pub const GRADIENT_MATERIAL: PipelineId = PipelineId::builtin(0x100);
 pub const NOISE_MATERIAL:    PipelineId = PipelineId::builtin(0x101);
 pub const GLOW_MATERIAL:     PipelineId = PipelineId::builtin(0x102);
+pub const GLASS_MATERIAL:    PipelineId = PipelineId::builtin(0x103);
 
 // ── 1. Flowing animated linear gradient ─────────────────────────────────────
 
@@ -186,6 +187,105 @@ pub fn glow(color: Color, radius: f32, speed: f32) -> ShaderMaterial {
     ShaderMaterial::new(GLOW_MATERIAL, u.to_bytes())
 }
 
+// ── 4. Liquid glass — real backdrop refraction ──────────────────────────────
+//
+// Promoted from `examples/src/bin/liquid_glass_app.rs` (the tuned WGSL is
+// unchanged) so any app can reach for it without copy-pasting a shader —
+// same "curated starter, raw registry stays open underneath" reasoning as
+// the other three materials above. Requires [`ShaderSpec::with_backdrop`]
+// (already applied by [`register_glass_material`]) — this samples what's
+// BEHIND the surface it's painted on, unlike gradient/noise/glow which are
+// self-contained. Deliberately no `.fallback(..)` (see [`glass`]'s doc):
+// an opaque fallback would itself get sampled by the shader on the CPU/web
+// path, which is worse than the surface's own normal (pre-material)
+// rendering showing through instead.
+
+#[derive(ShaderUniforms)]
+struct GlassUniforms {
+    radius: f32,
+    refract_px: f32,
+    frost_px: f32,
+    bright: f32,
+}
+
+const GLASS_WGSL: &str = r#"
+struct Mat { radius: f32, refract_px: f32, frost_px: f32, bright: f32, };
+@group(0) @binding(1) var<uniform> m: Mat;
+
+fn sd_rrect(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
+    let q = abs(p) - half + vec2<f32>(r, r);
+    return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
+@fragment
+fn fs_main(in: RosaceVsOut) -> @location(0) vec4<f32> {
+    let size = rosace_quad.size_px;
+    let px = in.uv * size;
+    let p = px - size * 0.5;
+    let d = sd_rrect(p, size * 0.5 - vec2<f32>(1.0, 1.0), m.radius);
+    let mask = clamp(0.5 - d, 0.0, 1.0);
+
+    // Thick-slab refraction: bend the sample OUTWARD near the rim, like
+    // looking through the beveled edge of real glass. Quadratic falloff so
+    // the panel center stays optically flat.
+    let edge = 22.0;
+    let bend = pow(smoothstep(-edge, 0.0, d), 2.0);
+    let dir = p / max(length(p), 0.001);
+    let uv_off = dir * bend * m.refract_px / size;
+
+    // Subtle chromatic split on the refracted rim (real dispersion).
+    let ca = 1.0 + bend * 0.06;
+    var col: vec3<f32>;
+    col.r = rosace_sample_backdrop(in.uv + uv_off * ca).r;
+    col.g = rosace_sample_backdrop(in.uv + uv_off).g;
+    col.b = rosace_sample_backdrop(in.uv + uv_off / ca).b;
+
+    // Light frost: 4 extra taps in a cross — enough to soften what's
+    // behind so controls stay legible, nowhere near a real gaussian cost.
+    let fr = vec2<f32>(m.frost_px, m.frost_px) / size;
+    var acc = col * 0.40;
+    acc += rosace_sample_backdrop(in.uv + uv_off + vec2<f32>(fr.x, 0.0)).rgb * 0.15;
+    acc += rosace_sample_backdrop(in.uv + uv_off - vec2<f32>(fr.x, 0.0)).rgb * 0.15;
+    acc += rosace_sample_backdrop(in.uv + uv_off + vec2<f32>(0.0, fr.y)).rgb * 0.15;
+    acc += rosace_sample_backdrop(in.uv + uv_off - vec2<f32>(0.0, fr.y)).rgb * 0.15;
+
+    // Smoked-glass body: tint toward a deep neutral so light-theme text on
+    // top stays legible over ANY backdrop, then a gentle lift.
+    var glass = mix(acc, vec3<f32>(0.030, 0.036, 0.070), 0.38) * m.bright;
+    glass += vec3<f32>(0.012);
+
+    // Specular rim — strongest along the top edge, fading down the sides.
+    let rim = smoothstep(-3.0, -0.5, d);
+    glass += rim * (0.08 + 0.22 * (1.0 - in.uv.y));
+
+    // Soft inner shade toward the bottom edge for depth.
+    glass -= smoothstep(-6.0, -0.5, d) * in.uv.y * 0.04;
+
+    // No branch anywhere: texture sampling stays in uniform control flow,
+    // and outside the mask this is premultiplied transparent black.
+    return vec4<f32>(glass * mask, mask);
+}
+"#;
+
+/// Register the glass pipeline (idempotent — re-registration replaces).
+/// Called by [`register_starter_materials`]; call directly if you only
+/// want this one. Unlike the other three starters, this needs
+/// [`ShaderSpec::with_backdrop`] — applied here, not left to the caller.
+pub fn register_glass_material() {
+    register_shader(GLASS_MATERIAL, ShaderSpec::new(GLASS_WGSL).with_backdrop());
+}
+
+/// Real backdrop-sampling liquid glass: thick-slab edge refraction, subtle
+/// chromatic split, light frost, specular rim. `radius` should match the
+/// surface's own corner radius (mismatched radii show a visible seam
+/// between the shader's rounded mask and the widget's own clip/border).
+/// Requires [`register_glass_material`] (or [`register_starter_materials`])
+/// once at startup. No fallback color — see this section's module doc.
+pub fn glass(radius: f32) -> ShaderMaterial {
+    let u = GlassUniforms { radius, refract_px: 20.0, frost_px: 3.5, bright: 1.0 };
+    ShaderMaterial::new(GLASS_MATERIAL, u.to_bytes())
+}
+
 // ── Bulk registration ───────────────────────────────────────────────────────
 
 /// Register every starter-library pipeline at once (idempotent). Call at
@@ -194,6 +294,7 @@ pub fn register_starter_materials() {
     register_gradient_material();
     register_noise_material();
     register_glow_material();
+    register_glass_material();
 }
 
 #[cfg(test)]
@@ -233,5 +334,13 @@ mod tests {
         assert!(ids.contains(&GRADIENT_MATERIAL.raw()));
         assert!(ids.contains(&NOISE_MATERIAL.raw()));
         assert!(ids.contains(&GLOW_MATERIAL.raw()));
+        assert!(ids.contains(&GLASS_MATERIAL.raw()));
+    }
+
+    #[test]
+    fn glass_material_has_no_fallback() {
+        let m = glass(26.0);
+        assert_eq!(m.pipeline, GLASS_MATERIAL);
+        assert_eq!(m.fallback, None, "an opaque fallback would itself get sampled by the shader");
     }
 }
