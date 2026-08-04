@@ -13,7 +13,7 @@ pub use crate::{
     SelectionKind, SelectionStyle,
     Card, Checkbox, Chip, Column, Container, CustomPaint,
     AspectRatio, BoxShape, CircularProgress, Dropdown, Drawer, Accordion, Dialog, DialogPresentation, Divider, EdgeInsets, Grid, Expanded, Hero, HeroApi, Icon, IconKind, register_icon, resolve_icon,
-    ListTile, ListView, Menu, NavItem, NavRail, ProgressBar, PullToRefresh, Autocomplete,
+    ListTile, ListView, Menu, NavItem, NavRail, ProgressBar, PullToRefresh, Autocomplete, Dismissible, DismissDirection,
     AbsorbPointer, IgnorePointer, PressApi, Pressable, RectReader, RepaintBoundary, TransformLayer,
     Positioned, Radio, Row, Scaffold, ScreenTransitionView, SegmentedControl, ScrollView, ScrollAxis, Sheet, Slider, Spacer, Stack, Switch,
     Skeleton, Tab, TabBar, Tabs, TabView, Wrap, Text, TextArea, TextInput, Toast, ToastKind, Tooltip, TooltipStyle, WidgetExt,
