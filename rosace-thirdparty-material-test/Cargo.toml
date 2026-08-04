@@ -7,11 +7,11 @@ license.workspace = true
 publish = false
 
 [dependencies]
-rosace = { path = "../rosace" }
+rosace = { path = "../rosace", version = "0.1.0" }
 
 # Test-only: constructing a real PaintCtx in a unit test needs these
 # lower-level types directly. The WIDGET/PIPELINE/MATERIALKEY code above
 # (the actual extensibility proof) depends on nothing but `rosace`.
 [dev-dependencies]
-rosace-render = { path = "../rosace-render" }
-rosace-theme  = { path = "../rosace-theme" }
+rosace-render = { path = "../rosace-render", version = "0.1.0" }
+rosace-theme  = { path = "../rosace-theme", version = "0.1.0" }

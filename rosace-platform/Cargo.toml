@@ -8,15 +8,15 @@ license.workspace = true
 
 [dependencies]
 web-time           = "1"
-rosace-animate    = { path = "../rosace-animate" }
-rosace-compositor = { path = "../rosace-compositor" }
-rosace-core       = { path = "../rosace-core" }
-rosace-ime        = { path = "../rosace-ime" }
-rosace-render     = { path = "../rosace-render" }
-rosace-shader     = { path = "../rosace-shader" }
-rosace-state      = { path = "../rosace-state" }
-rosace-theme      = { path = "../rosace-theme" }
-rosace-trace      = { path = "../rosace-trace" }
+rosace-animate    = { path = "../rosace-animate", version = "0.1.0" }
+rosace-compositor = { path = "../rosace-compositor", version = "0.1.0" }
+rosace-core       = { path = "../rosace-core", version = "0.1.0" }
+rosace-ime        = { path = "../rosace-ime", version = "0.1.0" }
+rosace-render     = { path = "../rosace-render", version = "0.1.0" }
+rosace-shader     = { path = "../rosace-shader", version = "0.1.0" }
+rosace-state      = { path = "../rosace-state", version = "0.1.0" }
+rosace-theme      = { path = "../rosace-theme", version = "0.1.0" }
+rosace-trace      = { path = "../rosace-trace", version = "0.1.0" }
 log                = "0.4"
 winit              = "0.30"
 softbuffer         = "0.4"
@@ -47,7 +47,7 @@ console_error_panic_hook = "0.1"
 # crate) -> Layer 2 (rosace-core, rosace-web-seo's only dependency) —
 # no cycle. wasm32-gated for the same reason as everything else in this
 # block: never compiled for iOS/Android/macOS/Windows/Linux.
-rosace-web-seo = { path = "../rosace-web-seo" }
+rosace-web-seo = { path = "../rosace-web-seo", version = "0.1.0" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
 version = "0.3"

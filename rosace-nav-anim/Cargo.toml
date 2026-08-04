@@ -8,5 +8,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rosace-nav     = { path = "../rosace-nav" }
-rosace-trace   = { path = "../rosace-trace" }
+rosace-nav     = { path = "../rosace-nav", version = "0.1.0" }
+rosace-trace   = { path = "../rosace-trace", version = "0.1.0" }

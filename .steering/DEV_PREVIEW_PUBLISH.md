@@ -30,10 +30,10 @@ version. The CLI's own closure is small (5 crates) but that's not the bar —
 
 ## Still open before running any publish
 
-- [ ] Confirm crate names are available on crates.io (blocked earlier this
-      session by their anti-bot API policy on scripted `curl` — needs a
-      manual browser check for `rosace`, `rosace-cli`, and anything else
-      likely to collide with an existing crate name).
+- [x] Crate names confirmed available on crates.io (user checked manually
+      2026-08-04, since scripted `curl` is blocked by their anti-bot policy).
+- [x] crates.io API token already configured locally (`~/.cargo/credentials.toml`
+      present, confirmed 2026-08-04) — `cargo publish` can authenticate.
 - [ ] Dry-run each crate with `cargo publish --dry-run -p <crate>` in the
       order below, fixing whatever it surfaces (missing `readme`, path deps
       that don't yet have a matching published version, etc.) before any

@@ -8,5 +8,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rosace-theme  = { path = "../rosace-theme" }
-rosace-core   = { path = "../rosace-core" }
+rosace-theme  = { path = "../rosace-theme", version = "0.1.0" }
+rosace-core   = { path = "../rosace-core", version = "0.1.0" }

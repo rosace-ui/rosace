@@ -9,6 +9,6 @@ repository.workspace = true
 
 [dependencies]
 web-time = "1"
-rosace-core  = { path = "../rosace-core" }
-rosace-state = { path = "../rosace-state" }
-rosace-trace = { path = "../rosace-trace" }
+rosace-core  = { path = "../rosace-core", version = "0.1.0" }
+rosace-state = { path = "../rosace-state", version = "0.1.0" }
+rosace-trace = { path = "../rosace-trace", version = "0.1.0" }

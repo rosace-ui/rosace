@@ -8,10 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rosace-trace  = { path = "../rosace-trace" }
-rosace-core   = { path = "../rosace-core" }
-rosace-layout = { path = "../rosace-layout" }
-rosace-macros = { path = "../rosace-macros" }
+rosace-trace  = { path = "../rosace-trace", version = "0.1.0" }
+rosace-core   = { path = "../rosace-core", version = "0.1.0" }
+rosace-layout = { path = "../rosace-layout", version = "0.1.0" }
+rosace-macros = { path = "../rosace-macros", version = "0.1.0" }
 tiny-skia      = "0.11"
 swash          = "0.2"
 ttf-parser     = "0.20"

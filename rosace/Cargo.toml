@@ -52,42 +52,42 @@ libc = { version = "0.2", optional = true }
 web-time = "1"
 
 # Core layers
-rosace-trace   = { path = "../rosace-trace" }
-rosace-state   = { path = "../rosace-state" }
-rosace-core    = { path = "../rosace-core" }
-rosace-layout  = { path = "../rosace-layout" }
-rosace-render  = { path = "../rosace-render" }
-rosace-theme   = { path = "../rosace-theme" }
+rosace-trace   = { path = "../rosace-trace", version = "0.1.0" }
+rosace-state   = { path = "../rosace-state", version = "0.1.0" }
+rosace-core    = { path = "../rosace-core", version = "0.1.0" }
+rosace-layout  = { path = "../rosace-layout", version = "0.1.0" }
+rosace-render  = { path = "../rosace-render", version = "0.1.0" }
+rosace-theme   = { path = "../rosace-theme", version = "0.1.0" }
 
 # Widget layer
-rosace-widgets = { path = "../rosace-widgets" }
+rosace-widgets = { path = "../rosace-widgets", version = "0.1.0" }
 
 # Service layer
-rosace-animate  = { path = "../rosace-animate" }
-rosace-scroll   = { path = "../rosace-scroll" }
-rosace-nav      = { path = "../rosace-nav" }
-rosace-nav-anim = { path = "../rosace-nav-anim" }
-rosace-forms    = { path = "../rosace-forms" }
-rosace-gesture  = { path = "../rosace-gesture" }
-rosace-a11y     = { path = "../rosace-a11y" }
-rosace-text     = { path = "../rosace-text" }
-rosace-shader   = { path = "../rosace-shader" }
-rosace-shaping  = { path = "../rosace-shaping" }
-rosace-style    = { path = "../rosace-style" }
-rosace-i18n     = { path = "../rosace-i18n" }
-rosace-storage = { path = "../rosace-storage" }
-rosace-net      = { path = "../rosace-net" }
-rosace-file     = { path = "../rosace-file" }
-rosace-ws       = { path = "../rosace-ws" }
-rosace-clipboard = { path = "../rosace-clipboard" }
-rosace-platform  = { path = "../rosace-platform" }
-rosace-bidi      = { path = "../rosace-bidi" }
-rosace-ime       = { path = "../rosace-ime" }
-rosace-media     = { path = "../rosace-media" }
-rosace-macros    = { path = "../rosace-macros" }
-rosace-hot-reload = { path = "../rosace-hot-reload" }
-rosace-devtools   = { path = "../rosace-devtools" }
-rosace-test-utils = { path = "../rosace-test-utils" }
+rosace-animate  = { path = "../rosace-animate", version = "0.1.0" }
+rosace-scroll   = { path = "../rosace-scroll", version = "0.1.0" }
+rosace-nav      = { path = "../rosace-nav", version = "0.1.0" }
+rosace-nav-anim = { path = "../rosace-nav-anim", version = "0.1.0" }
+rosace-forms    = { path = "../rosace-forms", version = "0.1.0" }
+rosace-gesture  = { path = "../rosace-gesture", version = "0.1.0" }
+rosace-a11y     = { path = "../rosace-a11y", version = "0.1.0" }
+rosace-text     = { path = "../rosace-text", version = "0.1.0" }
+rosace-shader   = { path = "../rosace-shader", version = "0.1.0" }
+rosace-shaping  = { path = "../rosace-shaping", version = "0.1.0" }
+rosace-style    = { path = "../rosace-style", version = "0.1.0" }
+rosace-i18n     = { path = "../rosace-i18n", version = "0.1.0" }
+rosace-storage = { path = "../rosace-storage", version = "0.1.0" }
+rosace-net      = { path = "../rosace-net", version = "0.1.0" }
+rosace-file     = { path = "../rosace-file", version = "0.1.0" }
+rosace-ws       = { path = "../rosace-ws", version = "0.1.0" }
+rosace-clipboard = { path = "../rosace-clipboard", version = "0.1.0" }
+rosace-platform  = { path = "../rosace-platform", version = "0.1.0" }
+rosace-bidi      = { path = "../rosace-bidi", version = "0.1.0" }
+rosace-ime       = { path = "../rosace-ime", version = "0.1.0" }
+rosace-media     = { path = "../rosace-media", version = "0.1.0" }
+rosace-macros    = { path = "../rosace-macros", version = "0.1.0" }
+rosace-hot-reload = { path = "../rosace-hot-reload", version = "0.1.0" }
+rosace-devtools   = { path = "../rosace-devtools", version = "0.1.0" }
+rosace-test-utils = { path = "../rosace-test-utils", version = "0.1.0" }
 
 # Web-only (D107/Phase 25 Step 4) — the runtime shadow-DOM fallback that
 # syncs SemanticNode -> live DOM after hydration. This is the FIRST
@@ -100,7 +100,7 @@ rosace-test-utils = { path = "../rosace-test-utils" }
 # directly in its own Cargo.toml instead — it's a dev-machine tool, never
 # shipped inside any app binary regardless of the app's target platform.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-rosace-web-seo = { path = "../rosace-web-seo" }
+rosace-web-seo = { path = "../rosace-web-seo", version = "0.1.0" }
 # Web hot-reload transport (Tier 1): a WebSocket receives edited source pushed
 # by the dev server, and console logging. Only pulled into wasm builds.
 wasm-bindgen = "0.2"

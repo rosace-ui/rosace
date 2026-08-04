@@ -8,8 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rosace-core  = { path = "../rosace-core" }
-rosace-trace = { path = "../rosace-trace" }
+rosace-core  = { path = "../rosace-core", version = "0.1.0" }
+rosace-trace = { path = "../rosace-trace", version = "0.1.0" }
 
 # File/save picker dialogs: real native AppKit/Win32/GTK UI on desktop —
 # see picker.rs's module doc for why iOS/Android/wasm32 are named gaps

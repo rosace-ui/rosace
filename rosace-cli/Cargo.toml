@@ -12,7 +12,7 @@ name = "rsc"
 path = "src/main.rs"
 
 [dependencies]
-rosace-trace      = { path = "../rosace-trace" }
-rosace-core       = { path = "../rosace-core" }
-rosace-hot-reload = { path = "../rosace-hot-reload" }
+rosace-trace      = { path = "../rosace-trace", version = "0.1.0" }
+rosace-core       = { path = "../rosace-core", version = "0.1.0" }
+rosace-hot-reload = { path = "../rosace-hot-reload", version = "0.1.0" }
 resvg = { version = "0.47.0", default-features = false }

@@ -12,14 +12,14 @@ repository.workspace = true
 rsc-hot = ["rosace/rsc-hot"]
 
 [dependencies]
-rosace         = { path = "../rosace" }
-rosace-core    = { path = "../rosace-core" }
-rosace-platform = { path = "../rosace-platform" }
-rosace-render  = { path = "../rosace-render" }
-rosace-theme   = { path = "../rosace-theme" }
-rosace-state   = { path = "../rosace-state" }
-rosace-compositor = { path = "../rosace-compositor" }
-rosace-trace   = { path = "../rosace-trace" }
+rosace         = { path = "../rosace", version = "0.1.0" }
+rosace-core    = { path = "../rosace-core", version = "0.1.0" }
+rosace-platform = { path = "../rosace-platform", version = "0.1.0" }
+rosace-render  = { path = "../rosace-render", version = "0.1.0" }
+rosace-theme   = { path = "../rosace-theme", version = "0.1.0" }
+rosace-state   = { path = "../rosace-state", version = "0.1.0" }
+rosace-compositor = { path = "../rosace-compositor", version = "0.1.0" }
+rosace-trace   = { path = "../rosace-trace", version = "0.1.0" }
 # Platform Channel's wire format (D127) — the app-facing method-call bridge
 # to native code. This codebase has otherwise deliberately avoided serde
 # (ureq/tungstenite were picked specifically to dodge an async-runtime

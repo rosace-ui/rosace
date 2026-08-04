@@ -20,4 +20,4 @@ rsc-hot = []
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
-rosace-view-syntax = { path = "../rosace-view-syntax" }
+rosace-view-syntax = { path = "../rosace-view-syntax", version = "0.1.0" }
