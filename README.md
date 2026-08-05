@@ -6,6 +6,7 @@
   <p><strong>The UI framework Rust deserved from day one.</strong></p>
 
   ![Status](https://img.shields.io/badge/status-active-brightgreen)
+  ![Version](https://img.shields.io/badge/crates.io-0.1.0-orange)
   ![Rendering](https://img.shields.io/badge/rendering-GPU%2FCPU%20hybrid%20(wgpu)-8A2BE2)
   ![Performance](https://img.shields.io/badge/target-120fps-ff69b4)
   ![Platforms](https://img.shields.io/badge/platforms-desktop%20·%20web%20·%20iOS%20·%20Android-blue)
@@ -16,7 +17,7 @@
 
 ---
 
-> **Work in Progress** — Rosace is under active development. APIs are unstable and large parts are still being built. Not production-ready yet — but what's here already runs fast.
+> **0.1.0 — first release, published on crates.io.** Rosace is still under active development: APIs are unstable and large parts are still being built. Not production-ready yet — but what's here already runs fast, and it's now installable, not just clonable.
 
 ---
 
@@ -141,7 +142,7 @@ Data flows downward (props). State changes propagate through reactive atoms. The
 
 > Early development — these steps work today but will evolve as the framework stabilises.
 
-**Prerequisites:** Rust 1.78+ (stable), `cargo` in your PATH.
+**Prerequisites:** Rust 1.78+ (stable), `cargo` in your PATH — install both via [rustup.rs](https://rustup.rs) if you don't have them yet.
 
 ```bash
 git clone https://github.com/rosace-ui/rosace.git
@@ -151,10 +152,8 @@ cargo build
 
 ### rsc CLI
 
-> Publishing to crates.io is in progress (`rosace-cli` itself is already up, along with most of the framework's crates) — but `rosace`, the core dependency every scaffolded app needs, isn't live yet, so `cargo install rosace-cli` won't produce a working `rsc new` output until that finishes. For now, build `rsc` from a local checkout as below; this note gets removed once the full publish is done.
-
 ```bash
-cargo install --path rosace-cli     # install the developer CLI
+cargo install rosace-cli            # install the developer CLI from crates.io
 
 rsc new my-app                      # scaffold a new Rosace project
 rsc dev                             # dev loop with hot reload
@@ -167,6 +166,9 @@ rsc snapshot --package <pkg> --example <name>   # golden snapshot test
 `rsc new` drops an `AGENTS.md` and `CLI.md` straight into the new project —
 your editor's AI assistant reads the framework's own primer instead of
 hallucinating an API. Every app, every time, no flag required.
+
+Building from a local checkout instead of crates.io (e.g. to track `main`)
+still works — `cargo install --path rosace-cli` in place of the line above.
 
 ### Writing custom widgets
 
