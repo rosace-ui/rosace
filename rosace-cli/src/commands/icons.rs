@@ -21,13 +21,17 @@ use super::new::Platform;
 
 /// The framework's default app icon: the rosace brand MARK (aurora variant),
 /// embedded at compile time. This SVG is a transparent-background mark (the
-/// diamond rosette, no backdrop) — see `assets/rosace/rosace-mark-aurora.svg`.
-/// Flat icon formats rasterize it over `ICON_BACKGROUND_COLOR`; the Android
-/// adaptive-icon foreground layer uses it as-is (transparent), which is
-/// exactly what that layer wants (the system composites its own background
-/// under it and independently masks/zooms/parallaxes the foreground).
+/// diamond rosette, no backdrop) — a copy of the workspace's shared
+/// `assets/rosace/rosace-mark-aurora.svg` lives inside this crate's own
+/// `assets/` (`cargo publish` packages each crate in isolation, so a path
+/// reaching outside the crate directory resolves to nothing once published
+/// — found live publishing rosace-cli, 2026-08-05). Flat icon formats
+/// rasterize it over `ICON_BACKGROUND_COLOR`; the Android adaptive-icon
+/// foreground layer uses it as-is (transparent), which is exactly what that
+/// layer wants (the system composites its own background under it and
+/// independently masks/zooms/parallaxes the foreground).
 const MARK_SVG: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/rosace/rosace-mark-aurora.svg"));
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/rosace-mark-aurora.svg"));
 
 /// The app-icon background. The aurora mark is designed on white (see the
 /// reference render `assets/rosace/rosace-icon-aurora-1024.png`), so flat
