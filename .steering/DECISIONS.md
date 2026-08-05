@@ -1570,36 +1570,52 @@ scaffold-time-only, same as every other generated file.
 
 ---
 
-### D130 — MILESTONE: first live publish of the full framework to crates.io (started 2026-08-04)
+### D130 — MILESTONE: first live publish of the full framework to crates.io (2026-08-04 → completed 2026-08-05 19:35 UTC)
 
-Rosace began shipping to crates.io for real for the first time — all 39
+Rosace shipped to crates.io for real for the first time — all 39
 publishable crates (`rosace-thirdparty-material-test` excluded,
 `publish = false`), at `0.1.0`, via `scripts/publish_crates.sh --live` in
-the topological order recorded in `.steering/DEV_PREVIEW_PUBLISH.md`. Once
-complete, `cargo install rosace-cli` and `rsc new` will produce apps that
-build against real registry dependencies, not a local path checkout — the
-thing every earlier prep step (D129, the license/readme/repository sweep,
-the CI fixes below) existed to make safe.
+the topological order recorded in `.steering/DEV_PREVIEW_PUBLISH.md`.
+Confirmed complete two ways, not just by the script exiting 0: (1) a
+direct `curl` sweep of all 39 crates against the crates.io API returned
+200 for every one; (2) a genuinely fresh `cargo install rosace-cli`
+(no local checkout involved) into a scratch `--root`, followed by
+`rsc new` and `cargo build` in the scaffolded app, succeeded end to end —
+every dependency in the build log came from the registry, not a path.
+That second check is the thing this whole release existed to make
+possible (see "Why the full framework, not just the CLI" in
+`.steering/DEV_PREVIEW_PUBLISH.md`), so it was worth actually running
+rather than trusting the API check alone.
 
 **Ran across two days, not one**: crates.io rate-limits new-crate-name
 publishes (burst, then a cooldown with an explicit retry-after timestamp
 per crate) — 2026-08-04 ended with 6/39 live before the session's machine
-shut down for the night. Resuming 2026-08-05 surfaced a real, unrelated
-bug: `scripts/publish_crates.sh`'s own resumability check used bare `curl`
-with no `User-Agent`, which crates.io's API 403s (anti-bot policy) — the
-check was silently failing closed the whole time, always reporting "not
-published" regardless of actual state. Fixed by adding a descriptive UA.
-Separately, `rosace-render` failed to package for real (not a rate limit):
-its `include_bytes!` for the bundled Inter/DejaVu fonts pointed at the
-workspace-root `assets/fonts/`, outside the crate's own directory — works
-in the local workspace, but `cargo publish` packages each crate in
-isolation, so the path resolved to nothing. Fixed by moving the font files
-into `rosace-render/assets/fonts/` (git mv, not copy — no other crate or
-script referenced the root path) and updating the two `include_bytes!`
-calls. See the current state of this file / crates.io itself for whether
-the run has actually finished by the time this is read — this entry
-records the milestone's start and the bugs found completing it, not a
-timestamped completion.
+shut down for the night. Resuming 2026-08-05 surfaced three more real bugs
+on top of the rate limiting itself:
+- `scripts/publish_crates.sh`'s own resumability check used bare `curl`
+  with no `User-Agent`, which crates.io's API 403s (anti-bot policy) — the
+  check was silently failing closed the whole time, always reporting "not
+  published" regardless of actual state. Fixed by adding a descriptive UA.
+- `rosace-render` failed to package for real (not a rate limit): its
+  `include_bytes!` for the bundled Inter/DejaVu fonts pointed at the
+  workspace-root `assets/fonts/`, outside the crate's own directory —
+  works in the local workspace, but `cargo publish` packages each crate in
+  isolation, so the path resolved to nothing. Fixed by moving the font
+  files into `rosace-render/assets/fonts/` (git mv, not copy — no other
+  crate or script referenced the root path).
+- `rosace-cli` hit the exact same class of bug via a different macro
+  shape: `icons.rs` used `include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"),
+  "/../assets/rosace/rosace-mark-aurora.svg"))`, also reaching the
+  workspace root. Unlike the font case, `assets/rosace/` is a shared brand
+  folder other things reference directly (the README's own logo), so this
+  one was fixed by copying just the needed file into `rosace-cli/assets/`
+  rather than moving the shared directory.
+- `rosace-widgets` (the largest crate, 11.2MiB — it bundles the Material
+  Symbols icon font) hit a repeatable `HTTP/2 stream error` on upload,
+  separate from all of the above and never fully explained — not a rate
+  limit, not a code bug, cleared up on its own after a few retries with
+  backoff. Environment/network-level flakiness on large uploads, not a
+  crates.io or ROSACE issue as far as could be determined.
 
 **Immediately before this run**: the pushed CI (`.github/workflows/rust.yml`)
 had 5 real, non-flaky failures on the `ubuntu-latest` runner — 2 from no
