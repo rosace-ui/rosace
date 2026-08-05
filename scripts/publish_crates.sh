@@ -80,6 +80,12 @@ if [[ -n "$FROM" ]]; then
   CRATES=("${filtered[@]}")
 fi
 
+# crates.io's API 403s bare/default-User-Agent requests (anti-bot policy,
+# undocumented in the error body — found 2026-08-05 resuming this exact
+# script: the skip-check below was silently failing closed, treating every
+# already-published crate as unpublished). A descriptive UA is required.
+CURL_UA="rosace-publish-script (https://github.com/rosace-ui/rosace)"
+
 VERSION=$(grep -A5 '^\[workspace.package\]' Cargo.toml | grep '^version' | head -1 | sed -E 's/.*"(.*)".*/\1/')
 echo "Publishing ${#CRATES[@]} crates at version $VERSION (live=$LIVE)"
 echo
@@ -88,7 +94,7 @@ for crate in "${CRATES[@]}"; do
   echo "── $crate ──────────────────────────────────────────"
 
   # Resumability: skip if this exact version is already on crates.io.
-  if curl -sf "https://crates.io/api/v1/crates/$crate/$VERSION" -o /dev/null 2>/dev/null; then
+  if curl -sf -H "User-Agent: $CURL_UA" "https://crates.io/api/v1/crates/$crate/$VERSION" -o /dev/null 2>/dev/null; then
     echo "  already published at $VERSION — skipping"
     echo
     continue
@@ -105,7 +111,7 @@ for crate in "${CRATES[@]}"; do
     # path->registry dep can resolve.
     echo "  published. waiting for index propagation..."
     for i in $(seq 1 30); do
-      if curl -sf "https://crates.io/api/v1/crates/$crate/$VERSION" -o /dev/null 2>/dev/null; then
+      if curl -sf -H "User-Agent: $CURL_UA" "https://crates.io/api/v1/crates/$crate/$VERSION" -o /dev/null 2>/dev/null; then
         break
       fi
       sleep 2

@@ -1570,6 +1570,57 @@ scaffold-time-only, same as every other generated file.
 
 ---
 
+### D130 — MILESTONE: first live publish of the full framework to crates.io (started 2026-08-04)
+
+Rosace began shipping to crates.io for real for the first time — all 39
+publishable crates (`rosace-thirdparty-material-test` excluded,
+`publish = false`), at `0.1.0`, via `scripts/publish_crates.sh --live` in
+the topological order recorded in `.steering/DEV_PREVIEW_PUBLISH.md`. Once
+complete, `cargo install rosace-cli` and `rsc new` will produce apps that
+build against real registry dependencies, not a local path checkout — the
+thing every earlier prep step (D129, the license/readme/repository sweep,
+the CI fixes below) existed to make safe.
+
+**Ran across two days, not one**: crates.io rate-limits new-crate-name
+publishes (burst, then a cooldown with an explicit retry-after timestamp
+per crate) — 2026-08-04 ended with 6/39 live before the session's machine
+shut down for the night. Resuming 2026-08-05 surfaced a real, unrelated
+bug: `scripts/publish_crates.sh`'s own resumability check used bare `curl`
+with no `User-Agent`, which crates.io's API 403s (anti-bot policy) — the
+check was silently failing closed the whole time, always reporting "not
+published" regardless of actual state. Fixed by adding a descriptive UA.
+Separately, `rosace-render` failed to package for real (not a rate limit):
+its `include_bytes!` for the bundled Inter/DejaVu fonts pointed at the
+workspace-root `assets/fonts/`, outside the crate's own directory — works
+in the local workspace, but `cargo publish` packages each crate in
+isolation, so the path resolved to nothing. Fixed by moving the font files
+into `rosace-render/assets/fonts/` (git mv, not copy — no other crate or
+script referenced the root path) and updating the two `include_bytes!`
+calls. See the current state of this file / crates.io itself for whether
+the run has actually finished by the time this is read — this entry
+records the milestone's start and the bugs found completing it, not a
+timestamped completion.
+
+**Immediately before this run**: the pushed CI (`.github/workflows/rust.yml`)
+had 5 real, non-flaky failures on the `ubuntu-latest` runner — 2 from no
+X server/`xclip` for `rosace-clipboard`'s Linux backend, 3 from parallel
+test races on shared global state (confirmed clean single-threaded) — plus
+a clippy lint that only failed on the CI runner's newer `stable` toolchain
+(1.97 vs local 1.96). Fixed and pushed (`8c44c6e`) before authorizing this
+publish, not after — a red CI on the commit this release point traces back
+to would undermine the "we tested this" claim the release itself makes.
+
+**Not automatic yet**: the README's `### rsc CLI` section still says "Not
+yet on crates.io" — flip that note to make `cargo install rosace-cli` the
+primary instruction (source-build via `--path` becomes the fallback), per
+the "After a real publish" checklist already in `DEV_PREVIEW_PUBLISH.md`.
+
+**Affects**: every crate in the workspace (now has a real registry
+presence at 0.1.0). Nothing in the crates' own code — this is a release
+event, not a code change.
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

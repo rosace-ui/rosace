@@ -302,12 +302,12 @@ impl FontCache {
     /// Guarantees text always renders on every platform.
     pub fn embedded() -> Self {
         const DEJAVU_SANS: &[u8] =
-            include_bytes!("../../assets/fonts/DejaVuSans.ttf");
+            include_bytes!("../assets/fonts/DejaVuSans.ttf");
         Self::from_bytes(DEJAVU_SANS)
     }
 
     /// The DEFAULT app font (Phase 32, user-decided): bundled Inter (SIL
-    /// OFL — `assets/fonts/inter/LICENSE-OFL.txt`), the same pleasant,
+    /// OFL — this crate's own `assets/fonts/inter/LICENSE-OFL.txt`), the same pleasant,
     /// screen-tuned face on EVERY platform with clearly differentiable
     /// weights — Regular for body, real Bold (700) for emphasis. Replaces
     /// "whatever the OS ships" as the default (`system_ui()` remains
@@ -319,9 +319,9 @@ impl FontCache {
     /// axis yet (tracked in `PHASE_32.md`).
     pub fn bundled() -> Self {
         const INTER_REGULAR: &[u8] =
-            include_bytes!("../../assets/fonts/inter/Inter-Regular.ttf");
+            include_bytes!("../assets/fonts/inter/Inter-Regular.ttf");
         const INTER_BOLD: &[u8] =
-            include_bytes!("../../assets/fonts/inter/Inter-Bold.ttf");
+            include_bytes!("../assets/fonts/inter/Inter-Bold.ttf");
         let regular = OwnedFace::new(INTER_REGULAR.to_vec(), 0, 400.0)
             .expect("bundled Inter Regular is valid");
         let bold = OwnedFace::new(INTER_BOLD.to_vec(), 0, 700.0)
