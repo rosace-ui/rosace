@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/rosace/rosace-logo-aurora.svg" alt="Rosace" width="420"/>
+  <img src="https://raw.githubusercontent.com/rosace-ui/rosace/main/assets/rosace/rosace-logo-aurora.svg" alt="Rosace" width="420"/>
 
   <p><em>Fast by nature. Beautiful by design.</em></p>
 
@@ -151,7 +151,7 @@ cargo build
 
 ### rsc CLI
 
-> Not yet on crates.io — for now, build `rsc` from a local checkout as below. Once published, `cargo install rosace-cli` will be the primary path.
+> Publishing to crates.io is in progress (`rosace-cli` itself is already up, along with most of the framework's crates) — but `rosace`, the core dependency every scaffolded app needs, isn't live yet, so `cargo install rosace-cli` won't produce a working `rsc new` output until that finishes. For now, build `rsc` from a local checkout as below; this note gets removed once the full publish is done.
 
 ```bash
 cargo install --path rosace-cli     # install the developer CLI
@@ -179,14 +179,14 @@ Most app code only composes built-in widgets (`Column`, `Button`, `ScrollView`, 
 The framework supports a rich set of UI components and effects:
 
 ### Glassmorphism & modern effects
-![Liquid Glass Example](assets/examples/liquid_glass.png)
+![Liquid Glass Example](https://raw.githubusercontent.com/rosace-ui/rosace/main/assets/examples/liquid_glass.png)
 
 ### Widget gallery
 A showcase of built-in widgets in action:
 
-![Widget Gallery 1](assets/examples/widget_gallery_1.png)
-![Widget Gallery 2](assets/examples/widget_gallery_2.png)
-![Widget Gallery 3](assets/examples/widget_gallery_3.png)
+![Widget Gallery 1](https://raw.githubusercontent.com/rosace-ui/rosace/main/assets/examples/widget_gallery_1.png)
+![Widget Gallery 2](https://raw.githubusercontent.com/rosace-ui/rosace/main/assets/examples/widget_gallery_2.png)
+![Widget Gallery 3](https://raw.githubusercontent.com/rosace-ui/rosace/main/assets/examples/widget_gallery_3.png)
 
 ---
 
