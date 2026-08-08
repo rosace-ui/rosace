@@ -1637,6 +1637,97 @@ event, not a code change.
 
 ---
 
+### D131 — Crate consolidation: 39 publishable crates → 26 (2026-08-08)
+
+Thirteen crates became modules of the crate that was already their sole
+real consumer. Pure code relocation — no dependency inversions, no new
+abstractions, no public API change:
+
+```
+ws        -> net::ws              a11y     -> core::a11y
+file      -> storage::file        i18n     -> core::i18n
+forms     -> widgets::forms       nav-anim -> nav::anim
+scroll    -> widgets::scroll      ime      -> platform::ime
+clipboard -> widgets::clipboard   web-seo  -> platform::web_seo
+shaping   -> text::shaping        gesture  -> platform::gesture
+bidi      -> text::bidi
+```
+
+**Why**: the 39-crate split enforced internal layering (real, and leaned
+on repeatedly), but delivered **zero à-la-carte benefit downstream**.
+Nothing can meaningfully depend on a subset — implementing `Widget` alone
+requires types from four crates (`LayoutCtx` is literally
+`{ Constraints, &FontCache, &ThemeData }`, three crates), and
+`rosace-widgets` re-exports none of them. Every real consumer depends on
+the `rosace` umbrella and `use rosace::prelude::*` — that is the actual
+public API. So the granularity was pure internal bookkeeping, paid for at
+39× on every metadata change and on every topological publish.
+
+**The rate-limit premise, corrected — recorded because it nearly drove a
+much more aggressive refactor**: the D130 publish took ~5.7h of pure
+cooldown, which suggested "a release costs a day." Reading crates.io's
+actual `rate_limiter.rs` shows two different buckets — `PublishNew`
+(burst 5, refill 1 per **10 min**) and `PublishUpdate` (burst 30, refill
+1 per **1 min**). D130's error was verbatim `PublishNew`. So that cost was
+a **one-time initiation fee for 39 brand-new names**; releasing 0.2.0
+across the same crates is ~9 minutes. Consolidation therefore proceeded on
+its real merits (metadata overhead, navigability, dead crates), NOT on a
+release-speed emergency that does not recur.
+
+**Why it was safe**: the umbrella exposes each crate through a module
+facade (`pub mod ws { pub use rosace_ws::*; }`), so every merge was a
+one-line re-point (`pub use rosace_net::ws::*;`) and `rosace::ws::…` kept
+resolving. Verified: all 34 `rosace::<mod>` paths byte-identical to the
+pre-merge tree, `#[test]` count unchanged at 1458 (nothing silently
+dropped), 1449 passing, clippy clean, `examples/showcase` compiles and
+**runs live** (navigation, tap-to-toggle, scroll, two-way state binding
+all confirmed on screen), the real-system-clipboard and IME/forms engine
+tests pass, and a freshly scaffolded `rsc new` app builds end to end.
+
+**Deliberately NOT merged**, each for a reason rather than to hit a number:
+`trace`/`state` (trace is the one zero-dep Layer 0 crate all 28 others
+share; folding it means anything wanting a logger pulls core),
+`media` (D128 plans real `VideoController` work there), `style`,
+`devtools` and `test-utils` (opt-in and dev-only compile boundaries), and
+the four that are structurally forced: `macros` (proc-macro crates can't
+export anything else), `view-syntax` (shared by the proc-macro crate *and*
+`rosace-widgets` at runtime), `asset-codegen` (build-dependency only),
+`cli`/`ffi` (binary / native-host adapter).
+
+**The anti-regrowth rule this establishes** — more valuable than the
+one-time merge, since *new* crate names are the expensive ones:
+
+> New functionality goes into the closest existing crate. A new crate
+> needs a hard justification — proc-macro requirement, build-dependency
+> isolation, or an opt-in compile boundary. "It's a different topic" is
+> not one.
+
+**Follow-ups this surfaced, not fixed here** (deliberately out of scope —
+each is an architectural change, which this refactor excluded):
+- `core::semantic_node`'s `SemanticRole` carries a comment saying it is
+  deliberately *not* unified with `a11y::role::Role`. Both now live in
+  `rosace-core`, so that duplication is co-located and more visible.
+- The semantic tree is **not exported to any platform accessibility API**
+  — zero `NSAccessibility`/`AXUIElement`/`accesskit` references workspace-
+  wide, including the Swift/Kotlin hosts. Its only consumer is
+  `platform::web_seo` (HTML for SEO). README line 35 currently claims the
+  tree "feeds platform accessibility (VoiceOver/TalkBack/ARIA)" — the SEO
+  half ships, the a11y half does not. Wiring it (AccessKit covers
+  macOS/Windows/Linux for renderer-owned surfaces) would deliver real
+  screen-reader support *and* an external automation surface, since
+  accessibility is the automation API on every desktop OS.
+
+**Affects**: 13 crates deleted, 6 gained modules, umbrella facade re-pointed,
+`Cargo.toml` workspace members, and `scripts/publish_crates.sh`'s crate
+list (updated to the recomputed 26-crate topological order in the same
+change — it would otherwise try to publish deleted crates).
+
+**Still stale, docs only**: `.steering/CRATE_CONTRACTS.md` and the README's
+crate table still describe the pre-merge 39. Worth a pass, but neither
+breaks anything at runtime.
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

@@ -3,6 +3,7 @@
 #
 # Order matches .steering/DEV_PREVIEW_PUBLISH.md (computed from the actual
 # path-dependency graph — DO NOT hand-edit this list without recomputing).
+# 26 crates as of D131 (2026-08-08); was 39 before the consolidation.
 #
 # Usage:
 #   scripts/publish_crates.sh                 # dry run (default, safe)
@@ -15,44 +16,31 @@
 set -euo pipefail
 
 CRATES=(
-  rosace-view-syntax
-  rosace-macros
   rosace-trace
   rosace-state
   rosace-core
-  rosace-theme
-  rosace-style
-  rosace-layout
-  rosace-render
-  rosace-scroll
   rosace-animate
-  rosace-forms
+  rosace-layout
+  rosace-view-syntax
+  rosace-macros
+  rosace-render
+  rosace-theme
   rosace-nav
-  rosace-text
-  rosace-a11y
   rosace-shader
+  rosace-text
   rosace-widgets
-  rosace-hot-reload
-  rosace-cli
-  rosace-asset-codegen
-  rosace-web-seo
-  rosace-compositor
-  rosace-ime
-  rosace-platform
-  rosace-nav-anim
   rosace-devtools
-  rosace-gesture
-  rosace-net
-  rosace-file
-  rosace-storage
-  rosace-shaping
-  rosace-bidi
-  rosace-i18n
-  rosace-clipboard
-  rosace-ws
+  rosace-hot-reload
   rosace-media
+  rosace-net
+  rosace-compositor
+  rosace-platform
+  rosace-storage
+  rosace-style
   rosace-test-utils
   rosace
+  rosace-asset-codegen
+  rosace-cli
   rosace-ffi
 )
 
