@@ -62,6 +62,26 @@ pub struct SemanticNode {
     /// The link target for `Role::Link` (`<a href="...">`); `None` for
     /// every other role.
     pub href: Option<String>,
+    /// Stable identity for this node, carried over from the render-tree
+    /// `NodeId` that declared it.
+    ///
+    /// Platform accessibility APIs are **stateful**: they hold node
+    /// references across frames and expect the same element to keep the
+    /// same identity so focus, the screen-reader cursor, and
+    /// "press the element named X" automation survive a repaint. The
+    /// HTML/SEO consumer (D107) needs none of that — it serializes a
+    /// snapshot and throws it away — which is why this was absent until
+    /// the platform-a11y work. `None` when the tree was built by hand
+    /// (tests, or a caller assembling nodes directly).
+    pub id: Option<u64>,
+    /// This node's on-screen rectangle in logical pixels, window-relative.
+    ///
+    /// Needed by every platform accessibility API to place the
+    /// screen-reader cursor, hit-test, and answer "what is at this
+    /// point". Sourced from the render tree's `cached_rect`, so it is
+    /// only present after a real paint. `None` for a hand-built tree, or
+    /// for a node whose render-tree entry has not been laid out yet.
+    pub bounds: Option<crate::types::Rect>,
     /// Child semantic nodes.
     pub children: Vec<SemanticNode>,
 }
@@ -75,8 +95,22 @@ impl SemanticNode {
             value: None,
             heading_level: None,
             href: None,
+            id: None,
+            bounds: None,
             children: Vec::new(),
         }
+    }
+
+    /// Sets this node's stable identity (see [`SemanticNode::id`]).
+    pub fn id(mut self, id: u64) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    /// Sets this node's window-relative rectangle (see [`SemanticNode::bounds`]).
+    pub fn bounds(mut self, bounds: crate::types::Rect) -> Self {
+        self.bounds = Some(bounds);
+        self
     }
 
     /// Sets the accessible label for this node.

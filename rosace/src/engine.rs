@@ -2531,6 +2531,48 @@ mod tests {
         );
     }
 
+    /// D132 prerequisite: the semantic tree must carry per-node identity
+    /// and geometry, not just label/role. Platform accessibility APIs are
+    /// stateful — they hold node references across frames and must be able
+    /// to answer "where is this on screen" — whereas the HTML/SEO consumer
+    /// (D107) needed neither, which is why both were absent until now.
+    /// Asserts against a REAL paint, not a hand-built tree: bounds have to
+    /// come from the render tree's laid-out rect.
+    #[test]
+    fn semantic_nodes_carry_stable_ids_and_real_painted_bounds() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut engine, mut canvas, mut overlay) = headless_nav_engine();
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        fn find<'a>(n: &'a rosace_core::SemanticNode, label: &str) -> Option<&'a rosace_core::SemanticNode> {
+            if n.label.as_deref() == Some(label) { return Some(n); }
+            n.children.iter().find_map(|c| find(c, label))
+        }
+
+        let tree = engine.semantics();
+        let btn = find(&tree, "Screen A").expect("the button must appear in the semantic tree");
+
+        let id = btn.id.expect("a painted semantic node must carry a stable id");
+        let bounds = btn.bounds.expect("a painted semantic node must carry its on-screen rect");
+
+        // Geometry must be real, not a placeholder: the button fills the
+        // 300x200 headless canvas under tight constraints, the same shape
+        // every other engine test in this file relies on.
+        assert!(
+            bounds.size.width > 0.0 && bounds.size.height > 0.0,
+            "bounds must come from the laid-out rect, got {bounds:?}"
+        );
+
+        // Identity must survive a repaint — otherwise a screen reader's
+        // cursor and any "press the element named X" automation would be
+        // invalidated on every frame.
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        let again = engine.semantics();
+        let btn2 = find(&again, "Screen A").expect("still present after a repaint");
+        assert_eq!(btn2.id, Some(id), "the same widget must keep the same semantic id across repaints");
+        assert_eq!(btn2.bounds, Some(bounds), "an unmoved widget must report the same bounds");
+    }
+
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
         fn walk(node: &rosace_core::SemanticNode, out: &mut Vec<String>) {
             if let Some(l) = &node.label { out.push(l.clone()); }

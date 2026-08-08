@@ -755,8 +755,16 @@ impl RenderTree {
 
     fn collect_semantics_node(&self, id: NodeId, parent: &mut rosace_core::SemanticNode) {
         let n = &self.nodes[id];
-        for s in &n.semantics {
+        for (i, s) in n.semantics.iter().enumerate() {
             let mut sn = rosace_core::SemanticNode::new().role(s.role.clone());
+            // Identity + geometry for platform accessibility APIs, which
+            // (unlike the HTML/SEO consumer) hold node references across
+            // frames and need to answer "where is this on screen".
+            // A node may declare several semantics entries, so the id
+            // mixes in the entry index to stay unique within the tree —
+            // the render-tree NodeId alone would collide.
+            sn = sn.id(((id as u64) << 8) | (i as u64 & 0xff));
+            if let Some(r) = n.cached_rect { sn = sn.bounds(r); }
             if let Some(l) = &s.label { sn = sn.label(l.clone()); }
             // `value`/`heading_level`/`href` were silently dropped here before
             // D107/Phase 25 — a real gap for a `TextInput`'s current text, a
