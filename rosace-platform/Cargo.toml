@@ -67,3 +67,13 @@ features = [
     # attach_shadow if none exists, e.g. `rsc dev` without a build step).
     "ShadowRoot", "ShadowRootInit", "ShadowRootMode",
 ]
+
+# Platform accessibility (D132). AccessKit bridges one semantic tree to
+# NSAccessibility (macOS), UI Automation (Windows), and AT-SPI (Linux) —
+# the same three targets winit covers here, so it carries the same gating.
+# Deliberately NOT on wasm32 (the DOM shadow tree from D107 already serves
+# assistive tech there) nor iOS/Android (their hosts are Swift/Kotlin and
+# would bridge via rosace-ffi, not winit).
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+accesskit = "0.24"
+accesskit_winit = "0.33"

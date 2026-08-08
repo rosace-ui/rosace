@@ -1083,7 +1083,22 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 self.config.width,
                 self.config.height,
             ));
+        // AccessKit's adapter must be constructed while the window is still
+        // invisible — it panics otherwise (D132). So on the desktop targets
+        // that have a bridge, the window is born hidden, the adapter is
+        // attached, and only then is it shown. Every other target keeps the
+        // original create-and-show behaviour untouched.
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        let attrs = attrs.with_visible(false);
+
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
+
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        {
+            crate::a11y_bridge::init(event_loop, &window);
+            window.set_visible(true);
+        }
+
         window.focus_window();
 
         // On iOS, the native UIWindow's frame/bounds — what actually
@@ -1187,6 +1202,13 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
         _id: WindowId,
         event: WindowEvent,
     ) {
+        // Let the accessibility adapter observe focus/geometry changes before
+        // we consume the event (D132). No-op unless assistive tech attached.
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        if let Some(w) = &self.window {
+            crate::a11y_bridge::process_event(w, &event);
+        }
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 

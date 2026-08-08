@@ -232,7 +232,21 @@ impl App {
                 if content_changed {
                     rosace_platform::web_seo_sync::sync(&engine.semantics());
                 }
-                #[cfg(not(target_arch = "wasm32"))]
+                // D132 — the desktop counterpart of the same idea: republish
+                // the semantic tree to the OS accessibility layer. Gated on
+                // the same `content_changed` signal, and `sync` itself is a
+                // cheap no-op unless assistive tech has actually attached, so
+                // the common case never walks the tree at all.
+                #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+                if content_changed {
+                    rosace_platform::a11y_bridge::sync(&engine.semantics());
+                }
+                #[cfg(not(any(
+                    target_arch = "wasm32",
+                    target_os = "macos",
+                    target_os = "windows",
+                    target_os = "linux"
+                )))]
                 let _ = content_changed;
             });
     }
