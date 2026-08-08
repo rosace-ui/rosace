@@ -42,7 +42,7 @@ pub struct TextInput {
     spans: Option<Arc<SpanFn>>,
     cursor_style: Option<CursorStyle>,
     keyboard_type: rosace_core::KeyboardType,
-    field: Option<rosace_forms::FormField>,
+    field: Option<crate::forms::FormField>,
     filters: Vec<super::text_edit::InputFilter>,
     leading: Option<super::BoxedWidget>,
     trailing: Option<super::BoxedWidget>,
@@ -92,7 +92,7 @@ impl TextInput {
     /// Seed this input as focused on its FIRST paint only (a one-shot
     /// request, not a per-frame re-request — see `PaintCtx::focus_node_seeded`).
     /// Real, persistent focus state now lives on this widget's own
-    /// [`rosace_a11y::FocusNode`] (auto-created, zero wiring required),
+    /// [`rosace_core::a11y::FocusNode`] (auto-created, zero wiring required),
     /// driven by click/Tab from then on.
     pub fn focused(mut self) -> Self { self.focused = true; self }
     pub fn obscure(mut self) -> Self { self.obscure = true; self }
@@ -152,7 +152,7 @@ impl TextInput {
         self.keyboard_type = kt;
         self
     }
-    /// Bind this field to a [`rosace_forms::FormField`] (D116 Phase 28
+    /// Bind this field to a [`crate::forms::FormField`] (D116 Phase 28
     /// Step 8) — the primary way to wire form validation. Sets the
     /// widget's initial value from `f.get()` and installs an `on_change`
     /// that writes back into the field (`f.set(v)`) AND immediately
@@ -161,7 +161,7 @@ impl TextInput {
     /// both update live as the user types — not just on submit. Calling
     /// `.on_change()` again AFTER `.field()` overrides this binding;
     /// call `.field()` last if you need both.
-    pub fn field(mut self, f: rosace_forms::FormField) -> Self {
+    pub fn field(mut self, f: crate::forms::FormField) -> Self {
         self.value = f.get();
         let bound = f.clone();
         self.on_change = Some(Arc::new(move |v| {

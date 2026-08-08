@@ -13,7 +13,6 @@ web-time           = "1"
 rosace-animate    = { path = "../rosace-animate", version = "0.1.0" }
 rosace-compositor = { path = "../rosace-compositor", version = "0.1.0" }
 rosace-core       = { path = "../rosace-core", version = "0.1.0" }
-rosace-ime        = { path = "../rosace-ime", version = "0.1.0" }
 rosace-render     = { path = "../rosace-render", version = "0.1.0" }
 rosace-shader     = { path = "../rosace-shader", version = "0.1.0" }
 rosace-state      = { path = "../rosace-state", version = "0.1.0" }
@@ -49,7 +48,6 @@ console_error_panic_hook = "0.1"
 # crate) -> Layer 2 (rosace-core, rosace-web-seo's only dependency) —
 # no cycle. wasm32-gated for the same reason as everything else in this
 # block: never compiled for iOS/Android/macOS/Windows/Linux.
-rosace-web-seo = { path = "../rosace-web-seo", version = "0.1.0" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
 version = "0.3"

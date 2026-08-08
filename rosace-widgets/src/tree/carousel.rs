@@ -3,7 +3,7 @@
 //! indicator-dot row.
 //!
 //! Gesture model (reuses the ScrollView machinery, D101/D108): the widget's
-//! per-node [`rosace_scroll::ScrollController`] accumulates the horizontal
+//! per-node [`crate::scroll::ScrollController`] accumulates the horizontal
 //! drag streamed through `ctx.on_press_at`; on release (`pressed()`
 //! true→false, the same transition `ScrollView` keys momentum off) the
 //! accumulated distance either snaps to the neighboring page (past
@@ -102,7 +102,7 @@ impl Carousel {
 
     /// Current page index (controlled atom, or the controller's spare
     /// `offset[1]` slot when uncontrolled), clamped to the page count.
-    fn current_page(&self, ctrl: &rosace_scroll::ScrollController, n: usize) -> usize {
+    fn current_page(&self, ctrl: &crate::scroll::ScrollController, n: usize) -> usize {
         let raw = match &self.page {
             Some(a) => a.get(),
             None => ctrl.offset.get()[1].max(0.0) as usize,
@@ -111,7 +111,7 @@ impl Carousel {
     }
 
     /// Write the page (atom or internal slot) and reset the drag distance.
-    fn set_page(&self, ctrl: &rosace_scroll::ScrollController, p: usize) {
+    fn set_page(&self, ctrl: &crate::scroll::ScrollController, p: usize) {
         if let Some(a) = &self.page {
             if a.get() != p { a.set(p); }
         }

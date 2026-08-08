@@ -342,7 +342,7 @@ impl DatePicker {
 
     /// Paint the year-picker grid (4 columns × 3 rows) for the window starting
     /// at `base`; selecting a year jumps the view and returns to Days mode.
-    fn paint_years(&self, ctx: &mut PaintCtx, body: Rect, base: i32, pal: &Pal, ctrl: &rosace_scroll::ScrollController) {
+    fn paint_years(&self, ctx: &mut PaintCtx, body: Rect, base: i32, pal: &Pal, ctrl: &crate::scroll::ScrollController) {
         const COLS: usize = 4;
         const ROWS: usize = 3;
         let cw = body.size.width / COLS as f32;

@@ -1414,18 +1414,18 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
 
             WindowEvent::Ime(ime) => {
                 let ev = match ime {
-                    Ime::Enabled => rosace_ime::ImeEvent::Enabled,
+                    Ime::Enabled => crate::ime::ImeEvent::Enabled,
                     Ime::Preedit(text, cursor_range) => {
                         self.ime_composing = !text.is_empty();
-                        rosace_ime::ImeEvent::Preedit { text, cursor_range }
+                        crate::ime::ImeEvent::Preedit { text, cursor_range }
                     }
                     Ime::Commit(text) => {
                         self.ime_composing = false;
-                        rosace_ime::ImeEvent::Commit(text)
+                        crate::ime::ImeEvent::Commit(text)
                     }
                     Ime::Disabled => {
                         self.ime_composing = false;
-                        rosace_ime::ImeEvent::Disabled
+                        crate::ime::ImeEvent::Disabled
                     }
                 };
                 self.pending_events.push(InputEvent::Ime(ev));

@@ -19,7 +19,7 @@ use rosace_widgets::tree::{
     clear_overlays, drain_overlays, push_overlay, text_edit, FocusBehavior, InputBehavior,
     LayerPosition, Menu, NodeId, OverlayEntry, ScrimConfig,
 };
-use rosace_clipboard::ClipboardProvider as _;
+use rosace_widgets::clipboard::ClipboardProvider as _;
 
 use crate::{inflate_rect, rect_contains, theme_color, walk_element, OverlayRoute};
 
@@ -224,7 +224,7 @@ pub struct FrameEngine {
     render_tree: Rc<RefCell<rosace_widgets::tree::RenderTree>>,
 
     // ── Focus + input state ─────────────────────────────────────────────
-    focus_manager: rosace_a11y::FocusManager,
+    focus_manager: rosace_core::a11y::FocusManager,
     shift_held: bool,
     /// Held-modifier state for text-editing shortcuts (D112/Phase 28
     /// Step 1) — mirrors `shift_held`. Cmd/Ctrl+A/C/X/V trigger on
@@ -351,7 +351,7 @@ impl FrameEngine {
             element_cache: HashMap::new(),
             build_overlays: Vec::new(),
             render_tree: Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
-            focus_manager: rosace_a11y::FocusManager::new(),
+            focus_manager: rosace_core::a11y::FocusManager::new(),
             shift_held: false,
             ctrl_held: false,
             meta_held: false,
@@ -625,7 +625,7 @@ impl FrameEngine {
     }
 
     /// Apply any context-menu actions enqueued since last frame (D116 Step
-    /// 7) — the exact same `text_edit`/`rosace_clipboard` calls the
+    /// 7) — the exact same `text_edit`/`rosace_widgets::clipboard` calls the
     /// Cmd/Ctrl+X/C/V/A keyboard shortcuts use, just triggered from a menu
     /// item instead of a `KeyDown` match arm. Closes the menu after ANY
     /// action, matching every desktop context menu's convention.
@@ -651,18 +651,18 @@ impl FrameEngine {
                 }
                 ContextMenuAction::Copy => {
                     if let Some(sel) = text_edit::selected_text(&value, &state) {
-                        let _ = rosace_clipboard::SystemClipboard::new().write(&sel);
+                        let _ = rosace_widgets::clipboard::SystemClipboard::new().write(&sel);
                     }
                 }
                 ContextMenuAction::Cut => {
                     if let Some(sel) = text_edit::selected_text(&value, &state) {
-                        let _ = rosace_clipboard::SystemClipboard::new().write(&sel);
+                        let _ = rosace_widgets::clipboard::SystemClipboard::new().write(&sel);
                         let (nv, ns) = text_edit::backspace(&value, &state, now);
                         self.commit_text_edit(node_id, &value, nv, ns);
                     }
                 }
                 ContextMenuAction::Paste => {
-                    if let Some(text) = rosace_clipboard::SystemClipboard::new().read() {
+                    if let Some(text) = rosace_widgets::clipboard::SystemClipboard::new().read() {
                         if !text.is_empty() {
                             let (nv, ns) = text_edit::insert_str(&value, &state, &text, now);
                             self.commit_text_edit(node_id, &value, nv, ns);
@@ -1840,7 +1840,7 @@ impl FrameEngine {
                 }
                 // Real OS IME composition (D116 Step 6) — `rosace-platform`
                 // translates winit's `WindowEvent::Ime` into
-                // `rosace_ime::ImeEvent` (the wire payload, reused as-is —
+                // `rosace_platform::ime::ImeEvent` (the wire payload, reused as-is —
                 // see `InputEvent::Ime`'s doc comment for why that crate is
                 // safe to depend on from the platform layer). `Enabled` is
                 // pure state (nothing to do — no field-scoped enable/disable
@@ -1849,7 +1849,7 @@ impl FrameEngine {
                     if let Some((node_id, value, state, _)) = self.focused_editable() {
                         let now = rosace_widgets::tree::anim_clock();
                         match ime_event {
-                            rosace_ime::ImeEvent::Preedit { text, cursor_range } => {
+                            rosace_platform::ime::ImeEvent::Preedit { text, cursor_range } => {
                                 // winit's cursor_range is a BYTE range into
                                 // `text` itself; the edit core is
                                 // char-indexed (see text_edit.rs's module
@@ -1858,11 +1858,11 @@ impl FrameEngine {
                                 let (nv, ns) = text_edit::ime_set_preedit(&value, &state, text, cursor_in_text, now);
                                 self.commit_text_edit(node_id, &value, nv, ns);
                             }
-                            rosace_ime::ImeEvent::Commit(text) => {
+                            rosace_platform::ime::ImeEvent::Commit(text) => {
                                 let (nv, ns) = text_edit::ime_commit(&value, &state, text, now);
                                 self.commit_text_edit(node_id, &value, nv, ns);
                             }
-                            rosace_ime::ImeEvent::Enabled | rosace_ime::ImeEvent::Disabled => {}
+                            rosace_platform::ime::ImeEvent::Enabled | rosace_platform::ime::ImeEvent::Disabled => {}
                         }
                     }
                 }
@@ -1897,18 +1897,18 @@ impl FrameEngine {
                                 }
                                 'c' => {
                                     if let Some(sel) = text_edit::selected_text(&value, &state) {
-                                        let _ = rosace_clipboard::SystemClipboard::new().write(&sel);
+                                        let _ = rosace_widgets::clipboard::SystemClipboard::new().write(&sel);
                                     }
                                 }
                                 'x' => {
                                     if let Some(sel) = text_edit::selected_text(&value, &state) {
-                                        let _ = rosace_clipboard::SystemClipboard::new().write(&sel);
+                                        let _ = rosace_widgets::clipboard::SystemClipboard::new().write(&sel);
                                         let (nv, ns) = text_edit::backspace(&value, &state, now);
                                         self.commit_text_edit(node_id, &value, nv, ns);
                                     }
                                 }
                                 'v' => {
-                                    if let Some(text) = rosace_clipboard::SystemClipboard::new().read() {
+                                    if let Some(text) = rosace_widgets::clipboard::SystemClipboard::new().read() {
                                         let clean: String = if multiline {
                                             text.chars().filter(|c| !c.is_control() || *c == '\n').collect()
                                         } else {
@@ -3245,8 +3245,8 @@ mod tests {
         // suite only exercises NoopClipboard) — save and restore whatever
         // was there so this test leaves no lasting side effect on the
         // developer's actual clipboard.
-        use rosace_clipboard::ClipboardProvider;
-        let cb = rosace_clipboard::SystemClipboard::new();
+        use rosace_widgets::clipboard::ClipboardProvider;
+        let cb = rosace_widgets::clipboard::SystemClipboard::new();
         let original = cb.read();
 
         let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
@@ -3956,10 +3956,10 @@ mod tests {
     // ── Real OS IME (D116 Step 6) ──────────────────────────────────────────
 
     fn ime_preedit(text: &str, cursor_range: Option<(usize, usize)>) -> rosace_platform::InputEvent {
-        rosace_platform::InputEvent::Ime(rosace_ime::ImeEvent::Preedit { text: text.to_string(), cursor_range })
+        rosace_platform::InputEvent::Ime(rosace_platform::ime::ImeEvent::Preedit { text: text.to_string(), cursor_range })
     }
     fn ime_commit(text: &str) -> rosace_platform::InputEvent {
-        rosace_platform::InputEvent::Ime(rosace_ime::ImeEvent::Commit(text.to_string()))
+        rosace_platform::InputEvent::Ime(rosace_platform::ime::ImeEvent::Commit(text.to_string()))
     }
 
     #[test]
@@ -4084,7 +4084,7 @@ mod tests {
     #[test]
     fn right_click_copy_and_paste_round_trip_through_the_real_clipboard() {
         let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let cb = rosace_clipboard::SystemClipboard::new();
+        let cb = rosace_widgets::clipboard::SystemClipboard::new();
         let original = cb.read();
 
         let (mut engine, mut canvas, mut overlay, atom) = headless_text_input_engine();
@@ -4284,12 +4284,12 @@ mod tests {
     }
 
     struct OneFormTextInput {
-        captured_field: Arc<OnceLock<rosace_forms::FormField>>,
+        captured_field: Arc<OnceLock<rosace_widgets::forms::FormField>>,
         submitted: Arc<std::sync::atomic::AtomicBool>,
     }
     impl Component for OneFormTextInput {
         fn build(&self, ctx: &mut Context) -> Element {
-            let field = rosace_forms::FormField::for_ctx(ctx, "name").rule(rosace_forms::Required);
+            let field = rosace_widgets::forms::FormField::for_ctx(ctx, "name").rule(rosace_widgets::forms::Required);
             let _ = self.captured_field.set(field.clone());
             // `.rule()` on a fresh `FormField::for_ctx` result each build
             // would rebuild the validator list every frame harmlessly
@@ -4297,7 +4297,7 @@ mod tests {
             // field once via `ctx.state`-backed `for_ctx` and DON'T
             // re-add rules every build; captured here only so the test
             // can read it back.
-            let form = rosace_forms::Form::new().field(field.clone());
+            let form = rosace_widgets::forms::Form::new().field(field.clone());
             let submitted = self.submitted.clone();
             Column::new()
                 // `.field()` is the WHOLE binding — deliberately no

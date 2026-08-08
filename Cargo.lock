@@ -2058,29 +2058,18 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "libloading",
- "rosace-a11y",
  "rosace-animate",
- "rosace-bidi",
- "rosace-clipboard",
  "rosace-core",
  "rosace-devtools",
- "rosace-file",
- "rosace-forms",
- "rosace-gesture",
  "rosace-hot-reload",
- "rosace-i18n",
- "rosace-ime",
  "rosace-layout",
  "rosace-macros",
  "rosace-media",
  "rosace-nav",
- "rosace-nav-anim",
  "rosace-net",
  "rosace-platform",
  "rosace-render",
- "rosace-scroll",
  "rosace-shader",
- "rosace-shaping",
  "rosace-state",
  "rosace-storage",
  "rosace-style",
@@ -2088,20 +2077,10 @@ dependencies = [
  "rosace-text",
  "rosace-theme",
  "rosace-trace",
- "rosace-web-seo",
  "rosace-widgets",
- "rosace-ws",
  "wasm-bindgen",
  "web-sys",
  "web-time",
-]
-
-[[package]]
-name = "rosace-a11y"
-version = "0.1.0"
-dependencies = [
- "rosace-core",
- "rosace-state",
 ]
 
 [[package]]
@@ -2119,26 +2098,12 @@ name = "rosace-asset-codegen"
 version = "0.1.0"
 
 [[package]]
-name = "rosace-bidi"
-version = "0.1.0"
-dependencies = [
- "rosace-trace",
-]
-
-[[package]]
 name = "rosace-cli"
 version = "0.1.0"
 dependencies = [
  "resvg",
  "rosace-core",
  "rosace-hot-reload",
- "rosace-trace",
-]
-
-[[package]]
-name = "rosace-clipboard"
-version = "0.1.0"
-dependencies = [
  "rosace-trace",
 ]
 
@@ -2192,48 +2157,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rosace-file"
-version = "0.1.0"
-dependencies = [
- "rfd",
- "rosace-core",
- "rosace-trace",
-]
-
-[[package]]
-name = "rosace-forms"
-version = "0.1.0"
-dependencies = [
- "rosace-core",
- "rosace-state",
- "rosace-trace",
-]
-
-[[package]]
-name = "rosace-gesture"
-version = "0.1.0"
-dependencies = [
- "rosace-platform",
- "rosace-trace",
-]
-
-[[package]]
 name = "rosace-hot-reload"
-version = "0.1.0"
-dependencies = [
- "rosace-trace",
-]
-
-[[package]]
-name = "rosace-i18n"
-version = "0.1.0"
-dependencies = [
- "rosace-state",
- "rosace-trace",
-]
-
-[[package]]
-name = "rosace-ime"
 version = "0.1.0"
 dependencies = [
  "rosace-trace",
@@ -2276,20 +2200,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "rosace-nav-anim"
-version = "0.1.0"
-dependencies = [
- "rosace-nav",
- "rosace-trace",
-]
-
-[[package]]
 name = "rosace-net"
 version = "0.1.0"
 dependencies = [
  "rosace-core",
  "rosace-state",
  "rosace-trace",
+ "tungstenite",
  "ureq",
 ]
 
@@ -2304,13 +2221,11 @@ dependencies = [
  "rosace-animate",
  "rosace-compositor",
  "rosace-core",
- "rosace-ime",
  "rosace-render",
  "rosace-shader",
  "rosace-state",
  "rosace-theme",
  "rosace-trace",
- "rosace-web-seo",
  "softbuffer",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2333,33 +2248,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "rosace-scroll"
-version = "0.1.0"
-dependencies = [
- "rosace-core",
- "rosace-layout",
- "rosace-render",
- "rosace-state",
- "rosace-trace",
-]
-
-[[package]]
 name = "rosace-shader"
 version = "0.1.0"
 dependencies = [
  "rosace-core",
  "rosace-macros",
  "rosace-render",
- "rosace-trace",
-]
-
-[[package]]
-name = "rosace-shaping"
-version = "0.1.0"
-dependencies = [
- "rosace-core",
- "rosace-render",
- "rosace-text",
  "rosace-trace",
 ]
 
@@ -2376,6 +2270,7 @@ dependencies = [
 name = "rosace-storage"
 version = "0.1.0"
 dependencies = [
+ "rfd",
  "rosace-core",
  "rosace-trace",
  "rusqlite",
@@ -2441,24 +2336,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "rosace-web-seo"
-version = "0.1.0"
-dependencies = [
- "rosace-core",
-]
-
-[[package]]
 name = "rosace-widgets"
 version = "0.1.0"
 dependencies = [
- "rosace-a11y",
  "rosace-animate",
  "rosace-core",
- "rosace-forms",
  "rosace-layout",
  "rosace-nav",
  "rosace-render",
- "rosace-scroll",
  "rosace-shader",
  "rosace-state",
  "rosace-text",
@@ -2468,16 +2353,6 @@ dependencies = [
  "tiny-skia 0.11.4",
  "unicode-segmentation",
  "web-time",
-]
-
-[[package]]
-name = "rosace-ws"
-version = "0.1.0"
-dependencies = [
- "rosace-core",
- "rosace-state",
- "rosace-trace",
- "tungstenite",
 ]
 
 [[package]]

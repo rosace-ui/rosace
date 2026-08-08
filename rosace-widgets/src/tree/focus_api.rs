@@ -1,4 +1,4 @@
-use rosace_a11y::FocusNode;
+use rosace_core::a11y::FocusNode;
 use rosace_render::{Color, DrawCommand};
 use super::{Widget, PaintCtx};
 

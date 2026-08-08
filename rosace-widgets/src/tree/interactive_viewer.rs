@@ -2,7 +2,7 @@ use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::PictureRecorder;
-use rosace_scroll::controller::{MAX_VELOCITY, COAST_STOP_THRESHOLD};
+use crate::scroll::controller::{MAX_VELOCITY, COAST_STOP_THRESHOLD};
 use rosace_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx, TransformLayerEntry, avail_w, avail_h};
 use super::container::draw_rounded_rect_pub;
@@ -147,7 +147,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for InteractiveViewer<W> {
         // Momentum coast (the reported "abrupt, no momentum" gap): once
         // released, keep applying the last tracked velocity with exponential
         // decay until it settles — same friction/threshold constants
-        // `ScrollView`'s own momentum uses (`rosace_scroll::controller`), so
+        // `ScrollView`'s own momentum uses (`crate::scroll::controller`), so
         // panning here feels consistent with scrolling elsewhere in the app.
         // `ctx.pressed()` transitioning true->false is what starts this:
         // MouseUp already forces one repaint for the pressed node

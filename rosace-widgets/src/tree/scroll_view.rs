@@ -2,7 +2,7 @@ use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::{Color, DrawCommand};
-use rosace_scroll::{ScrollController, ScrollPhysics, ScrollStyle};
+use crate::scroll::{ScrollController, ScrollPhysics, ScrollStyle};
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h, intersect_rect};
 
 /// Scroll direction.
@@ -704,7 +704,7 @@ impl ScrollView {
         };
         let active = is_pressed
             || ctrl.is_some_and(|c| c.wheel_recently_active()
-                || c.velocity_magnitude() > rosace_scroll::controller::COAST_STOP_THRESHOLD);
+                || c.velocity_magnitude() > crate::scroll::controller::COAST_STOP_THRESHOLD);
 
         let target = match st.visibility {
             ScrollbarVisibility::Hidden => 0.0,

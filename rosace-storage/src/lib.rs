@@ -23,6 +23,10 @@
 //! localStorage/IndexedDB backend is future work, tracked in
 //! `PHASE_31.md` Step 1.
 
+/// Filesystem access + native file pickers (merged from the former
+/// `rosace-file` crate, D131).
+pub mod file;
+
 #[cfg(not(target_arch = "wasm32"))]
 use rusqlite::Connection;
 #[cfg(not(target_arch = "wasm32"))]

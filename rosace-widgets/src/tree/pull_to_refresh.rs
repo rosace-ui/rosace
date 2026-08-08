@@ -18,7 +18,7 @@
 use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_render::{Color, DrawCommand};
-use rosace_scroll::ScrollPhysics;
+use crate::scroll::ScrollPhysics;
 
 use super::{avail_h, avail_w, intersect_rect, BoxedWidget, Children, LayoutCtx, PaintCtx, Widget};
 

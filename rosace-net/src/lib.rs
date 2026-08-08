@@ -24,6 +24,8 @@
 //! ```
 
 pub mod client;
+/// WebSocket client (merged from the former `rosace-ws` crate).
+pub mod ws;
 pub mod load_state;
 pub mod loader;
 pub mod network_status;

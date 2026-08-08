@@ -4,7 +4,7 @@
 //! around a [`super::ListTile`].
 //!
 //! Drag model mirrors [`super::Carousel`]'s (same `ctx.on_press_at` +
-//! per-node [`rosace_scroll::ScrollController`] idiom, D101/D108): the
+//! per-node [`crate::scroll::ScrollController`] idiom, D101/D108): the
 //! controller's otherwise-unused `offset[0]` slot stores the live drag
 //! distance (this widget never scrolls anything, so there's no real
 //! offset meaning to conflict with). On release past `threshold` (a

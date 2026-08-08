@@ -91,7 +91,7 @@ impl TextLayout {
     /// heuristic `estimated_width`.
     ///
     /// `measure(text, font_size)` must return the pixel width of `text` at the
-    /// given font size.  Use `rosace_text::metrics::measure_text` for real
+    /// given font size.  Use `crate::metrics::measure_text` for real
     /// font metrics or any closure for testing.
     pub fn layout_with_measure<F>(spans: &[TextSpan], max_width: f32, measure: F) -> Self
     where
