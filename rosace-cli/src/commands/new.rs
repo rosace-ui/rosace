@@ -1123,8 +1123,8 @@ fn main() {{
     engine.paint(&mut canvas, &mut overlay, &[]);
 
     let tree = engine.semantics();
-    let html = rosace_web_seo::render_shadow_dom_template(&tree);
-    let text = rosace_web_seo::render_text(&tree);
+    let html = rosace_platform::web_seo::render_shadow_dom_template(&tree);
+    let text = rosace_platform::web_seo::render_text(&tree);
 
     print!("{{html}}{{SPLIT_MARKER}}{{text}}");
 }}

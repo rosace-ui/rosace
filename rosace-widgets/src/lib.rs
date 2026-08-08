@@ -1,5 +1,12 @@
 //! `rosace-widgets` — built-in widgets for the ROSACE UI framework.
 
+/// Form state + validation (merged from the former `rosace-forms` crate, D131).
+pub mod forms;
+/// Scroll physics, controller, and ScrollView internals (former `rosace-scroll`, D131).
+pub mod scroll;
+/// OS clipboard access (former `rosace-clipboard`, D131).
+pub mod clipboard;
+
 /// Composable widget tree system — the primary API for building ROSACE apps.
 pub mod tree;
 
@@ -84,7 +91,7 @@ pub use tree::{Text, TextAlign, FontWeight};
 pub use tree::TextInput;
 pub use tree::TextArea;
 pub use tree::{CursorShape, CursorStyle, EditController, InputFilter, Span, SpanFn, TextLayoutSnapshot};
-pub use rosace_forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
+pub use crate::forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
 pub use tree::Image;
 pub use tree::{Tooltip, TooltipStyle, WidgetExt};
 

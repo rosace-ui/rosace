@@ -16,12 +16,12 @@ pub enum InputEvent {
     Pinch         { x: f32, y: f32, delta: f32 },
     /// A real OS IME session event (D116 Step 6) — CJK/complex-script
     /// composition. Desktop: translated from winit's `WindowEvent::Ime`.
-    /// Reuses `rosace_ime::ImeEvent` as the wire payload rather than
+    /// Reuses `crate::ime::ImeEvent` as the wire payload rather than
     /// re-declaring the same four variants here — `rosace-ime` is a
     /// tiny, dependency-light crate (only `rosace-trace`) both this
     /// crate and `rosace`'s dispatch layer can depend on without a
     /// layering cycle.
-    Ime(rosace_ime::ImeEvent),
+    Ime(crate::ime::ImeEvent),
     /// An OS app-lifecycle transition (D042/D110, Phase 29 Step 1) —
     /// reported by a mobile native host over the FFI bridge
     /// (`RSC_EVENT_LIFECYCLE_*`). Desktop winit never sends this (desktop

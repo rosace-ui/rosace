@@ -615,7 +615,7 @@ impl Default for CursorStyle {
 // source reaches (`engine.rs`'s `commit_text_edit`), not per transaction-
 // builder function, so typed chars/paste/IME-commit/controller ops all
 // get filtered identically without duplicating the check everywhere.
-// Deliberately separate from `rosace_forms::Validator`: a filter REJECTS
+// Deliberately separate from `crate::forms::Validator`: a filter REJECTS
 // characters as you type ("this field can never contain a comma"); a
 // validator judges a COMPLETE value ("this field must be a valid
 // email") — conflating them would make simple things (max length) need
@@ -623,7 +623,7 @@ impl Default for CursorStyle {
 // ─────────────────────────────────────────────────────────────────────────
 
 /// One input filter — see the module-section doc above for why this is
-/// a separate concept from `rosace_forms::Validator`.
+/// a separate concept from `crate::forms::Validator`.
 #[derive(Clone)]
 pub enum InputFilter {
     /// Reject any edit that would push the value's CHAR count past `n`

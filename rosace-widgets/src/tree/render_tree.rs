@@ -114,7 +114,7 @@ pub struct TreeNode {
     pub nested_scrolls: Vec<(Rect, ScrollHandler)>,
     pub scrolls:    Vec<ScrollRegion>,
     pub zooms:      Vec<ZoomRegion>,
-    pub focus:      Vec<rosace_a11y::FocusNode>,
+    pub focus:      Vec<rosace_core::a11y::FocusNode>,
     pub overlays:   Vec<OverlayEntry>,
     pub transforms: Vec<TransformLayerEntry>,
     pub semantics:  Vec<super::Semantics>,
@@ -130,7 +130,7 @@ pub struct TreeNode {
     /// The node's implicit scroll position (D101) — created lazily by the
     /// first scrollable painted at this position, survives rebuilds like
     /// Flutter's ScrollPosition.
-    pub scroll_ctrl: Option<rosace_scroll::ScrollController>,
+    pub scroll_ctrl: Option<crate::scroll::ScrollController>,
     /// A persistent eased scalar (0..1) for toggle transitions — advanced by
     /// PaintCtx::animate_to. `None` until first observed (then snaps).
     pub anim: Option<f32>,
@@ -141,10 +141,10 @@ pub struct TreeNode {
     /// observed (then snaps), exactly like `anim`. Grows on demand; persists
     /// across repaints and cache-hit frames like the other retained state.
     pub anim_channels: Vec<Option<f32>>,
-    /// This node's [`rosace_a11y::FocusNode`] (D112/Phase 28 Step 1) —
+    /// This node's [`rosace_core::a11y::FocusNode`] (D112/Phase 28 Step 1) —
     /// created lazily by [`super::PaintCtx::focus_node`], survives
     /// rebuilds like `scroll_ctrl` above.
-    pub focus_node: Option<rosace_a11y::FocusNode>,
+    pub focus_node: Option<rosace_core::a11y::FocusNode>,
     /// Persistent cursor/selection state for an editable node (D091/D112)
     /// — NOT cleared on repaint, so the caret survives a rebuild with the
     /// same displayed value.
@@ -691,13 +691,13 @@ impl RenderTree {
 
     /// All focus nodes in tree (paint) order — feeds the Tab cycle each frame,
     /// including cache-hit frames where no widget was repainted.
-    pub fn collect_focus(&self) -> Vec<rosace_a11y::FocusNode> {
+    pub fn collect_focus(&self) -> Vec<rosace_core::a11y::FocusNode> {
         let mut out = Vec::new();
         self.collect_focus_node(Self::ROOT, &mut out);
         out
     }
 
-    fn collect_focus_node(&self, id: NodeId, out: &mut Vec<rosace_a11y::FocusNode>) {
+    fn collect_focus_node(&self, id: NodeId, out: &mut Vec<rosace_core::a11y::FocusNode>) {
         let n = &self.nodes[id];
         out.extend(n.focus.iter().cloned());
         for &child in &n.children {
@@ -705,7 +705,7 @@ impl RenderTree {
         }
     }
 
-    /// The render-tree node that declared the [`rosace_a11y::FocusNode`]
+    /// The render-tree node that declared the [`rosace_core::a11y::FocusNode`]
     /// with id `focus_id` (D112/Phase 28 Step 1) — bridges
     /// `FocusManager::focused` (a `FocusNode`'s own global id) back to a
     /// `NodeId`, so the engine's key dispatch can find and mutate that

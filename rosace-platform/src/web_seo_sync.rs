@@ -34,7 +34,7 @@ thread_local! {
 /// Syncs the live shadow DOM to `tree`. No-op (cheaply) if the resulting
 /// HTML is unchanged since the last call.
 pub fn sync(tree: &SemanticNode) {
-    let html = rosace_web_seo::render_html(tree);
+    let html = crate::web_seo::render_html(tree);
 
     let changed = PREV_HTML.with(|prev| {
         let mut prev = prev.borrow_mut();

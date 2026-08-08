@@ -1,7 +1,7 @@
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
-use rosace_scroll::ScrollController;
+use crate::scroll::ScrollController;
 use rosace_shader::ShaderMaterial;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget};
 use super::container::draw_rounded_rect_pub;

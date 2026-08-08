@@ -23,7 +23,7 @@ use super::text_edit::{
 /// New in this widget: word-wrapping (`wrap_char_ranges` below), Enter
 /// inserts a real newline (`engine.rs`, gated on `multiline`), Up/Down
 /// cross wrapped lines with goal-column memory (`TextEditState::goal_x`),
-/// and vertical scrolling via the same zero-wiring [`rosace_scroll::ScrollController`]
+/// and vertical scrolling via the same zero-wiring [`crate::scroll::ScrollController`]
 /// `ListView`/`ScrollView` use (D101) — wheel events mutate the
 /// controller's atoms directly, never the render tree, so there's no
 /// `!Sync`/`!Send` wall to work around here the way click dispatch has.
@@ -51,7 +51,7 @@ pub struct TextArea {
     controller: Option<EditController>,
     spans: Option<Arc<SpanFn>>,
     cursor_style: Option<CursorStyle>,
-    field: Option<rosace_forms::FormField>,
+    field: Option<crate::forms::FormField>,
     filters: Vec<super::text_edit::InputFilter>,
     show_scrollbar: bool,
     scrollbar_color: Color,
@@ -110,7 +110,7 @@ impl TextArea {
         self
     }
     /// See `TextInput::field` — same seam, same contract (D116 Step 8).
-    pub fn field(mut self, f: rosace_forms::FormField) -> Self {
+    pub fn field(mut self, f: crate::forms::FormField) -> Self {
         self.value = f.get();
         let bound = f.clone();
         self.on_change = Some(Arc::new(move |v| {

@@ -596,7 +596,7 @@ pub use rosace_core::{Component, Context, Element};
 pub use rosace_render::canvas::Color;
 
 // Accessibility + focus
-pub use rosace_a11y::FocusNode;
+pub use rosace_core::a11y::FocusNode;
 pub use rosace_widgets::{AbsorbPointer, FocusApi, IgnorePointer, OverlayApi, OverlayKind, PressApi, Pressable};
 
 // Widgets
@@ -626,7 +626,7 @@ pub use rosace_widgets::{
 };
 
 // Forms (D116 Phase 28 Step 8)
-pub use rosace_forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
+pub use rosace_widgets::forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
 
 // Text styling
 pub use rosace_widgets::{TextAlign, FontWeight};
@@ -669,34 +669,34 @@ pub mod render    { pub use rosace_render::*; }
 pub mod core      { pub use rosace_core::*; }
 pub mod state     { pub use rosace_state::*; pub use rosace_trace::event::AtomId; }
 pub mod animate   { pub use rosace_animate::*; }
-pub mod scroll    { pub use rosace_scroll::*; }
+pub mod scroll    { pub use rosace_widgets::scroll::*; }
 pub mod nav       { pub use rosace_nav::*; }
-pub mod nav_anim  { pub use rosace_nav_anim::*; }
-pub mod forms     { pub use rosace_forms::*; }
-pub mod gesture   { pub use rosace_gesture::*; }
-pub mod a11y      { pub use rosace_a11y::*; }
+pub mod nav_anim  { pub use rosace_nav::anim::*; }
+pub mod forms     { pub use rosace_widgets::forms::*; }
+pub mod gesture   { pub use rosace_platform::gesture::*; }
+pub mod a11y      { pub use rosace_core::a11y::*; }
 pub mod text      { pub use rosace_text::*; }
 // The derive macro and the trait deliberately share the name
 // `ShaderUniforms` (different namespaces — the serde pattern), so one
 // import path serves both: `use rosace::shader::ShaderUniforms;`.
 pub mod shader    { pub use rosace_shader::*; pub use rosace_macros::ShaderUniforms; }
-pub mod shaping   { pub use rosace_shaping::*; }
+pub mod shaping   { pub use rosace_text::shaping::*; }
 pub mod style     { pub use rosace_style::*; }
-pub mod i18n      { pub use rosace_i18n::*; }
+pub mod i18n      { pub use rosace_core::i18n::*; }
 pub mod net       { pub use rosace_net::*; }
 /// App-local file storage (Documents/Cache/Temp) + native OS file/save
 /// picker dialogs (D125) — see `rosace-file`'s own crate doc.
-pub mod file      { pub use rosace_file::*; }
+pub mod file      { pub use rosace_storage::file::*; }
 /// Direct access to the on-disk key-value store (D114) — for data that
 /// is not atom-shaped (caches, blobs). Persistent ATOMS should prefer
 /// ctx.state_permanent, which reads/writes this same store.
 pub mod storage   { pub use rosace_storage::*; }
-pub mod clipboard { pub use rosace_clipboard::*; }
+pub mod clipboard { pub use rosace_widgets::clipboard::*; }
 pub mod platform  { pub use rosace_platform::*; }
 pub mod media     { pub use rosace_media::*; }
-pub mod ime       { pub use rosace_ime::*; }
-pub mod bidi      { pub use rosace_bidi::*; }
-pub mod ws        { pub use rosace_ws::*; }
+pub mod ime       { pub use rosace_platform::ime::*; }
+pub mod bidi      { pub use rosace_text::bidi::*; }
+pub mod ws        { pub use rosace_net::ws::*; }
 pub mod hot_reload { pub use rosace_hot_reload::*; }
 pub mod devtools  { pub use rosace_devtools::*; }
 pub mod test_utils { pub use rosace_test_utils::*; }
@@ -717,7 +717,7 @@ pub mod prelude {
         OverlayEntry, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
         push_overlay, OverlayApi, OverlayKind,
     };
-    pub use rosace_a11y::FocusNode;
+    pub use rosace_core::a11y::FocusNode;
     pub use rosace_widgets::FocusApi;
     pub use rosace_widgets::RepaintBoundary;
     pub use rosace_widgets::TransformLayer;
@@ -731,7 +731,7 @@ pub mod prelude {
     pub use rosace_core::types::{Point, Rect, Size};
     pub use rosace_layout::{Constraints, CrossAxisAlignment, MainAxisAlignment};
     pub use rosace_state::Atom;
-    pub use rosace_scroll::ScrollController;
+    pub use rosace_widgets::scroll::ScrollController;
     /// `RichText`/`TextSpan`/`TextStyle` (Phase 32 Step 3) build the mixed-style
     /// paragraphs `Text::rich(...)` renders. These carry `rosace_theme::Color`
     /// (0..1 float channels) internally, NOT the prelude's own `Color` above

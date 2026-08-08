@@ -1,3 +1,8 @@
+/// Accessibility tree, roles, and focus management (former `rosace-a11y`, D131).
+pub mod a11y;
+/// Localization: message bundles, locale, `t()` lookup (former `rosace-i18n`, D131).
+pub mod i18n;
+
 pub mod app;
 pub mod app_lifecycle;
 pub mod asset;

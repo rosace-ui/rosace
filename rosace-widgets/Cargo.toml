@@ -16,7 +16,6 @@ rosace-view-syntax = { path = "../rosace-view-syntax", version = "0.1.0" }
 # D116/Phase 28 Step 2 — UAX #29 grapheme/word segmentation for the
 # text-editing core (see PHASE_28.md's "Approved dependencies").
 unicode-segmentation = "1"
-rosace-a11y   = { path = "../rosace-a11y", version = "0.1.0" }
 rosace-trace  = { path = "../rosace-trace", version = "0.1.0" }
 rosace-core   = { path = "../rosace-core", version = "0.1.0" }
 rosace-state  = { path = "../rosace-state", version = "0.1.0" }
@@ -24,9 +23,7 @@ rosace-layout = { path = "../rosace-layout", version = "0.1.0" }
 rosace-nav    = { path = "../rosace-nav", version = "0.1.0" }
 rosace-render = { path = "../rosace-render", version = "0.1.0" }
 rosace-shader = { path = "../rosace-shader", version = "0.1.0" }
-rosace-scroll = { path = "../rosace-scroll", version = "0.1.0" }
 rosace-animate = { path = "../rosace-animate", version = "0.1.0" }
 rosace-text   = { path = "../rosace-text", version = "0.1.0" }
 rosace-theme  = { path = "../rosace-theme", version = "0.1.0" }
-rosace-forms  = { path = "../rosace-forms", version = "0.1.0" }
 tiny-skia      = "0.11"

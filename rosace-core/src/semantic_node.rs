@@ -4,7 +4,7 @@
 /// `RenderTree::collect_semantics()` — used both for assistive tech (D099)
 /// and, from D107/Phase 25 on, for mapping to real HTML tags (`<h1>`-`<h6>`,
 /// `<a>`, `<ul>`/`<li>`, ...) for SEO/crawler-facing output. Deliberately
-/// NOT unified with the separate, richer `rosace_a11y::role::Role` — that
+/// NOT unified with the separate, richer `crate::a11y::role::Role` — that
 /// one drives `rosace-a11y`'s own internal focus-management tree, a
 /// different concern (focus navigation, not HTML/SEO structure); merging
 /// them would touch already-working, unrelated code for no benefit this

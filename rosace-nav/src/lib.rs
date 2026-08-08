@@ -22,6 +22,9 @@
 //! assert_eq!(nav.current(), Some(Screen::Home));
 //! ```
 
+/// Merged from the former `rosace-nav-anim` crate (D131).
+pub mod anim;
+
 pub mod guard;
 pub mod history;
 pub mod navigator;

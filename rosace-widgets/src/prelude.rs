@@ -20,4 +20,4 @@ pub use crate::{
     CursorShape, CursorStyle, EditController, InputFilter, Span,
     Image, ImageCache, ImageFit, ImageSource, ImageWidget,
 };
-pub use rosace_forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
+pub use crate::forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};

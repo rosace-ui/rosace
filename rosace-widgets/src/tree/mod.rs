@@ -472,7 +472,7 @@ impl<'a> PaintCtx<'a> {
     }
 
     /// Register a focus node for Tab-cycle inclusion (called from `WithFocus<W>::paint`).
-    pub fn register_focus(&self, node: rosace_a11y::FocusNode) {
+    pub fn register_focus(&self, node: rosace_core::a11y::FocusNode) {
         self.tree.borrow_mut().node_mut(self.node).focus.push(node);
     }
 
@@ -504,13 +504,13 @@ impl<'a> PaintCtx<'a> {
     /// created on first use, persists across rebuilds, subscribed to the
     /// owning component so scroll writes repaint. This is why
     /// `ScrollView::new(child)` scrolls with zero wiring.
-    pub fn scroll_controller(&self) -> rosace_scroll::ScrollController {
+    pub fn scroll_controller(&self) -> crate::scroll::ScrollController {
         let mut tree = self.tree.borrow_mut();
         let node = tree.node_mut(self.node);
         if let Some(c) = &node.scroll_ctrl {
             return c.clone();
         }
-        let c = rosace_scroll::ScrollController::new();
+        let c = crate::scroll::ScrollController::new();
         c.offset.subscribe(self.owner);
         c.content_size.subscribe(self.owner);
         c.viewport_size.subscribe(self.owner);
@@ -599,7 +599,7 @@ impl<'a> PaintCtx<'a> {
         self.tree.borrow_mut().node_mut(self.node).semantics.push(s);
     }
 
-    /// The [`rosace_a11y::FocusNode`] for this widget's tree position —
+    /// The [`rosace_core::a11y::FocusNode`] for this widget's tree position —
     /// created lazily on first paint and persists across rebuilds, the
     /// same "zero wiring by default" precedent as [`Self::scroll_controller`]
     /// (D101: "this is why `ScrollView::new(child)` scrolls with zero
@@ -609,7 +609,7 @@ impl<'a> PaintCtx<'a> {
     /// that DO want explicit neighbor wiring can still layer
     /// `FocusApi::focus_node` on top; the two are independent focus-graph
     /// nodes if both are used on the same widget.
-    pub fn focus_node(&self) -> rosace_a11y::FocusNode {
+    pub fn focus_node(&self) -> rosace_core::a11y::FocusNode {
         self.focus_node_seeded(false)
     }
 
@@ -620,13 +620,13 @@ impl<'a> PaintCtx<'a> {
     /// re-request — a later paint with `seed == true` on an
     /// already-focus-noded position does NOT steal focus back after the
     /// user has tabbed away.
-    pub fn focus_node_seeded(&self, seed: bool) -> rosace_a11y::FocusNode {
+    pub fn focus_node_seeded(&self, seed: bool) -> rosace_core::a11y::FocusNode {
         let mut tree = self.tree.borrow_mut();
         let node = tree.node_mut(self.node);
         if let Some(f) = &node.focus_node {
             return f.clone();
         }
-        let f = rosace_a11y::FocusNode::new();
+        let f = rosace_core::a11y::FocusNode::new();
         if seed {
             f.request();
         }

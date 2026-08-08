@@ -16,6 +16,12 @@
 //! // layout.render(&mut canvas, &font, 20.0, 40.0);
 //! ```
 
+/// Merged from the former `rosace-bidi` crate (D131).
+pub mod bidi;
+
+/// Merged from the former `rosace-shaping` crate (D131).
+pub mod shaping;
+
 pub mod cursor;
 pub mod direction;
 pub mod layout;

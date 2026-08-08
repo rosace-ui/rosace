@@ -20,3 +20,9 @@ rosace-trace = { path = "../rosace-trace", version = "0.1.0" }
 # src/lib.rs's module doc.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Native file/save picker dialogs (merged from the former `rosace-file`
+# crate, D131) — real AppKit/Win32/GTK UI on desktop; iOS/Android/wasm32
+# are named gaps, see src/file/picker.rs's module doc.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+rfd = "0.17"
