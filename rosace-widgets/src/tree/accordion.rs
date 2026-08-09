@@ -37,7 +37,7 @@ impl Accordion {
             border: None,
             radius: 10.0,
             elevation: 0.0,
-            title_size: 15.0,
+            title_size: 17.0,
         }
     }
     /// Panel fill — defaults to the theme's `surface`.

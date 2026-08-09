@@ -147,6 +147,28 @@ impl Widget for Text {
         // reports the wrapped height, but a parent may allot less (constrained
         // container) — painting past the rect would bleed into siblings.
         let fit = ((ctx.rect.size.height / line_h).floor() as usize).max(1);
+        if fit < lines.len() {
+            // Say so instead of silently swallowing the tail. This is how a
+            // non-scrollable screen fails at raised OS text sizes: content
+            // that fits at 100% overflows at 200%, the parent squeezes the
+            // child, and words vanish with no other symptom — which cost a
+            // real debugging session (iOS, 2026-08-09) chasing a layout bug
+            // that did not exist. Flutter shows an overflow stripe for the
+            // same reason; a warning is the cheap equivalent.
+            //
+            // `max_lines` truncation is deliberate and already applied in
+            // `wrap_lines`, so it never reaches here.
+            rosace_trace::warn!(
+                "Text overflow: {} of {} lines dropped — {:.0}px tall rect cannot fit \
+                 {:.0}px of text. Wrap this screen in a ScrollView if it must survive \
+                 large OS text sizes. Text: {:?}",
+                lines.len() - fit,
+                lines.len(),
+                ctx.rect.size.height,
+                line_h * lines.len() as f32,
+                self.text.chars().take(40).collect::<String>(),
+            );
+        }
         lines.truncate(fit);
 
         let total_h = line_h * lines.len() as f32;

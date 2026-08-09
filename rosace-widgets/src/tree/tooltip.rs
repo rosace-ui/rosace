@@ -28,7 +28,7 @@ impl Default for TooltipStyle {
             background: Color::rgba(40, 42, 58, 245),
             text_color: Color::rgb(228, 230, 244),
             radius: 6.0,
-            font_size: 12.0,
+            font_size: 13.0,
             pad_h: 10.0,
             elevation: 1.0,
         }

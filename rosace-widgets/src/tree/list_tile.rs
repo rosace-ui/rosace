@@ -12,8 +12,10 @@ pub struct ListTile {
     pub selected: bool,
     pub height: f32,
     pub padding_h: f32,
-    pub title_size: f32,
-    pub subtitle_size: f32,
+    /// `None` = read from the active theme's `typography.body_large`.
+    pub title_size: Option<f32>,
+    /// `None` = read from the active theme's `typography.body_medium`.
+    pub subtitle_size: Option<f32>,
     /// `TRANSPARENT` (alpha 0) = use the active theme's `on_surface`.
     pub title_color: Color,
     press: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
@@ -37,8 +39,8 @@ impl ListTile {
             selected: false,
             height: 48.0,
             padding_h: 14.0,
-            title_size: 11.0,
-            subtitle_size: 9.0,
+            title_size: None,
+            subtitle_size: None,
             title_color: Color::TRANSPARENT,
             subtitle_color: Color::TRANSPARENT,
             bg: Color::rgba(0, 0, 0, 0),
@@ -55,6 +57,10 @@ impl ListTile {
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
     pub fn no_divider(mut self) -> Self { self.divider = false; self }
     pub fn title_color(mut self, c: Color) -> Self { self.title_color = c; self }
+    /// Overrides the theme's `body_large` for this row's title.
+    pub fn title_size(mut self, s: f32) -> Self { self.title_size = Some(s); self }
+    /// Overrides the theme's `body_medium` for this row's subtitle.
+    pub fn subtitle_size(mut self, s: f32) -> Self { self.subtitle_size = Some(s); self }
     pub fn background(mut self, c: Color) -> Self { self.bg = c; self }
 
     /// Make the whole tile pressable.
@@ -63,9 +69,29 @@ impl ListTile {
         self
     }
 
+    /// Explicit size, else the theme's. Hardcoded 11/9 px before this —
+    /// roughly two thirds of the platform body size, which is why lists read
+    /// as noticeably smaller than native UI beside them. Material 3's list
+    /// item uses body-large for the headline and body-medium for supporting
+    /// text; these tokens are exactly that.
+    pub fn resolved_title_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.title_size.unwrap_or(theme.typography.body_large.size)
+    }
+
+    pub fn resolved_subtitle_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.subtitle_size.unwrap_or(theme.typography.body_medium.size)
+    }
+
     /// Greedy word-wrap, same primitive the `Text` widget uses.
-    fn wrap_subtitle(&self, font: &rosace_render::FontCache, sub: &str, max_w: f32) -> Vec<String> {
-        rosace_text::word_wrap(sub, max_w, |s| font.measure_text(s, self.subtitle_size))
+    fn wrap_subtitle(
+        &self,
+        font: &rosace_render::FontCache,
+        theme: &rosace_theme::ThemeData,
+        sub: &str,
+        max_w: f32,
+    ) -> Vec<String> {
+        let size = self.resolved_subtitle_size(theme);
+        rosace_text::word_wrap(sub, max_w, |s| font.measure_text(s, size))
     }
 }
 
@@ -84,9 +110,9 @@ impl Widget for ListTile {
                 let lead_w = if self.leading.is_some() { 32.0 + 10.0 } else { 0.0 };
                 let trail_w = if self.trailing.is_some() { 60.0 + self.padding_h } else { self.padding_h };
                 let text_w = (width - self.padding_h - lead_w - trail_w).max(1.0);
-                let sub_lines = self.wrap_subtitle(ctx.font, sub, text_w).len().max(1);
-                let line_h_title = ctx.font.line_height(self.title_size);
-                let line_h_sub = ctx.font.line_height(self.subtitle_size);
+                let sub_lines = self.wrap_subtitle(ctx.font, ctx.theme, sub, text_w).len().max(1);
+                let line_h_title = ctx.font.line_height(self.resolved_title_size(ctx.theme));
+                let line_h_sub = ctx.font.line_height(self.resolved_subtitle_size(ctx.theme));
                 let content_h = line_h_title + 2.0 + line_h_sub * sub_lines as f32;
                 self.height.max(content_h + 12.0)
             }
@@ -167,10 +193,10 @@ impl Widget for ListTile {
 
         // Title + subtitle
         let text_w = r.size.width - x + r.origin.x - trailing_w;
-        let line_h_title = ctx.font.line_height(self.title_size);
-        let line_h_sub = ctx.font.line_height(self.subtitle_size);
+        let line_h_title = ctx.font.line_height(self.resolved_title_size(&ctx.theme));
+        let line_h_sub = ctx.font.line_height(self.resolved_subtitle_size(&ctx.theme));
         let sub_lines = self.subtitle.as_ref()
-            .map(|sub| self.wrap_subtitle(ctx.font, sub, text_w.max(1.0)))
+            .map(|sub| self.wrap_subtitle(ctx.font, &ctx.theme, sub, text_w.max(1.0)))
             .unwrap_or_default();
         let total_text_h = if sub_lines.is_empty() {
             line_h_title
@@ -179,11 +205,11 @@ impl Widget for ListTile {
         };
         let text_y = r.origin.y + (r.size.height - total_text_h) / 2.0;
 
-        ctx.draw_text_at(&self.title, Point { x, y: text_y }, title_color, self.title_size);
+        ctx.draw_text_at(&self.title, Point { x, y: text_y }, title_color, self.resolved_title_size(&ctx.theme));
 
         for (i, line) in sub_lines.iter().enumerate() {
             let sub_y = text_y + line_h_title + 2.0 + line_h_sub * i as f32;
-            ctx.draw_text_at(line, Point { x, y: sub_y }, subtitle_color, self.subtitle_size);
+            ctx.draw_text_at(line, Point { x, y: sub_y }, subtitle_color, self.resolved_subtitle_size(&ctx.theme));
         }
 
         if self.divider {

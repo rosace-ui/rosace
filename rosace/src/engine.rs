@@ -2899,6 +2899,89 @@ mod tests {
         );
     }
 
+    /// Text was clipped at large scale (reported live on iOS, 2026-08-09:
+    /// the welcome subtitle lost its last word).
+    ///
+    /// `Text::layout` wrapped against the width it ASKED for
+    /// (`constraints.max_width`) but returned the longest LINE as its width.
+    /// `Text::paint` then wrapped against the rect it was GIVEN — the
+    /// narrower value — producing more lines than layout had allotted, which
+    /// `lines.truncate(fit)` silently dropped.
+    ///
+    /// Laying out twice makes it observable with no private access: measuring
+    /// at the width layout just reported must not need more height.
+    #[test]
+    fn wrapped_text_height_is_stable_at_the_width_it_reports() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+
+        // The reported failure was at raised Dynamic Type, so exercise that.
+        rosace_core::media_query::set_media_query(rosace_core::MediaQuery {
+            text_scale: 2.0, ..Default::default()
+        });
+
+        let text = w::Text::new(
+            "A tour of what you can build — widgets, platform channels, and more.",
+        );
+
+        let first = text.layout(&w::LayoutCtx::new(
+            rosace_layout::Constraints::loose(300.0, 1000.0), &font, &theme,
+        ));
+        // Re-measure at exactly the width it just claimed to need.
+        let second = text.layout(&w::LayoutCtx::new(
+            rosace_layout::Constraints::loose(first.width, 1000.0), &font, &theme,
+        ));
+
+        rosace_core::media_query::set_media_query(rosace_core::MediaQuery {
+            text_scale: 1.0, ..Default::default()
+        });
+
+        assert_eq!(
+            second.height, first.height,
+            "re-wrapping at the reported width must not need more lines, or paint \
+             (which uses that width) draws more than layout reserved and the tail \
+             gets truncated: {first:?} -> {second:?}"
+        );
+    }
+
+    /// Widgets must take their type size from the theme, not hardcode one.
+    ///
+    /// The typography scale was already right (body_large 17, matching
+    /// Material 3 and iOS), but widgets ignored it: `ListTile` drew its title
+    /// at 11 px and `AppBar` its title at 13 px — roughly two thirds of the
+    /// platform body size. Side by side with native UI the whole app read as
+    /// shrunken (reported repeatedly, screenshot comparison 2026-08-09).
+    ///
+    /// Guards the resolution, not exact numbers, so retuning the theme scale
+    /// stays a one-place change.
+    #[test]
+    fn widget_type_sizes_come_from_the_theme_scale() {
+        use rosace_widgets::tree as w;
+        let theme = rosace_theme::built_in::dark_theme();
+
+        assert_eq!(
+            w::ListTile::new("Widgets").resolved_title_size(&theme),
+            theme.typography.body_large.size,
+            "a list row's title is body text, not fine print"
+        );
+        assert_eq!(
+            w::ListTile::new("Widgets").subtitle("x").resolved_subtitle_size(&theme),
+            theme.typography.body_medium.size,
+        );
+        assert_eq!(
+            w::AppBar::new("showcase").resolved_title_size(&theme),
+            theme.typography.title_large.size,
+            "a top app bar's title is a title, not a caption"
+        );
+
+        // An explicit size still wins — theme-defaulted must not mean
+        // theme-forced (the widget standard is "max-customizable").
+        assert_eq!(w::ListTile::new("x").title_size(9.0).resolved_title_size(&theme), 9.0);
+        assert_eq!(w::AppBar::new("x").title_size(9.0).resolved_title_size(&theme), 9.0);
+    }
+
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
         fn walk(node: &rosace_core::SemanticNode, out: &mut Vec<String>) {
             if let Some(l) = &node.label { out.push(l.clone()); }

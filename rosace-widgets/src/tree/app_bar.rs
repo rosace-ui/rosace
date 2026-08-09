@@ -17,7 +17,8 @@ use super::material::{resolve_material, AppBarMaterial};
 /// instance; a widget that doesn't call them follows the theme.
 pub struct AppBar {
     pub title: String,
-    pub title_size: f32,
+    /// `None` = read from the active theme's `typography.title_large`.
+    pub title_size: Option<f32>,
     pub background: Color,
     pub foreground: Color,
     pub border_color: Color,
@@ -34,7 +35,7 @@ impl AppBar {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
-            title_size: 13.0,
+            title_size: None,
             background: Color::rgba(0, 0, 0, 0), // sentinel: use theme.surface
             foreground: Color::rgba(0, 0, 0, 0), // sentinel: use theme.on_surface
             border_color: Color::rgba(0, 0, 0, 0), // sentinel: use theme.outline
@@ -58,7 +59,14 @@ impl AppBar {
     /// screenshots — a real app window already has real OS traffic lights).
     /// Overrides the active theme's traffic-light setting for this instance.
     pub fn traffic_lights(mut self) -> Self { self.show_traffic_lights = Some(true); self }
-    pub fn title_size(mut self, s: f32) -> Self { self.title_size = s; self }
+    pub fn title_size(mut self, s: f32) -> Self { self.title_size = Some(s); self }
+
+    /// Explicit size, else the theme's. Hardcoded 13 px before this — barely
+    /// over half the platform title size, which is why the bar read as much
+    /// smaller than native chrome beside it.
+    pub fn resolved_title_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
+        self.title_size.unwrap_or(theme.typography.title_large.size)
+    }
     /// Per-instance shader material — replaces the bar fill when resolved.
     /// Beats the theme's `AppBarMaterial` default (D124 Step 5).
     pub fn material(mut self, m: ShaderMaterial) -> Self { self.material = Some(m); self }
@@ -77,7 +85,7 @@ impl Widget for AppBar {
         // stayed put and clipped them (reported live on iOS, 2026-08-09).
         // Ordinary 100% bars are unchanged, since line_height + padding is
         // well under the designed height there.
-        let title_h = ctx.font.line_height(self.title_size);
+        let title_h = ctx.font.line_height(self.resolved_title_size(ctx.theme));
         let height = self.effective_height(ctx.theme).max(title_h + 12.0);
         Size { width: avail_w(constraints), height }
     }
@@ -195,8 +203,8 @@ impl Widget for AppBar {
         let region_r = (ax - 8.0).max(region_l);
         let region_w = (region_r - region_l).max(0.0);
         if region_w > 4.0 {
-            let title_w = ctx.font.measure_text(&self.title, self.title_size);
-            let line_h = ctx.font.line_height(self.title_size);
+            let title_w = ctx.font.measure_text(&self.title, self.resolved_title_size(&ctx.theme));
+            let line_h = ctx.font.line_height(self.resolved_title_size(&ctx.theme));
             let title_y = r.origin.y + (r.size.height - line_h) / 2.0;
             let title_x = match style.title_align {
                 TitleAlign::Leading => {
@@ -216,7 +224,7 @@ impl Widget for AppBar {
                 size: Size { width: region_w, height: r.size.height },
             };
             ctx.record(DrawCommand::PushClip { rect: clip });
-            ctx.draw_text_at(&self.title, Point { x: title_x, y: title_y }, fg, self.title_size);
+            ctx.draw_text_at(&self.title, Point { x: title_x, y: title_y }, fg, self.resolved_title_size(&ctx.theme));
             ctx.record(DrawCommand::PopClip);
         }
     }
