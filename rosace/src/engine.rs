@@ -2781,6 +2781,85 @@ mod tests {
         );
     }
 
+    /// User-reported on iOS at ~150% Dynamic Type (2026-08-09): text grew but
+    /// the boxes did not, so rows overflowed into their dividers and the FAB
+    /// was clipped.
+    ///
+    /// Cause: `measure_text` applied `text_scale` but `line_height` did not,
+    /// so widths tracked the OS setting while heights stayed at 100%. Layout
+    /// and paint must agree on one size — this asserts BOTH axes respond.
+    #[test]
+    fn os_text_scale_grows_line_height_not_just_width() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let font = rosace_render::FontCache::embedded();
+
+        rosace_core::media_query::set_media_query(rosace_core::MediaQuery {
+            text_scale: 1.0, ..Default::default()
+        });
+        let w1 = font.measure_text("Widgets", 16.0);
+        let h1 = font.line_height(16.0);
+
+        rosace_core::media_query::set_media_query(rosace_core::MediaQuery {
+            text_scale: 2.0, ..Default::default()
+        });
+        let w2 = font.measure_text("Widgets", 16.0);
+        let h2 = font.line_height(16.0);
+
+        // Restore before asserting so a failure can't leak scale into other tests.
+        rosace_core::media_query::set_media_query(rosace_core::MediaQuery {
+            text_scale: 1.0, ..Default::default()
+        });
+
+        assert!(w2 > w1 * 1.8, "width must track text_scale: {w1} -> {w2}");
+        assert!(
+            h2 > h1 * 1.8,
+            "line height must track text_scale too, or rows keep their 100% \
+             height while the glyphs inside them grow: {h1} -> {h2}"
+        );
+    }
+
+    /// Companion to `os_text_scale_grows_line_height_not_just_width`: it is
+    /// not enough for the FONT to scale, the CONTROL must grow with it.
+    /// `Button::layout` estimated width as `len * size * 0.6` and used a
+    /// fixed height, so neither saw `text_scale` and the label spilled out
+    /// of the pill at 150% Dynamic Type (reported live on iOS, 2026-08-09).
+    #[test]
+    fn controls_grow_with_os_text_scale() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        fn button_size(scale: f32) -> rosace_core::types::Size {
+            rosace_core::media_query::set_media_query(rosace_core::MediaQuery {
+                text_scale: scale, ..Default::default()
+            });
+            let font = rosace_render::FontCache::embedded();
+            let theme = rosace_theme::built_in::dark_theme();
+            let ctx = w::LayoutCtx::new(
+                rosace_layout::Constraints::loose(1000.0, 1000.0),
+                &font,
+                &theme,
+            );
+            w::Button::new("Get Started").on_press(|| {}).layout(&ctx)
+        }
+
+        let small = button_size(1.0);
+        let large = button_size(2.0);
+        rosace_core::media_query::set_media_query(rosace_core::MediaQuery {
+            text_scale: 1.0, ..Default::default()
+        });
+
+        assert!(
+            large.width > small.width * 1.4,
+            "the button must widen so the label still fits: {} -> {}",
+            small.width, large.width
+        );
+        assert!(
+            large.height > small.height,
+            "and grow taller, or a scaled label is clipped vertically: {} -> {}",
+            small.height, large.height
+        );
+    }
+
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
         fn walk(node: &rosace_core::SemanticNode, out: &mut Vec<String>) {
             if let Some(l) = &node.label { out.push(l.clone()); }

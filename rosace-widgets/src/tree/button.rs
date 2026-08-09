@@ -90,7 +90,15 @@ impl Widget for Button {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
         let font_size = self.resolved_font_size(ctx.theme);
-        let text_w = self.label.len() as f32 * font_size * 0.6;
+        // Measure for real rather than estimating `len() * size * 0.6`.
+        // The estimate is wrong twice over: it ignores per-glyph advances
+        // (so "IIII" and "WWWW" size identically), and — the reason it was
+        // caught — it never sees the OS text-size multiplier, because
+        // `measure_text` is what applies `text_scale`. At 150% Dynamic Type
+        // the label rendered larger while the pill kept its 100% width, so
+        // the text spilled out of the button (reported live on iOS,
+        // 2026-08-09).
+        let text_w = ctx.font.measure_text(&self.label, font_size);
         // Same rough per-char estimate `layout()` already used for the
         // label — an icon's own reported size is available at `paint()`
         // time via a real `LayoutCtx`, unavailable here without one; the
@@ -98,7 +106,11 @@ impl Widget for Button {
         // at, plus the same gap.
         let icon_w = if self.icon.is_some() { font_size + 4.0 + 6.0 } else { 0.0 };
         let w = self.width.unwrap_or(text_w + icon_w + 32.0);
-        constraints.constrain(Size { width: w, height: self.height })
+        // Height must grow with the text too, for the same reason — a fixed
+        // pill height clips a scaled-up label vertically. Keep the designed
+        // height as a MINIMUM so ordinary buttons are unchanged at 100%.
+        let h = self.height.max(ctx.font.line_height(font_size) + 16.0);
+        constraints.constrain(Size { width: w, height: h })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

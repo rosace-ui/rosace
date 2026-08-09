@@ -2103,7 +2103,7 @@ final class MetalView: UIView {
 
     /// Supplies the engine's semantic tree as JSON. Set by
     /// `EngineViewController`, which owns the engine pointer.
-    var semanticsJSON: (() -> String?)?
+    var semanticsJSONProvider: (() -> String?)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2130,44 +2130,92 @@ final class MetalView: UIView {
         set { }
     }
 
+    /// Cached so UIKit's retained element references stay alive.
+    ///
+    /// Rebuilding on every getter call returns fresh objects each time; the
+    /// ones UIKit already handed to VoiceOver then go stale, and the
+    /// Accessibility Inspector reports Label/Traits as None on an element
+    /// whose header still shows the right name. Keyed on the JSON so the
+    /// tree is only re-decoded when it actually changed.
+    private var cachedJSON: String?
+    private var cachedElements: [UIAccessibilityElement] = []
+
     override var accessibilityElements: [Any]? {
         get {
-            guard let json = semanticsJSON?(), let data = json.data(using: .utf8) else {
-                return nil
+            guard let json = semanticsJSON(), !json.isEmpty else { return nil }
+            if json != cachedJSON {
+                cachedJSON = json
+                cachedElements = buildElements(from: json)
             }
-            guard let root = try? JSONDecoder().decode(RscSemanticNode.self, from: data) else {
-                return nil
-            }
-            var out: [UIAccessibilityElement] = []
-            appendElements(from: root, into: &out)
-            return out.isEmpty ? nil : out
+            return cachedElements.isEmpty ? nil : cachedElements
         }
         set { }
     }
 
+    private func semanticsJSON() -> String? { semanticsJSONProvider?() }
+
+    private func buildElements(from json: String) -> [UIAccessibilityElement] {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONDecoder().decode(RscSemanticNode.self, from: data)
+        else { return [] }
+        var out: [UIAccessibilityElement] = []
+        appendElements(from: root, into: &out)
+        return out
+    }
+
     /// Flattens the tree into the linear list VoiceOver swipes through.
     ///
-    /// Only nodes that actually say something become elements; structural
-    /// nodes (a Column, an unlabelled wrapper) are walked through rather
-    /// than announced, which is the same pruning the web/SEO mapping does.
+    /// Two rules, both learned from the Accessibility Inspector:
+    ///
+    /// 1. **An interactive control speaks for its own subtree.** A Button's
+    ///    node and the Text inside it carry the same label, so emitting both
+    ///    produced two elements stacked on one rect. The control wins and we
+    ///    stop descending.
+    /// 2. **Containers are emitted AFTER their children.** An AppBar declares
+    ///    a heading spanning the whole bar, which contains the Back and Light
+    ///    buttons. Emitting the container first put a full-width element on
+    ///    top of them, so only the title was reachable. Overlapping frames are
+    ///    legal; order decides priority, so children go in first and the
+    ///    container still gets announced rather than being dropped.
     private func appendElements(from node: RscSemanticNode, into out: inout [UIAccessibilityElement]) {
-        let hasSomethingToSay = (node.label?.isEmpty == false) || (node.value?.isEmpty == false)
-        if hasSomethingToSay, let b = node.bounds {
-            let element = UIAccessibilityElement(accessibilityContainer: self)
-            element.accessibilityLabel = node.label
-            element.accessibilityValue = node.value
-            element.accessibilityTraits = traits(for: node.role)
-            // Rust reports LOGICAL, view-relative pixels; UIKit wants screen
-            // coordinates. UIAccessibility does the conversion (including the
-            // scale factor), so we must not pre-multiply — the desktop bridge
-            // shipped every element at half size by doing exactly that.
-            let local = CGRect(x: CGFloat(b.x), y: CGFloat(b.y),
-                               width: CGFloat(b.w), height: CGFloat(b.h))
-            element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(local, in: self)
-            out.append(element)
+        let speaks = (node.label?.isEmpty == false) || (node.value?.isEmpty == false)
+
+        if speaks, isInteractive(node.role), let b = node.bounds {
+            out.append(makeElement(node, b))
+            return
         }
         for child in node.children {
             appendElements(from: child, into: &out)
+        }
+        if speaks, let b = node.bounds {
+            out.append(makeElement(node, b))
+        }
+    }
+
+    private func makeElement(_ node: RscSemanticNode, _ b: RscSemanticNode.RscBounds) -> UIAccessibilityElement {
+        let element = UIAccessibilityElement(accessibilityContainer: self)
+        element.accessibilityLabel = node.label
+        element.accessibilityValue = node.value
+        element.accessibilityTraits = traits(for: node.role)
+        // Rust reports LOGICAL, view-relative pixels; UIKit wants screen
+        // coordinates. UIAccessibility does the conversion (including the
+        // scale factor), so we must not pre-multiply — the desktop bridge
+        // shipped every element at half size by doing exactly that.
+        let local = CGRect(x: CGFloat(b.x), y: CGFloat(b.y),
+                           width: CGFloat(b.w), height: CGFloat(b.h))
+        element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(local, in: self)
+        return element
+    }
+
+    /// Roles that represent a control the user operates, rather than content
+    /// or grouping. These stop the descent (rule 1 above).
+    private func isInteractive(_ role: String) -> Bool {
+        switch role {
+        case "button", "checkbox", "radio", "switch", "textinput",
+             "link", "slider", "tab", "menuitem":
+            return true
+        default:
+            return false
         }
     }
 
@@ -2282,7 +2330,7 @@ final class EngineViewController: UIViewController, UIKeyInput {
         // `unowned` rather than a strong capture — the view is owned by this
         // controller, so a strong reference here would be a retain cycle.
         if let metalView = view as? MetalView {
-            metalView.semanticsJSON = { [unowned self] in
+            metalView.semanticsJSONProvider = { [unowned self] in
                 guard let engine = self.engine,
                       let ptr = rsc_engine_semantics_json(engine) else { return nil }
                 defer { rsc_string_free(ptr) }

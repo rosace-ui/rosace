@@ -793,7 +793,16 @@ impl FontCache {
     }
 
     /// Full line height (ascender + descender + gap) in pixels.
+    /// Line height at `px`, with the OS text-size multiplier applied.
+    ///
+    /// Scaling here is not optional: `measure_text_weighted` already scales,
+    /// and `ctx.text()`/`draw_text_at` scale at paint time. Leaving line
+    /// height unscaled made widths grow with Dynamic Type while heights
+    /// stayed put, so every text row overflowed its box — rows collided with
+    /// their dividers and the FAB was clipped off-screen (reported live on
+    /// iOS at ~150%, 2026-08-09). Layout and paint must agree on one size.
     pub fn line_height(&self, px: f32) -> f32 {
+        let px = px * rosace_core::media_query::use_media_query().text_scale;
         let font_ref = self.font.font_ref();
         let m = font_ref.metrics(&[]).scale(px);
         let total = m.ascent + m.descent + m.leading;
