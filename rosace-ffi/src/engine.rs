@@ -192,6 +192,13 @@ impl Engine {
         }
     }
 
+    /// This engine's current semantic tree (D132) — the accessibility model
+    /// the native host republishes to VoiceOver/TalkBack. Reads the render
+    /// tree, so it is only meaningful after at least one `frame()`.
+    pub fn semantics(&self) -> rosace_core::SemanticNode {
+        self.frame_engine.semantics()
+    }
+
     /// Runs one frame: build/paint/dispatch (via `FrameEngine`), then
     /// composite + present (via `GpuPresenter`) — the same two-step sequence
     /// `rosace-platform/src/app.rs`'s `RedrawRequested` handler runs.

@@ -2962,8 +2962,34 @@ pub extern "C" fn rsc_platform_channel_take_outgoing() -> *mut std::os::raw::c_c
     std::ffi::CString::new(text).unwrap_or_default().into_raw()
 }
 
-/// Frees a string previously returned by `rsc_platform_channel_take_outgoing`
-/// or `rsc_platform_channel_dispatch`.
+/// The current accessibility tree as JSON (D132) — what the native host
+/// republishes to VoiceOver (iOS) / TalkBack (Android).
+///
+/// PULL, not push: both mobile a11y APIs are demand-driven, so the host
+/// calls this only while assistive tech is actually inspecting. An app with
+/// no screen reader running never pays for it.
+///
+/// `bounds` are LOGICAL pixels, window-relative — each host converts to its
+/// own convention (iOS screen-space `CGRect`, Android physical-pixel `Rect`).
+///
+/// # Safety
+/// `engine` must be a live pointer from `rsc_engine_init`. The returned
+/// pointer is an owned, NUL-terminated JSON string the caller MUST pass to
+/// `rsc_string_free` exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn rsc_engine_semantics_json(
+    engine: *mut Engine,
+) -> *mut std::os::raw::c_char {
+    if engine.is_null() {
+        return std::ptr::null_mut();
+    }
+    let engine = unsafe { &*engine };
+    let text = rosace_ffi::semantics_json(engine);
+    std::ffi::CString::new(text).unwrap_or_default().into_raw()
+}
+
+/// Frees a string previously returned by `rsc_platform_channel_take_outgoing`,
+/// `rsc_platform_channel_dispatch`, or `rsc_engine_semantics_json`.
 ///
 /// # Safety
 /// `ptr` must be either null (a no-op) or a pointer this crate returned

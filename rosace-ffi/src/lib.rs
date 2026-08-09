@@ -16,6 +16,7 @@
 //! pattern `rsc new`'s generated `lib.rs` already uses for
 //! `#[wasm_bindgen(start)]` on web.
 
+mod a11y;
 #[cfg(target_os = "android")]
 mod android;
 mod capability;
@@ -24,6 +25,7 @@ mod event;
 mod platform_channel;
 mod surface;
 
+pub use a11y::semantics_json;
 #[cfg(target_os = "android")]
 pub use android::AndroidSurfaceHandle;
 pub use capability::{report_camera_result, request_camera, use_camera_permission, CAMERA_PERMISSION};
