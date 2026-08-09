@@ -610,6 +610,12 @@ impl<'a> PaintCtx<'a> {
         self.tree.borrow_mut().node_mut(self.node).semantics_excluded = true;
     }
 
+    /// Absorbs this node's descendants into its own semantics — the node is
+    /// announced, the subtree below it is not. Backs `Semantics::merge()`.
+    pub fn merge_semantics(&self) {
+        self.tree.borrow_mut().node_mut(self.node).semantics_merges_descendants = true;
+    }
+
     /// The [`rosace_core::a11y::FocusNode`] for this widget's tree position —
     /// created lazily on first paint and persists across rebuilds, the
     /// same "zero wiring by default" precedent as [`Self::scroll_controller`]

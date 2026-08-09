@@ -34,6 +34,13 @@ impl<W: Widget + Send + Sync + 'static> Widget for Pressable<W> {
     fn paint(&self, ctx: &mut PaintCtx) {
         let f = self.on_press.clone();
         ctx.on_press(move || f());
+        // Quality Bar §5. Deliberately no label: `Pressable` wraps arbitrary
+        // content, so its accessible NAME is whatever that content says.
+        // Platform a11y layers derive a button's name from its descendants
+        // (AccessKit does this for `Role::Button` explicitly), so declaring
+        // the role alone gives "Save, button" rather than an empty control.
+        // Inventing a label here would override the child's real text.
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button));
         let r = ctx.rect;
         self.child.paint(&mut ctx.child(r));
     }

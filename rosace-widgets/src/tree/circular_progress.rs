@@ -33,6 +33,13 @@ impl Widget for CircularProgress {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // Quality Bar §5. An indeterminate spinner has no value to report —
+        // announcing "0" would be a lie, so only a determinate ring carries one.
+        let mut sem = super::SemanticsProps::new(rosace_core::Role::ProgressBar).label("Progress");
+        if let Some(v) = self.value {
+            sem = sem.value(format!("{}%", (v * 100.0).round() as i32));
+        }
+        ctx.semantics(sem);
         let r = ctx.rect;
         let color = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.primary));
         let center = Point { x: r.origin.x + r.size.width / 2.0, y: r.origin.y + r.size.height / 2.0 };

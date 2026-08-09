@@ -2617,6 +2617,102 @@ mod tests {
         );
     }
 
+    /// Enforces `WIDGET_QUALITY_BAR.md` §5 ("declares a semantic role +
+    /// label") as an actual gate rather than a prose checklist.
+    ///
+    /// This exists because §5 was written long before anything checked it,
+    /// and widgets duly shipped without semantics — invisible to every screen
+    /// reader and to the platform accessibility bridge (D132).
+    ///
+    /// It is deliberately **behavioural**: each widget is really painted and
+    /// the resulting semantic tree inspected. A grep for `ctx.semantics(` gives
+    /// false positives in both directions — `SearchBar` declares none of its
+    /// own yet inherits `TextInput`'s by delegation, while a wrapper may hold
+    /// the literal call and still contribute nothing.
+    ///
+    /// Widgets that are correctly SILENT belong in `TRANSPARENT` below, with a
+    /// reason. Adding a widget to that list is a deliberate act; forgetting
+    /// semantics entirely now fails the build instead of shipping quietly.
+    #[test]
+    fn widgets_meet_quality_bar_section_5_semantics() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        fn semantic_count(build: fn() -> w::BoxedWidget) -> usize {
+            struct R(fn() -> w::BoxedWidget);
+            impl Component for R {
+                fn build(&self, _c: &mut Context) -> Element {
+                    (self.0)().into_element()
+                }
+            }
+            let mut e = FrameEngine::new(Box::new(R(build)), rosace_render::FontCache::embedded());
+            let (mut a, mut b) = (SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200));
+            e.paint(&mut a, &mut b, &[]);
+            fn n(x: &rosace_core::SemanticNode) -> usize {
+                (if x.role != rosace_core::Role::Unknown || x.label.is_some() { 1 } else { 0 })
+                    + x.children.iter().map(n).sum::<usize>()
+            }
+            n(&e.semantics())
+        }
+
+        /// A widget constructor under test.
+        type Build = fn() -> w::BoxedWidget;
+        /// `(name, builder)` — expected to announce something.
+        type Speaks = (&'static str, Build);
+        /// `(name, why it is silent, builder)`.
+        type Silent = (&'static str, &'static str, Build);
+
+        // Must announce something: a control, or content a user needs.
+        let must_speak: Vec<Speaks> = vec![
+            ("Button",           || Box::new(w::Button::new("Save").on_press(|| {}))),
+            ("Checkbox",         || Box::new(w::Checkbox::new(true))),
+            ("Switch",           || Box::new(w::Switch::new(true))),
+            ("Slider",           || Box::new(w::Slider::new(0.5))),
+            ("TextInput",        || Box::new(w::TextInput::new().placeholder("Email"))),
+            ("SearchBar",        || Box::new(w::SearchBar::new())),
+            ("Text",             || Box::new(w::Text::new("hello"))),
+            ("Pressable",        || Box::new(w::Pressable::new(w::Text::new("tap"), || {}))),
+            ("CircularProgress", || Box::new(w::CircularProgress::new(0.5))),
+            ("ProgressBar",      || Box::new(w::ProgressBar::new(0.5))),
+            ("Skeleton",         || Box::new(w::Skeleton::new())),
+            ("Tooltip",          || Box::new(w::Tooltip::new("Delete", w::Text::new("x")))),
+            ("Icon (labelled)",  || Box::new(w::Icon::new(w::IconKind::Search).semantic_label("Search"))),
+        ];
+
+        // Correctly silent, each for a stated reason.
+        let transparent: Vec<Silent> = vec![
+            ("Icon (bare)", "decorative by default — usually sits beside text that already says it",
+             || Box::new(w::Icon::new(w::IconKind::Search))),
+            ("Card", "a styled box; its children carry the meaning",
+             || Box::new(w::Card::new(w::Spacer::new(8.0)))),
+            ("Container", "pure layout/decoration",
+             || Box::new(w::Container::new())),
+            ("Column", "pure layout", || Box::new(w::Column::new())),
+            ("Row", "pure layout", || Box::new(w::Row::new())),
+            ("Spacer", "empty space", || Box::new(w::Spacer::new(8.0))),
+            ("CustomPaint", "app-supplied pixels — annotate with the Semantics widget",
+             || Box::new(w::CustomPaint::new(|_, _| {}))),
+        ];
+
+        let mut failures = Vec::new();
+        for (name, f) in must_speak {
+            if semantic_count(f) == 0 {
+                failures.push(format!(
+                    "  {name} declares NO semantics — violates WIDGET_QUALITY_BAR §5"
+                ));
+            }
+        }
+        for (name, why, f) in transparent {
+            if semantic_count(f) != 0 {
+                failures.push(format!(
+                    "  {name} is listed as intentionally transparent ({why}) but now declares \
+                     semantics — either that is a bug, or move it to `must_speak`"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "WIDGET_QUALITY_BAR §5 violations:\n{}", failures.join("\n"));
+    }
+
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
         fn walk(node: &rosace_core::SemanticNode, out: &mut Vec<String>) {
             if let Some(l) = &node.label { out.push(l.clone()); }

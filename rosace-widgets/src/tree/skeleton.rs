@@ -42,6 +42,12 @@ impl Widget for Skeleton {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // Quality Bar §5. A skeleton is a placeholder for content that has
+        // not arrived; silence would leave a screen-reader user with a blank
+        // region and no idea anything is coming.
+        ctx.semantics(
+            super::SemanticsProps::new(rosace_core::Role::ProgressBar).label("Loading"),
+        );
         let r = ctx.rect;
         let (cr, cg, cb) = (self.color.r, self.color.g, self.color.b);
         let base = Color::rgba(cr, cg, cb, 30);

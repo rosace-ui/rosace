@@ -44,6 +44,7 @@ pub struct Semantics<W: Widget> {
     heading_level: Option<u8>,
     href: Option<String>,
     excluded: bool,
+    merged: bool,
 }
 
 impl<W: Widget> Semantics<W> {
@@ -59,6 +60,7 @@ impl<W: Widget> Semantics<W> {
             heading_level: None,
             href: None,
             excluded: false,
+            merged: false,
         }
     }
 
@@ -98,6 +100,27 @@ impl<W: Widget> Semantics<W> {
         self
     }
 
+    /// Makes this node speak for its whole subtree: its own role/label are
+    /// announced and everything below it is absorbed rather than announced
+    /// separately.
+    ///
+    /// Without this, annotating is *additive* — a screen reader reads both
+    /// your label and the raw inner content, which is right for a composite
+    /// whose children are meaningful ("Save" inside a button) and wrong for
+    /// one whose children are not (a chart's placeholder glyphs). Reach for
+    /// `merge()` when the wrapper's label already says everything.
+    ///
+    /// ```rust,ignore
+    /// Semantics::new(icon_plus_label_plus_target)
+    ///     .role(Role::Button)
+    ///     .label("Add to cart")
+    ///     .merge()          // one control, not three announcements
+    /// ```
+    pub fn merge(mut self) -> Self {
+        self.merged = true;
+        self
+    }
+
     /// Removes this subtree from the accessibility tree.
     ///
     /// Wins over any role/label set on the same widget — an excluded subtree
@@ -133,6 +156,9 @@ impl<W: Widget + 'static> Widget for Semantics<W> {
                 s = s.href(h.clone());
             }
             ctx.semantics(s);
+            if self.merged {
+                ctx.merge_semantics();
+            }
         }
         // Pass-through paint — annotation must not change what is drawn.
         let r = ctx.rect;

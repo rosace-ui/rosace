@@ -202,6 +202,16 @@ pub struct Icon {
     source: IconSource,
     pub size: f32,
     pub color: Color,
+    /// Accessible name, when the icon carries meaning of its own.
+    ///
+    /// `None` (the default) makes the icon **decorative**: it is left out of
+    /// the accessibility tree entirely. That is the right default because the
+    /// overwhelming majority of icons sit beside text that already says the
+    /// same thing, and announcing both produces a stutter ("Search, Search").
+    /// Set this only for an icon that is the *sole* carrier of meaning — a
+    /// bare icon-only button. Same default and reasoning as Flutter's
+    /// `Icon.semanticLabel`.
+    semantic_label: Option<String>,
 }
 
 impl Icon {
@@ -225,10 +235,18 @@ impl Icon {
     }
 
     fn from_source(source: IconSource) -> Self {
-        Self { source, size: 16.0, color: Color::rgb(180, 184, 210) }
+        Self { source, size: 16.0, color: Color::rgb(180, 184, 210), semantic_label: None }
     }
 
     pub fn size(mut self, s: f32) -> Self { self.size = s; self }
+
+    /// Gives this icon an accessible name, putting it into the accessibility
+    /// tree. Use only when the icon is the sole carrier of meaning — see
+    /// [`Icon::semantic_label`]'s field doc for why decorative is the default.
+    pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
+        self.semantic_label = Some(label.into());
+        self
+    }
     pub fn color(mut self, c: Color) -> Self { self.color = c; self }
 }
 
@@ -238,6 +256,11 @@ impl Widget for Icon {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // Quality Bar §5: named icons are announced, unnamed ones are
+        // decorative and stay out of the tree (see the field doc).
+        if let Some(l) = &self.semantic_label {
+            ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Image).label(l));
+        }
         let r = ctx.rect;
         let cx = r.origin.x + r.size.width / 2.0;
         let cy = r.origin.y + r.size.height / 2.0;

@@ -126,6 +126,15 @@ pub struct TreeNode {
     /// audible while hiding their parent would produce orphaned, context-free
     /// announcements — worse than either extreme.
     pub semantics_excluded: bool,
+    /// Absorbs descendants into this node's own semantics
+    /// (`Semantics::merge()`): this node's entry is emitted, then its
+    /// subtree is not walked.
+    ///
+    /// For composites that are one control to a user but many nodes to the
+    /// framework — an icon + label + tap target. Without it a screen reader
+    /// announces the wrapper's meaning AND the raw inner content, which for
+    /// hand-painted content ("::chart::") is noise.
+    pub semantics_merges_descendants: bool,
 
     /// Editable text content declared this paint (D112/Phase 28 Step 1) —
     /// current value, rect, and the `on_change` callback. Cleared each
@@ -236,6 +245,7 @@ impl RenderTree {
         n.transforms.clear();
         n.semantics.clear();
         n.semantics_excluded = false;
+        n.semantics_merges_descendants = false;
         n.pointer_mode = 0;
         n.hover_regions.clear();
         n.long_hits.clear();
@@ -789,6 +799,12 @@ impl RenderTree {
             if let Some(lvl) = s.heading_level { sn = sn.heading_level(lvl); }
             if let Some(h) = &s.href { sn = sn.href(h.clone()); }
             parent.children.push(sn);
+        }
+        // `Semantics::merge()` — this node speaks for its whole subtree, so
+        // stop here. Its own entry above is already emitted; the descendants
+        // are absorbed rather than announced separately.
+        if n.semantics_merges_descendants {
+            return;
         }
         // Children nest under THIS node's last semantic entry when it declared
         // one (a Button's inner Text belongs to the Button); nodes with no

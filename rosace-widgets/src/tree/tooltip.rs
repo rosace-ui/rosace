@@ -76,6 +76,12 @@ impl Widget for Tooltip {
     fn children(&self) -> Children<'_> { Children::One(&*self.child) }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // Quality Bar §5. The tip text is the whole point of a tooltip, but
+        // it only ever paints on hover — a pointer-only affordance a screen
+        // reader user never triggers. Declaring it here makes it reachable
+        // without hovering; the child nests underneath, so it reads as
+        // "<tip>, <child>" rather than replacing the child's own meaning.
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Unknown).label(&self.label));
         let r = ctx.rect;
         self.child.paint(&mut ctx.child(r));
         ctx.hoverable();
