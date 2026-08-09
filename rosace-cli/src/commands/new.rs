@@ -2058,6 +2058,11 @@ func rsc_platform_channel_take_outgoing() -> UnsafeMutablePointer<CChar>?
 @_silgen_name("rsc_string_free")
 func rsc_string_free(_ ptr: UnsafeMutablePointer<CChar>?)
 
+// Accessibility (D132): the engine's semantic tree as JSON, pulled on
+// demand. See `MetalView`'s UIAccessibilityContainer conformance below.
+@_silgen_name("rsc_engine_semantics_json")
+func rsc_engine_semantics_json(_ engine: RscEngine?) -> UnsafeMutablePointer<CChar>?
+
 @_silgen_name("rsc_platform_channel_report_result")
 func rsc_platform_channel_report_result(_ callId: UInt64, _ resultJson: UnsafePointer<CChar>?)
 
@@ -2081,8 +2086,24 @@ func rsc_platform_channel_dispatch(
 /// even though the Rust side correctly renders at full physical-pixel
 /// resolution — one of the most common CAMetalLayer gotchas. Root-caused
 /// and fixed 2026-07-08 after a direct visual report of blurry text.
+/// One node of the engine's semantic tree, decoded from the FFI JSON.
+private struct RscSemanticNode: Decodable {
+    let id: UInt64?
+    let role: String
+    let label: String?
+    let value: String?
+    let bounds: RscBounds?
+    let children: [RscSemanticNode]
+
+    struct RscBounds: Decodable { let x: Float; let y: Float; let w: Float; let h: Float }
+}
+
 final class MetalView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
+
+    /// Supplies the engine's semantic tree as JSON. Set by
+    /// `EngineViewController`, which owns the engine pointer.
+    var semanticsJSON: (() -> String?)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2092,6 +2113,84 @@ final class MetalView: UIView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         (layer as! CAMetalLayer).contentsScale = UIScreen.main.scale
+    }
+
+    // ── Accessibility (D132) ────────────────────────────────────────────
+    //
+    // ROSACE paints every pixel into this one CAMetalLayer, so without the
+    // bridge below VoiceOver sees a single blank rectangle. UIKit asks for
+    // `accessibilityElements` only while VoiceOver is actually inspecting,
+    // so the engine is never serialized in the common case — which is why
+    // the Rust side exposes this as a PULL rather than pushing each frame.
+    //
+    // The container must not itself be an element, or VoiceOver stops at
+    // the container and never reaches the children.
+    override var isAccessibilityElement: Bool {
+        get { false }
+        set { }
+    }
+
+    override var accessibilityElements: [Any]? {
+        get {
+            guard let json = semanticsJSON?(), let data = json.data(using: .utf8) else {
+                return nil
+            }
+            guard let root = try? JSONDecoder().decode(RscSemanticNode.self, from: data) else {
+                return nil
+            }
+            var out: [UIAccessibilityElement] = []
+            appendElements(from: root, into: &out)
+            return out.isEmpty ? nil : out
+        }
+        set { }
+    }
+
+    /// Flattens the tree into the linear list VoiceOver swipes through.
+    ///
+    /// Only nodes that actually say something become elements; structural
+    /// nodes (a Column, an unlabelled wrapper) are walked through rather
+    /// than announced, which is the same pruning the web/SEO mapping does.
+    private func appendElements(from node: RscSemanticNode, into out: inout [UIAccessibilityElement]) {
+        let hasSomethingToSay = (node.label?.isEmpty == false) || (node.value?.isEmpty == false)
+        if hasSomethingToSay, let b = node.bounds {
+            let element = UIAccessibilityElement(accessibilityContainer: self)
+            element.accessibilityLabel = node.label
+            element.accessibilityValue = node.value
+            element.accessibilityTraits = traits(for: node.role)
+            // Rust reports LOGICAL, view-relative pixels; UIKit wants screen
+            // coordinates. UIAccessibility does the conversion (including the
+            // scale factor), so we must not pre-multiply — the desktop bridge
+            // shipped every element at half size by doing exactly that.
+            let local = CGRect(x: CGFloat(b.x), y: CGFloat(b.y),
+                               width: CGFloat(b.w), height: CGFloat(b.h))
+            element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(local, in: self)
+            out.append(element)
+        }
+        for child in node.children {
+            appendElements(from: child, into: &out)
+        }
+    }
+
+    /// Maps ROSACE roles onto VoiceOver traits. Names must match
+    /// `rosace-ffi`'s `role_name` exactly — that function spells them out
+    /// literally so this mapping cannot drift with a Rust-side rename.
+    private func traits(for role: String) -> UIAccessibilityTraits {
+        switch role {
+        case "button":      return .button
+        case "link":        return .link
+        case "heading":     return .header
+        case "image":       return .image
+        case "textinput":   return .searchField
+        case "slider":      return .adjustable
+        case "progressbar": return .updatesFrequently
+        case "alert":       return .staticText
+        case "tab":         return .button
+        case "menuitem":    return .button
+        // checkbox/radio/switch have no dedicated trait; VoiceOver conveys
+        // their on/off state through accessibilityValue, which the engine
+        // already supplies, so `.none` here is correct rather than lossy.
+        default:            return .none
+        }
     }
 }
 
@@ -2176,6 +2275,20 @@ final class EngineViewController: UIViewController, UIKeyInput {
         let height = UInt32(view.bounds.height * CGFloat(scale))
         let viewPtr = Unmanaged.passUnretained(view).toOpaque()
         engine = rsc_engine_init(viewPtr, width, height, scale)
+
+        // Accessibility (D132): hand the view a way to pull the semantic
+        // tree. UIKit only calls this while VoiceOver is inspecting, so an
+        // app with no screen reader running never serializes anything.
+        // `unowned` rather than a strong capture — the view is owned by this
+        // controller, so a strong reference here would be a retain cycle.
+        if let metalView = view as? MetalView {
+            metalView.semanticsJSON = { [unowned self] in
+                guard let engine = self.engine,
+                      let ptr = rsc_engine_semantics_json(engine) else { return nil }
+                defer { rsc_string_free(ptr) }
+                return String(cString: ptr)
+            }
+        }
 
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .default)
