@@ -2713,6 +2713,74 @@ mod tests {
         assert!(failures.is_empty(), "WIDGET_QUALITY_BAR §5 violations:\n{}", failures.join("\n"));
     }
 
+    /// User-reported (2026-08-09, showcase item #14): on macOS the tooltip
+    /// never appears. Drives a real MouseMove onto the anchor and asserts the
+    /// tip actually PAINTS — checked against the overlay canvas, not the
+    /// semantic tree, since the tip label now legitimately sits in semantics
+    /// even before hover (a screen-reader user can't hover at all).
+    #[test]
+    fn tooltip_paints_on_hover() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct Tip;
+        impl Component for Tip {
+            fn build(&self, _c: &mut Context) -> Element {
+                w::Tooltip::new("Delete this item", w::Text::new("target")).into_element()
+            }
+        }
+        let mut e = FrameEngine::new(Box::new(Tip), rosace_render::FontCache::embedded());
+
+        let mut canvas = SkiaCanvas::new(300, 200);
+        let mut cold = SkiaCanvas::new(300, 200);
+        e.paint(&mut canvas, &mut cold, &[]);
+        assert!(!cold.has_drawn(), "no tooltip before the pointer arrives");
+
+        // Pointer moves onto the anchor (which fills the canvas).
+        let mv = rosace_platform::InputEvent::MouseMove { x: 150.0, y: 100.0 };
+        e.paint(&mut canvas, &mut SkiaCanvas::new(300, 200), &[mv]);
+        // Hover flips a `forced_repaint` flag, so the tip lands on the FOLLOWING
+        // frame — exactly what a real event loop delivers.
+        let mut hot = SkiaCanvas::new(300, 200);
+        e.paint(&mut canvas, &mut hot, &[]);
+        assert!(
+            hot.has_drawn(),
+            "the tooltip must paint into the overlay layer while its anchor is hovered"
+        );
+    }
+
+    /// The real-world shape: a tooltip wrapping an INTERACTIVE child.
+    /// `Tooltip::new("...", Button::new("Hover me"))` is what the showcase —
+    /// and any real app — actually writes, and it is the case the user
+    /// reported broken on macOS.
+    #[test]
+    fn tooltip_paints_when_wrapping_an_interactive_child() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct Tip;
+        impl Component for Tip {
+            fn build(&self, _c: &mut Context) -> Element {
+                w::Tooltip::new("A helpful tip", w::Button::new("Hover me").on_press(|| {}))
+                    .into_element()
+            }
+        }
+        let mut e = FrameEngine::new(Box::new(Tip), rosace_render::FontCache::embedded());
+        let mut canvas = SkiaCanvas::new(300, 200);
+        e.paint(&mut canvas, &mut SkiaCanvas::new(300, 200), &[]);
+
+        let mv = rosace_platform::InputEvent::MouseMove { x: 150.0, y: 100.0 };
+        e.paint(&mut canvas, &mut SkiaCanvas::new(300, 200), &[mv]);
+        let mut hot = SkiaCanvas::new(300, 200);
+        e.paint(&mut canvas, &mut hot, &[]);
+        assert!(
+            hot.has_drawn(),
+            "a tooltip wrapping a Button must still appear: the button registers its own \
+             hover region and wins the topmost hover test, so the tooltip's own node never \
+             sees hovered() unless hover propagates to ancestors"
+        );
+    }
+
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
         fn walk(node: &rosace_core::SemanticNode, out: &mut Vec<String>) {
             if let Some(l) = &node.label { out.push(l.clone()); }

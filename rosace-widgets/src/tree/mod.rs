@@ -535,6 +535,24 @@ impl<'a> PaintCtx<'a> {
 
     /// Declare a hover-only region (tooltips): participates in hover
     /// tracking without swallowing clicks.
+    /// True when the pointer is over this widget **or anything inside it**.
+    ///
+    /// [`Self::hovered`] is exact-node-only: hover marks a single topmost
+    /// node, so a wrapper around an interactive child never sees it (the
+    /// child wins). Wrappers whose whole purpose is to react to the pointer
+    /// being *somewhere in their subtree* — `Tooltip` above all — need this
+    /// instead. Kept separate from `hovered()` rather than changing it,
+    /// because 19 widgets drive visual state off the exact-node meaning and
+    /// would light up spuriously if hover propagated to every ancestor.
+    pub fn hovered_within(&self) -> bool {
+        let tree = self.tree.borrow();
+        fn any(tree: &RenderTree, id: NodeId) -> bool {
+            let n = tree.node(id);
+            n.hovered || n.children.iter().any(|&c| any(tree, c))
+        }
+        any(&tree, self.node)
+    }
+
     pub fn hoverable(&self) {
         let r = self.rect;
         self.tree.borrow_mut().node_mut(self.node).hover_regions.push(r);

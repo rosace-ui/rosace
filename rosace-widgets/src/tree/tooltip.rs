@@ -84,8 +84,23 @@ impl Widget for Tooltip {
         ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Unknown).label(&self.label));
         let r = ctx.rect;
         self.child.paint(&mut ctx.child(r));
+        // Hover registration still matters: entering/leaving a hover target
+        // is what makes the engine request the next frame.
         ctx.hoverable();
-        if ctx.hovered() {
+        // But DON'T gate on `ctx.hovered()`. That flag marks a single topmost
+        // node, so wrapping anything interactive — `Tooltip::new("tip",
+        // Button::new("Hover me"))`, which is what every real app writes —
+        // hands the hover to the Button and the tooltip's own node never sees
+        // it. User-reported broken on macOS (2026-08-09); it only ever worked
+        // around inert children like `Text`.
+        //
+        // Propagating hover up the ancestor chain was the alternative, but 19
+        // widgets drive visual state off `hovered()` and every enclosing Card
+        // or ListTile would light up too. `hovered_within` asks the precise
+        // question instead — "is the hovered node me or one of my
+        // descendants?" — which is exactly what a tooltip means, and is
+        // correctly false before the pointer has ever entered.
+        if ctx.hovered_within() {
             let style = self.style.unwrap_or_else(|| TooltipStyle::resolve(&ctx.theme));
             let w = ctx.font.measure_text(&self.label, style.font_size) + style.pad_h * 2.0;
             let h = style.font_size * 1.7;
