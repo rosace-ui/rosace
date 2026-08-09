@@ -100,7 +100,18 @@ impl Widget for ListTile {
             Some(sub) => format!("{}, {}", self.title, sub),
             None => self.title.clone(),
         };
-        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::ListItem).label(label));
+        // A row with a tap handler is a CONTROL, not just content. Declaring
+        // it `ListItem` unconditionally left it announced but inert: platform
+        // a11y layers key "can I activate this?" off the role, so VoiceOver
+        // read the row and then offered no action (reported live on iOS,
+        // 2026-08-09). Non-tappable rows stay `ListItem`, which is still the
+        // right structural role for them.
+        let role = if self.press.is_some() {
+            rosace_core::Role::Button
+        } else {
+            rosace_core::Role::ListItem
+        };
+        ctx.semantics(super::SemanticsProps::new(role).label(label));
         if let Some(f) = &self.press {
             let f = f.clone();
             ctx.on_press(move || f());

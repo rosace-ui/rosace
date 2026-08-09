@@ -71,7 +71,15 @@ impl AppBar {
 impl Widget for AppBar {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
-        Size { width: avail_w(constraints), height: self.effective_height(ctx.theme) }
+        // The theme height is a MINIMUM, not a ceiling. Taken literally it
+        // cannot respond to the OS text-size setting, so at raised Dynamic
+        // Type the title and the leading/action buttons grew while the bar
+        // stayed put and clipped them (reported live on iOS, 2026-08-09).
+        // Ordinary 100% bars are unchanged, since line_height + padding is
+        // well under the designed height there.
+        let title_h = ctx.font.line_height(self.title_size);
+        let height = self.effective_height(ctx.theme).max(title_h + 12.0);
+        Size { width: avail_w(constraints), height }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

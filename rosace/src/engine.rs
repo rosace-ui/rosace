@@ -2860,6 +2860,45 @@ mod tests {
         );
     }
 
+    /// A tappable ListTile must be ACTIONABLE, not merely announced.
+    /// Platform a11y layers decide "can I activate this?" from the role, so
+    /// a row declaring `ListItem` was read out and then offered no action
+    /// (reported live on iOS, 2026-08-09).
+    #[test]
+    fn a_tappable_list_row_is_a_control_an_inert_one_is_not() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        fn role_of(build: fn() -> w::BoxedWidget) -> rosace_core::Role {
+            struct R(fn() -> w::BoxedWidget);
+            impl Component for R {
+                fn build(&self, _c: &mut Context) -> Element { (self.0)().into_element() }
+            }
+            let mut e = FrameEngine::new(Box::new(R(build)), rosace_render::FontCache::embedded());
+            e.paint(&mut SkiaCanvas::new(300, 120), &mut SkiaCanvas::new(300, 120), &[]);
+            fn find(n: &rosace_core::SemanticNode) -> Option<rosace_core::Role> {
+                if n.label.as_deref().map(|l| l.starts_with("Widgets")).unwrap_or(false) {
+                    return Some(n.role.clone());
+                }
+                n.children.iter().find_map(find)
+            }
+            find(&e.semantics()).expect("the row must be in the tree")
+        }
+
+        assert_eq!(
+            role_of(|| Box::new(
+                w::ListTile::new("Widgets").subtitle("one page each").on_press(|| {})
+            )),
+            rosace_core::Role::Button,
+            "a row with a tap handler must be exposed as an activatable control"
+        );
+        assert_eq!(
+            role_of(|| Box::new(w::ListTile::new("Widgets").subtitle("one page each"))),
+            rosace_core::Role::ListItem,
+            "a row with no handler stays structural — claiming it is a button would be a lie"
+        );
+    }
+
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
         fn walk(node: &rosace_core::SemanticNode, out: &mut Vec<String>) {
             if let Some(l) = &node.label { out.push(l.clone()); }
