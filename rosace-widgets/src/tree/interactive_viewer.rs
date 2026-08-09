@@ -183,7 +183,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for InteractiveViewer<W> {
             }));
         }
 
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Unknown)
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Unknown)
             .label("Interactive viewer".to_string()));
 
         if self.zoom_controls {

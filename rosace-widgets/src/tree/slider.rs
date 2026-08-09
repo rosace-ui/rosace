@@ -76,7 +76,7 @@ impl Widget for Slider {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Slider)
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Slider)
             .value(format!("{:.2}", self.min + self.value * (self.max - self.min))));
 
         // ── Interactivity (identity) — a positional press is draggable via the

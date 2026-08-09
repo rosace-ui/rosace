@@ -100,7 +100,7 @@ impl Widget for ListTile {
             Some(sub) => format!("{}, {}", self.title, sub),
             None => self.title.clone(),
         };
-        ctx.semantics(super::Semantics::new(rosace_core::Role::ListItem).label(label));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::ListItem).label(label));
         if let Some(f) = &self.press {
             let f = f.clone();
             ctx.on_press(move || f());

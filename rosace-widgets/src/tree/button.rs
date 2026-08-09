@@ -102,7 +102,7 @@ impl Widget for Button {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Button).label(&self.label));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button).label(&self.label));
         let t = &ctx.theme.colors;
         let variant = if self.disabled { ButtonVariant::Secondary } else { self.variant };
 

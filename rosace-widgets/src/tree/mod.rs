@@ -69,6 +69,7 @@ pub mod time_picker;
 pub mod data_table;
 pub mod render_tree;
 pub mod repaint_boundary;
+pub mod semantics;
 pub mod row;
 pub mod scaffold;
 pub mod screen_transition_view;
@@ -155,6 +156,7 @@ pub use time_picker::{TimePicker, SimpleTime, TimeUnit};
 pub use data_table::{DataTable, DataTableColumn, SortDirection};
 pub use render_tree::{HitHandler, InspectNode, NodeId, RenderTree, ScrollAxes, ScrollHandler, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
+pub use semantics::Semantics;
 pub use row::Row;
 pub use scaffold::Scaffold;
 pub use screen_transition_view::ScreenTransitionView;
@@ -278,7 +280,7 @@ impl Alignment {
     }
 }
 
-// ── Semantics ────────────────────────────────────────────────────────────────
+// ── SemanticsProps ────────────────────────────────────────────────────────────────
 
 /// A declarative semantics entry (D099). Widgets push these during paint via
 /// [`PaintCtx::semantics`]; the frame derives the accessibility tree from the
@@ -287,7 +289,7 @@ impl Alignment {
 /// `heading_level`/`href` (D107/Phase 25) mirror `rosace_core::SemanticNode`'s
 /// fields of the same name — carried through unchanged by `collect_semantics`.
 #[derive(Clone, Debug)]
-pub struct Semantics {
+pub struct SemanticsProps {
     pub role: rosace_core::Role,
     pub label: Option<String>,
     pub value: Option<String>,
@@ -295,7 +297,7 @@ pub struct Semantics {
     pub href: Option<String>,
 }
 
-impl Semantics {
+impl SemanticsProps {
     pub fn new(role: rosace_core::Role) -> Self {
         Self { role, label: None, value: None, heading_level: None, href: None }
     }
@@ -595,8 +597,17 @@ impl<'a> PaintCtx<'a> {
     /// Written to the render-tree node — persists on clean frames, cleared
     /// on repaint, like every other declaration. The a11y tree is derived
     /// from the render tree each frame.
-    pub fn semantics(&self, s: Semantics) {
+    pub fn semantics(&self, s: SemanticsProps) {
         self.tree.borrow_mut().node_mut(self.node).semantics.push(s);
+    }
+
+    /// Drops this node and everything below it from the accessibility tree.
+    ///
+    /// For purely decorative content that would otherwise be announced as
+    /// noise — a background flourish, a duplicate icon sitting next to text
+    /// that already says the same thing. Backs `Semantics::exclude()`.
+    pub fn exclude_semantics(&self) {
+        self.tree.borrow_mut().node_mut(self.node).semantics_excluded = true;
     }
 
     /// The [`rosace_core::a11y::FocusNode`] for this widget's tree position —

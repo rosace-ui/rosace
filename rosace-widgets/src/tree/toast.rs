@@ -104,7 +104,7 @@ impl Widget for Toast {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Alert).label(&self.message));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Alert).label(&self.message));
         let r = ctx.rect;
         let radius = self.radius.unwrap_or(r.size.height / 2.0);
         let (bg, fg) = {

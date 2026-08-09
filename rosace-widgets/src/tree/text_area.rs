@@ -211,7 +211,7 @@ impl Widget for TextArea {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        ctx.semantics(super::Semantics::new(rosace_core::Role::TextInput)
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::TextInput)
             .label(&self.placeholder).value(&self.value));
         let font_size = self.resolved_font_size(&ctx.theme);
 
@@ -475,7 +475,7 @@ impl Widget for TextArea {
         if let Some(field) = &self.field {
             if field.is_touched() {
                 if let Some(err) = field.errors().first() {
-                    ctx.semantics(super::Semantics::new(rosace_core::Role::Alert).label(&err.message));
+                    ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Alert).label(&err.message));
                     ctx.record(DrawCommand::DrawText {
                         text: err.message.clone(),
                         origin: Point { x: full_rect.origin.x + 2.0, y: r.origin.y + r.size.height + 2.0 },

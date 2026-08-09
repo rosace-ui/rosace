@@ -52,7 +52,7 @@ impl Widget for Image {
         // No entry at all for a decorative image (no `.alt(...)` set) —
         // matches HTML's own convention (see the `alt` field doc).
         if let Some(alt) = &self.inner.alt {
-            ctx.semantics(super::Semantics::new(rosace_core::Role::Image).label(alt));
+            ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Image).label(alt));
         }
         let x = ctx.rect.origin.x;
         let y = ctx.rect.origin.y;

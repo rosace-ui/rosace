@@ -132,7 +132,7 @@ impl Widget for Accordion {
         let atom = self.expanded.clone();
         let header_ctx = ctx.child(header);
         header_ctx.semantics(
-            super::Semantics::new(rosace_core::Role::Button)
+            super::SemanticsProps::new(rosace_core::Role::Button)
                 .label(&self.title)
                 .value(if open { "expanded" } else { "collapsed" }),
         );

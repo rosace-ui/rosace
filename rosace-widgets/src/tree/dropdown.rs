@@ -52,7 +52,7 @@ impl Widget for Dropdown {
         // The trigger is a button that opens a menu — its own MenuItem
         // children (via Menu, which already declares semantics) carry the
         // option list; this is just the current-selection summary.
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Button).label(selected_label));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button).label(selected_label));
         let (bg, fg, border) = {
             let t = &ctx.theme.colors;
             (self.background.unwrap_or_else(|| ctx.tc(t.surface_variant)),

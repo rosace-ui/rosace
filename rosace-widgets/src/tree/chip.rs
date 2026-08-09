@@ -63,7 +63,7 @@ impl Widget for Chip {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Checkbox)
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Checkbox)
             .label(&self.label)
             .value(if self.selected { "selected" } else { "not selected" }));
 

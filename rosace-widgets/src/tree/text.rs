@@ -135,7 +135,7 @@ impl Widget for Text {
             return;
         }
         if self.text.is_empty() { return; }
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Text).label(&self.text));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Text).label(&self.text));
 
         // Fall back to theme on_surface when no explicit color is set.
         let color = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.on_surface));
@@ -182,7 +182,7 @@ fn rich_layout(rt: &RichText, font: &rosace_render::FontCache, max_w: f32) -> Te
 
 fn paint_rich(rt: &RichText, ctx: &mut PaintCtx, align: TextAlign) {
     if rt.is_empty() { return; }
-    ctx.semantics(super::Semantics::new(rosace_core::Role::Text).label(rt.plain_text()));
+    ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Text).label(rt.plain_text()));
 
     let layout = rich_layout(rt, ctx.font, ctx.rect.size.width);
     let mut cy = 0.0_f32;

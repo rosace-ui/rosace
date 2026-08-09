@@ -93,7 +93,7 @@ impl Widget for Switch {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         // ── A11y ────────────────────────────────────────────────────────────
-        let mut sem = super::Semantics::new(rosace_core::Role::Switch)
+        let mut sem = super::SemanticsProps::new(rosace_core::Role::Switch)
             .value(if self.on { "on" } else { "off" });
         if let Some(l) = &self.label { sem = sem.label(l); }
         ctx.semantics(sem);

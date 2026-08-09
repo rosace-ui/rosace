@@ -101,7 +101,7 @@ impl Widget for SegmentedControl {
             let col = super::lerp_color(fg, sel_fg, nearness);
             child.draw_text_at(label, Point { x: tx, y: ty }, with_alpha(col, dim), 13.0);
             child.semantics(
-                super::Semantics::new(rosace_core::Role::Tab)
+                super::SemanticsProps::new(rosace_core::Role::Tab)
                     .label(label)
                     .value(if i == self.selected { "selected" } else { "not selected" }),
             );

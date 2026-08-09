@@ -150,7 +150,7 @@ impl Widget for Sheet {
         // No title field to label itself with (unlike Dialog) — still worth
         // marking as a modal region boundary, unlabeled, so assistive tech
         // knows it's entered one.
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Dialog));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Dialog));
         // Hoisted theme reads (borrow must end before mutable painting).
         let (surface, handle_color) = {
             let t = &ctx.theme.colors;

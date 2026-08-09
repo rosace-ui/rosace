@@ -103,7 +103,7 @@ impl Widget for RatingBar {
 
         let r = ctx.rect;
         ctx.semantics(
-            super::Semantics::new(rosace_core::Role::Slider)
+            super::SemanticsProps::new(rosace_core::Role::Slider)
                 .label("rating")
                 .value(format!("{:.0} of {}", self.value.round(), self.count)),
         );

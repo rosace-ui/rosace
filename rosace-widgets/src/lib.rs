@@ -19,7 +19,7 @@ pub mod template;
 pub use template::{PropValue, StaticValue, Template, TemplateKey, TemplateNode};
 
 // ── Tree widget re-exports (canonical top-level names) ─────────────────────
-pub use tree::{Alignment, Children, Semantics, Widget};
+pub use tree::{Alignment, Children, Semantics, SemanticsProps, Widget};
 pub use tree::PaintCtx;
 pub use tree::{HitTarget, ScrollTarget};
 pub use tree::{AbsorbPointer, IgnorePointer};

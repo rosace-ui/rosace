@@ -60,7 +60,7 @@ impl Widget for NavItem {
     fn paint(&self, ctx: &mut PaintCtx) {
         // NavRail items are navigation destinations — <a> in the real-world
         // HTML shape (<nav><ul><li><a>...) a nav rail maps to (D107).
-        let mut sem = super::Semantics::new(rosace_core::Role::Link).label(&self.label);
+        let mut sem = super::SemanticsProps::new(rosace_core::Role::Link).label(&self.label);
         if let Some(n) = self.badge { sem = sem.value(n.to_string()); }
         ctx.semantics(sem);
         let r = ctx.rect;
@@ -190,7 +190,7 @@ impl Widget for NavRail {
                 NavRailEntry::Section(label) => {
                     let section_rect = Rect { origin: Point { x: r.origin.x, y }, size: Size { width: self.width, height: 20.0 } };
                     ctx.child(section_rect).semantics(
-                        super::Semantics::new(rosace_core::Role::Heading).label(label).heading_level(3),
+                        super::SemanticsProps::new(rosace_core::Role::Heading).label(label).heading_level(3),
                     );
                     ctx.draw_text_at(
                         label,

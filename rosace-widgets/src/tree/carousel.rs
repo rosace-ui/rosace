@@ -216,7 +216,7 @@ impl Widget for Carousel {
         }
 
         ctx.semantics(
-            super::Semantics::new(rosace_core::Role::List)
+            super::SemanticsProps::new(rosace_core::Role::List)
                 .label("carousel")
                 .value(format!("page {} of {}", cur + 1, n)),
         );

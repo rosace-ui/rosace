@@ -86,7 +86,7 @@ impl Widget for Checkbox {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         // ── A11y ──────────────────────────────────────────────────────────
-        let mut sem = super::Semantics::new(rosace_core::Role::Checkbox)
+        let mut sem = super::SemanticsProps::new(rosace_core::Role::Checkbox)
             .value(if self.indeterminate { "mixed" } else if self.checked { "checked" } else { "unchecked" });
         if let Some(l) = &self.label { sem = sem.label(l); }
         ctx.semantics(sem);

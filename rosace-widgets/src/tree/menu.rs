@@ -134,7 +134,7 @@ impl Widget for Menu {
             }
             let ty = row.origin.y + (self.row_height - line_h) / 2.0;
             child.draw_text_at(label, rosace_core::types::Point { x: row.origin.x + PAD_H, y: ty }, fg, font_size);
-            child.semantics(super::Semantics::new(rosace_core::Role::MenuItem).label(label));
+            child.semantics(super::SemanticsProps::new(rosace_core::Role::MenuItem).label(label));
             child.register_hit(Arc::clone(cb));
         }
     }

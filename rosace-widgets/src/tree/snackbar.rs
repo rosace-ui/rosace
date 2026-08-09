@@ -134,7 +134,7 @@ impl Widget for Snackbar {
         };
         let r = ctx.rect;
 
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Alert).label(&self.message));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Alert).label(&self.message));
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
 
         let font_size = self.resolved_font_size(&ctx.theme);
@@ -156,7 +156,7 @@ impl Widget for Snackbar {
                 size: Size { width: aw + 16.0, height: r.size.height },
             };
             let mut action_ctx = ctx.child(hit);
-            action_ctx.semantics(super::Semantics::new(rosace_core::Role::Button).label(label));
+            action_ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button).label(label));
             action_ctx.draw_text_at(label, Point { x: ax, y: ty }, action_fg, font_size);
             if let Some(cb) = &self.on_action {
                 action_ctx.register_hit(Arc::clone(cb));

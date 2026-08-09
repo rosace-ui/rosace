@@ -235,7 +235,7 @@ mod tests {
         t.node_mut(node).cached_size = Some(Size { width: 120.0, height: 40.0 });
         t.node_mut(node).last_constraints = Some(Constraints::loose(300.0, 600.0));
         t.node_mut(node).semantics.push(
-            rosace_widgets::tree::Semantics::new(rosace_core::Role::Button).label("Save"),
+            rosace_widgets::tree::SemanticsProps::new(rosace_core::Role::Button).label("Save"),
         );
         t.node_mut(node).hits.push((rect(30.0, 210.0, 120.0, 40.0), std::sync::Arc::new(|| {})));
         t.finalize();
@@ -262,7 +262,7 @@ mod tests {
         let node = t.slot(RenderTree::ROOT, true);
         t.node_mut(node).cached_rect = Some(rect(84.0, 230.0, 300.0, 40.0));
         t.node_mut(node).semantics.push(
-            rosace_widgets::tree::Semantics::new(rosace_core::Role::TextInput).label("Your name"),
+            rosace_widgets::tree::SemanticsProps::new(rosace_core::Role::TextInput).label("Your name"),
         );
         t.finalize();
         let snap = t.inspect();

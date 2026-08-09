@@ -719,7 +719,7 @@ impl FrameEngine {
     /// Returns whether any component's content may have changed this frame
     /// (`global_dirty || !dirty_ids.is_empty()` — deliberately excludes
     /// purely-visual causes like a resize or hover repaint, which affect
-    /// pixels but never `Semantics`/text content). Used by the web target's
+    /// pixels but never `SemanticsProps`/text content). Used by the web target's
     /// D107/Phase 25 Step 4 shadow-DOM sync to decide whether it's worth
     /// re-deriving the semantic tree at all this frame — computed here
     /// rather than by the caller re-deriving it, since `dirty_ids` is
@@ -2352,7 +2352,7 @@ mod tests {
     /// nav.transition_handle(), nav.stack_keys())` in place of handing
     /// `body` straight to a container) — the real integration point for
     /// Step 3. Both screens are
-    /// `Button`s (not bare `Text`) so both always declare real `Semantics`
+    /// `Button`s (not bare `Text`) so both always declare real `SemanticsProps`
     /// regardless of `on_press`, giving the test a reliable signal for
     /// "is this screen's content actually painted this frame."
     struct NavRoot;
@@ -2571,6 +2571,50 @@ mod tests {
         let btn2 = find(&again, "Screen A").expect("still present after a repaint");
         assert_eq!(btn2.id, Some(id), "the same widget must keep the same semantic id across repaints");
         assert_eq!(btn2.bounds, Some(bounds), "an unmoved widget must report the same bounds");
+    }
+
+    /// The `Semantics` widget (D132): apps must be able to annotate content
+    /// the framework cannot understand — a hand-painted chart is just pixels
+    /// — and to silence decoration that would otherwise be announced twice.
+    #[test]
+    fn semantics_widget_annotates_a_subtree_and_exclude_removes_it() {
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct Annotated;
+        impl Component for Annotated {
+            fn build(&self, _ctx: &mut Context) -> Element {
+                rosace_widgets::tree::Column::new()
+                    // A chart the framework can't read, given meaning by the app.
+                    .child(rosace_widgets::tree::Semantics::new(
+                        rosace_widgets::tree::Text::new("::chart::"),
+                    )
+                    .role(rosace_core::Role::Image)
+                    .label("Revenue, up 12%"))
+                    // Decoration that must NOT be announced, even though the
+                    // Text inside it declares semantics of its own.
+                    .child(rosace_widgets::tree::Semantics::new(
+                        rosace_widgets::tree::Text::new("decorative sparkle"),
+                    )
+                    .exclude())
+                    .into_element()
+            }
+        }
+
+        let engine = FrameEngine::new(Box::new(Annotated), rosace_render::FontCache::embedded());
+        let (mut engine, mut canvas, mut overlay) =
+            (engine, SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200));
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let labels = semantic_labels(&engine);
+        assert!(
+            labels.iter().any(|l| l == "Revenue, up 12%"),
+            "the app-supplied label must reach the tree, got {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l == "decorative sparkle"),
+            "an excluded subtree must be silent — its child's own semantics \
+             must be pruned too, not just the wrapper: {labels:?}"
+        );
     }
 
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {

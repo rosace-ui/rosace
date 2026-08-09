@@ -316,7 +316,7 @@ impl Widget for TimePicker {
             }
         }
 
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Unknown)
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Unknown)
             .label(format!("Time picker, {h12:02}:{:02} {}", self.value.minute, ampm_label)));
     }
 }

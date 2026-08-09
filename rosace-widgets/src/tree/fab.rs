@@ -95,7 +95,7 @@ impl Widget for FloatingActionButton {
         let r = ctx.rect;
 
         let sem_label = self.label.clone().unwrap_or_else(|| "action".to_string());
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Button).label(&sem_label));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button).label(&sem_label));
 
         // Real blurred drop shadow (`ctx.fill_shadow_rrect`, same Gaussian
         // primitive `Container`'s `.elevation()`/`.shadow()` use) — this

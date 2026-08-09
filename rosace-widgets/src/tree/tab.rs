@@ -217,7 +217,7 @@ impl Widget for TabBar {
             child.draw_text_at(&tab.label, Point { x: tx, y: ty }, label_color, font_size);
 
             child.semantics(
-                super::Semantics::new(rosace_core::Role::Tab)
+                super::SemanticsProps::new(rosace_core::Role::Tab)
                     .label(&tab.label)
                     .value(if i == self.selected { "selected" } else { "not selected" }),
             );

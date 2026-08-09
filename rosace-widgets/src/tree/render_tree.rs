@@ -117,7 +117,15 @@ pub struct TreeNode {
     pub focus:      Vec<rosace_core::a11y::FocusNode>,
     pub overlays:   Vec<OverlayEntry>,
     pub transforms: Vec<TransformLayerEntry>,
-    pub semantics:  Vec<super::Semantics>,
+    pub semantics:  Vec<super::SemanticsProps>,
+    /// Drops this node AND its whole subtree from the accessibility tree
+    /// (`Semantics::exclude()`). Declared per paint like `semantics` above.
+    ///
+    /// Subtree-wide rather than node-only on purpose: the point of excluding
+    /// is to silence a decorative region entirely, and leaving its children
+    /// audible while hiding their parent would produce orphaned, context-free
+    /// announcements — worse than either extreme.
+    pub semantics_excluded: bool,
 
     /// Editable text content declared this paint (D112/Phase 28 Step 1) —
     /// current value, rect, and the `on_change` callback. Cleared each
@@ -227,6 +235,7 @@ impl RenderTree {
         n.overlays.clear();
         n.transforms.clear();
         n.semantics.clear();
+        n.semantics_excluded = false;
         n.pointer_mode = 0;
         n.hover_regions.clear();
         n.long_hits.clear();
@@ -755,6 +764,11 @@ impl RenderTree {
 
     fn collect_semantics_node(&self, id: NodeId, parent: &mut rosace_core::SemanticNode) {
         let n = &self.nodes[id];
+        // `Semantics::exclude()` — prune here and the whole subtree goes with
+        // it, since we simply never recurse.
+        if n.semantics_excluded {
+            return;
+        }
         for (i, s) in n.semantics.iter().enumerate() {
             let mut sn = rosace_core::SemanticNode::new().role(s.role.clone());
             // Identity + geometry for platform accessibility APIs, which
@@ -1204,12 +1218,12 @@ mod tests {
         t.start_frame();
         let button = t.slot(RenderTree::ROOT, true);
         t.node_mut(button).semantics.push(
-            crate::tree::Semantics::new(Role::Button).label("Save"),
+            crate::tree::SemanticsProps::new(Role::Button).label("Save"),
         );
         // Button's inner text node — must nest under the Button.
         let label = t.slot(button, true);
         t.node_mut(label).semantics.push(
-            crate::tree::Semantics::new(Role::Text).label("Save"),
+            crate::tree::SemanticsProps::new(Role::Text).label("Save"),
         );
         t.finalize();
 
@@ -1231,15 +1245,15 @@ mod tests {
         t.start_frame();
         let input = t.slot(RenderTree::ROOT, true);
         t.node_mut(input).semantics.push(
-            crate::tree::Semantics::new(Role::TextInput).label("Name").value("Ada"),
+            crate::tree::SemanticsProps::new(Role::TextInput).label("Name").value("Ada"),
         );
         let heading = t.slot(RenderTree::ROOT, true);
         t.node_mut(heading).semantics.push(
-            crate::tree::Semantics::new(Role::Heading).label("Section").heading_level(2),
+            crate::tree::SemanticsProps::new(Role::Heading).label("Section").heading_level(2),
         );
         let link = t.slot(RenderTree::ROOT, true);
         t.node_mut(link).semantics.push(
-            crate::tree::Semantics::new(Role::Link).label("Docs").href("https://example.com"),
+            crate::tree::SemanticsProps::new(Role::Link).label("Docs").href("https://example.com"),
         );
         t.finalize();
 
@@ -1315,7 +1329,7 @@ mod tests {
         let mut t = RenderTree::new();
         t.start_frame();
         let btn = t.slot(RenderTree::ROOT, true);
-        t.node_mut(btn).semantics.push(super::super::Semantics::new(Role::Button).label("Save"));
+        t.node_mut(btn).semantics.push(super::super::SemanticsProps::new(Role::Button).label("Save"));
         t.node_mut(btn).hits.push((rect(0.0, 0.0, 10.0, 10.0), Arc::new(|| {})));
         t.node_mut(btn).hovered = true;
         t.finalize();

@@ -615,7 +615,7 @@ pub use rosace_widgets::{AbsorbPointer, FocusApi, IgnorePointer, OverlayApi, Ove
 
 // Widgets
 pub use rosace_widgets::{
-    Alignment, Children, Semantics, Widget, WidgetApp, PaintCtx, BoxedWidget,
+    Alignment, Children, Semantics, SemanticsProps, Widget, WidgetApp, PaintCtx, BoxedWidget,
     AppBar, Avatar, Badge,
     Button, ButtonVariant,
     Card, Checkbox, Chip,

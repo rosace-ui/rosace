@@ -66,7 +66,7 @@ impl Widget for Badge {
             ctx.fill_circle(Point { x: cx, y: cy }, 4.0, self.color);
             return;
         }
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Text).label(&self.label));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Text).label(&self.label));
         let font_size = self.resolved_font_size(&ctx.theme);
         let r = ctx.rect;
         draw_rounded_rect_pub(ctx, r, self.color, r.size.height / 2.0);

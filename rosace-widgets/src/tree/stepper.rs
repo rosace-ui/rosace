@@ -120,7 +120,7 @@ impl Widget for Stepper {
 
         let r = ctx.rect;
         ctx.semantics(
-            super::Semantics::new(rosace_core::Role::Slider)
+            super::SemanticsProps::new(rosace_core::Role::Slider)
                 .label("stepper")
                 .value(self.value.to_string()),
         );
@@ -159,7 +159,7 @@ impl Widget for Stepper {
             (plus_rect, "+", at_max, 1i64, "increment"),
         ] {
             let mut slot = ctx.child(rect);
-            slot.semantics(super::Semantics::new(rosace_core::Role::Button).label(sem_label));
+            slot.semantics(super::SemanticsProps::new(rosace_core::Role::Button).label(sem_label));
 
             // Hover/press lift, the Button/FAB convention (D108 Step 1).
             let target = if disabled { 0.0 } else if slot.pressed() { 1.0 } else if slot.hovered() { 0.5 } else { 0.0 };

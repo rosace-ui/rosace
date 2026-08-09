@@ -497,7 +497,7 @@ impl Widget for DatePicker {
             // Persist the base so chevron paging is stable across frames.
             if ctrl.offset.get()[1] as i32 == 0 { ctrl.offset.set([1.0, year_base as f32]); }
             self.paint_years(ctx, body, year_base, &pal, &ctrl);
-            ctx.semantics(super::Semantics::new(rosace_core::Role::Unknown).label(format!("Year picker, {label}")));
+            ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Unknown).label(format!("Year picker, {label}")));
             return;
         }
 
@@ -619,7 +619,7 @@ impl Widget for DatePicker {
             });
         }
 
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Unknown)
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Unknown)
             .label(format!("Date picker, {label}")));
     }
 }

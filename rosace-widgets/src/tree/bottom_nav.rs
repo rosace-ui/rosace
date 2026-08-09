@@ -165,7 +165,7 @@ impl Widget for BottomNavigationBar {
             };
             let mut slot_ctx = ctx.child(slot);
             // Destinations are links (the D107 <nav><a> shape, same as NavRail).
-            let mut sem = super::Semantics::new(rosace_core::Role::Link).label(&item.label);
+            let mut sem = super::SemanticsProps::new(rosace_core::Role::Link).label(&item.label);
             if let Some(n) = item.badge { sem = sem.value(n.to_string()); }
             slot_ctx.semantics(sem);
 

@@ -239,7 +239,7 @@ impl Widget for Dialog {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Dialog).label(&self.title));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Dialog).label(&self.title));
         let surface = self.background.unwrap_or_else(|| ctx.tc(ctx.theme.colors.surface));
         let r = ctx.rect;
         let material = resolve_material::<DialogMaterial>(&ctx.theme, self.material.as_ref());

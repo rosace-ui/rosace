@@ -77,7 +77,7 @@ impl Widget for AppBar {
     fn paint(&self, ctx: &mut PaintCtx) {
         // The app bar's title is the screen's heading — maps to <h1> in the
         // HTML/SEO export (D107/Phase 25): a screen only ever has one.
-        ctx.semantics(super::Semantics::new(rosace_core::Role::Heading).label(&self.title).heading_level(1));
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Heading).label(&self.title).heading_level(1));
         let style = ctx.theme.app_bar;
         let t = &ctx.theme.colors;
         let bg     = if self.background.a   == 0 { ctx.tc(t.surface)     } else { self.background   };

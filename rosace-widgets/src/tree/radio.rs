@@ -60,7 +60,7 @@ impl Widget for Radio {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        let mut sem = super::Semantics::new(rosace_core::Role::Radio)
+        let mut sem = super::SemanticsProps::new(rosace_core::Role::Radio)
             .value(if self.selected { "selected" } else { "not selected" });
         if let Some(l) = &self.label { sem = sem.label(l); }
         ctx.semantics(sem);
