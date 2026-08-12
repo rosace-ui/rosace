@@ -1765,6 +1765,39 @@ claims Cupertino ships), `examples/showcase/src/theme.rs`,
 ## DEFERRED DECISIONS
 
 ```
+### D134 — An icon's size is a design dimension, not type (2026-08-12)
+
+`Icon` renders at exactly the `size` the app asked for at every OS text
+setting. It does not grow with `MediaQuery::text_scale`. Same choice
+Flutter and Jetpack Compose make.
+
+**Why**: an icon's size is the diameter of a target or the height of a bar
+— geometry the layout is built around — not a piece of prose. Growing it
+re-flows every layout containing an icon the moment a user raises their
+text size, which is a large blast radius for a small readability gain.
+Text itself does scale, and that is where the accessibility win actually
+comes from.
+
+**What this fixes**: icons were drawn through `PaintCtx::draw_text_at`,
+which multiplies px by `text_scale`, while the metrics every icon uses to
+centre itself (`FontCache::glyph`, `FontCache::ascender`) do NOT scale —
+unlike `measure_text`/`line_height`, which do — and `Icon::layout`
+returned the raw `size`. So at `text_scale = 1.5` a 24px icon rendered at
+36px, positioned by metrics solved at 24px, inside a 24px box: oversized
+AND mis-centred, with the error growing linearly in the OS setting. The
+file's own comment ("metrics are at logical px; the canvas re-rasterizes
+at physical px, which scales linearly") was sound for DPI, where both
+sides scale together, and was silently invalidated by `text_scale`, which
+scales only one side.
+
+Icons now draw through `PaintCtx::draw_glyph_unscaled`, which also pins
+the weight to Regular so `bold_text` cannot thicken them.
+
+**Escape hatch**: none yet. If icons paired with enlarged text prove too
+small in practice, the additive fix is a `.scales_with_text()` builder
+opting an individual icon in — deliberately NOT a global default, per the
+"no blanket defaults" rule that D111 established.
+
 D-DEF-001  ROSACE Studio design          → Phase 4
 D-DEF-002  Wide color / HDR              → Phase 3
 D-DEF-003  2D bidirectional scroll       → Phase 3

@@ -310,6 +310,12 @@ impl Widget for Icon {
         // Metrics here are at logical px; the canvas re-rasterizes at
         // physical px, which scales linearly — placement agrees within a
         // physical pixel.
+        //
+        // The metrics below are UNSCALED (`glyph`/`ascender` do not apply
+        // `text_scale`, unlike `measure_text`/`line_height`), so the draw
+        // must be unscaled too or the two disagree — see
+        // `PaintCtx::draw_glyph_unscaled`. An icon keeps its designed size
+        // at every OS text setting; `layout` returns that same `self.size`.
         let m = ctx.font.glyph(ch, s).0;
         let asc = ctx.font.ascender(s) as f32;
         let origin = Point {
@@ -318,7 +324,7 @@ impl Widget for Icon {
                 - (asc - m.ymin as f32 - m.height as f32),
         };
         let mut buf = [0u8; 4];
-        ctx.draw_text_at(ch.encode_utf8(&mut buf), origin, c, s);
+        ctx.draw_glyph_unscaled(ch.encode_utf8(&mut buf), origin, c, s);
     }
 }
 

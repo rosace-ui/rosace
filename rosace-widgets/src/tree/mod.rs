@@ -880,6 +880,29 @@ impl<'a> PaintCtx<'a> {
         });
     }
 
+    /// Draw a glyph at EXACTLY `px`, ignoring `MediaQuery::text_scale`.
+    ///
+    /// For icon glyphs only. An icon's `size` is a design dimension — the
+    /// diameter of a target, the height of a bar — not type, so it does not
+    /// grow with the OS text setting (same choice Flutter and Compose make).
+    ///
+    /// This exists because `draw_text_at` scales the px it draws while
+    /// `FontCache::glyph`/`ascender` (which every icon uses to centre
+    /// itself) do NOT. Drawing an icon through the text path therefore
+    /// rendered the glyph at `px * text_scale` inside a box of `px`,
+    /// positioned by metrics solved at `px` — oversized AND mis-centred,
+    /// with the error growing linearly in the OS setting.
+    pub fn draw_glyph_unscaled(&mut self, text: &str, origin: Point, color: Color, px: f32) {
+        self.recorder.push(DrawCommand::DrawText {
+            text: text.to_string(),
+            origin,
+            color,
+            px,
+            // Icons are not prose: `bold_text` must not thicken them either.
+            weight: rosace_render::FontWeight::Regular,
+        });
+    }
+
     /// Draw text at `(self.rect.origin + (dx, dy))`.
     pub fn text(&mut self, s: &str, dx: f32, dy: f32, color: Color, px: f32) {
         let mq = rosace_core::media_query::use_media_query();
