@@ -4,6 +4,31 @@ Produced by running `WIDGET_AUDIT_PIPELINE.md` over all 76 widgets.
 Failures only — PASS and justified N/A verdicts are omitted for signal.
 Live-testing findings live separately in `WIDGET_FINDINGS.md`.
 
+
+## Fix status
+
+Updated as work lands. The audit is the backlog; this is the burn-down.
+
+| | Item | State |
+|---|---|---|
+| B1 | Password plaintext on the a11y bus | **FIXED** 803cc93 |
+| B2 | `Image::fit(..)` did nothing | **FIXED** 803cc93 |
+| B3 | `AbsorbPointer` blocked only clicks | **FIXED** 803cc93 |
+| B4 | `MAX_TRANSFORM_DIM` never enforced | open |
+| P1 | `len()*0.6` text estimates (5 widgets) | **FIXED** 292dd7b |
+| — | Icons scaled but were centred unscaled | **FIXED** ea9c8a0 (D134) |
+| P2 | Fixed heights that clip scaled text (~25) | open — badge done |
+| P3 | Hardcoded colours (~20 widgets) | open |
+| P4 | Touch targets under 44px (~15) | open |
+| P5 | Theme-forced fields with no builder | open |
+| P6 | No `.padding(..)` (most of the library) | open |
+| P7 | No tests (~20 widgets) | open |
+| A | Missing/incorrect semantics (~12) | open |
+
+Every fix above was confirmed to FAIL against the unfixed code before
+being called done, rather than assumed to work because the new test passed.
+
+
 ## Systemic patterns (fix these once, not per-widget)
 
 **P1 — `len() * size * 0.6` text estimate (X1).** Sizes text by BYTE length
