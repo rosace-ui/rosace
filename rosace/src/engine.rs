@@ -222,6 +222,19 @@ pub struct FrameEngine {
     /// the clear-before-build comment in `paint`).
     build_overlays: Vec<rosace_widgets::tree::OverlayEntry>,
     render_tree: Rc<RefCell<rosace_widgets::tree::RenderTree>>,
+    /// Retained render trees for KEYED overlays, by `OverlayEntry::key`.
+    ///
+    /// Overlays are otherwise painted into a throwaway tree rebuilt every
+    /// frame, which silently destroys per-node retained state — `animate_to`
+    /// reads `node.anim` as `None` each frame, snaps to its target, and never
+    /// animates. Worse, it then never settles, so anything driving it
+    /// requests frames forever (the permanent repaint loop D123's
+    /// "event-driven, never frame-driven" rule exists to prevent).
+    ///
+    /// Entries are dropped when their overlay stops being emitted, so a
+    /// closed sheet does not leak its tree — and reopening genuinely starts
+    /// fresh rather than resuming a half-finished animation.
+    overlay_trees: std::collections::HashMap<u64, Rc<RefCell<rosace_widgets::tree::RenderTree>>>,
 
     // ── Focus + input state ─────────────────────────────────────────────
     focus_manager: rosace_core::a11y::FocusManager,
@@ -351,6 +364,7 @@ impl FrameEngine {
             element_cache: HashMap::new(),
             build_overlays: Vec::new(),
             render_tree: Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
+            overlay_trees: std::collections::HashMap::new(),
             focus_manager: rosace_core::a11y::FocusManager::new(),
             shift_held: false,
             ctrl_held: false,
@@ -984,6 +998,9 @@ impl FrameEngine {
             None
         };
         let mut overlay_routes: Vec<OverlayRoute> = Vec::new();
+        // Keys of the overlays actually emitted this frame; anything retained
+        // but absent below is a closed overlay whose tree must be released.
+        let mut live_overlay_keys: Vec<Option<u64>> = Vec::new();
         let mut overlay_pass_ran = false;
         {
             use rosace_core::types::{Point, Rect, Size};
@@ -1093,11 +1110,24 @@ impl FrameEngine {
                     };
                     let widget_rect = Rect { origin, size: widget_size };
 
-                    // Paint into a per-entry throwaway tree; its regions
-                    // are flattened into the entry's dispatch route.
-                    let ov_tree = Rc::new(RefCell::new(
-                        rosace_widgets::tree::RenderTree::new(),
-                    ));
+                    // A KEYED overlay paints into a tree retained across
+                    // frames, so its per-node state (animation, scroll, drag)
+                    // survives; an unkeyed one keeps the original throwaway
+                    // tree. Its regions are flattened into the dispatch route
+                    // either way.
+                    let ov_tree = match entry.key {
+                        Some(k) => Rc::clone(
+                            self.overlay_trees.entry(k).or_insert_with(|| {
+                                Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new()))
+                            }),
+                        ),
+                        None => Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
+                    };
+                    // Retained trees must be told a new frame started, or the
+                    // per-paint declarations (hits, scrolls, semantics) from
+                    // the previous frame pile up instead of being replaced.
+                    ov_tree.borrow_mut().start_frame();
+                    live_overlay_keys.push(entry.key);
                     let mut ov_ctx = rosace_widgets::tree::PaintCtx::root(
                         &mut ov_recorder,
                         widget_rect,
@@ -1130,6 +1160,12 @@ impl FrameEngine {
                         win_w, win_h, font,
                     );
                 }
+
+                // Release trees for overlays that are no longer emitted. A
+                // closed sheet must not keep its tree (a leak), and reopening
+                // should genuinely start fresh rather than resume a
+                // half-finished animation from last time it was open.
+                self.overlay_trees.retain(|k, _| live_overlay_keys.contains(&Some(*k)));
 
                 // (The DevTools FAB + panel are now a real widget overlay,
                 // injected above via `devtools_entry` and rendered through the
@@ -3108,6 +3144,76 @@ mod tests {
         open.set(false);
         e.paint(&mut c, &mut o, &[]);
         assert!(!open.get(), "setting the atom must still close it");
+    }
+
+    /// Retained overlay trees (the prerequisite for animated/draggable
+    /// sheets). Overlays were painted into a tree rebuilt every frame, so
+    /// `animate_to`'s eased value in `node.anim` was destroyed each frame: it
+    /// read `None`, snapped to target, and never animated — while also never
+    /// settling, so anything driving it would request frames forever.
+    ///
+    /// Asserts the observable consequence: a widget inside an overlay must
+    /// see its animation ADVANCE over frames rather than snap.
+    #[test]
+    fn animation_state_survives_across_frames_inside_an_overlay() {
+        use rosace_widgets::tree as w;
+        use std::sync::{Arc, Mutex};
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        rosace_animate::set_frame_dt(1.0 / 60.0);
+
+        // Records the eased value the overlay's widget observes each frame.
+        let seen: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+
+        struct Probe(Arc<Mutex<Vec<f32>>>);
+        impl w::Widget for Probe {
+            fn layout(&self, ctx: &w::LayoutCtx) -> rosace_core::types::Size {
+                ctx.constraints.constrain(rosace_core::types::Size { width: 100.0, height: 100.0 })
+            }
+            fn paint(&self, ctx: &mut w::PaintCtx) {
+                // First paint establishes 0.0 (animate_to snaps when it has
+                // no prior value); afterwards ease toward 1.0. With a
+                // retained tree we observe intermediate values; with a tree
+                // wiped each frame every paint looks like "first paint" and
+                // snaps straight to the target.
+                let mut seen = self.0.lock().unwrap();
+                let target = if seen.is_empty() { 0.0 } else { 1.0 };
+                let v = ctx.animate_to(target, 300.0);
+                seen.push(v);
+            }
+        }
+
+        let open = rosace_state::Atom::new(rosace_state::next_atom_id(), true);
+        struct S(rosace_state::Atom<bool>, Arc<Mutex<Vec<f32>>>);
+        impl Component for S {
+            fn build(&self, _ctx: &mut Context) -> Element {
+                use rosace_widgets::tree::OverlayApi;
+                let seen = Arc::clone(&self.1);
+                w::Text::new("host")
+                    .sheet(self.0.clone(), move || Box::new(Probe(Arc::clone(&seen))))
+                    .into_element()
+            }
+        }
+
+        let mut e = FrameEngine::new(
+            Box::new(S(open.clone(), Arc::clone(&seen))),
+            rosace_render::FontCache::embedded(),
+        );
+        let (mut c, mut o) = (SkiaCanvas::new(400, 600), SkiaCanvas::new(400, 600));
+        for _ in 0..5 {
+            e.paint(&mut c, &mut o, &[]);
+        }
+
+        let vals = seen.lock().unwrap().clone();
+        assert!(vals.len() >= 3, "the overlay must have painted several frames, got {vals:?}");
+        assert_eq!(vals[0], 0.0, "first paint establishes the starting value");
+        // The discriminator: at least one value strictly BETWEEN 0 and 1.
+        // A wiped tree makes every frame behave like a first paint, snapping
+        // straight to 1.0 with nothing in between.
+        assert!(
+            vals.iter().any(|v| *v > 1e-6 && *v < 1.0 - 1e-6),
+            "animation must EASE inside an overlay, not snap — retained state \
+             is what makes that possible: {vals:?}"
+        );
     }
 
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {

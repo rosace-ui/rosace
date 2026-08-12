@@ -131,6 +131,11 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
             // overlay routing already treats a missing `on_tap` that way, so
             // non-dismissible needs no new dispatch path.
             let dismissible = cfg.dismissible;
+            // Cross-frame identity so the engine retains this overlay's
+            // render tree — without it, per-node state (animation, scroll,
+            // drag) is wiped every frame. The `open` atom's id is stable for
+            // the life of the overlay and unique per instance.
+            let overlay_key = cfg.open.id().0;
 
             let entry = match cfg.kind {
                 OverlayKind::Dropdown => {
@@ -142,6 +147,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                     // it (and is consumed) — standard menu behavior.
                     let dismiss = Arc::new(move || open_atom.set(false));
                     OverlayEntry::new(LayerPosition::Absolute(pos), content)
+                        .key(overlay_key)
                         .input(InputBehavior::PassThrough)
                         .focus(FocusBehavior::PassThrough)
                         .scrim(ScrimConfig {
@@ -162,6 +168,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                     // (user-reported 2026-08-12). `Dialog` right below always
                     // had this correct.
                     OverlayEntry::new(LayerPosition::BottomAnchored, content)
+                        .key(overlay_key)
                         .input(InputBehavior::Block)
                         .focus(FocusBehavior::Trap)
                         .scrim(ScrimConfig {
@@ -174,6 +181,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                 OverlayKind::Dialog => {
                     let dismiss = Arc::new(move || open_atom.set(false));
                     OverlayEntry::new(LayerPosition::Centered, content)
+                        .key(overlay_key)
                         .input(InputBehavior::Block)
                         .focus(FocusBehavior::Trap)
                         .scrim(ScrimConfig {
@@ -188,12 +196,14 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                     // the old right-edge Absolute position drifted far from
                     // the anchor).
                     OverlayEntry::new(LayerPosition::AboveCentered(anchor), content)
+                        .key(overlay_key)
                         .input(InputBehavior::PassThrough)
                         .focus(FocusBehavior::Inert)
                 }
 
                 OverlayKind::Toast => {
                     OverlayEntry::new(LayerPosition::BottomCenter, content)
+                        .key(overlay_key)
                         .input(InputBehavior::PassThrough)
                         .focus(FocusBehavior::Inert)
                 }

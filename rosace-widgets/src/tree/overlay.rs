@@ -92,6 +92,18 @@ impl std::fmt::Debug for ScrimConfig {
 /// See D058 in DECISIONS.md for the full architecture.
 pub struct OverlayEntry {
     pub id:       LayerId,
+    /// Stable identity ACROSS FRAMES, unlike `id` (a fresh counter value on
+    /// every `OverlayEntry::new`, i.e. every frame the overlay is re-emitted).
+    ///
+    /// When set, the engine retains this overlay's render tree between frames
+    /// instead of painting into a throwaway one — which is what makes
+    /// per-node retained state (`animate_to`'s eased value, scroll offsets,
+    /// drag offsets) survive at all inside an overlay. Callers pass something
+    /// genuinely stable; the overlay APIs use their `open` atom's id.
+    ///
+    /// `None` keeps the original throwaway behaviour, so nothing that does
+    /// not opt in changes.
+    pub key:      Option<u64>,
     pub position: LayerPosition,
     pub widget:   BoxedWidget,
     pub input:    InputBehavior,
@@ -100,9 +112,17 @@ pub struct OverlayEntry {
 }
 
 impl OverlayEntry {
+    /// Give this overlay a cross-frame identity so its render tree is
+    /// retained — see [`OverlayEntry::key`].
+    pub fn key(mut self, key: u64) -> Self {
+        self.key = Some(key);
+        self
+    }
+
     pub fn new(position: LayerPosition, widget: impl super::Widget + 'static) -> Self {
         Self {
             id: LayerId::new(),
+            key: None,
             position,
             widget: Box::new(widget),
             input: InputBehavior::PassThrough,

@@ -67,6 +67,10 @@ impl Drawer {
                 material: self.material.clone(),
                 panel,
             })
+                // Retained tree, keyed by the `open` atom — see
+                // `OverlayEntry::key`. Without it the panel's per-node state
+                // is wiped every frame.
+                .key(self.open.id().0)
                 .input(InputBehavior::Block)
                 .focus(FocusBehavior::Trap)
                 .scrim(ScrimConfig { color: self.scrim_color, on_tap: Some(Arc::new(move || close.set(false))), exclude_rect: None }),
