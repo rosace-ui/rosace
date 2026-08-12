@@ -61,7 +61,12 @@ pub struct AppBarStyle {
 
 impl Default for AppBarStyle {
     fn default() -> Self {
-        Self { title_align: TitleAlign::Leading, show_traffic_lights: false, height: 44.0, elevation: 1.0 }
+        // 52, not 44. The bar has to seat a `title_large` (23 px) title plus
+        // breathing room and a row of controls; 44 left it visibly cramped
+        // once widgets started honouring the theme type scale instead of
+        // their old hardcoded 13 px. Still a MINIMUM — `AppBar::layout`
+        // grows past it when the OS text size demands.
+        Self { title_align: TitleAlign::Leading, show_traffic_lights: false, height: 52.0, elevation: 1.0 }
     }
 }
 

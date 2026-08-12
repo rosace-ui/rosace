@@ -96,7 +96,9 @@ pub fn material() -> ThemeData {
         app_bar: crate::theme::AppBarStyle {
             title_align: crate::theme::TitleAlign::Leading,
             show_traffic_lights: false,
-            height: 56.0,
+            // Material 3's small top app bar is 64dp (M2's 56 is what we
+            // had — the spec grew with M3's larger title type).
+            height: 64.0,
             elevation: 4.0,
         },
         ..light_theme()
@@ -122,7 +124,10 @@ pub fn cupertino() -> ThemeData {
         app_bar: crate::theme::AppBarStyle {
             title_align: crate::theme::TitleAlign::Center,
             show_traffic_lights: false,
-            height: 48.0,
+            // iOS nav bars are 44pt of content, but our title renders at
+            // `title_large`; 52 keeps the proportions right without the
+            // squeeze 48 produced.
+            height: 52.0,
             // A soft shadow rather than pure-flat — 2026-07-31 user feedback
             // that a hairline-only bar read as un-elevated on a real device.
             elevation: 1.0,
@@ -210,8 +215,8 @@ mod tests {
         let c = cupertino();
         assert_eq!(m.app_bar.title_align, crate::theme::TitleAlign::Leading);
         assert_eq!(c.app_bar.title_align, crate::theme::TitleAlign::Center);
-        assert_eq!(m.app_bar.height, 56.0);
-        assert_eq!(c.app_bar.height, 48.0);
+        assert_eq!(m.app_bar.height, 64.0);
+        assert_eq!(c.app_bar.height, 52.0);
     }
 
     #[test]
