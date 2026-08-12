@@ -177,3 +177,99 @@ of the "max-customizable" standard.
   without wrapping it in a `Column`. `EdgeInsets` is also physical
   left/right, so RTL is not expressible through it — and every consumer
   inherits that (`row`, `column`, `positioned` all repeat it).
+
+## Batches 2 and 5 — REAL BUGS, not rubric items
+
+These four are not "widget misses a builder". They are defects.
+
+- **B1 — password plaintext leaks to the accessibility tree.**
+  `text_input.rs` L213-214 passes `&self.value` to `.value(..)`
+  unconditionally. The *visual* path correctly substitutes bullets at L241,
+  and `self.obscure` is checked at L242 and L386 — but never at the semantics
+  call. So VoiceOver/TalkBack/AccessKit announce the real password. Privacy
+  defect; fix first.
+- **B2 — `Image::fit(..)` does nothing.** Every constructor sets
+  `ImageFit::Contain` (L18, L26, L31) and `.fit()` is a real builder (L39),
+  but `paint` blits into `dest_rect = width x height` (L61, L96-102) and
+  never calls `compute_fit` — that lives only on the legacy non-tree paint
+  path (L200-206, L262). Every image in every ROSACE app is stretched and
+  aspect ratio is silently ignored while the API claims otherwise.
+- **B3 — `AbsorbPointer` is not a barrier.** `pointer_mode == 2` is handled
+  ONLY in the click hit-test (`render_tree.rs` L433-439). The hover walk
+  (L525), long-press walk (L552) and L747 each check `== 1` but never `== 2`,
+  so hover, long-press and scroll pass straight through to the content
+  behind — which is exactly the modal-barrier use its own doc claims (L25-27).
+  `IgnorePointer` is correct on all four paths.
+- **B4 — `MAX_TRANSFORM_DIM` is declared and never enforced.**
+  `transform_layer.rs` L25 is its only occurrence in the repo; `child_size`
+  L57 goes straight into `TransformLayerEntry` L83 unclamped, so the D082
+  4096 px physical cap is not applied on this path.
+
+## Batches 2 and 5 — pattern reinforcement
+
+- **P1/X1** `icon.rs` is a NEW variant of the scaling bug and a nastier one:
+  `layout()` returns the raw `size` square (L254-256) while `draw_text_at`
+  multiplies px by `text_scale` (`tree/mod.rs` L872-873) — but the centring
+  metrics come from `ctx.font.glyph(..)` and `ctx.font.ascender(..)`, and
+  **neither of those scales** (`font.rs` L623-625, L838-843), unlike
+  `measure_text`/`line_height` which do. So the glyph is drawn larger than
+  its reported box AND mis-centred, with the error growing linearly in the
+  OS setting. Same class as the Dynamic Type fix already landed in
+  `button.rs` L93-112 — icons were simply not swept when it went in.
+- **P2** more fixed boxes: `dropdown` 36 L48 (also fixed 200 width, label
+  never measured, so a long option runs under the chevron with no ellipsis) ·
+  `fab` flat `size` square L80-82 · `icon` L254-256 · `date_picker` whole
+  widget fixed L397 and it ignores incoming `Constraints` entirely ·
+  `interactive_viewer` `BTN = 32.0` L223 · `tooltip` `h = font_size * 1.7`
+  L106 using the UNSCALED size while the glyphs inside scale · `text_input`
+  36 L31/L57 · `grid` bento hands children a fixed lattice rect with no
+  measurement at all (L169-207 takes no `LayoutCtx`).
+- **P3** more hardcoded colour: `icon` default `rgb(180,184,210)` L238 —
+  `Icon` never reads `ctx.theme` at all, so EVERY unstyled icon ignores the
+  theme · `image` four literals L111/L119/L126/L130 · `dialog` shadow L262
+  and barrier L144 while `theme.colors.shadow` exists · `dismissible` red
+  L154 while `colors.error` exists · `text_input`/`text_area` whole palettes
+  (documented decision at text_input L101-103, but still a FAIL) ·
+  `tooltip` L28-29 reads only the theme EXT, never `theme.colors`, so a
+  light-theme app with no `TooltipStyle` gets a dark bubble · `focus_api`
+  ring L55 · `selection.rs` `flat()` L53-56 and `text_edit` `CursorStyle`
+  L605 — a non-violet accent gets violet selection and a violet caret.
+- **P7** more untested: `custom_paint` · `divider` · `dropdown` (the single
+  test only checks layout size) · `fab` · `image` · `wrap` ·
+  `repaint_boundary` · `transform_layer` · `pointer` · `focus_api`.
+  `repaint_boundary`, `transform_layer`, `pointer` and `focus_api` have **no
+  caller anywhere in the repo** outside re-exports — the built-but-never-
+  wired pattern again.
+
+## Batches 2 and 5 — per-widget
+
+- **`text.rs`** — T2 FAIL matters more than most: `size` is a plain field
+  defaulting to 18.0 (L58) and the named styles hardcode 16/14/22/20/40
+  (L242-260), so `Text` — the single most-used widget — is the reason
+  `dialog`, `data_table` and others fail T2 downstream. Fixing `Text` fixes
+  a chain.
+- **`date_picker`** — no day cell declares semantics at all (the cell loop
+  L314-340 only paints), so all 42 dates are invisible; the calendar cannot
+  be operated non-visually. Day cells also have no hover/press feedback,
+  unlike the header and chevrons in the same file.
+- **`data_table`** — sort state is communicated by appending a literal
+  `"^"`/`"v"` to the header label (L137-142); that is what gets announced.
+- **`dismissible`** — no semantics at all, and no non-gesture path to
+  `on_dismissed`, so swipe-to-delete is unreachable without a pointer.
+- **`fab`** — registers a hit ONLY when `on_press` is `Some` (L152-156),
+  breaking interactive-by-identity that `button.rs` L180-189 follows
+  explicitly. Icon-only FABs announce the literal `"action"` (L97).
+- **`repaint_boundary`** — staleness is keyed on `rect` and the atoms only
+  (L37-56), so a child whose CONTENT changes (different `Text`, theme swap,
+  `text_scale` change) replays a stale Picture forever.
+- **`divider`** — "unset colour" sentinel is `alpha == 0` (L21/L49), so a
+  deliberately transparent divider silently becomes the theme outline.
+  `Option<Color>` is the library's own pattern elsewhere.
+- **`screen_transition_view`** — during a transition BOTH screens paint, so
+  a screen reader sees two full screen subtrees at once; no
+  `exclude_semantics` on the outgoing side.
+- **`focus_api`** — `paint` passes `ctx` straight through (L48) instead of
+  `ctx.child(rect)`, unlike every other wrapper, so the wrapped widget shares
+  the wrapper's node. May alias per-node state (anim channels, text-edit
+  state). Its doc example uses `TextInput::new("Email")`, a signature that no
+  longer exists.
