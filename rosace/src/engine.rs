@@ -2982,6 +2982,98 @@ mod tests {
         assert_eq!(w::AppBar::new("x").title_size(9.0).resolved_title_size(&theme), 9.0);
     }
 
+    /// User-reported (2026-08-12): tapping INSIDE a sheet dismissed it.
+    /// A sheet is a modal surface — it owns the clicks that land on it, and
+    /// only a scrim tap OUTSIDE should dismiss. `Dialog` declares
+    /// `InputBehavior::Block` and gets this right; `Sheet` declared
+    /// `PassThrough`, so an inside tap skipped the engine's absorb step and
+    /// fell through to the scrim's on_tap.
+    ///
+    /// Asserts on the open ATOM, not the overlay canvas: a clean frame never
+    /// touches that canvas, so `has_drawn` reports false for "nothing
+    /// repainted" as well as for "dismissed" — two different things.
+    #[test]
+    fn tapping_inside_a_sheet_does_not_dismiss_it() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let open = rosace_state::Atom::new(rosace_state::next_atom_id(), true);
+        struct S(rosace_state::Atom<bool>);
+        impl Component for S {
+            fn build(&self, _ctx: &mut Context) -> Element {
+                use rosace_widgets::tree::OverlayApi;
+                let o = self.0.clone();
+                w::Text::new("host")
+                    .sheet(o, || Box::new(w::Text::new("sheet body")))
+                    .into_element()
+            }
+        }
+        let mut e = FrameEngine::new(Box::new(S(open.clone())), rosace_render::FontCache::embedded());
+        let (mut c, mut o) = (SkiaCanvas::new(400, 600), SkiaCanvas::new(400, 600));
+        e.paint(&mut c, &mut o, &[]);
+        assert!(open.get(), "sheet must start open");
+
+        // Bottom-anchored and CONTENT-sized (not full-width), so the inside
+        // point must be within the panel's actual rect — near the left edge,
+        // low on the screen.
+        e.paint(&mut c, &mut o, &[
+            rosace_platform::InputEvent::MouseDown { x: 40.0, y: 580.0, button: rosace_platform::MouseButton::Left },
+            rosace_platform::InputEvent::MouseUp   { x: 40.0, y: 580.0, button: rosace_platform::MouseButton::Left },
+        ]);
+        assert!(open.get(), "a tap INSIDE the sheet must not dismiss it");
+
+        // And the scrim must still work: well above the panel is outside it.
+        e.paint(&mut c, &mut o, &[
+            rosace_platform::InputEvent::MouseDown { x: 40.0, y: 40.0, button: rosace_platform::MouseButton::Left },
+            rosace_platform::InputEvent::MouseUp   { x: 40.0, y: 40.0, button: rosace_platform::MouseButton::Left },
+        ]);
+        assert!(!open.get(), "a tap OUTSIDE, on the scrim, must still dismiss");
+    }
+
+    /// Companion to the sheet case: a Drawer is also a modal surface, and
+    /// was reported dismissing on inside taps too. It already declared
+    /// `InputBehavior::Block`, so this pins that it genuinely works rather
+    /// than assuming it from the flag.
+    #[test]
+    fn tapping_inside_a_drawer_does_not_dismiss_it() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let open = rosace_state::Atom::new(rosace_state::next_atom_id(), true);
+        // `Drawer` is not a Widget — a host widget calls `emit()` from its
+        // own paint (the Scaffold does this in a real app).
+        struct Host(rosace_state::Atom<bool>);
+        impl w::Widget for Host {
+            fn paint(&self, ctx: &mut w::PaintCtx) {
+                w::Drawer::new(self.0.clone(), || Box::new(w::Text::new("drawer body"))).emit();
+                let _ = ctx;
+            }
+        }
+        struct D(rosace_state::Atom<bool>);
+        impl Component for D {
+            fn build(&self, _ctx: &mut Context) -> Element {
+                Host(self.0.clone()).into_element()
+            }
+        }
+        let mut e = FrameEngine::new(Box::new(D(open.clone())), rosace_render::FontCache::embedded());
+        let (mut c, mut o) = (SkiaCanvas::new(400, 600), SkiaCanvas::new(400, 600));
+        e.paint(&mut c, &mut o, &[]);
+
+        // Left-anchored, full height — a point near the left edge is inside.
+        e.paint(&mut c, &mut o, &[
+            rosace_platform::InputEvent::MouseDown { x: 40.0, y: 300.0, button: rosace_platform::MouseButton::Left },
+            rosace_platform::InputEvent::MouseUp   { x: 40.0, y: 300.0, button: rosace_platform::MouseButton::Left },
+        ]);
+        assert!(open.get(), "a tap INSIDE the drawer panel must not dismiss it");
+
+        // Far right is past the panel — that is the scrim.
+        e.paint(&mut c, &mut o, &[
+            rosace_platform::InputEvent::MouseDown { x: 380.0, y: 300.0, button: rosace_platform::MouseButton::Left },
+            rosace_platform::InputEvent::MouseUp   { x: 380.0, y: 300.0, button: rosace_platform::MouseButton::Left },
+        ]);
+        assert!(!open.get(), "a tap OUTSIDE, on the scrim, must still dismiss");
+    }
+
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
         fn walk(node: &rosace_core::SemanticNode, out: &mut Vec<String>) {
             if let Some(l) = &node.label { out.push(l.clone()); }

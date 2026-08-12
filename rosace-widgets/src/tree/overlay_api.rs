@@ -126,9 +126,17 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
 
                 OverlayKind::Sheet => {
                     let dismiss = Arc::new(move || open_atom.set(false));
+                    // A sheet is a MODAL SURFACE, like a Dialog: it owns the
+                    // clicks and scrolls that land on it, and only a tap on
+                    // the scrim OUTSIDE it dismisses. It was `PassThrough`,
+                    // so an inside tap skipped the absorb step in the engine's
+                    // overlay routing and fell straight through to the scrim's
+                    // on_tap — tapping any content inside the sheet closed it
+                    // (user-reported 2026-08-12). `Dialog` right below always
+                    // had this correct.
                     OverlayEntry::new(LayerPosition::BottomAnchored, content)
-                        .input(InputBehavior::PassThrough)
-                        .focus(FocusBehavior::PassThrough)
+                        .input(InputBehavior::Block)
+                        .focus(FocusBehavior::Trap)
                         .scrim(ScrimConfig {
                             color: Color::rgba(0, 0, 0, 100),
                             on_tap: Some(dismiss),
