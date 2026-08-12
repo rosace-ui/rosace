@@ -1575,6 +1575,10 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import android.graphics.Rect
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityNodeProvider
+import org.json.JSONObject
 
 /// A `SurfaceView` that can receive the soft keyboard's `InputConnection`
 /// (D116 Step 6, Android). A plain `SurfaceView` isn't a text editor, so the
@@ -1588,6 +1592,9 @@ private class EngineSurfaceView(
     context: Context,
     private val onText: (Int) -> Unit,
     private val onKey: (Int) -> Unit,
+    /// Supplies the engine's semantic tree as JSON (D132). A callback, like
+    /// `onText`/`onKey`, so this view keeps no engine-handle knowledge.
+    private val semanticsJson: () -> String?,
 ) : SurfaceView(context) {{
     // RSC_KEY_* (rosace_ffi::event) — Enter/Tab/Backspace are commands, never
     // literal text, same convention iOS's insertText special-cases them with.
@@ -1600,7 +1607,170 @@ private class EngineSurfaceView(
     init {{
         isFocusable = true
         isFocusableInTouchMode = true
+        // Without this the view never reaches the accessibility tree at all:
+        // a SurfaceView carries no text or contentDescription, so the default
+        // IMPORTANT_FOR_ACCESSIBILITY_AUTO resolves to "not important" and
+        // `getAccessibilityNodeProvider` is never called. Verified with
+        // `uiautomator dump`, which showed only the parent FrameLayout (D132).
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        // We paint our own content, so the host node itself should not be a
+        // leaf that swallows focus — the virtual children carry the meaning.
+        contentDescription = null
     }}
+
+    // -- Accessibility (D132) ------------------------------------------
+    //
+    // ROSACE draws every pixel into this one SurfaceView, so without the
+    // provider below TalkBack sees a single unlabelled rectangle.
+    //
+    // Android's model is NOT iOS's. UIKit takes an array of element objects;
+    // Android asks for one node at a time by an Int "virtual view id" and
+    // expects parent/child links expressed as ids. So the tree is flattened
+    // once per query and the LIST INDEX is used as the id — our own semantic
+    // ids are u64 and would not fit an Int.
+    //
+    // Pull, not push: these methods are only called while an accessibility
+    // service is exploring, so TalkBack-off costs nothing.
+
+    private class A11yNode(
+        val label: String,
+        val role: String,
+        val bounds: Rect?,
+        val children: MutableList<Int> = mutableListOf(),
+        var parent: Int = AccessibilityNodeProvider.HOST_VIEW_ID,
+    )
+
+    private fun flatten(): List<A11yNode> {{
+        val json = semanticsJson() ?: return emptyList()
+        val out = mutableListOf<A11yNode>()
+        try {{
+            walk(JSONObject(json), out, AccessibilityNodeProvider.HOST_VIEW_ID)
+        }} catch (e: Exception) {{
+            return emptyList()
+        }}
+        return out
+    }}
+
+    /// Same two rules as the iOS bridge, for the same reasons: an
+    /// interactive control speaks for its subtree (otherwise a Button and
+    /// the Text inside it both become nodes on one rect), and a container is
+    /// emitted AFTER its children so its full-width rect does not occlude
+    /// them in hit-testing order.
+    private fun walk(node: JSONObject, out: MutableList<A11yNode>, parent: Int) {{
+        // `optString` returns the literal string "null" for a JSON null —
+        // org.json's long-standing gotcha. Read through `isNull` or TalkBack
+        // announces a phantom node that literally says "null" (seen in a
+        // uiautomator dump before this guard).
+        val rawLabel = if (node.isNull("label")) "" else node.optString("label", "")
+        val rawValue = if (node.isNull("value")) "" else node.optString("value", "")
+        val label = rawLabel.ifEmpty {{ rawValue }}
+        val role = node.optString("role", "unknown")
+        val speaks = label.isNotEmpty()
+        val kids = node.optJSONArray("children")
+
+        if (speaks && isInteractive(role)) {{
+            out.add(makeNode(node, label, role, parent))
+            return
+        }}
+        val childIds = mutableListOf<Int>()
+        if (kids != null) {{
+            for (i in 0 until kids.length()) {{
+                val before = out.size
+                walk(kids.getJSONObject(i), out, parent)
+                for (j in before until out.size) {{
+                    if (out[j].parent == parent) childIds.add(j)
+                }}
+            }}
+        }}
+        if (speaks) {{
+            out.add(makeNode(node, label, role, parent))
+        }}
+    }}
+
+    private fun makeNode(node: JSONObject, label: String, role: String, parent: Int): A11yNode {{
+        val b = node.optJSONObject("bounds")
+        var rect: Rect? = null
+        if (b != null) {{
+            // Rust reports LOGICAL, view-relative px. AccessibilityNodeInfo
+            // wants PHYSICAL screen px, so scale by density and offset by the
+            // view's position — the mirror of the conversion iOS does with
+            // UIAccessibility.convertToScreenCoordinates.
+            val d = resources.displayMetrics.density
+            val loc = IntArray(2)
+            getLocationOnScreen(loc)
+            val x = (b.optDouble("x", 0.0) * d).toInt() + loc[0]
+            val y = (b.optDouble("y", 0.0) * d).toInt() + loc[1]
+            val w = (b.optDouble("w", 0.0) * d).toInt()
+            val h = (b.optDouble("h", 0.0) * d).toInt()
+            rect = Rect(x, y, x + w, y + h)
+        }}
+        val n = A11yNode(label, role, rect)
+        n.parent = parent
+        return n
+    }}
+
+    private fun isInteractive(role: String): Boolean = when (role) {{
+        "button", "checkbox", "radio", "switch", "textinput",
+        "link", "slider", "tab", "menuitem" -> true
+        else -> false
+    }}
+
+    /// TalkBack derives the spoken role from the class name, the way it does
+    /// for real framework widgets.
+    private fun classNameFor(role: String): String = when (role) {{
+        "button", "menuitem", "tab" -> "android.widget.Button"
+        "checkbox" -> "android.widget.CheckBox"
+        "radio" -> "android.widget.RadioButton"
+        "switch" -> "android.widget.Switch"
+        "textinput" -> "android.widget.EditText"
+        "image" -> "android.widget.ImageView"
+        "slider", "progressbar" -> "android.widget.SeekBar"
+        else -> "android.widget.TextView"
+    }}
+
+    private val provider = object : AccessibilityNodeProvider() {{
+        override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {{
+            val nodes = flatten()
+            if (virtualViewId == HOST_VIEW_ID) {{
+                val info = AccessibilityNodeInfo.obtain(this@EngineSurfaceView)
+                onInitializeAccessibilityNodeInfo(info)
+                // Only top-level nodes attach to the host; nested ones are
+                // reached through their own parent.
+                nodes.forEachIndexed {{ i, n ->
+                    if (n.parent == HOST_VIEW_ID) info.addChild(this@EngineSurfaceView, i)
+                }}
+                return info
+            }}
+            val n = nodes.getOrNull(virtualViewId) ?: return null
+            val info = AccessibilityNodeInfo.obtain(this@EngineSurfaceView, virtualViewId)
+            info.className = classNameFor(n.role)
+            info.text = n.label
+            info.contentDescription = n.label
+            info.packageName = context.packageName
+            info.setParent(this@EngineSurfaceView)
+            n.bounds?.let {{ info.setBoundsInScreen(it) }}
+            info.isVisibleToUser = true
+            info.isEnabled = true
+            if (isInteractive(n.role)) {{
+                info.isClickable = true
+                info.isFocusable = true
+                info.addAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }}
+            return info
+        }}
+
+        override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {{
+            // Activation would have to route back into the engine's
+            // hit-test/dispatch path, which this view deliberately has no
+            // handle for. Named as a gap in D132 rather than silently
+            // reporting success for something that did nothing.
+            return false
+        }}
+
+        override fun findFocus(focus: Int): AccessibilityNodeInfo? = null
+    }}
+
+    override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = provider
 
     override fun onCheckIsTextEditor(): Boolean = true
 
@@ -1656,6 +1826,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
     private external fun nativeTouch(handle: Long, kind: Int, x: Float, y: Float)
     private external fun nativeKey(handle: Long, key: Int)
     private external fun nativeText(handle: Long, character: Int)
+    private external fun nativeSemanticsJson(handle: Long): String?
     private external fun nativeTextInputActive(): Boolean
     private external fun nativeFocusedKeyboardType(): Int
     // Platform Channel (D127) — the generic bidirectional method-call bridge
@@ -1692,6 +1863,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
             this,
             onText = {{ c -> if (engineHandle != 0L) nativeText(engineHandle, c) }},
             onKey = {{ k -> if (engineHandle != 0L) nativeKey(engineHandle, k) }},
+            // D132: TalkBack pulls the tree through here, only while an
+            // accessibility service is actually exploring.
+            semanticsJson = {{ if (engineHandle != 0L) nativeSemanticsJson(engineHandle) else null }},
         )
         surfaceView.holder.addCallback(this)
         setContentView(surfaceView)
@@ -3451,6 +3625,33 @@ pub extern "system" fn Java_{jni_prefix}_nativeFocusedKeyboardType(
 // (`env.new_string`/`get_string`), unlike iOS's C strings — no
 // `rsc_string_free` equivalent is needed here; the JVM garbage-collects
 // `JString`s normally.
+
+/// The engine's accessibility tree as JSON (D132) — what the Kotlin side
+/// turns into `AccessibilityNodeInfo`s for TalkBack.
+///
+/// PULL, not push: `AccessibilityNodeProvider` is called only while an
+/// accessibility service is actually exploring, so an app with TalkBack off
+/// never serializes anything. Bounds are LOGICAL, view-relative pixels; the
+/// host multiplies by density for `AccessibilityNodeInfo`'s physical-pixel
+/// `Rect`.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeSemanticsJson(
+    env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+) -> jni::sys::jstring {{
+    if handle == 0 {{
+        return std::ptr::null_mut();
+    }}
+    // The handle is an `AndroidEngine` (the surface-owning wrapper), NOT a
+    // bare `Engine` — every other JNI fn here casts it that way. Casting to
+    // `Engine` directly read from a bogus offset and segfaulted at 0x10 the
+    // moment TalkBack first queried the tree.
+    let ptr = handle as *mut AndroidEngine;
+    let text = rosace_ffi::semantics_json(unsafe {{ &(*ptr).engine }});
+    env.new_string(text).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}}
 
 /// The host's ONE per-frame poll (alongside `nativeFrame`) — drains every
 /// queued Platform Channel call (push-permission discovery included) as a
