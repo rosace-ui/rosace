@@ -53,8 +53,9 @@ fn with_alpha(c: Color, a: f32) -> Color {
 impl Widget for Radio {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let font_size = self.resolved_font_size(ctx.theme);
+        // Measured, not estimated — see `Checkbox::layout` for the reasoning.
         let label_w = self.label.as_ref()
-            .map(|l| l.len() as f32 * font_size * 0.6 + 10.0)
+            .map(|l| ctx.font.measure_text(l, font_size) + 10.0)
             .unwrap_or(0.0);
         Size { width: self.size + label_w, height: self.size.max(font_size * 1.4) }
     }
@@ -179,4 +180,24 @@ mod tests {
         assert!(!cmds.iter().any(|c| matches!(c, DrawCommand::FillCircle { .. })),
             "an unselected radio has no dot (t=0)");
     }
+
+    /// The label width used to be `len() * size * 0.6`, which cannot tell
+    /// "WWWWW" from "iiiii" — same len(), very different widths — so a wide
+    /// label silently overlapped whatever sat beside it. It also ignored
+    /// `MediaQuery::text_scale`, since only `measure_text` applies that.
+    #[test]
+    fn label_width_is_measured_per_glyph_not_estimated_from_len() {
+        let font = FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let c = rosace_layout::Constraints::loose(400.0, 400.0);
+        let ctx = LayoutCtx::new(c, &font, &theme);
+
+        let wide = Radio::new(false).label("WWWWW").layout(&ctx).width;
+        let narrow = Radio::new(false).label("iiiii").layout(&ctx).width;
+        assert!(wide > narrow, "same len(), different glyphs: {wide} vs {narrow}");
+
+        let bare = Radio::new(false).layout(&ctx).width;
+        assert!(narrow > bare, "a labelled control must be wider than a bare one");
+    }
+
 }

@@ -109,13 +109,19 @@ impl Widget for NavItem {
 
         if let Some(n) = self.badge {
             let ns = n.to_string();
-            let bw = ns.len() as f32 * 7.0 + 8.0;
+            // Measured at the size it is drawn — see `BottomNav`'s badge for
+            // why `len() * 7.0` was wrong.
+            let badge_fs = 8.5;
+            let bw = (ctx.font.measure_text(&ns, badge_fs) + 8.0).max(16.0);
+            let bh = (ctx.font.line_height(badge_fs) + 2.0).max(16.0);
             let bx = r.origin.x + r.size.width - bw - 10.0;
-            let by = r.origin.y + (r.size.height - 16.0) / 2.0;
+            let by = r.origin.y + (r.size.height - bh) / 2.0;
             let badge_col = if self.active { accent } else { with_alpha(on_surf, 0.18) };
-            draw_rounded_rect_pub(ctx, Rect { origin: Point { x: bx, y: by }, size: Size { width: bw, height: 16.0 } }, badge_col, 8.0);
-            let badge_text_color = if self.active { Color::rgb(252, 252, 255) } else { with_alpha(on_surf, 0.7) };
-            ctx.draw_text_at(&ns, Point { x: bx + 4.0, y: by + 3.0 }, badge_text_color, 8.5);
+            draw_rounded_rect_pub(ctx, Rect { origin: Point { x: bx, y: by }, size: Size { width: bw, height: bh } }, badge_col, bh / 2.0);
+            let badge_text_color = if self.active { ctx.tc(ctx.theme.colors.on_primary) } else { with_alpha(on_surf, 0.7) };
+            let tx = bx + (bw - ctx.font.measure_text(&ns, badge_fs)) / 2.0;
+            let ty = by + (bh - ctx.font.line_height(badge_fs)) / 2.0;
+            ctx.draw_text_at(&ns, Point { x: tx, y: ty }, badge_text_color, badge_fs);
         }
     }
 }

@@ -54,8 +54,14 @@ impl Widget for Badge {
             return Size { width: 8.0, height: 8.0 };
         }
         let font_size = self.resolved_font_size(ctx.theme);
-        let w = self.label.len() as f32 * font_size * 0.6 + 12.0;
-        Size { width: w.max(16.0), height: 16.0 }
+        // `paint` has always measured this properly; `layout` estimated it as
+        // `len() * size * 0.6`, so a badge whose glyphs are wider than the
+        // guess (or any label at a raised OS text scale) got centred inside a
+        // box too small for it. Both axes are floored, never fixed, so the
+        // designed 16px pill is a MINIMUM.
+        let w = ctx.font.measure_text(&self.label, font_size) + 12.0;
+        let h = ctx.font.line_height(font_size) + 4.0;
+        Size { width: w.max(16.0), height: h.max(16.0) }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -75,5 +81,63 @@ impl Widget for Badge {
         let line_h = ctx.font.line_height(font_size);
         let ty = ((r.size.height - line_h) / 2.0).max(0.0);
         ctx.text(&self.label, tx, ty, self.text_color, font_size);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_render::FontCache;
+    use rosace_theme::built_in;
+
+    fn layout_of(b: &Badge) -> Size {
+        let font = FontCache::system_ui().or_else(FontCache::system_mono).expect("no system font");
+        let theme = built_in::dark_theme();
+        let c = rosace_layout::Constraints::loose(400.0, 400.0);
+        b.layout(&LayoutCtx::new(c, &font, &theme))
+    }
+
+    /// `layout` used to estimate `len() * size * 0.6` while `paint` measured
+    /// the same string properly, so the two disagreed and the text was
+    /// centred inside a box too small for it.
+    #[test]
+    fn layout_width_matches_what_paint_will_actually_measure() {
+        // "WWW" and "iii" have the same len() and very different widths — the
+        // estimate could not tell them apart, a real measurement must.
+        let wide = layout_of(&Badge::new("WWW")).width;
+        let narrow = layout_of(&Badge::new("iii")).width;
+        assert!(wide > narrow, "proportional glyphs must produce different widths ({wide} vs {narrow})");
+    }
+
+    /// A designed size is a MINIMUM, not a ceiling (pipeline check X2).
+    #[test]
+    fn a_short_label_still_gets_the_designed_minimum_pill() {
+        let s = layout_of(&Badge::new("1"));
+        assert!(s.width >= 16.0 && s.height >= 16.0, "got {s:?}");
+    }
+
+    /// Raising the OS text size must grow the BOX, not just the glyphs.
+    ///
+    /// Asserted structurally rather than by setting `text_scale`: that is a
+    /// process-global, and the suite runs in parallel, so mutating it here
+    /// would corrupt any other test measuring text at the same moment.
+    /// `line_height`/`measure_text` are the two functions that apply the
+    /// scale, so deriving both axes from them IS the guarantee — and the
+    /// fixed `height: 16.0` this replaced could not have satisfied it.
+    #[test]
+    fn both_axes_derive_from_scaled_font_metrics_not_constants() {
+        let font = FontCache::system_ui().or_else(FontCache::system_mono).expect("no system font");
+        let theme = built_in::dark_theme();
+        let c = rosace_layout::Constraints::loose(400.0, 400.0);
+        let ctx = LayoutCtx::new(c, &font, &theme);
+
+        let b = Badge::new("notifications pending");
+        let fs = b.resolved_font_size(&theme);
+        let s = b.layout(&ctx);
+
+        assert!(s.width >= font.measure_text("notifications pending", fs),
+            "width must clear the measured text, got {}", s.width);
+        assert!(s.height >= font.line_height(fs),
+            "height must clear the scaled line box, got {}", s.height);
     }
 }

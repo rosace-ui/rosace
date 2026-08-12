@@ -215,16 +215,24 @@ impl Widget for BottomNavigationBar {
 
             if let Some(n) = item.badge {
                 let ns = n.to_string();
-                let bw = ns.len() as f32 * 7.0 + 8.0;
+                // Measured at the size it is actually drawn (`badge_fs`), not
+                // `len() * 7.0` — a magic advance that is wrong for "1" vs
+                // "88" and ignores the OS text scale entirely, so a 3-digit
+                // count spilled out of its pill.
+                let badge_fs = 8.5;
+                let bw = (slot_ctx.font.measure_text(&ns, badge_fs) + 8.0).max(15.0);
+                let bh = (slot_ctx.font.line_height(badge_fs) + 2.0).max(15.0);
                 let bx = slot.origin.x + slot.size.width / 2.0 + 6.0;
                 let by = slot.origin.y + 6.0;
                 draw_rounded_rect_pub(
                     &mut slot_ctx,
-                    Rect { origin: Point { x: bx, y: by }, size: Size { width: bw, height: 15.0 } },
+                    Rect { origin: Point { x: bx, y: by }, size: Size { width: bw, height: bh } },
                     err_bg,
-                    7.5,
+                    bh / 2.0,
                 );
-                slot_ctx.draw_text_at(&ns, Point { x: bx + 4.0, y: by + 2.5 }, err_fg, 8.5);
+                let tx = bx + (bw - slot_ctx.font.measure_text(&ns, badge_fs)) / 2.0;
+                let ty = by + (bh - slot_ctx.font.line_height(badge_fs)) / 2.0;
+                slot_ctx.draw_text_at(&ns, Point { x: tx, y: ty }, err_fg, badge_fs);
             }
 
             // Interactive-by-identity: always absorb (nav bars sit over content).
