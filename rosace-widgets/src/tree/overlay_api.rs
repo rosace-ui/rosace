@@ -29,6 +29,9 @@ struct OverlayConfig {
     kind:    OverlayKind,
     open:    Atom<bool>,
     content: Arc<dyn Fn() -> BoxedWidget + Send + Sync>,
+    /// Whether a tap on the scrim closes this overlay. `true` by default —
+    /// the common case, and what every overlay did unconditionally before.
+    dismissible: bool,
 }
 
 // ── WithOverlay wrapper ───────────────────────────────────────────────────────
@@ -49,7 +52,27 @@ impl<W: Widget + 'static> WithOverlay<W> {
 
     fn push(mut self, kind: OverlayKind, open: Atom<bool>,
             content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
-        self.overlays.push(OverlayConfig { kind, open, content: Arc::new(content) });
+        self.overlays.push(OverlayConfig {
+            kind, open, content: Arc::new(content), dismissible: true,
+        });
+        self
+    }
+
+    /// Makes the most recently attached overlay refuse scrim dismissal, so it
+    /// can only be closed by setting its `open` atom — the "you must choose"
+    /// case (unsaved-changes prompts, required decisions, a sheet mid-upload).
+    ///
+    /// Dismissal was unconditional before this: every scrim tap closed, with
+    /// no way to opt out. Standard elsewhere too — Flutter's `isDismissible`
+    /// on bottom sheets and `barrierDismissible` on dialogs.
+    ///
+    /// ```rust,ignore
+    /// widget.dialog(open, || confirm_discard()).non_dismissible()
+    /// ```
+    pub fn non_dismissible(mut self) -> Self {
+        if let Some(last) = self.overlays.last_mut() {
+            last.dismissible = false;
+        }
         self
     }
 
@@ -104,6 +127,10 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
 
             let content = (cfg.content)();
             let open_atom = cfg.open.clone();
+            // `None` here means "no scrim tap-to-dismiss" — the engine's
+            // overlay routing already treats a missing `on_tap` that way, so
+            // non-dismissible needs no new dispatch path.
+            let dismissible = cfg.dismissible;
 
             let entry = match cfg.kind {
                 OverlayKind::Dropdown => {
@@ -119,7 +146,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                         .focus(FocusBehavior::PassThrough)
                         .scrim(ScrimConfig {
                             color: Color::TRANSPARENT,
-                            on_tap: Some(dismiss),
+                            on_tap: dismissible.then_some(dismiss as Arc<dyn Fn() + Send + Sync>),
                         exclude_rect: None,
                         })
                 }
@@ -139,7 +166,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                         .focus(FocusBehavior::Trap)
                         .scrim(ScrimConfig {
                             color: Color::rgba(0, 0, 0, 100),
-                            on_tap: Some(dismiss),
+                            on_tap: dismissible.then_some(dismiss as Arc<dyn Fn() + Send + Sync>),
                         exclude_rect: None,
                         })
                 }
@@ -151,7 +178,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
                         .focus(FocusBehavior::Trap)
                         .scrim(ScrimConfig {
                             color: Color::rgba(0, 0, 0, 160),
-                            on_tap: Some(dismiss),
+                            on_tap: dismissible.then_some(dismiss as Arc<dyn Fn() + Send + Sync>),
                         exclude_rect: None,
                         })
                 }

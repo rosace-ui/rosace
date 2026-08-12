@@ -3074,6 +3074,42 @@ mod tests {
         assert!(!open.get(), "a tap OUTSIDE, on the scrim, must still dismiss");
     }
 
+    /// `non_dismissible()` — dismissal was unconditional before, so a
+    /// "you must choose" surface (unsaved changes, a sheet mid-upload) had no
+    /// way to refuse a scrim tap.
+    #[test]
+    fn a_non_dismissible_overlay_ignores_the_scrim_but_still_closes_by_state() {
+        use rosace_widgets::tree as w;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let open = rosace_state::Atom::new(rosace_state::next_atom_id(), true);
+        struct S(rosace_state::Atom<bool>);
+        impl Component for S {
+            fn build(&self, _ctx: &mut Context) -> Element {
+                use rosace_widgets::tree::OverlayApi;
+                w::Text::new("host")
+                    .dialog(self.0.clone(), || Box::new(w::Text::new("must choose")))
+                    .non_dismissible()
+                    .into_element()
+            }
+        }
+        let mut e = FrameEngine::new(Box::new(S(open.clone())), rosace_render::FontCache::embedded());
+        let (mut c, mut o) = (SkiaCanvas::new(400, 600), SkiaCanvas::new(400, 600));
+        e.paint(&mut c, &mut o, &[]);
+
+        // Corner tap — squarely on the scrim, which would normally dismiss.
+        e.paint(&mut c, &mut o, &[
+            rosace_platform::InputEvent::MouseDown { x: 10.0, y: 10.0, button: rosace_platform::MouseButton::Left },
+            rosace_platform::InputEvent::MouseUp   { x: 10.0, y: 10.0, button: rosace_platform::MouseButton::Left },
+        ]);
+        assert!(open.get(), "a non-dismissible overlay must survive a scrim tap");
+
+        // The owner can still close it — refusing the scrim must not trap it.
+        open.set(false);
+        e.paint(&mut c, &mut o, &[]);
+        assert!(!open.get(), "setting the atom must still close it");
+    }
+
     fn semantic_labels(engine: &FrameEngine) -> Vec<String> {
         fn walk(node: &rosace_core::SemanticNode, out: &mut Vec<String>) {
             if let Some(l) = &node.label { out.push(l.clone()); }
