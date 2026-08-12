@@ -82,6 +82,22 @@ impl Widget for Image {
         let broken = decoded.is_none() && !matches!(self.inner.source, ImageSource::Placeholder);
 
         if let Some(img) = decoded {
+            // Honour `.fit(..)`. This used to blit straight into `dest_rect`
+            // (the widget box) and never consult `self.inner.fit` at all, so
+            // EVERY image was stretched to its box and the aspect ratio the
+            // API promised was silently ignored. `compute_fit` lived only on
+            // the legacy non-tree paint path, which nothing calls any more.
+            //
+            // `BlitRgba` carries no source-crop rect, so `Cover` and `None`
+            // are expressed as an oversized/undersized dest rect bracketed by
+            // a clip to the widget box rather than by cropping the source.
+            let (src_w, src_h) = (img.width as f32, img.height as f32);
+            let (dest_rect, clip) = fit_rect(self.inner.fit, src_w, src_h, dest_rect);
+            if clip {
+                ctx.record(DrawCommand::PushClip { rect: Rect {
+                    origin: Point { x, y }, size: Size { width: w, height: h },
+                } });
+            }
             // No default load-in fade (D111 corrects D108/Phase 26 Step
             // 4): this widget has no stable per-image identity inside a
             // virtualized list (`ListView` allocates render-tree nodes
@@ -100,6 +116,9 @@ impl Widget for Image {
                 dest_rect,
                 opacity: 1.0,
             });
+            if clip {
+                ctx.record(DrawCommand::PopClip);
+            }
             return;
         }
 
@@ -128,6 +147,44 @@ impl Widget for Image {
             origin: Point { x: x + w / 2.0 - 20.0, y: y + h / 2.0 + 5.0 },
             size: Size { width: 40.0, height: 20.0 },
         }, Color::rgb(80, 90, 120));
+    }
+}
+
+/// Place a `src_w` x `src_h` image inside the widget `box_rect` per `fit`.
+///
+/// Returns the destination rect and whether the caller must clip to
+/// `box_rect` — true exactly when the destination can fall outside it
+/// (`Cover` scales up and overflows; `None` draws at natural size, which may
+/// be larger than the box). `Fill` and `Contain` are always contained, so
+/// they skip the clip and the two draw commands it costs.
+fn fit_rect(fit: ImageFit, src_w: f32, src_h: f32, box_rect: Rect) -> (Rect, bool) {
+    let (x, y) = (box_rect.origin.x, box_rect.origin.y);
+    let (w, h) = (box_rect.size.width, box_rect.size.height);
+    // A zero-dimension source has no aspect ratio to preserve; every mode
+    // degenerates to the box, and dividing by it would yield NaN rects.
+    if src_w <= 0.0 || src_h <= 0.0 {
+        return (box_rect, false);
+    }
+    let at = |dx: f32, dy: f32, dw: f32, dh: f32| Rect {
+        origin: Point { x: dx, y: dy },
+        size: Size { width: dw, height: dh },
+    };
+    match fit {
+        ImageFit::Fill => (box_rect, false),
+        ImageFit::Contain => {
+            let s = (w / src_w).min(h / src_h);
+            let (dw, dh) = (src_w * s, src_h * s);
+            (at(x + (w - dw) / 2.0, y + (h - dh) / 2.0, dw, dh), false)
+        }
+        ImageFit::Cover => {
+            let s = (w / src_w).max(h / src_h);
+            let (dw, dh) = (src_w * s, src_h * s);
+            (at(x + (w - dw) / 2.0, y + (h - dh) / 2.0, dw, dh), true)
+        }
+        ImageFit::None => {
+            let (dw, dh) = (src_w, src_h);
+            (at(x + (w - dw) / 2.0, y + (h - dh) / 2.0, dw, dh), dw > w || dh > h)
+        }
     }
 }
 
@@ -164,5 +221,58 @@ mod tests {
         let size = img.layout(&ctx);
         assert_eq!(size.width, 100.0);
         assert_eq!(size.height, 80.0);
+    }
+
+    fn boxr(w: f32, h: f32) -> Rect {
+        Rect { origin: Point { x: 10.0, y: 20.0 }, size: Size { width: w, height: h } }
+    }
+
+    #[test]
+    fn fill_stretches_to_the_box_and_needs_no_clip() {
+        let (r, clip) = fit_rect(ImageFit::Fill, 100.0, 50.0, boxr(200.0, 200.0));
+        assert_eq!((r.size.width, r.size.height), (200.0, 200.0));
+        assert!(!clip);
+    }
+
+    #[test]
+    fn contain_letterboxes_and_preserves_aspect_ratio() {
+        // 100x50 (2:1) into a 200x200 box -> 200x100, centred vertically.
+        let (r, clip) = fit_rect(ImageFit::Contain, 100.0, 50.0, boxr(200.0, 200.0));
+        assert_eq!((r.size.width, r.size.height), (200.0, 100.0));
+        assert_eq!(r.origin.x, 10.0, "no horizontal letterbox — it fills the width");
+        assert_eq!(r.origin.y, 20.0 + 50.0, "centred in the leftover 100px");
+        assert!(!clip, "Contain never leaves the box");
+        assert!((r.size.width / r.size.height - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cover_fills_the_box_overflows_and_clips() {
+        // 100x50 (2:1) into a 200x200 box -> 400x200, centred horizontally.
+        let (r, clip) = fit_rect(ImageFit::Cover, 100.0, 50.0, boxr(200.0, 200.0));
+        assert_eq!((r.size.width, r.size.height), (400.0, 200.0));
+        assert_eq!(r.origin.x, 10.0 - 100.0, "overflow split evenly on both sides");
+        assert!(clip, "Cover overflows, so the caller MUST clip");
+        assert!((r.size.width / r.size.height - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn none_draws_natural_size_and_clips_only_when_it_overflows() {
+        let (small, clip) = fit_rect(ImageFit::None, 40.0, 30.0, boxr(200.0, 200.0));
+        assert_eq!((small.size.width, small.size.height), (40.0, 30.0));
+        assert!(!clip, "smaller than the box — nothing to clip");
+
+        let (big, clip) = fit_rect(ImageFit::None, 400.0, 30.0, boxr(200.0, 200.0));
+        assert_eq!(big.size.width, 400.0);
+        assert!(clip, "wider than the box — must clip");
+    }
+
+    #[test]
+    fn zero_sized_source_degenerates_to_the_box_without_nan() {
+        // Guards the divide-by-zero: every mode divides by src_w/src_h.
+        for fit in [ImageFit::Fill, ImageFit::Contain, ImageFit::Cover, ImageFit::None] {
+            let (r, _) = fit_rect(fit, 0.0, 0.0, boxr(200.0, 200.0));
+            assert!(r.size.width.is_finite() && r.size.height.is_finite());
+            assert_eq!((r.size.width, r.size.height), (200.0, 200.0));
+        }
     }
 }

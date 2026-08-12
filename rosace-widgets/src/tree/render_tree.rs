@@ -205,6 +205,56 @@ pub struct RenderTree {
     begun_this_frame: Vec<NodeId>,
 }
 
+/// The outcome of one pointer walk over a subtree.
+///
+/// A bare `Option` cannot express this: "nothing here, keep looking behind
+/// me" and "a barrier covers this point, stop looking" are both "no result",
+/// but they must produce opposite behaviour in the caller's sibling loop.
+/// Conflating them is exactly why `AbsorbPointer` failed to block anything
+/// but clicks.
+enum Walk<T> {
+    /// A match — return it.
+    Hit(T),
+    /// An `AbsorbPointer` covers this point; the whole walk stops, and
+    /// nothing behind the barrier may match.
+    Blocked,
+    /// No match here; the caller should carry on with its other children.
+    Miss,
+}
+
+impl<T> Walk<T> {
+    /// The result, with a barrier reported as "nothing" to public callers.
+    fn hit(self) -> Option<T> {
+        match self {
+            Walk::Hit(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// For a CHILD recursion: `Some(..)` when the parent must return
+    /// immediately (a hit to propagate, or a barrier), `None` to keep
+    /// iterating siblings.
+    fn settled(self) -> Option<Walk<T>> {
+        match self {
+            Walk::Hit(v) => Some(Walk::Hit(v)),
+            Walk::Blocked => Some(Walk::Blocked),
+            Walk::Miss => None,
+        }
+    }
+}
+
+impl Walk<()> {
+    /// For the GATE at the top of a walk: `Some(..)` when this node must not
+    /// be descended into at all.
+    fn stop<T>(self) -> Option<Walk<T>> {
+        match self {
+            Walk::Hit(()) => None,
+            Walk::Blocked => Some(Walk::Blocked),
+            Walk::Miss => Some(Walk::Miss),
+        }
+    }
+}
+
 impl RenderTree {
     pub fn new() -> Self {
         Self {
@@ -421,7 +471,30 @@ impl RenderTree {
     /// not two): returns the leaf hit exactly like the old two-element
     /// version did, and — independently of what that leaf is, or even
     /// whether one was found at all — pushes every node's own
-    /// `nested_scrolls` entry covering `(x, y)` onto `chain` as the
+     /// How a pointer walk must treat `n`.
+    ///
+    /// `IgnorePointer` (mode 1) is TRANSPARENT: its subtree never matches,
+    /// but content behind it still does, so the walk skips this branch and
+    /// carries on with the siblings. `AbsorbPointer` (mode 2) is a BARRIER:
+    /// inside its rect neither the subtree nor anything behind it matches,
+    /// so the walk stops dead — which is why `Miss` and `Blocked` cannot be
+    /// the same answer, and why these walks return [`Walk`] rather than a
+    /// bare `Option`.
+    ///
+    /// Both modes used to be consulted only in `hit_test_node` (and scroll
+    /// consulted neither), so an `AbsorbPointer` placed as a modal barrier —
+    /// the use its own doc describes — still let hover, long-press, scroll
+    /// and click-to-edit reach the content underneath it.
+    fn pointer_gate(&self, n: &TreeNode, x: f32, y: f32) -> Walk<()> {
+        match n.pointer_mode {
+            1 => Walk::Miss,
+            2 if n.cached_rect.as_ref().is_some_and(|r| contains(r, x, y)) => Walk::Blocked,
+            _ => Walk::Hit(()),
+        }
+    }
+
+
+   /// `nested_scrolls` entry covering `(x, y)` onto `chain` as the
     /// recursion unwinds, innermost first.
     fn hit_test_node(&self, id: NodeId, x: f32, y: f32, chain: &mut Vec<ScrollHandler>) -> Option<(HitHandler, bool)> {
         let n = &self.nodes[id];
@@ -517,19 +590,19 @@ impl RenderTree {
     /// Topmost node under the cursor that owns any interactive or hover
     /// region — drives hover state (buttons, tiles, tooltips).
     pub fn hover_test(&self, x: f32, y: f32) -> Option<NodeId> {
-        self.hover_test_node(Self::ROOT, x, y)
+        self.hover_test_node(Self::ROOT, x, y).hit()
     }
 
-    fn hover_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<NodeId> {
+    fn hover_test_node(&self, id: NodeId, x: f32, y: f32) -> Walk<NodeId> {
         let n = &self.nodes[id];
-        if n.pointer_mode == 1 {
-            return None;
+        if let Some(stop) = self.pointer_gate(n, x, y).stop() {
+            return stop;
         }
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
-                if let Some(hit) = self.hover_test_node(child, cx, cy) {
-                    return Some(hit);
+                if let Some(stop) = self.hover_test_node(child, cx, cy).settled() {
+                    return stop;
                 }
             }
         }
@@ -539,33 +612,33 @@ impl RenderTree {
             .chain(n.hover_regions.iter())
             .chain(n.nested_scrolls.iter().map(|(r, _)| r))
             .any(|r| contains(r, x, y));
-        if owns { Some(id) } else { None }
+        if owns { Walk::Hit(id) } else { Walk::Miss }
     }
 
     /// Topmost long-press callback under the cursor.
     pub fn long_press_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        self.long_press_node(Self::ROOT, x, y)
+        self.long_press_node(Self::ROOT, x, y).hit()
     }
 
-    fn long_press_node(&self, id: NodeId, x: f32, y: f32) -> Option<Arc<dyn Fn() + Send + Sync>> {
+    fn long_press_node(&self, id: NodeId, x: f32, y: f32) -> Walk<Arc<dyn Fn() + Send + Sync>> {
         let n = &self.nodes[id];
-        if n.pointer_mode == 1 {
-            return None;
+        if let Some(stop) = self.pointer_gate(n, x, y).stop() {
+            return stop;
         }
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
-                if let Some(cb) = self.long_press_node(child, cx, cy) {
-                    return Some(cb);
+                if let Some(stop) = self.long_press_node(child, cx, cy).settled() {
+                    return stop;
                 }
             }
         }
         for (rect, cb) in n.long_hits.iter().rev() {
             if contains(rect, x, y) {
-                return Some(cb.clone());
+                return Walk::Hit(cb.clone());
             }
         }
-        None
+        Walk::Miss
     }
 
     /// Set the hovered node, clearing the previous one. Marks both the old
@@ -615,6 +688,8 @@ impl RenderTree {
     {
         let mut candidates: Vec<(ScrollAxes, HitHandler)> = Vec::new();
         self.scroll_candidates(Self::ROOT, x, y, &mut candidates);
+        // `scroll_candidates` stops collecting at a barrier, so `candidates`
+        // already excludes anything behind it.
         select_scroll_handler(&candidates, dx, dy)
     }
 
@@ -624,8 +699,11 @@ impl RenderTree {
         x: f32,
         y: f32,
         out: &mut Vec<(ScrollAxes, HitHandler)>,
-    ) {
+    ) -> Walk<()> {
         let n = &self.nodes[id];
+        if let Some(stop) = self.pointer_gate(n, x, y).stop() {
+            return stop;
+        }
         // Descend in the CHILD's coordinate space when this node hosts a
         // transform (D090/D092) — bug found live: a scrollable widget
         // (InteractiveViewer) nested inside another scroll view (a normal
@@ -639,7 +717,12 @@ impl RenderTree {
         if !clipped {
             // Children first (topmost/innermost priority), later siblings first.
             for &child in n.children.iter().rev() {
-                self.scroll_candidates(child, cx, cy, out);
+                // A barrier below us also hides US from the scroll: it is
+                // painted on top, so the wheel belongs to it, not to the
+                // viewport it covers.
+                if let Some(stop) = self.scroll_candidates(child, cx, cy, out).settled() {
+                    return stop;
+                }
             }
         }
         for (rect, axes, cb) in n.scrolls.iter().rev() {
@@ -647,6 +730,7 @@ impl RenderTree {
                 out.push((*axes, cb.clone()));
             }
         }
+        Walk::Miss
     }
 
     /// Innermost registered zoom region under `(x, y)` (trackpad pinch,
@@ -654,27 +738,30 @@ impl RenderTree {
     /// priority as `scroll_test`, but with no axis-selection step (a pinch
     /// gesture has no "axis", just one delta).
     pub fn zoom_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn(f32) + Send + Sync>> {
-        self.zoom_candidate(Self::ROOT, x, y)
+        self.zoom_candidate(Self::ROOT, x, y).hit()
     }
 
-    fn zoom_candidate(&self, id: NodeId, x: f32, y: f32) -> Option<Arc<dyn Fn(f32) + Send + Sync>> {
+    fn zoom_candidate(&self, id: NodeId, x: f32, y: f32) -> Walk<Arc<dyn Fn(f32) + Send + Sync>> {
         let n = &self.nodes[id];
+        if let Some(stop) = self.pointer_gate(n, x, y).stop() {
+            return stop;
+        }
         // Same nested-transform remap as `scroll_candidates` — see its
         // comment for the bug this fixes.
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
-                if let Some(cb) = self.zoom_candidate(child, cx, cy) {
-                    return Some(cb);
+                if let Some(stop) = self.zoom_candidate(child, cx, cy).settled() {
+                    return stop;
                 }
             }
         }
         for (rect, cb) in n.zooms.iter().rev() {
             if contains(rect, x, y) {
-                return Some(cb.clone());
+                return Walk::Hit(cb.clone());
             }
         }
-        None
+        Walk::Miss
     }
 
     /// All hit regions in tree (paint) order — used by the overlay pass to
@@ -739,28 +826,28 @@ impl RenderTree {
     /// traversal as [`Self::hover_test`]; editable rects live in
     /// `TreeNode::editable`, declared by [`super::PaintCtx::register_editable`].
     pub fn editable_test(&self, x: f32, y: f32) -> Option<NodeId> {
-        self.editable_test_node(Self::ROOT, x, y)
+        self.editable_test_node(Self::ROOT, x, y).hit()
     }
 
-    fn editable_test_node(&self, id: NodeId, x: f32, y: f32) -> Option<NodeId> {
+    fn editable_test_node(&self, id: NodeId, x: f32, y: f32) -> Walk<NodeId> {
         let n = &self.nodes[id];
-        if n.pointer_mode == 1 {
-            return None;
+        if let Some(stop) = self.pointer_gate(n, x, y).stop() {
+            return stop;
         }
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
-                if let Some(hit) = self.editable_test_node(child, cx, cy) {
-                    return Some(hit);
+                if let Some(stop) = self.editable_test_node(child, cx, cy).settled() {
+                    return stop;
                 }
             }
         }
         if let Some(e) = &n.editable {
             if contains(&e.rect, x, y) {
-                return Some(id);
+                return Walk::Hit(id);
             }
         }
-        None
+        Walk::Miss
     }
 
     /// Derive the accessibility tree (D099): semantics entries in paint
@@ -1378,4 +1465,93 @@ mod tests {
         // Outside all rects: nothing.
         assert_eq!(t.pick(-5.0, -5.0), None);
     }
+
+    /// A barrier must stop EVERY pointer walk, not just clicks.
+    ///
+    /// `AbsorbPointer`'s whole purpose is to be a modal barrier, and
+    /// `pointer_mode == 2` was checked only in `hit_test_node` — so hover,
+    /// long-press, scroll and click-to-edit all reached the content behind
+    /// it. One test per walk, because each is a separate recursion.
+    #[test]
+    fn absorb_pointer_blocks_every_pointer_walk_not_just_clicks() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+
+        // Content behind the barrier, registered on all five paths.
+        let behind = t.slot(RenderTree::ROOT, true);
+        let r = rect(0.0, 0.0, 100.0, 100.0);
+        t.node_mut(behind).cached_rect = Some(r);
+        t.node_mut(behind).hits.push((r, Arc::new(|| {})));
+        t.node_mut(behind).hover_regions.push(r);
+        t.node_mut(behind).long_hits.push((r, Arc::new(|| {})));
+        t.node_mut(behind).editable = Some(crate::tree::text_edit::EditableDecl {
+            value: String::new(),
+            rect: r,
+            multiline: false,
+            obscure: false,
+            on_change: Arc::new(|_| {}),
+            controller: None,
+            layout: Default::default(),
+            filters: Vec::new(),
+        });
+        t.node_mut(behind).scrolls.push((r, ScrollAxes::BOTH, Arc::new(|_, _| {})));
+
+        // The barrier, painted after it so it sits on top.
+        let barrier = t.slot(RenderTree::ROOT, true);
+        t.node_mut(barrier).pointer_mode = 2;
+        t.node_mut(barrier).cached_rect = Some(rect(0.0, 0.0, 100.0, 100.0));
+        t.finalize();
+
+        assert!(t.hit_test(50.0, 50.0).0.is_some(), "click is absorbed, not passed through");
+        assert_eq!(t.hover_test(50.0, 50.0), None, "hover must not reach content behind");
+        assert!(t.long_press_test(50.0, 50.0).is_none(), "long-press must not reach behind");
+        assert!(t.editable_test(50.0, 50.0).is_none(), "click-to-edit must not reach behind");
+        assert!(t.scroll_test(50.0, 50.0, 0.0, -10.0).is_none(), "scroll must not reach behind");
+    }
+
+    /// The barrier is bounded by its rect — outside it, everything works.
+    #[test]
+    fn absorb_pointer_only_blocks_inside_its_own_rect() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+
+        let behind = t.slot(RenderTree::ROOT, true);
+        let r = rect(0.0, 0.0, 200.0, 200.0);
+        t.node_mut(behind).cached_rect = Some(r);
+        t.node_mut(behind).hover_regions.push(r);
+
+        let barrier = t.slot(RenderTree::ROOT, true);
+        t.node_mut(barrier).pointer_mode = 2;
+        t.node_mut(barrier).cached_rect = Some(rect(0.0, 0.0, 50.0, 50.0));
+        t.finalize();
+
+        assert_eq!(t.hover_test(25.0, 25.0), None, "inside the barrier: blocked");
+        assert_eq!(t.hover_test(150.0, 150.0), Some(behind), "outside it: normal");
+    }
+
+    /// `IgnorePointer` is transparent, not a barrier: its own subtree never
+    /// matches, but a sibling behind it still does. Scroll was missing this
+    /// check entirely — `scroll_candidates` consulted neither mode.
+    #[test]
+    fn ignore_pointer_is_transparent_to_scroll_but_its_subtree_is_not() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+
+        let r = rect(0.0, 0.0, 100.0, 100.0);
+        let behind = t.slot(RenderTree::ROOT, true);
+        t.node_mut(behind).cached_rect = Some(r);
+        t.node_mut(behind).scrolls.push((r, ScrollAxes::BOTH, Arc::new(|_, _| {})));
+
+        let ignored = t.slot(RenderTree::ROOT, true);
+        t.node_mut(ignored).pointer_mode = 1;
+        t.node_mut(ignored).cached_rect = Some(r);
+        t.node_mut(ignored).scrolls.push((r, ScrollAxes::BOTH, Arc::new(|_, _| {})));
+        t.finalize();
+
+        assert!(
+            t.scroll_test(50.0, 50.0, 0.0, -10.0).is_some(),
+            "the ignored node's own scroll target is skipped, but the one behind it still wins"
+        );
+    }
+
 }

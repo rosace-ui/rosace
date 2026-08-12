@@ -210,8 +210,19 @@ impl Widget for TextInput {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // An obscured field must NOT put its plaintext on the accessibility
+        // bus. The visual path substitutes bullets below (`display`), and
+        // this used to pass `&self.value` regardless — so a screen reader
+        // spoke the real password aloud while the screen showed dots.
+        // Platform convention for a secure field is to announce presence,
+        // never content, so we send a bullet run of the same length.
+        let announced = if self.obscure {
+            "•".repeat(self.value.chars().count())
+        } else {
+            self.value.clone()
+        };
         ctx.semantics(super::SemanticsProps::new(rosace_core::Role::TextInput)
-            .label(&self.placeholder).value(&self.value));
+            .label(&self.placeholder).value(&announced));
         let font_size = self.resolved_font_size(&ctx.theme);
 
         // Own persistent FocusNode (D112) — click-to-focus/Tab work with
@@ -795,4 +806,54 @@ mod tests {
         let (scroll_x, _, _) = paint_overflowing(300.0, "hi", true);
         assert_eq!(scroll_x, 0.0, "a value that fits must not scroll");
     }
+
+    /// An obscured field must never put its plaintext on the accessibility
+    /// bus. This shipped broken: the visual path substituted bullets while
+    /// `ctx.semantics(..)` passed `&self.value` straight through, so a
+    /// screen reader read the real password aloud.
+    #[test]
+    fn an_obscured_field_never_announces_its_plaintext() {
+        let font = FontCache::system_ui().or_else(FontCache::system_mono).expect("no system font");
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let mut rec = PictureRecorder::new();
+        let theme = built_in::dark_theme();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 200.0, height: 60.0 } },
+                &font,
+                theme,
+                tree.clone(),
+            );
+            TextInput::new().placeholder("Password").value("hunter2").obscure().paint(&mut ctx);
+        }
+        let sem = tree.borrow().collect_semantics();
+        let json = format!("{:?}", sem);
+        assert!(!json.contains("hunter2"), "the plaintext password reached the semantic tree: {json}");
+        assert!(json.contains("Password"), "the field must still announce its label");
+        assert!(json.contains("•"), "presence is announced as bullets, so length is still conveyed");
+    }
+
+    /// The mirror case — a normal field MUST still announce its value, or
+    /// the fix above would have silenced every text field in the library.
+    #[test]
+    fn a_plain_field_still_announces_its_value() {
+        let font = FontCache::system_ui().or_else(FontCache::system_mono).expect("no system font");
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let mut rec = PictureRecorder::new();
+        let theme = built_in::dark_theme();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 200.0, height: 60.0 } },
+                &font,
+                theme,
+                tree.clone(),
+            );
+            TextInput::new().placeholder("Email").value("a@b.com").paint(&mut ctx);
+        }
+        let json = format!("{:?}", tree.borrow().collect_semantics());
+        assert!(json.contains("a@b.com"), "a non-obscured value must reach the semantic tree: {json}");
+    }
+
 }

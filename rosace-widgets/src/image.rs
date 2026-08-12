@@ -17,7 +17,7 @@ use rosace_render::{Color, FontCache, SkiaCanvas};
 use rosace_theme::ThemeData;
 
 /// Controls how the image is scaled to fit the widget's bounding box.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFit {
     /// Stretch to fill the target rect exactly (may distort aspect ratio).
     Fill,
