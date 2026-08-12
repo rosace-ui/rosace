@@ -37,7 +37,6 @@ use rosace::prelude::*;
 let d = dark_theme();  // the framework default
 let l = light_theme();
 let m = material();    // Android-flavored: light_theme() + a taller, elevated, left-aligned AppBar
-let c = cupertino();   // iOS-flavored: system-blue accent + a centered, flat, 44pt AppBar
 ```
 
 `App::new()` starts on `dark_theme()`. Both light and dark are a neutral, JetBrains-Darcula-inspired palette (not Material's purple-tinted defaults) — a deep violet accent (`#7C4DFF`) on light, a soft lavender (`#BB86FC`) on dark.
@@ -131,7 +130,6 @@ A single `.theme(...)` is enough for most apps. If you want iOS to look Cupertin
 use rosace::prelude::*;
 
 let themes = Themes::new(light_theme())              // fallback: desktop, web, unlisted platforms
-    .platform(Platform::Ios, cupertino())
     .platform(Platform::Android, material());
 
 App::new().themes(themes).launch(MyApp);

@@ -18,7 +18,7 @@ use crate::theme::ThemeData;
 ///
 /// ```rust,ignore
 /// let themes = Themes::new(light_theme())
-///     .platform(Platform::Ios, cupertino())
+///     .platform(Platform::Ios, my_custom_theme())
 ///     .platform(Platform::Android, material());
 /// App::new().themes(themes).launch(MyApp);
 /// ```
@@ -52,20 +52,29 @@ impl Themes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::built_in::{cupertino, light_theme, material};
+    use crate::built_in::{light_theme, material};
+
+    /// Stands in for a third-party theme — the case the bundle now exists
+    /// to serve, since ROSACE itself ships one design system (D133).
+    fn custom() -> ThemeData {
+        ThemeData {
+            app_bar: crate::theme::AppBarStyle { height: 99.0, ..Default::default() },
+            ..light_theme()
+        }
+    }
 
     #[test]
     fn resolve_returns_registered_theme_for_platform() {
         let themes = Themes::new(light_theme())
-            .platform(Platform::Ios, cupertino())
+            .platform(Platform::Ios, custom())
             .platform(Platform::Android, material());
-        assert_eq!(themes.resolve(Platform::Ios).app_bar.height, cupertino().app_bar.height);
+        assert_eq!(themes.resolve(Platform::Ios).app_bar.height, custom().app_bar.height);
         assert_eq!(themes.resolve(Platform::Android).app_bar.height, material().app_bar.height);
     }
 
     #[test]
     fn resolve_falls_back_for_unregistered_platform() {
-        let themes = Themes::new(light_theme()).platform(Platform::Ios, cupertino());
+        let themes = Themes::new(light_theme()).platform(Platform::Ios, custom());
         // macOS was never registered — must fall back, not panic or default-construct.
         let resolved = themes.resolve(Platform::MacOs);
         assert_eq!(resolved.app_bar.height, light_theme().app_bar.height);

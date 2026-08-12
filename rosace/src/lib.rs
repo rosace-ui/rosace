@@ -647,7 +647,7 @@ pub use rosace_widgets::{TextAlign, FontWeight};
 
 // Theme
 pub use rosace_theme::{ThemeData, ColorScheme, Themes, AppBarStyle, TitleAlign};
-pub use rosace_theme::built_in::{dark_theme, light_theme, material, cupertino};
+pub use rosace_theme::built_in::{dark_theme, light_theme, material};
 
 // Platform (D105)
 pub use rosace_core::Platform;
@@ -739,7 +739,7 @@ pub mod prelude {
     pub use crate::AppBarNavExt;
     pub use rosace_render::canvas::Color;
     pub use rosace_theme::{ThemeData, ColorScheme, Themes, AppBarStyle, TitleAlign};
-    pub use rosace_theme::built_in::{dark_theme, light_theme, material, cupertino};
+    pub use rosace_theme::built_in::{dark_theme, light_theme, material};
     pub use rosace_core::Platform;
     pub use rosace_core::KeyboardType;
     pub use rosace_core::types::{Point, Rect, Size};

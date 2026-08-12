@@ -1728,6 +1728,40 @@ breaks anything at runtime.
 
 ---
 
+### D133 — One design system: `cupertino()` removed (2026-08-12, supersedes D105's platform-theme half)
+
+`built_in::cupertino()` is gone. `material()` stays as the single shipped
+design system; the `Themes`/`Platform` bundle stays as the extension point
+for third-party themes.
+
+**Why**: this is `.steering/THEME_SKINNING_ARCHITECTURE.md`'s existing
+position, applied one level up. That document already ruled — 2026-07-24,
+user call — that "**No Cupertino skin is built by us.** One standardized
+design system (what big companies do)... We ship the *capability*; third
+parties (or a future us) provide skins if wanted." Shipping a Cupertino
+*theme* while refusing to ship a Cupertino *skin* was the inconsistency:
+the theme only ever restyled the accent colour and the app bar's alignment
+and height, so it looked iOS-ish without any of the structural work that
+would make a control actually feel native. Half a platform look is worse
+than one deliberate one.
+
+**What this supersedes**: D105/Phase 23 built platform-adaptive theming and
+shipped `material()`/`cupertino()` as its two flavours. The *mechanism*
+(`Themes`, `Platform`, `AppBarStyle`) is untouched and still correct —
+only the Cupertino flavour is withdrawn.
+
+**Breaking change**: `cupertino()` is public API published on crates.io at
+`0.1.0`, re-exported from `rosace` and `rosace::prelude`. Removing it
+requires a `0.2.0` bump; it cannot ride a patch release.
+
+**Affects**: `rosace-theme` (fn + its two tests deleted), `rosace`
+(2 re-export sites), `rosace-cli`'s `rsc new` template (no longer wires
+`Platform::Ios -> cupertino()`, and the AGENTS.md it emits no longer
+claims Cupertino ships), `examples/showcase/src/theme.rs`,
+`docs/guide/theming.md`.
+
+---
+
 ## DEFERRED DECISIONS
 
 ```

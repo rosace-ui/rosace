@@ -105,37 +105,6 @@ pub fn material() -> ThemeData {
     }
 }
 
-/// A Cupertino (iOS-flavored) theme (D105 Phase 23 Step 5): an AppBar with a
-/// centered title, 44pt-tall, flat (hairline-only) look — iOS navigation-bar
-/// conventions — plus iOS system-blue accents in place of Material's purple,
-/// since reusing [`light_theme`]'s MD3 palette verbatim would look
-/// Android-branded on an iOS device. Every other token (typography, spacing,
-/// radius) still comes from [`light_theme`] — only the accent color and the
-/// AppBar structure are iOS-specific.
-pub fn cupertino() -> ThemeData {
-    ThemeData {
-        colors: ColorScheme {
-            primary:              Color::from_hex(0x007AFF),
-            on_primary:           Color::from_hex(0xFFFFFF),
-            primary_container:    Color::from_hex(0xD6E8FF),
-            on_primary_container: Color::from_hex(0x00265A),
-            ..light_theme().colors
-        },
-        app_bar: crate::theme::AppBarStyle {
-            title_align: crate::theme::TitleAlign::Center,
-            show_traffic_lights: false,
-            // iOS nav bars are 44pt of content, but our title renders at
-            // `title_large`; 52 keeps the proportions right without the
-            // squeeze 48 produced.
-            height: 52.0,
-            // A soft shadow rather than pure-flat — 2026-07-31 user feedback
-            // that a hairline-only bar read as un-elevated on a real device.
-            elevation: 1.0,
-        },
-        ..light_theme()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -210,24 +179,10 @@ mod tests {
     }
 
     #[test]
-    fn material_and_cupertino_are_structurally_distinct() {
+    fn material_is_structurally_distinct_from_the_base_theme() {
         let m = material();
-        let c = cupertino();
         assert_eq!(m.app_bar.title_align, crate::theme::TitleAlign::Leading);
-        assert_eq!(c.app_bar.title_align, crate::theme::TitleAlign::Center);
         assert_eq!(m.app_bar.height, 64.0);
-        assert_eq!(c.app_bar.height, 52.0);
     }
 
-    #[test]
-    fn cupertino_uses_ios_system_blue_not_the_light_theme_default() {
-        let expected = Color::from_hex(0x007AFF);
-        let c = cupertino();
-        assert!((c.colors.primary.r - expected.r).abs() < 1e-5);
-        assert!((c.colors.primary.g - expected.g).abs() < 1e-5);
-        assert!((c.colors.primary.b - expected.b).abs() < 1e-5);
-        // Material keeps light_theme()'s default blue already asserted by
-        // `light_theme_primary_is_modern_blue` (material() is built on it).
-        assert_ne!(c.colors.primary, material().colors.primary);
-    }
 }

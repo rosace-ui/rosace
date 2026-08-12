@@ -662,8 +662,8 @@ impl Component for Counter {{
 
 ## Theming
 
-Material 3 and Cupertino ship out of the box (`rosace::prelude::material()` /
-`cupertino()`), plus a compile-checked token system and runtime theme
+Material 3 ships out of the box as the single design system (`rosace::prelude::material()`,
+one standardized design system), plus a compile-checked token system and runtime theme
 switching. `src/theme.rs` in this project wires light/dark and (if this app
 targets iOS/Android) a per-platform `Themes` bundle. A pluggable third-party
 skin registry (swap a widget's whole visual form, not just its colors) is
@@ -944,7 +944,7 @@ impl Component for AppRoot {{
 
 /// Generates `src/theme.rs`. Always emits `dark()`/`light()` (used by the
 /// in-app theme toggle in `app.rs`); when iOS and/or Android are selected it
-/// also emits `themes()`, a platform-keyed `Themes` bundle wiring Cupertino
+/// also emits `themes()`, a platform-keyed `Themes` bundle wiring Material
 /// for iOS and Material for Android (D105 Phase 23 Step 5) so a generated
 /// app looks native-appropriate on each target with no hand-editing.
 fn theme_rs(opts: &NewOptions) -> String {
@@ -972,18 +972,14 @@ pub fn light() -> ThemeData {
     if has_ios || has_android {
         out.push_str(
             r#"
-/// Per-platform look (D105): iOS gets Cupertino chrome, Android gets
-/// Material chrome; every other platform (desktop, web) falls back to
-/// `light()`. Passed to `App::themes(..)` in `lib.rs`.
+/// One design system, not per-platform chrome (D133, superseding D105's
+/// Cupertino half): Android keeps Material's structural bar, everything
+/// else uses the base theme. Third-party themes plug in through this same
+/// `Themes` bundle. Passed to `App::themes(..)` in `lib.rs`.
 pub fn themes() -> rosace::prelude::Themes {
     rosace::prelude::Themes::new(light())
 "#,
         );
-        if has_ios {
-            out.push_str(
-                "        .platform(rosace::prelude::Platform::Ios, rosace::prelude::cupertino())\n",
-            );
-        }
         if has_android {
             out.push_str(
                 "        .platform(rosace::prelude::Platform::Android, rosace::prelude::material())\n",
