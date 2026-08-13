@@ -58,6 +58,10 @@ impl ListView {
     }
 
     pub fn no_scrollbar(mut self) -> Self { self.show_scrollbar = false; self }
+    /// Override the scrollbar thumb colour (defaults to the theme's
+    /// `outline`). Was reachable only by assigning the public field, which
+    /// breaks the builder chain.
+    pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar_color = Some(c); self }
 }
 
 impl Widget for ListView {

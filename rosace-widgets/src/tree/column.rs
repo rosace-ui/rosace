@@ -85,12 +85,22 @@ impl Column {
             .sum::<f32>() + gap_total;
 
         let flex_pool = (max_h - fixed_h).max(0.0);
+        // `c` is shadowed by the closure's child parameter below.
+        let cross_bound = c.max_width;
 
         let sizes: Vec<Size> = self.children.iter().map(|c| {
             let ff = c.flex_factor();
             if ff > 0.0 && flex_enabled {
                 let h = flex_pool * ff / total_flex;
-                c.layout(&ctx.with_constraints(Constraints::tight(max_w, h)))
+                // Mirror of the fix in `row.rs` — see its comment. `max_w` is
+                // infinite inside a horizontal ScrollView, and baking that
+                // into a tight constraint hands the child an infinite width.
+                c.layout(&ctx.with_constraints(Constraints {
+                    min_width: 0.0,
+                    max_width: cross_bound,
+                    min_height: h,
+                    max_height: rosace_core::AxisBound::Bounded(h),
+                }))
             } else {
                 c.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h)))
             }
@@ -149,6 +159,43 @@ impl Widget for Column {
             let pos = result.child_positions[i];
             let child_rect = rect_at(offset(inner_rect.origin, pos.x, pos.y), sizes[i]);
             child.paint(&mut ctx.child(child_rect));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An `Expanded` child inside an UNBOUNDED cross axis must not be handed
+    /// an infinite size.
+    ///
+    /// `avail_w` reports `f32::INFINITY` for an unbounded axis — which is
+    /// every Column inside a horizontal `ScrollView`. Baking that into the flex
+    /// branch's tight constraint forced an infinite width on the child; a
+    /// child that centres its own content then computed `(inf - h) / 2`, and
+    /// the arithmetic that followed produced NaN. The result was text drawn
+    /// at NaN and a panic in the glyph walk's `as i32` cast — a crash, not a
+    /// layout glitch.
+    #[test]
+    fn an_expanded_child_is_never_given_an_infinite_cross_axis() {
+        use rosace_render::FontCache;
+        let font = FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+
+        let w = Column::new().child(super::super::Expanded::new(
+            super::super::Container::new().width(64.0),
+        ));
+        let c = Constraints {
+            min_width: 0.0,
+            max_width: rosace_core::AxisBound::Unbounded,
+            min_height: 0.0,
+            max_height: rosace_core::AxisBound::Bounded(800.0),
+        };
+        let sizes = w.layout_sizes(&LayoutCtx::new(c, &font, &theme));
+        for s in &sizes {
+            assert!(s.width.is_finite(), "child width must be finite, got {}", s.width);
+            assert!(s.height.is_finite(), "child height must be finite, got {}", s.height);
         }
     }
 }

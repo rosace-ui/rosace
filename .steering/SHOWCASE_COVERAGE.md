@@ -1,5 +1,10 @@
 # Showcase coverage
 
+> **Update 2026-08-13** — the ten missing user-facing widgets now have
+> screens, every catalog page is render-tested, and every pressable element
+> reports through a shared toast. Re-run the measurement below after further
+> changes; the builder-coverage figure is the one still worth chasing.
+
 Measured 2026-08-13 against `examples/showcase`, not estimated. Method:
 enumerate every type in `rosace-widgets/src/tree` that implements `Widget`,
 enumerate each one's builder methods (`pub fn x(mut self, ..) -> Self`), then

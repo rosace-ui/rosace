@@ -21,3 +21,6 @@ pub use crate::{
     Image, ImageCache, ImageFit, ImageSource, ImageWidget,
 };
 pub use crate::forms::{Form, FormField, FieldError, Validator, Required, Email, MinLength, MaxLength, Range, Contains};
+
+/// Width breakpoints for [`Responsive`].
+pub use crate::tree::breakpoint;

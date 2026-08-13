@@ -611,6 +611,9 @@ pub use rosace_render::canvas::Color;
 
 // Accessibility + focus
 pub use rosace_core::a11y::FocusNode;
+// `Semantics` is in the prelude but its `.role(..)` argument was not, so the
+// widget could not actually be used from a prelude import.
+pub use rosace_core::{Role, SemanticNode};
 pub use rosace_widgets::{AbsorbPointer, FocusApi, IgnorePointer, OverlayApi, OverlayKind, PressApi, Pressable};
 
 // Widgets
@@ -733,6 +736,9 @@ pub mod prelude {
         push_overlay, OverlayApi, OverlayKind,
     };
     pub use rosace_core::a11y::FocusNode;
+    // `Semantics` is exported below but its `.role(..)` argument was not, so
+    // the widget could not be used from a plain prelude import.
+    pub use rosace_core::{Role, SemanticNode};
     pub use rosace_widgets::FocusApi;
     pub use rosace_widgets::RepaintBoundary;
     pub use rosace_widgets::TransformLayer;
