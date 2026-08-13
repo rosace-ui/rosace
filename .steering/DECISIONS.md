@@ -1844,6 +1844,42 @@ honest; interactive tracking is the named follow-up.
 (so a screen with unsaved edits can confirm) is the obvious next layer and is
 not built.
 
+### D136 — `WillPopScope` gates `pop()`, not the back intent (2026-08-13)
+
+The guard lives inside `ScreenNav::pop`, so it applies to every way out of a
+screen: the system back button/gesture, iOS's edge swipe,
+`AppBar::back_button` (which calls `pop`), and any programmatic `nav.pop()`.
+
+**Why not in the back handler.** Guarding only the system intent would be
+worse than no guard: the same screen would protect unsaved work or lose it
+depending on whether the user pressed the toolbar button or the hardware
+control. One gate, at the single choke point they all pass through.
+
+**A blocked pop still CONSUMES the back intent.** The guard has just acted —
+opened a "discard changes?" dialog, typically — and reporting "not handled"
+would let Android finish the activity out from under that question, which is
+exactly the data loss the guard exists to prevent. `has_will_pop` is separate
+from `may_pop` for this reason: at the root there is nothing to pop, but a
+guard present still means the app intercepted.
+
+**No force-pop API.** The guard reads app state, so clearing what made the
+screen dirty is what unblocks it. A bypass would be a way to defeat the guard
+by accident.
+
+**Blocking wins** when several scopes are registered. A guard protects
+something; losing work because one of two agreed is not a trade worth making.
+
+**Lifetime is the paint pass**, and the registry is cleared only when the
+widget tree is about to REPAINT. Clearing every frame looks equivalent and is
+not: on a cache-hit frame no widget `paint` runs, so guards would be wiped
+and never re-registered, protecting work only on frames that happened to be
+dirty. Same hazard the overlay registry hit; found here by a test that popped
+straight through a guard meant to block it.
+
+**Known edge:** during a screen transition both screens paint, so both guards
+apply and blocking wins. Recorded rather than solved — solving it needs the
+transition to expose which screen is incoming.
+
 D-DEF-001  ROSACE Studio design          → Phase 4
 D-DEF-002  Wide color / HDR              → Phase 3
 D-DEF-003  2D bidirectional scroll       → Phase 3

@@ -31,6 +31,9 @@ use std::sync::Arc;
 /// Returns `true` if it consumed the back intent.
 pub type BackHandler = Arc<dyn Fn() -> bool + Send + Sync>;
 
+/// Returns `true` to allow the pop, `false` to block it.
+pub type WillPopHandler = Arc<dyn Fn() -> bool + Send + Sync>;
+
 thread_local! {
     /// The active handler, if any.
     ///
@@ -45,6 +48,48 @@ thread_local! {
     /// have yet. Last-wins is predictable and documented rather than
     /// half-guessed; see the module docs for the ordering it sits inside.
     static HANDLER: RefCell<Option<BackHandler>> = const { RefCell::new(None) };
+
+    /// Per-frame `WillPopScope` registrations.
+    ///
+    /// Rebuilt every paint rather than kept: a scope belongs to the screen
+    /// that painted it, so a screen that is no longer on top simply stops
+    /// registering and its guard stops applying. Nothing has to track
+    /// mounting or disposal — the paint pass already knows what is on screen.
+    static WILL_POP: RefCell<Vec<WillPopHandler>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Clear the per-frame `WillPopScope` registrations. Called by the engine
+/// before each paint, the same way the overlay registry is drained.
+pub fn clear_will_pop() {
+    WILL_POP.with(|w| w.borrow_mut().clear());
+}
+
+/// Register a guard for this frame. Called by the `WillPopScope` widget
+/// during paint.
+pub fn register_will_pop(f: WillPopHandler) {
+    WILL_POP.with(|w| w.borrow_mut().push(f));
+}
+
+/// Is there a guard at all this frame?
+///
+/// Distinct from [`may_pop`] because the two answers differ at the root of
+/// the stack: with nothing to pop, a guard still means the app INTERCEPTED
+/// the intent (it is about to ask "discard your changes?"), and Android must
+/// not finish the activity underneath that question.
+pub fn has_will_pop() -> bool {
+    WILL_POP.with(|w| !w.borrow().is_empty())
+}
+
+/// May the current screen be popped?
+///
+/// Every registered guard must agree. Blocking wins, because a guard exists
+/// precisely to protect something — losing unsaved work because one of two
+/// scopes said yes is not a trade worth making.
+pub fn may_pop() -> bool {
+    // Cloned out before calling: a guard opens a dialog, which sets an atom,
+    // which can rebuild and re-register — re-entering the borrow would panic.
+    let guards: Vec<WillPopHandler> = WILL_POP.with(|w| w.borrow().clone());
+    guards.into_iter().all(|g| g())
 }
 
 /// Register the handler the engine consults on a back intent.

@@ -630,7 +630,7 @@ pub use rosace_widgets::{
     ProgressBar,
     RectReader,
     RepaintBoundary,
-    Responsive, breakpoint,
+    Responsive, breakpoint, WillPopScope,
     TransformLayer,
     OverlayEntry, LayerId, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
     push_overlay,

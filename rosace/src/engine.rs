@@ -900,6 +900,19 @@ impl FrameEngine {
             || hover_frame;
 
         if needs_paint {
+        // Reset the `WillPopScope` guards ONLY when the widget tree is about
+        // to re-paint and repopulate them.
+        //
+        // Clearing unconditionally (where `clear_overlays` sits, above) looks
+        // right and is wrong: on a cache-hit frame the engine replays cached
+        // pictures and no widget `paint` runs, so the guards would be wiped
+        // and never re-registered. A screen would then protect unsaved work
+        // only on frames that happened to be dirty — which is to say, almost
+        // never, and unpredictably. Same hazard the overlay registry hit
+        // (see `build_overlays`' comment); found by a test that popped
+        // successfully through a guard that should have blocked it.
+        rosace_core::nav_back::clear_will_pop();
+
         // A full repaint clears the whole canvas; otherwise we clear
         // and replay only the damaged region (computed by the walk).
         // GPU-shapes mode (D109/Phase 27) is ALWAYS a full repaint: the
@@ -5348,6 +5361,86 @@ mod tests {
         e.paint(&mut a, &mut b, &[rosace_platform::InputEvent::BackPressed]);
         assert!(!e.back_was_handled(),
             "a root navigator must not swallow back — the user could not leave the app");
+    }
+
+
+    /// `WillPopScope` must gate EVERY way out of a screen.
+    ///
+    /// The gate lives inside `ScreenNav::pop`, not in the back-intent
+    /// handler, precisely so the AppBar's own back button cannot walk past
+    /// it. A screen that protects unsaved work from the system gesture but
+    /// loses it to the toolbar button would be worse than no guard at all,
+    /// so both routes are driven here.
+    #[test]
+    fn will_pop_scope_blocks_the_system_back_and_the_app_bar_button_alike() {
+        use rosace_nav::ScreenNav;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Mutex;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct App {
+            depth: Arc<Mutex<usize>>,
+            asked: Arc<AtomicUsize>,
+            dirty: Arc<AtomicBool>,
+            nav_out: Arc<OnceLock<ScreenNav<u8>>>,
+        }
+        impl Component for App {
+            fn build(&self, ctx: &mut Context) -> Element {
+                let nav = ScreenNav::new(ctx, 0u8);
+                let seeded = ctx.state(false);
+                if !seeded.get() { seeded.set(true); nav.push(1u8); }
+                *self.depth.lock().unwrap() = nav.depth();
+                let _ = self.nav_out.set(nav.clone());
+
+                let (asked, dirty) = (self.asked.clone(), self.dirty.clone());
+                rosace_widgets::tree::WillPopScope::new(
+                    rosace_widgets::tree::Text::new("editor"),
+                )
+                .on_will_pop(move || {
+                    asked.fetch_add(1, Ordering::SeqCst);
+                    // Real shape: allow only once the work is saved.
+                    !dirty.load(Ordering::SeqCst)
+                })
+                .into_element()
+            }
+        }
+
+        let depth = Arc::new(Mutex::new(0));
+        let asked = Arc::new(AtomicUsize::new(0));
+        let dirty = Arc::new(AtomicBool::new(true));
+        let nav_out = Arc::new(OnceLock::new());
+        let mut e = FrameEngine::new(
+            Box::new(App {
+                depth: depth.clone(), asked: asked.clone(),
+                dirty: dirty.clone(), nav_out: nav_out.clone(),
+            }),
+            rosace_render::FontCache::embedded(),
+        );
+        let (mut a, mut b) = (SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200));
+        e.paint(&mut a, &mut b, &[]);
+        assert_eq!(*depth.lock().unwrap(), 2);
+
+        // 1. SYSTEM back — blocked, and still CONSUMED so Android does not
+        //    finish the activity out from under the question the guard asked.
+        e.paint(&mut a, &mut b, &[rosace_platform::InputEvent::BackPressed]);
+        e.paint(&mut a, &mut b, &[]);
+        assert_eq!(asked.load(Ordering::SeqCst), 1, "the guard must be consulted");
+        assert_eq!(*depth.lock().unwrap(), 2, "blocked: still on the same screen");
+        assert!(e.back_was_handled(),
+            "a blocked pop still consumes the intent — otherwise Android exits");
+
+        // 2. The APP BAR button calls nav.pop() directly. Same guard.
+        let nav = nav_out.get().unwrap().clone();
+        assert!(!nav.pop(), "pop must report it was blocked");
+        e.paint(&mut a, &mut b, &[]);
+        assert_eq!(asked.load(Ordering::SeqCst), 2, "consulted again");
+        assert_eq!(*depth.lock().unwrap(), 2, "the toolbar button cannot bypass the guard");
+
+        // 3. Work saved -> the same guard now allows, via BOTH routes.
+        dirty.store(false, Ordering::SeqCst);
+        assert!(nav.pop(), "an allowing guard lets the pop through");
+        e.paint(&mut a, &mut b, &[]);
+        assert_eq!(*depth.lock().unwrap(), 1, "back at the root");
     }
 
 }

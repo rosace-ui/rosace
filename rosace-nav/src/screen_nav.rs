@@ -140,6 +140,19 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
         {
             let handler_nav = nav.clone();
             rosace_core::nav_back::set_back_handler(std::sync::Arc::new(move || {
+                // A BLOCKED pop still consumes the intent. The guard has
+                // just done something — opened a "discard changes?" dialog,
+                // typically — and returning false here would let Android
+                // finish the activity out from under that question, which is
+                // precisely the data loss the guard exists to prevent.
+                //
+                // This is also why `has_will_pop` is separate from `may_pop`:
+                // at the ROOT there is nothing to pop, but a guard still
+                // means the app intercepted, so back must not exit.
+                if rosace_core::nav_back::has_will_pop() {
+                    let _ = handler_nav.pop(); // runs the guard; may be blocked
+                    return true;
+                }
                 handler_nav.can_pop() && handler_nav.pop()
             }));
         }
@@ -179,6 +192,16 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
     /// Pop the top screen. No-ops at the root. Returns true if a pop occurred.
     /// Triggers the reverse of `push`'s transition (enter from the left).
     pub fn pop(&self) -> bool {
+        // The `WillPopScope` gate lives HERE, not in the back-intent
+        // handler, so every route out of a screen passes through it: the
+        // system back button/gesture, `AppBar::back_button` (which calls
+        // this), and any programmatic `nav.pop()`. Gating only the system
+        // intent would let the bar's own back button walk past the guard —
+        // the same screen losing unsaved work depending on which control the
+        // user happened to press.
+        if !rosace_core::nav_back::may_pop() {
+            return false;
+        }
         if self.atom.get().len() > 1 {
             self.previous.set_always(self.current());
             self.atom.update_always(|s| {

@@ -54,6 +54,10 @@ automatically — pin `=0.1.0` if you need the old surface.
   overlay closes, else the navigator pops, else the app declines so the
   platform does its default. None of this was wired before — pressing back on
   Android three screens deep EXITED the app.
+- **`WillPopScope`** (D136) — intercept a screen leaving, so unsaved work
+  survives. Gates `ScreenNav::pop` itself, so it covers the system back
+  button/gesture, the iOS edge swipe, `AppBar::back_button` and any
+  programmatic pop alike.
 - **Platform accessibility** (D132). One semantic tree now drives AccessKit on
   desktop, `UIAccessibilityContainer` on iOS and `AccessibilityNodeProvider`
   on Android, carrying stable ids and painted bounds.
