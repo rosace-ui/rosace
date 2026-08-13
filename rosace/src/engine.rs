@@ -217,6 +217,20 @@ pub struct FrameEngine {
     // ── Reconciler state — persists across frames ──────────────────────
     prev_mounted: HashSet<u64>,
     element_cache: HashMap<u64, rosace_core::Element>,
+    /// This engine's root component id.
+    ///
+    /// Every engine used to hardcode `ComponentId(0)`, which is fine with one
+    /// engine per process and wrong the moment there are two: the dirty set
+    /// (`rosace_state::dirty_set`) is PROCESS-GLOBAL and keyed by
+    /// `ComponentId`, so two engines both calling themselves 0 shared one
+    /// dirty flag. Whichever drained `take_dirty_components()` first consumed
+    /// the other's mark, and that engine silently skipped its rebuild —
+    /// losing whatever the user had just typed.
+    ///
+    /// That is the root cause of the intermittent engine-test failures
+    /// logged as WIDGET_FINDINGS L15: the suite runs tests in parallel, each
+    /// with its own engine, all of them component 0.
+    root_component_id: rosace_core::types::ComponentId,
     /// Overlays emitted during BUILD (`Dialog::emit`/`Snackbar::emit`) —
     /// kept until the next rebuild so they survive cache-hit frames (see
     /// the clear-before-build comment in `paint`).
@@ -357,11 +371,18 @@ impl FrameEngine {
     /// the first `paint` call does a full build + repaint.
     pub fn new(root: Box<dyn Component>, font: rosace_render::FontCache) -> Self {
         rosace_state::reset_to_global_dirty();
+        // Process-unique, so concurrent engines never share a dirty flag.
+        // See the `root_component_id` field doc.
+        static NEXT_ROOT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let root_component_id = rosace_core::types::ComponentId(
+            NEXT_ROOT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
         Self {
             root,
             font,
             prev_mounted: HashSet::new(),
             element_cache: HashMap::new(),
+            root_component_id,
             build_overlays: Vec::new(),
             render_tree: Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
             overlay_trees: std::collections::HashMap::new(),
@@ -760,13 +781,13 @@ impl FrameEngine {
 
         // ── Build root (only when dirty) ────────────────────────────────
         //
-        // The root component (ComponentId(0)) owns all atoms created via
-        // ctx.state(). When any of those atoms change, ComponentId(0) lands
+        // The root component owns all atoms created via
+        // ctx.state(). When any of those atoms change, that id lands
         // in dirty_ids. We rebuild ONLY then; on clean frames the cached
         // element is reused, keeping `build()` side-effects out of the
         // render loop (e.g. an atom.set() inside build() would otherwise
         // cause an infinite loop).
-        let root_component_id = rosace_core::types::ComponentId(0);
+        let root_component_id = self.root_component_id;
         let root_is_dirty = global_dirty || dirty_ids.contains(&root_component_id);
 
         // ── Clear overlay registry BEFORE build ─────────────────────────
@@ -781,14 +802,15 @@ impl FrameEngine {
         // pushers (Dropdown, Menu, Drawer) still drain per-frame below.
         clear_overlays();
 
-        let element = if root_is_dirty || !self.element_cache.contains_key(&0) {
+        let cache_key = root_component_id.0;
+        let element = if root_is_dirty || !self.element_cache.contains_key(&cache_key) {
             let mut ctx = rosace_core::Context::new(root_component_id);
             let el = root.build(&mut ctx);
-            self.element_cache.insert(0, el.clone());
+            self.element_cache.insert(cache_key, el.clone());
             self.build_overlays = drain_overlays();
             el
         } else {
-            self.element_cache.get(&0).unwrap().clone()
+            self.element_cache.get(&cache_key).unwrap().clone()
         };
 
         // ── Read active theme each frame so set_theme() takes effect ────

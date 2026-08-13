@@ -140,10 +140,27 @@ pub fn set_theme(theme: ThemeData) {
 
 #[cfg(test)]
 mod tests {
+    /// Every test in this module drives the SAME process-global state — the
+    /// active theme, the theme mode, and the media query. The suite runs
+    /// tests in parallel, so without this they interleave: one test pushes
+    /// "OS is dark", another pushes "OS is light" between that write and the
+    /// assertion, and the first fails for reasons that have nothing to do
+    /// with the code it is testing.
+    ///
+    /// Observed as an intermittent failure of
+    /// `sync_system_theme_follows_os_brightness_in_system_mode` roughly one
+    /// full-workspace run in ten.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     use super::*;
 
     #[test]
     fn use_theme_returns_valid_theme() {
+        let _g = serial();
         let theme = use_theme();
         // The default theme is the light theme, so is_dark should be false.
         // However, if another test already called set_theme(), we just check
@@ -154,6 +171,7 @@ mod tests {
 
     #[test]
     fn set_theme_updates_the_global() {
+        let _g = serial();
         use crate::built_in::dark_theme;
 
         let dark = dark_theme();
@@ -168,6 +186,7 @@ mod tests {
 
     #[test]
     fn use_theme_typography_is_consistent() {
+        let _g = serial();
         let theme = use_theme();
         assert!(
             theme.typography.display_large.size > theme.typography.body_large.size,
@@ -177,6 +196,7 @@ mod tests {
 
     #[test]
     fn sync_system_theme_follows_os_brightness_in_system_mode() {
+        let _g = serial();
         set_theme_mode(ThemeMode::System);
 
         let mut mq = rosace_core::media_query::use_media_query();
@@ -193,6 +213,7 @@ mod tests {
 
     #[test]
     fn sync_system_theme_leaves_a_pinned_mode_alone() {
+        let _g = serial();
         set_theme_mode(ThemeMode::Dark);
 
         let mut mq = rosace_core::media_query::use_media_query();

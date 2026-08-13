@@ -1,8 +1,43 @@
-use std::sync::{Mutex, MutexGuard};
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use rosace_trace::event::ComponentId;
 
-static DIRTY: Mutex<Option<HashSet<ComponentId>>> = Mutex::new(None);
+thread_local! {
+    /// Components to rebuild next frame, for THIS thread's engine.
+    ///
+    /// Thread-local, not process-global, and that is the whole point. It used
+    /// to be a `static Mutex<Option<HashSet<..>>>` shared by every engine in
+    /// the process, while the state store it partners with
+    /// (`state_store::STORE`) was already thread-local. That asymmetry was a
+    /// real bug, not a style inconsistency:
+    ///
+    ///   * `take_dirty_components()` DRAINS the set. With two engines alive,
+    ///     whichever drained first consumed the other's marks, and that
+    ///     engine silently skipped its rebuild.
+    ///   * `FrameEngine::new()` calls `reset_to_global_dirty()`, so merely
+    ///     CONSTRUCTING a second engine wiped the first one's pending work.
+    ///
+    /// The visible symptom was dropped keystrokes: type "hello world" and get
+    /// "hello worl" — the frame that would have applied the last character
+    /// never rebuilt. It showed up as engine tests failing about one run in
+    /// three, a different test each time, because the suite runs tests in
+    /// parallel and each test builds its own engine (WIDGET_FINDINGS L15).
+    ///
+    /// A real app has one engine on one UI thread, so nothing changes there.
+    static DIRTY: RefCell<Option<HashSet<ComponentId>>> = const { RefCell::new(None) };
+}
+
+/// Cross-thread "rebuild everything" request.
+///
+/// [`reset_to_global_dirty`] can legitimately be called from a thread that
+/// owns no engine — a platform callback pushing an OS setting change
+/// (`set_media_query` on an iOS/Android configuration change). Marking only
+/// that thread's `DIRTY` would drop the request on the floor, so the intent
+/// is also recorded here where the UI thread can see it.
+///
+/// Erring toward an EXTRA rebuild is safe; missing one loses user input.
+static FORCE_GLOBAL: AtomicBool = AtomicBool::new(true);
 
 /// Mark the given components dirty for the next frame.
 ///
@@ -10,17 +45,19 @@ static DIRTY: Mutex<Option<HashSet<ComponentId>>> = Mutex::new(None);
 /// The render loop reads this via `take_dirty_components()` once per frame.
 pub fn mark_dirty(ids: &[ComponentId]) {
     if ids.is_empty() { return; }
-    let mut guard: MutexGuard<Option<HashSet<ComponentId>>> = DIRTY.lock().unwrap();
-    let set = guard.get_or_insert_with(HashSet::new);
-    for &id in ids {
-        set.insert(id);
-    }
+    DIRTY.with(|d| {
+        let mut guard = d.borrow_mut();
+        let set = guard.get_or_insert_with(HashSet::new);
+        for &id in ids {
+            set.insert(id);
+        }
+    });
 }
 
 /// Check if `ALL` components should be rebuilt this frame (when no specific
 /// dirty set is recorded — e.g. first frame, or full-refresh event).
 pub fn is_global_dirty() -> bool {
-    DIRTY.lock().unwrap().is_none()
+    DIRTY.with(|d| d.borrow().is_none()) || FORCE_GLOBAL.load(Ordering::Relaxed)
 }
 
 /// Drain and return the current dirty set, replacing it with an empty set.
@@ -30,18 +67,17 @@ pub fn is_global_dirty() -> bool {
 /// dirty this frame" — new atom writes after this call will call `mark_dirty`
 /// and populate the set for the NEXT frame.
 pub fn take_dirty_components() -> HashSet<ComponentId> {
-    let mut guard = DIRTY.lock().unwrap();
-    match guard.as_mut() {
-        Some(set) => {
-            // Swap the set out, leaving an empty set in place.
-            std::mem::take(set)
+    FORCE_GLOBAL.store(false, Ordering::Relaxed);
+    DIRTY.with(|d| {
+        let mut guard = d.borrow_mut();
+        match guard.as_mut() {
+            Some(set) => std::mem::take(set),
+            None => {
+                *guard = Some(HashSet::new());
+                HashSet::new()
+            }
         }
-        None => {
-            // Globally dirty — transition to "clean" (empty set).
-            *guard = Some(HashSet::new());
-            HashSet::new()
-        }
-    }
+    })
 }
 
 /// Reset to the "globally dirty" state (rebuild everything next frame).
@@ -49,7 +85,8 @@ pub fn take_dirty_components() -> HashSet<ComponentId> {
 /// Called at startup or when the tree shape changes in a way that invalidates
 /// the element cache (e.g. a component type mismatch during reconciliation).
 pub fn reset_to_global_dirty() {
-    *DIRTY.lock().unwrap() = None;
+    DIRTY.with(|d| *d.borrow_mut() = None);
+    FORCE_GLOBAL.store(true, Ordering::Relaxed);
 }
 
 #[cfg(test)]

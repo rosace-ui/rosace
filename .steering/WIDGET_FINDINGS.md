@@ -146,7 +146,7 @@ shared root causes** — worth investigating these before doing 46 individual wi
 - Give Button a "Link" variant (#41).
 - Clarify Table vs DataTable distinction (#25), Progress vs Slider distinction (#39).
 
-## L15 — engine text-input tests share state and flake (pre-existing)
+## L15 — engine text-input tests share state and flake — **FIXED 2026-08-13**
 
 Confirmed against an unmodified tree (stashed working copy): `cargo test -p
 rosace --lib` fails roughly 1 run in 3, and **the failing test differs each
@@ -172,9 +172,40 @@ exactly this class).
 `ANIMATION_GLOBAL_TEST_LOCK` is held by some of these tests but plainly not
 by all the ones that can interfere.
 
-NOT caused by the widget audit work; logged here so it is not rediscovered.
-Worth fixing before it erodes trust in the suite — a suite that fails 1 run
-in 3 for unrelated reasons trains you to ignore red.
+**Root cause (found 2026-08-13):** `rosace_state::dirty_set::DIRTY` was a
+process-global `Mutex<Option<HashSet<ComponentId>>>`, while the state store
+it partners with (`state_store::STORE`) was already thread-local. Two
+consequences, both silent:
+
+* `take_dirty_components()` DRAINS the set, so with two engines alive
+  whichever drained first consumed the other's marks — and that engine
+  skipped the rebuild that would have applied the keystroke.
+* `FrameEngine::new()` calls `reset_to_global_dirty()`, so merely
+  CONSTRUCTING a second engine wiped the first one's pending work.
+
+That is why the document came back mangled rather than merely misplaced: a
+frame that should have rebuilt did not, so the next keystroke was applied to
+a stale value. Every failure was a DROPPED character — "hello worl" for
+"hello world" — which reads as scrambling once the caret math follows.
+
+`DIRTY` is now thread-local, with a process-global `FORCE_GLOBAL` flag kept
+for the one legitimate cross-thread case: a platform callback pushing an OS
+setting change from a thread that owns no engine. Erring toward an extra
+rebuild is safe; missing one loses user input.
+
+A real app has one engine on one UI thread, so nothing changes there.
+
+**First attempt was wrong and the numbers said so.** I initially blamed
+every engine hardcoding `ComponentId(0)` and gave each engine a unique root
+id. Re-running showed 6/12 failures — no better than baseline — which is
+what sent me to the real cause. The unique-id change is kept: it is correct
+on its own merits, just not the bug.
+
+Verified: 10/10 clean full-workspace runs, from ~1 in 3 failing.
+
+Also fixed alongside: `rosace-theme::provider`'s five tests all drive the
+same global theme + media query and interleaved (~1 workspace run in 10);
+now serialized.
 
 Fixed while confirming the above: `rosace-state`'s `dirty_set` tests raced
 on the same process-global (each called `reset_to_global_dirty` at the top,
