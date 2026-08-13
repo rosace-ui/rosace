@@ -79,7 +79,15 @@ fn with_alpha(c: Color, a: f32) -> Color {
 
 impl Widget for Slider {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        Size { width: self.width.unwrap_or(avail_w(ctx.constraints)), height: self.height }
+        // 24px tall was the smallest target in the library — roughly half
+        // the minimum (Quality Bar §6). The track and thumb already centre
+        // on `ctx.rect`, so reserving the target moves nothing visually; a
+        // slider is also dragged, which makes a too-thin hit strip worse
+        // than a too-small button.
+        Size {
+            width:  self.width.unwrap_or(avail_w(ctx.constraints)),
+            height: self.height.max(super::MIN_TAP_TARGET),
+        }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -184,7 +192,12 @@ mod tests {
         let base = Slider::new(0.5);
         let customized = Slider::new(0.5).height(30.0).fill_color(Color::rgb(255, 0, 0));
         assert_eq!(base.layout(&ctx).width, customized.layout(&ctx).width);
-        assert_eq!(customized.layout(&ctx).height, 30.0);
+        // `.height(30.0)` sets the TRACK band; the widget still occupies the
+        // tap-target minimum (Quality Bar §6), the difference being
+        // transparent padding with the track centred in it.
+        assert_eq!(customized.layout(&ctx).height, crate::tree::MIN_TAP_TARGET);
+        // A track taller than the minimum is honoured as-is.
+        assert_eq!(Slider::new(0.5).height(72.0).layout(&ctx).height, 72.0);
     }
 
     #[test]

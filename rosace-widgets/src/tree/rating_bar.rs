@@ -85,7 +85,15 @@ impl Widget for RatingBar {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let n = self.count as f32;
         let w = n * self.size + (n - 1.0).max(0.0) * self.spacing;
-        ctx.constraints.constrain(Size { width: w, height: self.size })
+        // Stars keep their designed size; the ROW reserves a real tap
+        // target around them (Quality Bar §6). A 20px star is under half the
+        // minimum, and rating is a precision tap — the star you hit decides
+        // the value, so an undersized row mis-scores rather than just
+        // missing.
+        ctx.constraints.constrain(Size {
+            width:  w,
+            height: self.size.max(super::MIN_TAP_TARGET),
+        })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -101,7 +109,9 @@ impl Widget for RatingBar {
             )
         };
 
-        let r = ctx.rect;
+        // Stars are drawn in a band of their own height, centred in the
+        // (taller) tap target the layout reserved.
+        let r = super::centered_visual(ctx.rect, ctx.rect.size.width, self.size);
         ctx.semantics(
             super::SemanticsProps::new(rosace_core::Role::Slider)
                 .label("rating")
@@ -167,8 +177,11 @@ mod tests {
         let (font, theme) = test_env();
         let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
         let size = bar.layout(&ctx);
-        // 5 × 20 + 4 × 4 gaps = 116.
-        assert_eq!((size.width, size.height), (116.0, 20.0));
+        // 5 × 20 + 4 × 4 gaps = 116 wide. The stars are still 20px — the
+        // ROW reserves the tap-target minimum around them (Quality Bar §6),
+        // which is why the height is not 20.
+        assert_eq!(size.width, 116.0);
+        assert_eq!(size.height, crate::tree::MIN_TAP_TARGET);
     }
 
     #[test]

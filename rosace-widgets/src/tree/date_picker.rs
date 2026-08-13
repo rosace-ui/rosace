@@ -331,6 +331,47 @@ impl DatePicker {
                 }, dot_r, pal.accent, 1.5);
             }
 
+            // ── A11y ──────────────────────────────────────────────────
+            // Every cell gets its own node. Without this the calendar was
+            // completely unusable non-visually: the grid painted 42 dates
+            // and announced none of them, so a screen-reader user heard the
+            // month header and then nothing selectable at all.
+            //
+            // The label is the FULL date, not the day number. "15" is
+            // meaningless read aloud; "15 July 2026" is the thing being
+            // chosen. Cells belonging to the neighbouring month are marked,
+            // since they look dimmed but sound identical.
+            {
+                let cell_rect = Rect {
+                    origin: Point { x, y },
+                    size: Size { width: cw, height: CELL_H },
+                };
+                let mut label = format!(
+                    "{} {} {}",
+                    date.day, SimpleDate::month_name(date.month), date.year,
+                );
+                if !in_cur {
+                    label.push_str(", adjacent month");
+                }
+                let mut props = super::SemanticsProps::new(rosace_core::Role::Button)
+                    .label(label);
+                // State a reader cannot see: what is picked, what is off
+                // limits, and which day is today.
+                let state = if disabled {
+                    Some("unavailable")
+                } else if show_circle {
+                    Some("selected")
+                } else if in_cur && self.today == Some(date) {
+                    Some("today")
+                } else {
+                    None
+                };
+                if let Some(v) = state {
+                    props = props.value(v);
+                }
+                mc.child(cell_rect).semantics(props);
+            }
+
             let day_str = date.day.to_string();
             let dw = mc.font.measure_text(&day_str, 13.0);
             let fg = if show_circle { pal.bg }
@@ -779,4 +820,69 @@ mod tests {
         assert!(dp.is_disabled(SimpleDate::new(2024, 7, 25)));
         assert!(!dp.is_disabled(SimpleDate::new(2024, 7, 15)));
     }
+
+    /// The calendar grid painted 42 dates and announced none of them, so it
+    /// could not be operated non-visually at all. Every cell now carries its
+    /// own node with the FULL date — "15" read aloud is meaningless, "15 July
+    /// 2026" is the thing being chosen.
+    #[test]
+    fn every_day_cell_is_announced_with_its_full_date_and_state() {
+        use rosace_render::{FontCache, PictureRecorder};
+        use crate::tree::RenderTree;
+        use std::{cell::RefCell, rc::Rc};
+
+        let font = FontCache::embedded();
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 },
+                       size: Size { width: 320.0, height: 380.0 } },
+                &font,
+                rosace_theme::built_in::dark_theme(),
+                tree.clone(),
+            );
+            DatePicker::new(SimpleDate::new(2026, 7, 1))
+                .selected(SimpleDate::new(2026, 7, 15))
+                .today(SimpleDate::new(2026, 7, 9))
+                .paint(&mut ctx);
+        }
+
+        let json = format!("{:?}", tree.borrow().collect_semantics());
+        assert!(json.contains("15 July 2026"), "the selected date must be announced: {json}");
+        assert!(json.contains("1 July 2026"), "an ordinary date must be announced");
+        assert!(json.contains("selected"), "selection is state a reader cannot see");
+        assert!(json.contains("today"), "today is state a reader cannot see");
+        assert!(json.contains("adjacent month"),
+            "leading/trailing cells look dimmed but would otherwise sound identical");
+    }
+
+    /// A date outside min/max is dimmed on screen; it must say so too.
+    #[test]
+    fn an_out_of_range_day_announces_that_it_is_unavailable() {
+        use rosace_render::{FontCache, PictureRecorder};
+        use crate::tree::RenderTree;
+        use std::{cell::RefCell, rc::Rc};
+
+        let font = FontCache::embedded();
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 },
+                       size: Size { width: 320.0, height: 380.0 } },
+                &font,
+                rosace_theme::built_in::dark_theme(),
+                tree.clone(),
+            );
+            DatePicker::new(SimpleDate::new(2026, 7, 1))
+                .min_date(SimpleDate::new(2026, 7, 10))
+                .paint(&mut ctx);
+        }
+        let json = format!("{:?}", tree.borrow().collect_semantics());
+        assert!(json.contains("unavailable"), "dates before min_date must say so: {json}");
+    }
+
 }
