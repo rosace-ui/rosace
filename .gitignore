@@ -40,3 +40,14 @@ Cargo.lock
 # mdBook guide + architecture books). Don't confuse the two.
 /examples/
 /page/
+
+# The GitHub wiki clone, if you keep one here. Ignored PRE-EMPTIVELY: it is
+# not checked out today, and without this entry cloning it in would make
+# this repo start tracking a copy of content it already owns — the same
+# pages committed twice, in two places, drifting apart.
+#
+# It is also NOT a source of truth, unlike examples/ and page/. `docs/` is
+# the editable source; the wiki is GENERATED from it by
+# scripts/docs_to_wiki.py. Edit docs/, regenerate, push the wiki.
+/wiki/
+*.wiki/

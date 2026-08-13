@@ -39,6 +39,38 @@ its docs page are usually one piece of work. Siblings in `~/Development`
 meant three windows and a lot of `../../`. Nesting costs nothing because
 the ignore entries keep the histories fully separate.
 
+## The wiki is GENERATED, not a fourth source of truth
+
+`github.com/rosace-ui/rosace/wiki` (backed by `rosace.wiki.git`) is the
+published reader-facing copy. It is **output**:
+
+```
+docs/  ──  scripts/docs_to_wiki.py  ──▶  rosace.wiki.git
+(edit here)                              (never edit here)
+```
+
+Edits made in the wiki UI are silently destroyed by the next regeneration.
+That is the one rule worth remembering about it.
+
+You may clone it in for convenience — `.gitignore` already covers `/wiki/`
+and `*.wiki/`, pre-emptively, so it cannot be swept into this repo:
+
+```sh
+git clone https://github.com/rosace-ui/rosace.wiki.git wiki
+python3 scripts/docs_to_wiki.py --wiki wiki --check   # dry run, link guard
+python3 scripts/docs_to_wiki.py --wiki wiki           # write
+git -C wiki commit -am "Regenerate from docs/" && git -C wiki push
+```
+
+Without those ignore entries, cloning it here would make this repo start
+tracking a second copy of content it already owns — the same pages
+committed twice, in two places, free to drift apart. That is the
+double-tracking risk, and it is the reason the entries exist before the
+directory does.
+
+`--check` writes nothing and fails on any unresolvable inter-page link, so
+it is the thing to run after editing `docs/`.
+
 ## `docs/` is NOT one of them
 
 `docs/` is tracked by THIS repo. It is the mdBook source (guide +
