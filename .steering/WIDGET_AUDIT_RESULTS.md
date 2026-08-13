@@ -18,9 +18,9 @@ Updated as work lands. The audit is the backlog; this is the burn-down.
 | P1 | `len()*0.6` text estimates (5 widgets) | **FIXED** 292dd7b |
 | — | Icons scaled but were centred unscaled | **FIXED** ea9c8a0 (D134) |
 | P2 | Fixed heights that clip scaled text (~25) | open — badge done |
-| P3 | Hardcoded colours (~20 widgets) | open |
-| P4 | Touch targets under 44px (~15) | open |
-| P5 | Theme-forced fields with no builder | open |
+| P3 | Hardcoded colours (~20 widgets) | **FIXED** f2f9628 |
+| P4 | Touch targets under 44px (~15) | in progress — switch/checkbox/radio done |
+| P5 | Theme-forced fields with no builder | **FIXED** f2f9628 (folded into P3: avatar, badge, chip, progress_bar, nav_rail, list_view, scroll_view, skeleton all moved to `Option<Color>` + builder) |
 | P6 | No `.padding(..)` (most of the library) | open |
 | P7 | No tests (~20 widgets) | open |
 | A | Missing/incorrect semantics (~12) | open |
@@ -298,3 +298,19 @@ These four are not "widget misses a builder". They are defects.
   the wrapper's node. May alias per-node state (anim channels, text-edit
   state). Its doc example uses `TextInput::new("Email")`, a signature that no
   longer exists.
+
+
+## The tap-target approach (P4)
+
+Reserved in **layout**, not by inflating hit rects. `MIN_TAP_TARGET` (44,
+the iOS HIG figure; Material says 48) is a floor on the space a control
+occupies; it paints its smaller visual centred inside that via
+`centered_visual`. This is `MaterialTapTargetSize.padded` in Flutter.
+
+Growing hit regions instead is the obvious move and it is wrong: a row of
+20px radios spaced 24px apart would end up with overlapping 44px hit rects,
+and then registration order silently decides which one a tap lands on. The
+layout approach makes neighbours space themselves correctly for free.
+
+Cost: layouts containing these controls get slightly taller. That is the
+intended change — the controls were genuinely too small to hit.

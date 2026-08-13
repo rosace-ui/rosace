@@ -287,6 +287,33 @@ impl Alignment {
 /// render tree. Roles come from `rosace_core::Role`.
 ///
 /// `heading_level`/`href` (D107/Phase 25) mirror `rosace_core::SemanticNode`'s
+
+/// Minimum interactive target, in logical pixels (Quality Bar §6).
+///
+/// 44 is the iOS HIG figure; Material says 48. The smaller of the two is the
+/// floor a control must clear, not the size it should look.
+///
+/// Applied to LAYOUT, not by quietly inflating hit rects. A control reserves
+/// at least this much space and paints its smaller visual centred inside it —
+/// the approach Flutter takes with `MaterialTapTargetSize.padded`. Growing
+/// hit regions instead would make adjacent small controls overlap, and then
+/// registration order silently decides which one a tap lands on.
+pub const MIN_TAP_TARGET: f32 = 44.0;
+
+/// The rect a control should PAINT into, centred inside the (larger) rect it
+/// was laid out with. See [`MIN_TAP_TARGET`].
+pub fn centered_visual(outer: rosace_core::types::Rect, w: f32, h: f32) -> rosace_core::types::Rect {
+    let w = w.min(outer.size.width);
+    let h = h.min(outer.size.height);
+    rosace_core::types::Rect {
+        origin: rosace_core::types::Point {
+            x: outer.origin.x + (outer.size.width - w) / 2.0,
+            y: outer.origin.y + (outer.size.height - h) / 2.0,
+        },
+        size: rosace_core::types::Size { width: w, height: h },
+    }
+}
+
 /// fields of the same name — carried through unchanged by `collect_semantics`.
 #[derive(Clone, Debug)]
 pub struct SemanticsProps {

@@ -88,7 +88,15 @@ fn with_alpha(c: Color, a: f32) -> Color {
 
 impl Widget for Switch {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        ctx.constraints.constrain(Size { width: self.width, height: self.height })
+        // Reserve a real tap target (Quality Bar §6). The track itself stays
+        // `self.width` x `self.height`; `paint` centres it in whatever this
+        // returns. A 44x24 switch was under half the required height, and
+        // since this widget is the Quality Bar's own exemplar the gap was
+        // propagating to anything copying it.
+        ctx.constraints.constrain(Size {
+            width:  self.width.max(super::MIN_TAP_TARGET),
+            height: self.height.max(super::MIN_TAP_TARGET),
+        })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -128,7 +136,9 @@ impl Widget for Switch {
         let shadow    = ctx.tc(colors.shadow);
 
         let dim = if self.disabled { 0.38 } else { 1.0 };
-        let r = ctx.rect;
+        // The VISUAL track, centred inside the (larger) tap target. Every
+        // geometry below is relative to this, not to `ctx.rect`.
+        let r = super::centered_visual(ctx.rect, self.width, self.height);
         let radius = r.size.height / 2.0;
 
         // ── Track (color eased between off/on; off-state gets an outline that
@@ -204,7 +214,27 @@ mod tests {
         let font = FontCache::embedded();
         let theme = rosace_theme::built_in::dark_theme();
         let ctx = LayoutCtx::new(rosace_layout::Constraints::loose(200.0, 200.0), &font, &theme);
-        assert_eq!(Switch::new(false).layout(&ctx), Size { width: 44.0, height: 24.0 });
+        // The TRACK is 44x24 — that is the look. The widget LAYS OUT 44x44,
+        // because a 24px-tall control is barely half the minimum tap target
+        // (Quality Bar §6) and this widget is the bar's own exemplar. The
+        // extra height is transparent padding; `paint` centres the track in
+        // it (see `centered_visual`).
+        let s = Switch::new(false);
+        assert_eq!((s.width, s.height), (44.0, 24.0), "track visual unchanged");
+        assert_eq!(s.layout(&ctx), Size { width: 44.0, height: super::super::MIN_TAP_TARGET });
+    }
+
+    /// The track must stay its designed size inside the padded target — the
+    /// tap-target fix must not visually inflate the switch into a fat pill.
+    #[test]
+    fn the_padded_target_does_not_stretch_the_track() {
+        let cmds = paint_switch(false, false);
+        let track = cmds.iter().find_map(|c| match c {
+            DrawCommand::FillRRect { rect, .. } => Some(*rect),
+            _ => None,
+        }).expect("the track is drawn as a rounded rect");
+        assert_eq!(track.size.height, 24.0, "track must stay 24 tall, not fill the 44px target");
+        assert_eq!(track.size.width, 44.0);
     }
 
     #[test]

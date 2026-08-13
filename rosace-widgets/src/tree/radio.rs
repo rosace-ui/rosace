@@ -57,7 +57,12 @@ impl Widget for Radio {
         let label_w = self.label.as_ref()
             .map(|l| ctx.font.measure_text(l, font_size) + 10.0)
             .unwrap_or(0.0);
-        Size { width: self.size + label_w, height: self.size.max(font_size * 1.4) }
+        // Both axes clear the minimum tap target (Quality Bar §6) — a 20px
+        // radio was the smallest control in the library.
+        Size {
+            width:  (self.size + label_w).max(super::MIN_TAP_TARGET),
+            height: self.size.max(font_size * 1.4).max(super::MIN_TAP_TARGET),
+        }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -89,7 +94,12 @@ impl Widget for Radio {
         let dim = if self.disabled { 0.4 } else { 1.0 };
 
         let bs = self.size;
-        let cx = ctx.rect.origin.x + bs / 2.0;
+        // Anchored left when a label follows it, centred otherwise.
+        let cx = if self.label.is_some() {
+            ctx.rect.origin.x + bs / 2.0
+        } else {
+            ctx.rect.origin.x + ctx.rect.size.width / 2.0
+        };
         let cy = ctx.rect.origin.y + ctx.rect.size.height / 2.0;
         let center = Point { x: cx, y: cy };
 
@@ -198,6 +208,29 @@ mod tests {
 
         let bare = Radio::new(false).layout(&ctx).width;
         assert!(narrow > bare, "a labelled control must be wider than a bare one");
+    }
+
+
+    /// Quality Bar §6: a control must reserve at least `MIN_TAP_TARGET`,
+    /// even though its visual is much smaller. The extra is transparent
+    /// padding — reserved in LAYOUT rather than by inflating the hit rect,
+    /// because overlapping hit rects would let registration order decide
+    /// which of two adjacent controls a tap lands on.
+    #[test]
+    fn an_unlabelled_control_still_reserves_a_full_tap_target() {
+        let font = FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let c = rosace_layout::Constraints::loose(400.0, 400.0);
+        let ctx = LayoutCtx::new(c, &font, &theme);
+
+        let s = Radio::new(false).layout(&ctx);
+        assert!(s.width >= crate::tree::MIN_TAP_TARGET, "width {} too small", s.width);
+        assert!(s.height >= crate::tree::MIN_TAP_TARGET, "height {} too small", s.height);
+
+        // A label makes it wider, never narrower.
+        let labelled = Radio::new(false).label("Remember me").layout(&ctx);
+        assert!(labelled.width > s.width);
+        assert!(labelled.height >= crate::tree::MIN_TAP_TARGET);
     }
 
 }
