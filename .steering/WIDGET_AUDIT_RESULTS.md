@@ -21,7 +21,7 @@ Updated as work lands. The audit is the backlog; this is the burn-down.
 | P3 | Hardcoded colours (~20 widgets) | **FIXED** f2f9628 |
 | P4 | Touch targets under 44px (~15) | **FIXED** for switch/checkbox/radio/button/chip/dropdown/segmented/stepper; slider, rating_bar, tab, menu row, nav_rail item, date_picker cells still open |
 | P5 | Theme-forced fields with no builder | **FIXED** f2f9628 (folded into P3: avatar, badge, chip, progress_bar, nav_rail, list_view, scroll_view, skeleton all moved to `Option<Color>` + builder) |
-| P6 | No `.padding(..)` (most of the library) | open |
+| P6 | No `.padding(..)` (most of the library) | in progress — `Dialog`, `ListTile`, `Accordion` done; `Menu`, `Snackbar`, `Toast`, `TimePicker`, `TextInput`, `TextArea`, `ScrollView`, `ListView`, `NavRail` still hardcoded |
 | P7 | No tests (~20 widgets) | in progress — `padding`, `list_view`, `positioned`, `wrap`, `scaffold`, `transform_layer`, `responsive`, `row`, `column` done |
 | A | Missing/incorrect semantics (~12) | **FIXED**; day-cell grid FIXED; a11y **Activate** now works on desktop, Focus + mobile still open |
 

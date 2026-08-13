@@ -62,6 +62,8 @@ pub enum DialogPresentation {
 /// [`OverlayApi::dialog`]: super::overlay_api::OverlayApi::dialog
 /// [`Drawer::emit`]: super::drawer::Drawer::emit
 pub struct Dialog {
+    /// `None` = `EdgeInsets::all(PADDING)`.
+    padding: Option<EdgeInsets>,
     pub title: String,
     pub message: Option<String>,
     pub width: f32,
@@ -77,6 +79,7 @@ impl Dialog {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
+            padding: None,
             message: None,
             width: 340.0,
             radius: 12.0,
@@ -91,6 +94,8 @@ impl Dialog {
     pub fn message(mut self, m: impl Into<String>) -> Self { self.message = Some(m.into()); self }
     pub fn width(mut self, w: f32) -> Self { self.width = w; self }
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
+    /// Inset around the title/message/actions column.
+    pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = Some(p); self }
     /// Dialog surface fill color (theme's `surface` if unset).
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
     /// Title/message text color (theme's `on_surface` if unset).
@@ -222,6 +227,8 @@ impl Dialog {
     }
 }
 
+/// Default inset around a dialog's content. A MINIMUM in spirit, not a
+/// ceiling — `Dialog::padding` overrides it.
 const PADDING: f32 = 20.0;
 
 impl Widget for Dialog {
@@ -235,11 +242,12 @@ impl Widget for Dialog {
             });
         }
         let inner = self.build_inner();
-        let inner_c = Constraints::loose(self.width - PADDING * 2.0, f32::INFINITY);
+        let pad = self.padding.unwrap_or(EdgeInsets::all(PADDING));
+        let inner_c = Constraints::loose(self.width - pad.total_h(), f32::INFINITY);
         let inner_size = inner.layout(&ctx.with_constraints(inner_c));
         ctx.constraints.constrain(Size {
             width: self.width,
-            height: inner_size.height + PADDING * 2.0,
+            height: inner_size.height + pad.total_v(),
         })
     }
 
@@ -276,7 +284,7 @@ impl Widget for Dialog {
             }
         }
 
-        let inner_rect = EdgeInsets::all(PADDING).shrink(r);
+        let inner_rect = self.padding.unwrap_or(EdgeInsets::all(PADDING)).shrink(r);
         self.build_inner().paint(&mut ctx.child(inner_rect));
     }
 }
@@ -376,4 +384,22 @@ mod tests {
             .color(Color::rgb(255, 255, 255));
         assert_eq!(base.layout(&ctx), customized.layout(&ctx));
     }
+
+    /// `.padding(..)` must actually move content, and the default must be
+    /// unchanged — a padding builder that silently does nothing is worse
+    /// than none, since it looks configurable.
+    #[test]
+    fn padding_insets_the_content_and_the_default_is_unchanged() {
+        use rosace_render::FontCache;
+        let font = FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let c = rosace_layout::Constraints::loose(400.0, 600.0);
+        let ctx = LayoutCtx::new(c, &font, &theme);
+
+        let base = Dialog::new("T").message("m").layout(&ctx);
+        let padded = Dialog::new("T").message("m").padding(EdgeInsets::all(40.0)).layout(&ctx);
+        assert!(padded.height > base.height,
+            "generous padding must grow the box: {} vs {}", base.height, padded.height);
+    }
+
 }

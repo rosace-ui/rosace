@@ -210,3 +210,14 @@ now serialized.
 Fixed while confirming the above: `rosace-state`'s `dirty_set` tests raced
 on the same process-global (each called `reset_to_global_dirty` at the top,
 which is not enough when the suite runs in parallel). Now serialized.
+
+## L16 — `rosace-cli`'s doctor test is load-sensitive (pre-existing)
+
+`check_rust_toolchain_finds_a_real_rustc_on_this_dev_machine` shells out to
+`rustc --version`. Under a full-workspace run with several cargo processes
+competing it fails roughly 1 run in 3; in isolation it passed 5/5.
+
+Not a shared-global race like L15 — a real subprocess spawn that is simply
+slow under load. Worth either giving a generous timeout or marking it as a
+dev-machine smoke check rather than a unit test, since what it asserts
+("this machine has rustc") is not a property of the code.

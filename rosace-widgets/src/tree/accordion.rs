@@ -4,7 +4,7 @@ use rosace_render::Color;
 use rosace_state::Atom;
 
 use super::container::draw_rounded_rect_pub;
-use super::{BoxedWidget, LayoutCtx, PaintCtx, Widget};
+use super::{BoxedWidget, EdgeInsets, LayoutCtx, PaintCtx, Widget};
 
 /// A collapsible section: a clickable header row (title + chevron) with a
 /// body that shows only while `expanded` is true.
@@ -16,6 +16,8 @@ use super::{BoxedWidget, LayoutCtx, PaintCtx, Widget};
 /// same D108 machinery every toggle widget uses; disable animations
 /// globally and it snaps) and the chevron rotates through the same factor.
 pub struct Accordion {
+    /// `None` = `EdgeInsets::symmetric(PAD_H, 0.0)`.
+    padding: Option<EdgeInsets>,
     title: String,
     expanded: Atom<bool>,
     body: BoxedWidget,
@@ -31,6 +33,7 @@ impl Accordion {
     pub fn new(title: impl Into<String>, expanded: Atom<bool>, body: impl Widget + 'static) -> Self {
         Self {
             title: title.into(),
+            padding: None,
             expanded,
             body: Box::new(body),
             background: None,
@@ -50,14 +53,24 @@ impl Accordion {
 }
 
 const HEADER_H: f32 = 44.0;
+/// Default horizontal inset. Overridable via `Accordion::padding`.
 const PAD_H: f32 = 14.0;
+
+impl Accordion {
+    /// Inset around the header text and the expanded body.
+    pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = Some(p); self }
+
+    fn insets(&self) -> EdgeInsets {
+        self.padding.unwrap_or(EdgeInsets::symmetric(PAD_H, 0.0))
+    }
+}
 
 impl Widget for Accordion {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let w = super::avail_w(ctx.constraints);
         let mut h = HEADER_H;
         if self.expanded.get() {
-            let bc = Constraints::loose(w - PAD_H * 2.0, f32::INFINITY);
+            let bc = Constraints::loose(w - self.insets().total_h(), f32::INFINITY);
             h += self.body.layout(&ctx.with_constraints(bc)).height + 12.0;
         }
         ctx.constraints.constrain(Size { width: w, height: h })
@@ -98,7 +111,7 @@ impl Widget for Accordion {
         let lh = ctx.font.line_height(self.title_size);
         ctx.draw_text_at(
             &self.title,
-            Point { x: r.origin.x + PAD_H, y: r.origin.y + (HEADER_H - lh) / 2.0 },
+            Point { x: r.origin.x + self.insets().left, y: r.origin.y + (HEADER_H - lh) / 2.0 },
             fg,
             self.title_size,
         );
@@ -111,7 +124,7 @@ impl Widget for Accordion {
         // has no glyph for them, which rendered as a garbled/tofu box on
         // Android (no OS-level font-fallback there, unlike desktop).
         let chev_size = self.title_size + 2.0;
-        let cx = r.origin.x + r.size.width - PAD_H - chev_size;
+        let cx = r.origin.x + r.size.width - self.insets().right - chev_size;
         let cy = r.origin.y + (HEADER_H - chev_size) / 2.0;
         let chev_rect = Rect { origin: Point { x: cx, y: cy }, size: Size { width: chev_size, height: chev_size } };
         if t < 1.0 {
@@ -139,11 +152,12 @@ impl Widget for Accordion {
         header_ctx.register_hit(std::sync::Arc::new(move || atom.set(!atom.get())));
 
         if open {
-            let bc = Constraints::loose(r.size.width - PAD_H * 2.0, f32::INFINITY);
+            let pad = self.insets();
+            let bc = Constraints::loose(r.size.width - pad.total_h(), f32::INFINITY);
             let bs = self.body.layout(&ctx.layout_ctx(bc));
             let body_rect = Rect {
-                origin: Point { x: r.origin.x + PAD_H, y: r.origin.y + HEADER_H + 4.0 },
-                size: Size { width: r.size.width - PAD_H * 2.0, height: bs.height },
+                origin: Point { x: r.origin.x + pad.left, y: r.origin.y + HEADER_H + 4.0 },
+                size: Size { width: r.size.width - pad.total_h(), height: bs.height },
             };
             // Fade the body in along the same eased factor.
             if t < 1.0 {

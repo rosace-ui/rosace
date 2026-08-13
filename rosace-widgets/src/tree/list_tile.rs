@@ -1,7 +1,7 @@
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
-use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w};
+use super::{EdgeInsets, Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w};
 
 /// A standard list row: leading widget + title + subtitle + trailing widget.
 pub struct ListTile {
@@ -11,7 +11,13 @@ pub struct ListTile {
     pub trailing: Option<BoxedWidget>,
     pub selected: bool,
     pub height: f32,
+    /// Horizontal inset. Kept as a plain field for source compatibility;
+    /// prefer [`ListTile::padding`], which also controls the vertical inset.
     pub padding_h: f32,
+    /// `None` = `padding_h` on both sides and none vertically — the
+    /// long-standing behaviour. A full-bleed row inside a list rarely wants
+    /// vertical padding, but a standalone tile often does.
+    padding: Option<EdgeInsets>,
     /// `None` = read from the active theme's `typography.body_large`.
     pub title_size: Option<f32>,
     /// `None` = read from the active theme's `typography.body_medium`.
@@ -39,6 +45,7 @@ impl ListTile {
             selected: false,
             height: 48.0,
             padding_h: 14.0,
+            padding: None,
             title_size: None,
             subtitle_size: None,
             title_color: Color::TRANSPARENT,
@@ -55,6 +62,10 @@ impl ListTile {
     pub fn trailing(mut self, w: impl Widget + 'static) -> Self { self.trailing = Some(Box::new(w)); self }
     pub fn selected(mut self) -> Self { self.selected = true; self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
+    /// Inset around the row's content. Was reachable only by assigning the
+    /// public `padding_h` field, which breaks the builder chain and could
+    /// not express a vertical inset at all.
+    pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = Some(p); self }
     pub fn no_divider(mut self) -> Self { self.divider = false; self }
     pub fn title_color(mut self, c: Color) -> Self { self.title_color = c; self }
     /// Overrides the theme's `body_large` for this row's title.
@@ -95,6 +106,14 @@ impl ListTile {
     }
 }
 
+impl ListTile {
+    /// The effective inset: an explicit `.padding(..)`, else the legacy
+    /// horizontal-only behaviour.
+    fn insets(&self) -> EdgeInsets {
+        self.padding.unwrap_or(EdgeInsets::symmetric(self.padding_h, 0.0))
+    }
+}
+
 impl Widget for ListTile {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
@@ -108,8 +127,9 @@ impl Widget for ListTile {
         let height = match &self.subtitle {
             Some(sub) => {
                 let lead_w = if self.leading.is_some() { 32.0 + 10.0 } else { 0.0 };
-                let trail_w = if self.trailing.is_some() { 60.0 + self.padding_h } else { self.padding_h };
-                let text_w = (width - self.padding_h - lead_w - trail_w).max(1.0);
+                let pad = self.insets();
+                let trail_w = if self.trailing.is_some() { 60.0 + pad.right } else { pad.right };
+                let text_w = (width - pad.left - lead_w - trail_w).max(1.0);
                 let sub_lines = self.wrap_subtitle(ctx.font, ctx.theme, sub, text_w).len().max(1);
                 let line_h_title = ctx.font.line_height(self.resolved_title_size(ctx.theme));
                 let line_h_sub = ctx.font.line_height(self.resolved_subtitle_size(ctx.theme));
@@ -176,7 +196,8 @@ impl Widget for ListTile {
             }, selected_accent);
         }
 
-        let mut x = r.origin.x + self.padding_h;
+        let pad = self.insets();
+        let mut x = r.origin.x + pad.left;
 
         // Leading
         if let Some(lead) = &self.leading {
@@ -193,10 +214,10 @@ impl Widget for ListTile {
         let trailing_w = if let Some(trail) = &self.trailing {
             let ts = trail.layout(&ctx.layout_ctx(Constraints::loose(60.0, r.size.height)));
             let ty = r.origin.y + (r.size.height - ts.height) / 2.0;
-            let tx = r.origin.x + r.size.width - self.padding_h - ts.width;
+            let tx = r.origin.x + r.size.width - pad.right - ts.width;
             trail.paint(&mut ctx.child(Rect { origin: Point { x: tx, y: ty }, size: ts }));
-            ts.width + self.padding_h
-        } else { self.padding_h };
+            ts.width + pad.right
+        } else { pad.right };
 
         // Title + subtitle
         let text_w = r.size.width - x + r.origin.x - trailing_w;
@@ -221,10 +242,55 @@ impl Widget for ListTile {
 
         if self.divider {
             ctx.fill_rect(Rect {
-                origin: Point { x: r.origin.x + self.padding_h, y: r.origin.y + r.size.height - 1.0 },
-                size: Size { width: r.size.width - self.padding_h, height: 1.0 },
+                origin: Point { x: r.origin.x + pad.left, y: r.origin.y + r.size.height - 1.0 },
+                size: Size { width: r.size.width - pad.left, height: 1.0 },
             }, divider_color);
         }
     }
+
+
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `.padding(..)` must move the row's content, and the default must
+    /// reproduce the long-standing `padding_h`-only behaviour.
+    ///
+    /// Asserted on the painted TEXT origin rather than the layout size: a
+    /// ListTile's height is a fixed row, so a padding builder that did
+    /// nothing would still return the same Size and look correct.
+    #[test]
+    fn padding_moves_the_content_and_defaults_to_the_legacy_inset() {
+        use rosace_render::{DrawCommand, FontCache, PictureRecorder};
+        use crate::tree::RenderTree;
+        use std::{cell::RefCell, rc::Rc};
+
+        fn first_text_x(tile: ListTile) -> f32 {
+            let font = FontCache::embedded();
+            let mut rec = PictureRecorder::new();
+            {
+                let mut ctx = PaintCtx::root(
+                    &mut rec,
+                    Rect { origin: Point { x: 0.0, y: 0.0 },
+                           size: Size { width: 300.0, height: 60.0 } },
+                    &font,
+                    rosace_theme::built_in::dark_theme(),
+                    Rc::new(RefCell::new(RenderTree::new())),
+                );
+                tile.paint(&mut ctx);
+            }
+            rec.finish().commands.iter().find_map(|c| match c {
+                DrawCommand::DrawText { origin, .. } => Some(origin.x),
+                _ => None,
+            }).expect("the title must be drawn")
+        }
+
+        let default_x = first_text_x(ListTile::new("Title"));
+        assert_eq!(default_x, 14.0, "default is the legacy padding_h");
+
+        let padded_x = first_text_x(ListTile::new("Title").padding(EdgeInsets::all(32.0)));
+        assert_eq!(padded_x, 32.0, "an explicit inset must move the title");
+    }
+}
