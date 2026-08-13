@@ -300,6 +300,29 @@ impl Alignment {
 /// registration order silently decides which one a tap lands on.
 pub const MIN_TAP_TARGET: f32 = 44.0;
 
+/// The height a text-bearing control should PAINT at: its designed height,
+/// or the scaled line box plus padding when that is taller.
+///
+/// `line_height` is what applies `MediaQuery::text_scale`, so a control that
+/// hardcodes its height clips its own label the moment a user raises the OS
+/// text size. The designed height stays a MINIMUM, so nothing changes at
+/// 100%.
+pub fn text_fit_height(designed: f32, font: &rosace_render::FontCache, font_size: f32) -> f32 {
+    designed.max(font.line_height(font_size) + 12.0)
+}
+
+/// The height an interactive, text-bearing control should OCCUPY:
+/// [`text_fit_height`] floored at [`MIN_TAP_TARGET`].
+///
+/// The difference between this and `text_fit_height` is transparent padding
+/// — the control paints at the smaller value via [`centered_visual`], so the
+/// tap-target floor adds spacing rather than a visually fatter control. Text
+/// growth, by contrast, must grow the visual itself, or the label clips.
+pub fn control_height(designed: f32, font: &rosace_render::FontCache, font_size: f32) -> f32 {
+    text_fit_height(designed, font, font_size).max(MIN_TAP_TARGET)
+}
+
+
 /// The rect a control should PAINT into, centred inside the (larger) rect it
 /// was laid out with. See [`MIN_TAP_TARGET`].
 pub fn centered_visual(outer: rosace_core::types::Rect, w: f32, h: f32) -> rosace_core::types::Rect {

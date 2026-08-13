@@ -45,10 +45,17 @@ impl Widget for SegmentedControl {
         let w: f32 = self.segments.iter()
             .map(|s| ctx.font.measure_text(s, 13.0) + 28.0)
             .sum();
-        ctx.constraints.constrain(Size { width: w.max(120.0), height: self.height })
+        ctx.constraints.constrain(Size {
+            width: w.max(120.0),
+            height: super::control_height(self.height, ctx.font, 13.0),
+        })
     }
     fn paint(&self, ctx: &mut PaintCtx) {
-        let r = ctx.rect;
+        // The VISUAL track, centred in the (taller) tap target the layout
+        // reserved. Keeping this at the designed height means the padded
+        // target adds spacing, not a visually fatter control.
+        let r = super::centered_visual(ctx.rect, ctx.rect.size.width,
+            super::text_fit_height(self.height, ctx.font, 13.0));
         let n = self.segments.len().max(1);
         let seg_w = r.size.width / n as f32;
         let radius = self.height / 2.0;

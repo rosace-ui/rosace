@@ -58,8 +58,11 @@ fn with_alpha(c: Color, a: f32) -> Color {
 
 impl Widget for Chip {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let w = ctx.font.measure_text(&self.label, self.resolved_font_size(ctx.theme)) + 28.0;
-        Size { width: w, height: self.height }
+        let fs = self.resolved_font_size(ctx.theme);
+        let w = ctx.font.measure_text(&self.label, fs) + 28.0;
+        // 30px was both under the tap-target minimum and fixed, so raised OS
+        // text clipped inside it.
+        Size { width: w.max(super::MIN_TAP_TARGET), height: super::control_height(self.height, ctx.font, fs) }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -87,7 +90,11 @@ impl Widget for Chip {
         let sel_text = Color::rgb(252, 252, 255);
         let dim = if self.disabled { 0.4 } else { 1.0 };
 
-        let r = ctx.rect;
+        // The VISUAL pill, centred in the (taller) tap target the layout
+        // reserved. Keeping this at the designed height means the padded
+        // target adds spacing, not a visually fatter control.
+        let r = super::centered_visual(ctx.rect, ctx.rect.size.width,
+            super::text_fit_height(self.height, ctx.font, self.resolved_font_size(&ctx.theme)));
         let radius = self.radius.unwrap_or(r.size.height / 2.0);
 
         // Fill eases unselected→selected. Wash lightens it on hover/press.

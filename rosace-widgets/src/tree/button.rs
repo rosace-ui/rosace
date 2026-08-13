@@ -109,8 +109,15 @@ impl Widget for Button {
         // Height must grow with the text too, for the same reason — a fixed
         // pill height clips a scaled-up label vertically. Keep the designed
         // height as a MINIMUM so ordinary buttons are unchanged at 100%.
-        let h = self.height.max(ctx.font.line_height(font_size) + 16.0);
-        constraints.constrain(Size { width: w, height: h })
+        // ...and the layout adds the tap-target floor on top (Quality Bar
+        // §6) — 34px was under it. That last part is transparent padding:
+        // `paint` still draws the pill at `text_fit_height`, so the button
+        // does not visually fatten, it just stops being cramped against its
+        // neighbours.
+        constraints.constrain(Size {
+            width: w.max(super::MIN_TAP_TARGET),
+            height: super::control_height(self.height, ctx.font, font_size),
+        })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -149,7 +156,10 @@ impl Widget for Button {
             bg
         };
 
-        let r = ctx.rect;
+        // The VISUAL pill, centred in the (taller) tap target.
+        let font_size_h = self.resolved_font_size(&ctx.theme);
+        let r = super::centered_visual(ctx.rect, ctx.rect.size.width,
+            super::text_fit_height(self.height, ctx.font, font_size_h));
         super::container::draw_rounded_rect_pub(ctx, r, bg, self.radius);
 
         if let Some(bc) = border {
@@ -215,4 +225,50 @@ mod tests {
             .color(Color::rgb(255, 255, 255));
         assert_eq!(base.layout(&ctx), customized.layout(&ctx));
     }
+
+    /// The tap-target floor must be transparent PADDING, not a fatter pill.
+    ///
+    /// Asserted against the emitted draw command rather than the layout size,
+    /// because only the draw command can tell "reserved 44 and painted 34"
+    /// apart from "grew the button to 44" — and the second would silently
+    /// restyle every button in every app.
+    #[test]
+    fn the_tap_target_floor_pads_the_button_it_does_not_fatten_the_pill() {
+        use rosace_render::{DrawCommand, PictureRecorder};
+        use crate::tree::{PaintCtx, RenderTree};
+        use rosace_core::types::{Point, Rect, Size};
+        use std::{cell::RefCell, rc::Rc};
+
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx_l = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
+        let b = Button::new("Save").width(90.0);
+
+        let laid_out = b.layout(&ctx_l);
+        assert_eq!(laid_out.height, crate::tree::MIN_TAP_TARGET, "must reserve the target");
+
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 },
+                       size: Size { width: 90.0, height: laid_out.height } },
+                &font,
+                theme.clone(),
+                Rc::new(RefCell::new(RenderTree::new())),
+            );
+            b.paint(&mut ctx);
+        }
+        let pill = rec.finish().commands.iter().find_map(|c| match c {
+            DrawCommand::FillRRect { rect, .. } => Some(*rect),
+            _ => None,
+        }).expect("the pill is drawn as a rounded rect");
+
+        let designed = crate::tree::text_fit_height(34.0, &font, b.resolved_font_size(&theme));
+        assert_eq!(pill.size.height, designed, "pill must keep its designed height");
+        assert!(pill.size.height < laid_out.height, "the extra must be padding");
+        // ...and the pill must be centred in it, not top-aligned.
+        assert!((pill.origin.y - (laid_out.height - designed) / 2.0).abs() < 0.01);
+    }
+
 }

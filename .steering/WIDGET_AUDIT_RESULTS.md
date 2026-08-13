@@ -17,9 +17,9 @@ Updated as work lands. The audit is the backlog; this is the burn-down.
 | B4 | `MAX_TRANSFORM_DIM` never enforced | open |
 | P1 | `len()*0.6` text estimates (5 widgets) | **FIXED** 292dd7b |
 | — | Icons scaled but were centred unscaled | **FIXED** ea9c8a0 (D134) |
-| P2 | Fixed heights that clip scaled text (~25) | open — badge done |
+| P2 | Fixed heights that clip scaled text (~25) | **FIXED** for interactive controls; static ones (accordion, snackbar, tab, avatar, bottom_nav, menu row, nav_rail item, list_tile title-only) still open |
 | P3 | Hardcoded colours (~20 widgets) | **FIXED** f2f9628 |
-| P4 | Touch targets under 44px (~15) | in progress — switch/checkbox/radio done |
+| P4 | Touch targets under 44px (~15) | **FIXED** for switch/checkbox/radio/button/chip/dropdown/segmented/stepper; slider, rating_bar, tab, menu row, nav_rail item, date_picker cells still open |
 | P5 | Theme-forced fields with no builder | **FIXED** f2f9628 (folded into P3: avatar, badge, chip, progress_bar, nav_rail, list_view, scroll_view, skeleton all moved to `Option<Color>` + builder) |
 | P6 | No `.padding(..)` (most of the library) | open |
 | P7 | No tests (~20 widgets) | open |
@@ -344,3 +344,22 @@ while widgets shipped mute.
   offering is an improvement, not a fix; named in both files rather than
   papered over.
 - **Focus tracking** still always reports the root (L3).
+
+
+## Two floors, not one (P2 + P4)
+
+These are different problems and conflating them produces a wrong fix:
+
+* **`text_fit_height`** — the height a control PAINTS at. Grows with the
+  scaled line box, because a label that outgrows its pill clips. The visual
+  itself has to grow here; padding would not help.
+* **`control_height`** — the height a control OCCUPIES. `text_fit_height`
+  floored at `MIN_TAP_TARGET`. That last part is transparent padding: the
+  control still paints at the smaller value via `centered_visual`, so the
+  floor adds spacing, not a visually fatter control.
+
+The first version of this collapsed both into one helper, which would have
+pinned every pill to 44 tall and silently restyled every button in every
+app. `button.rs`'s test asserts the distinction against the emitted
+`FillRRect` — the layout size alone cannot tell "reserved 44, painted 34"
+from "grew to 44".

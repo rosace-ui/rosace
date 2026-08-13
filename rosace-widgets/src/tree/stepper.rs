@@ -110,7 +110,10 @@ impl Widget for Stepper {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let font_size = self.resolved_font_size(ctx.theme);
         let w = self.button_width() * 2.0 + self.value_width(ctx.font, font_size);
-        ctx.constraints.constrain(Size { width: w, height: self.height })
+        ctx.constraints.constrain(Size {
+            width: w,
+            height: super::control_height(self.height, ctx.font, font_size),
+        })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -125,7 +128,11 @@ impl Widget for Stepper {
         let dim = Color::rgba(fg.r, fg.g, fg.b, 90);
         let font_size = self.resolved_font_size(&ctx.theme);
 
-        let r = ctx.rect;
+        // The VISUAL field, centred in the (taller) tap target the layout
+        // reserved. Keeping this at the designed height means the padded
+        // target adds spacing, not a visually fatter control.
+        let r = super::centered_visual(ctx.rect, ctx.rect.size.width,
+            super::text_fit_height(self.height, ctx.font, self.resolved_font_size(&ctx.theme)));
         ctx.semantics(
             // `Role::Slider` was wrong: it tells assistive tech to offer
             // continuous adjust gestures (VoiceOver swipe-up/down, TalkBack
@@ -226,7 +233,9 @@ mod tests {
         let (font, theme) = test_env();
         let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
         let size = s.layout(&ctx);
-        assert_eq!(size.height, 32.0);
+        // 32 was under the tap-target minimum; the field still paints at 32,
+        // the widget occupies the floor.
+        assert_eq!(size.height, crate::tree::MIN_TAP_TARGET);
         // 2 square buttons (32 each) + the value segment (≥ MIN_VALUE_WIDTH).
         assert!(size.width >= 64.0 + MIN_VALUE_WIDTH, "got {}", size.width);
     }

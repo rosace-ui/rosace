@@ -52,7 +52,12 @@ impl Dropdown {
 
 impl Widget for Dropdown {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        ctx.constraints.constrain(Size { width: self.width, height: 36.0 })
+        // 36px was fixed AND under the tap target: the label is drawn at 13px
+        // through `line_height`, which scales, while the pill did not.
+        ctx.constraints.constrain(Size {
+            width: self.width,
+            height: super::control_height(36.0, ctx.font, 13.0),
+        })
     }
     fn paint(&self, ctx: &mut PaintCtx) {
         let selected_label = self.options.get(self.selected).map(|s| s.as_str()).unwrap_or("");
@@ -84,7 +89,11 @@ impl Widget for Dropdown {
         let dim = if self.disabled { 0.45 } else { 1.0 };
         let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, ((c.a as f32 / 255.0) * a.clamp(0.0, 1.0) * 255.0).round() as u8);
 
-        let r = ctx.rect;
+        // The VISUAL pill, centred in the (taller) tap target the layout
+        // reserved. Keeping this at the designed height means the padded
+        // target adds spacing, not a visually fatter control.
+        let r = super::centered_visual(ctx.rect, ctx.rect.size.width,
+            super::text_fit_height(36.0, ctx.font, 13.0));
         let mut bg = bg;
         if wash > 0.001 { bg = super::lerp_color(bg, Color::rgb(255, 255, 255), wash); }
         ctx.fill_rrect(r, self.radius, with_alpha(bg, dim));
@@ -163,6 +172,10 @@ mod tests {
             .border(Color::rgb(200, 0, 0), 2.0)
             .radius(4.0);
         let size = dd.layout(&ctx);
-        assert_eq!((size.width, size.height), (200.0, 36.0));
+        // The pill still LOOKS 36 tall; the widget OCCUPIES the tap-target
+        // minimum (Quality Bar §6), the difference being transparent
+        // padding. Asserted against the constant so this states the rule
+        // rather than restating a number.
+        assert_eq!((size.width, size.height), (200.0, crate::tree::MIN_TAP_TARGET));
     }
 }
