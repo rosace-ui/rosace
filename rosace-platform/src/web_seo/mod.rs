@@ -133,6 +133,22 @@ fn render_node(node: &SemanticNode, out: &mut String) {
         Role::MenuItem => {
             out.push_str(&format!("<li role=\"menuitem\">{}</li>", esc(label)));
         }
+        Role::Menu => {
+            // The MenuItem arm emits <li>, so the container must be the <ul>
+            // that makes those legal.
+            out.push_str("<ul role=\"menu\">");
+            render_children(node, out);
+            out.push_str("</ul>");
+        }
+        Role::SpinButton => {
+            // A discrete stepper is <input type="number">, not a range —
+            // the whole point of the role is that it is not continuous.
+            let value = node.value.as_deref().unwrap_or("");
+            out.push_str(&format!(
+                "<input type=\"number\" aria-label=\"{}\" value=\"{}\">",
+                esc_attr(label), esc_attr(value)
+            ));
+        }
         Role::Checkbox => {
             let checked = node.value.as_deref() == Some("checked") || node.value.as_deref() == Some("selected");
             out.push_str(&format!(

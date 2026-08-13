@@ -2713,6 +2713,25 @@ mod tests {
             ("Skeleton",         || Box::new(w::Skeleton::new())),
             ("Tooltip",          || Box::new(w::Tooltip::new("Delete", w::Text::new("x")))),
             ("Icon (labelled)",  || Box::new(w::Icon::new(w::IconKind::Search).semantic_label("Search"))),
+            // Added 2026-08-13 by the widget-audit sweep. None of these were
+            // listed here at all, so they were not merely silent — they were
+            // UNGUARDED, and nothing would have caught them going silent
+            // again. That gap is the reason §5 could sit in the Quality Bar
+            // for months while widgets shipped mute.
+            //
+            // NOTE the children: every wrapper here is given a SILENT child
+            // (`Spacer`), never a `Text`. `semantic_count` sums the whole
+            // subtree, so a wrapper whose child speaks passes this test even
+            // when the wrapper itself declares nothing — which is exactly how
+            // these went unnoticed. Verified by deleting each widget's
+            // `ctx.semantics(..)` and watching this test fail.
+            ("ListView",         || Box::new(w::ListView::builder(3, 40.0, |_| Box::new(w::Spacer::new(8.0))))),
+            ("Menu",             || Box::new(w::Menu::new().item("Copy", || {}))),
+            ("Stepper",          || Box::new(w::Stepper::new(2))),
+            ("Dropdown",         || Box::new(w::Dropdown::new(vec!["A", "B"], 0, rosace_state::Atom::new(rosace_state::next_atom_id(), false)))),
+            ("PullToRefresh",    || Box::new(w::PullToRefresh::new(w::Spacer::new(8.0)))),
+            ("Dismissible",      || Box::new(w::Dismissible::new(w::Spacer::new(8.0)))),
+            ("LongPressable",    || Box::new(w::LongPressable::new(w::Spacer::new(8.0), || {}))),
         ];
 
         // Correctly silent, each for a stated reason.

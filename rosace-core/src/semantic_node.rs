@@ -37,6 +37,15 @@ pub enum Role {
     ListItem,
     Tab,
     TabPanel,
+    /// A discrete numeric control adjusted by stepping, not by sliding — a
+    /// `Stepper`'s -/+ pair. Distinct from [`Role::Slider`], which tells
+    /// assistive tech to offer continuous adjust gestures; offering those for
+    /// a control that only supports two discrete presses misrepresents it.
+    SpinButton,
+    /// The container around a set of [`Role::MenuItem`]s, so a screen reader
+    /// can announce the group and its item count instead of reading loose
+    /// items with no context.
+    Menu,
     Unknown,
 }
 

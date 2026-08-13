@@ -64,6 +64,13 @@ impl<W: Widget + Send + Sync + 'static> Widget for LongPressable<W> {
     fn paint(&self, ctx: &mut PaintCtx) {
         let f = self.on_long_press.clone();
         ctx.on_long_press(move || f());
+        // Quality Bar §5, same reasoning as `Pressable` above: declare the
+        // role, never a label — the wrapped content supplies the name. This
+        // was missing entirely, which mattered more here than anywhere else:
+        // `PressApi` is a blanket impl over EVERY widget in the library, so a
+        // long-press-only affordance was invisible to assistive tech
+        // library-wide.
+        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button));
         let r = ctx.rect;
         self.child.paint(&mut ctx.child(r));
     }

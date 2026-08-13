@@ -23,7 +23,7 @@ Updated as work lands. The audit is the backlog; this is the burn-down.
 | P5 | Theme-forced fields with no builder | **FIXED** f2f9628 (folded into P3: avatar, badge, chip, progress_bar, nav_rail, list_view, scroll_view, skeleton all moved to `Option<Color>` + builder) |
 | P6 | No `.padding(..)` (most of the library) | open |
 | P7 | No tests (~20 widgets) | open |
-| A | Missing/incorrect semantics (~12) | open |
+| A | Missing/incorrect semantics (~12) | **FIXED** (day-cell grid + a11y actions still open) |
 
 Every fix above was confirmed to FAIL against the unfixed code before
 being called done, rather than assumed to work because the new test passed.
@@ -314,3 +314,33 @@ layout approach makes neighbours space themselves correctly for free.
 
 Cost: layouts containing these controls get slightly taller. That is the
 intended change — the controls were genuinely too small to hit.
+
+
+## The §5 enforcement test had a hole
+
+`widgets_meet_quality_bar_section_5_semantics` counts semantic nodes across
+the WHOLE subtree, so a wrapper whose child speaks passes even when the
+wrapper itself declares nothing. Every wrapper entry now gets a deliberately
+SILENT child (`Spacer`, never `Text`), so the count can only come from the
+widget under test.
+
+Found the honest way: after adding ListView/Dismissible/LongPressable to the
+list, I deleted each widget's `ctx.semantics(..)` again to confirm the test
+would catch it — and it did not. It does now.
+
+Worth noting these seven widgets were not merely silent, they were **absent
+from the list entirely** — so nothing would have caught them going silent
+again either. That gap is why §5 could sit in the Quality Bar for months
+while widgets shipped mute.
+
+## Still open in the A group
+
+- **`date_picker`**: none of the 42 day cells declare semantics (the cell
+  loop only paints), so the calendar cannot be operated non-visually. This
+  needs per-cell child nodes, not a one-line fix.
+- **A11y ACTIONS are still no-op on every platform** (WIDGET_FINDINGS L2).
+  `PullToRefresh` and `Dismissible` now announce their affordance, but there
+  is still no non-gestural way to TRIGGER either. Announcing without
+  offering is an improvement, not a fix; named in both files rather than
+  papered over.
+- **Focus tracking** still always reports the root (L3).

@@ -29,6 +29,9 @@ pub struct Slider {
     fill_color: Option<Color>,
     thumb_color: Option<Color>,
     on_change: Option<Arc<dyn Fn(f32) + Send + Sync>>,
+    /// Accessible name — what this control adjusts ("Volume"). Without it a
+    /// screen reader announces only the value.
+    label: Option<String>,
 }
 
 impl Slider {
@@ -44,8 +47,12 @@ impl Slider {
             fill_color: None,
             thumb_color: None,
             on_change: None,
+            label: None,
         }
     }
+
+    /// Name this control for assistive tech ("Volume", "Brightness").
+    pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
     pub fn range(mut self, min: f32, max: f32, value: f32) -> Self {
         self.min = min; self.max = max;
         self.value = ((value - min) / (max - min)).clamp(0.0, 1.0);
@@ -76,8 +83,14 @@ impl Widget for Slider {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Slider)
-            .value(format!("{:.2}", self.min + self.value * (self.max - self.min))));
+        // A slider announced a bare number with no indication of what it
+        // controls ("0.75" and nothing else). There was no `.label(..)`
+        // builder to supply one either — contrast `Switch`, which has had
+        // one all along.
+        let mut sem = super::SemanticsProps::new(rosace_core::Role::Slider)
+            .value(format!("{:.2}", self.min + self.value * (self.max - self.min)));
+        if let Some(l) = &self.label { sem = sem.label(l); }
+        ctx.semantics(sem);
 
         // ── Interactivity (identity) — a positional press is draggable via the
         //     engine's active_drag. Disabled still absorbs. ────────────────────

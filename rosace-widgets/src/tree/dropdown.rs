@@ -20,6 +20,9 @@ pub struct Dropdown {
     border_width: f32,
     radius: f32,
     on_change: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    /// Accessible name — what this control adjusts ("Volume"). Without it a
+    /// screen reader announces only the value.
+    label: Option<String>,
 }
 
 impl Dropdown {
@@ -28,8 +31,12 @@ impl Dropdown {
             options: options.into_iter().map(Into::into).collect(), selected, open, disabled: false, width: 200.0,
             background: None, color: None, border_color: None, border_width: 1.0, radius: 8.0,
             on_change: None,
+            label: None,
         }
     }
+
+    /// Name this control for assistive tech ("Volume", "Brightness").
+    pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
     pub fn width(mut self, w: f32) -> Self { self.width = w; self }
     pub fn disabled(mut self) -> Self { self.disabled = true; self }
     /// Trigger fill color (theme's `surface_variant` if unset).
@@ -52,7 +59,17 @@ impl Widget for Dropdown {
         // The trigger is a button that opens a menu — its own MenuItem
         // children (via Menu, which already declares semantics) carry the
         // option list; this is just the current-selection summary.
-        ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button).label(selected_label));
+        // The current selection is the VALUE, not the name: passing it as
+        // the label made a screen reader announce the chosen option where the
+        // field's own name belongs ("Medium, button" with no idea it is the
+        // size picker). `.label(..)` now supplies a real name when the app
+        // gives one, and expanded/collapsed is exposed too — it drives a
+        // whole overlay and was entirely silent.
+        let state = if self.open.get() { "expanded" } else { "collapsed" };
+        let mut sem = super::SemanticsProps::new(rosace_core::Role::Button)
+            .value(format!("{selected_label}, {state}"));
+        if let Some(l) = &self.label { sem = sem.label(l); }
+        ctx.semantics(sem);
         let (bg, fg, border) = {
             let t = &ctx.theme.colors;
             (self.background.unwrap_or_else(|| ctx.tc(t.surface_variant)),

@@ -137,7 +137,11 @@ impl Widget for ListTile {
         } else {
             rosace_core::Role::ListItem
         };
-        ctx.semantics(super::SemanticsProps::new(role).label(label));
+        // `selected` is painted (a tinted background and an accent bar) and
+        // was never announced, so the highlight was visual-only.
+        let mut sem = super::SemanticsProps::new(role).label(label);
+        if self.selected { sem = sem.value("selected"); }
+        ctx.semantics(sem);
         if let Some(f) = &self.press {
             let f = f.clone();
             ctx.on_press(move || f());

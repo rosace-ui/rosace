@@ -277,6 +277,8 @@ fn map_role(role: &Role) -> accesskit::Role {
         Role::MenuItem => accesskit::Role::MenuItem,
         Role::Tab => accesskit::Role::Tab,
         Role::TabPanel => accesskit::Role::TabPanel,
+        Role::SpinButton => accesskit::Role::SpinButton,
+        Role::Menu => accesskit::Role::Menu,
         Role::Unknown => accesskit::Role::GenericContainer,
     }
 }

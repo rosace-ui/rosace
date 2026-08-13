@@ -76,6 +76,25 @@ impl Widget for PullToRefresh {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // Quality Bar §5. This announced nothing at all: neither that the
+        // surface can be refreshed, nor that a refresh is currently running.
+        //
+        // `refreshing` is exposed as a value so a screen reader can say
+        // "busy" while the spinner is up — that state was visible only as a
+        // spinning arc, which conveys nothing non-visually.
+        //
+        // KNOWN GAP: there is still no non-gestural way to TRIGGER a
+        // refresh. A real a11y action needs the action plumbing that is
+        // currently a no-op on every platform (WIDGET_FINDINGS L2); until
+        // that lands, this announces the affordance without being able to
+        // offer it. Named rather than papered over.
+        let mut sem = super::SemanticsProps::new(rosace_core::Role::Button)
+            .label("Refresh");
+        if self.refreshing {
+            sem = sem.value("refreshing");
+        }
+        ctx.semantics(sem);
+
         let r = ctx.rect;
         let color = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.primary));
         let ctrl = ctx.scroll_controller();

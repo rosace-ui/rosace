@@ -38,6 +38,10 @@ pub struct Dismissible {
     direction: DismissDirection,
     threshold: f32,
     on_dismissed: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Accessible name for the row ("Archive message from Ana"). Defaults to
+    /// a generic "Dismissible item", which is better than silence but says
+    /// nothing about WHAT is being dismissed.
+    semantic_label: Option<String>,
 }
 
 impl Dismissible {
@@ -47,6 +51,7 @@ impl Dismissible {
             background: None,
             direction: DismissDirection::Horizontal,
             threshold: DEFAULT_THRESHOLD,
+            semantic_label: None,
             on_dismissed: None,
         }
     }
@@ -75,6 +80,12 @@ impl Dismissible {
         self
     }
 
+    /// Name this row for assistive tech — what is being dismissed.
+    pub fn semantic_label(mut self, l: impl Into<String>) -> Self {
+        self.semantic_label = Some(l.into());
+        self
+    }
+
     fn allows(&self, dx: f32) -> bool {
         match self.direction {
             DismissDirection::Horizontal => true,
@@ -95,6 +106,18 @@ impl Widget for Dismissible {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // Quality Bar §5. A swipe-to-delete row announced nothing, so the
+        // affordance was invisible AND unreachable without a pointer.
+        //
+        // Same known gap as `PullToRefresh`: the dismiss ACTION cannot yet be
+        // offered non-gesturally (WIDGET_FINDINGS L2). Declaring the role and
+        // label at least tells a screen-reader user the row is dismissible
+        // and lets the app supply a meaningful name.
+        ctx.semantics(
+            super::SemanticsProps::new(rosace_core::Role::Button)
+                .label(self.semantic_label.as_deref().unwrap_or("Dismissible item")),
+        );
+
         let r = ctx.rect;
         let ctrl = ctx.scroll_controller();
 

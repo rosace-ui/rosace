@@ -62,6 +62,8 @@ fn role_name(role: &Role) -> &'static str {
         Role::ListItem => "listitem",
         Role::Tab => "tab",
         Role::TabPanel => "tabpanel",
+        Role::SpinButton => "spinbutton",
+        Role::Menu => "menu",
         Role::Unknown => "unknown",
     }
 }

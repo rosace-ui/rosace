@@ -1725,6 +1725,11 @@ private class EngineSurfaceView(
         "textinput" -> "android.widget.EditText"
         "image" -> "android.widget.ImageView"
         "slider", "progressbar" -> "android.widget.SeekBar"
+        // A stepper is a discrete numeric field, not a seek bar — TalkBack
+        // offers swipe-to-adjust for SeekBar, which a two-button control
+        // cannot honour.
+        "spinbutton" -> "android.widget.NumberPicker"
+        "menu" -> "android.widget.ListView"
         else -> "android.widget.TextView"
     }}
 
@@ -2404,6 +2409,9 @@ final class MetalView: UIView {
         case "alert":       return .staticText
         case "tab":         return .button
         case "menuitem":    return .button
+        // A stepper is discrete: `.adjustable` would have VoiceOver offer
+        // swipe-up/down continuous adjustment, which it cannot perform.
+        case "spinbutton":  return .none
         // checkbox/radio/switch have no dedicated trait; VoiceOver conveys
         // their on/off state through accessibilityValue, which the engine
         // already supplies, so `.none` here is correct rather than lossy.

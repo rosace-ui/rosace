@@ -84,6 +84,15 @@ impl Widget for ListView {
         let cs = [vp.size.width, content_h];
         if ctrl.content_size.get() != cs { ctrl.content_size.set(cs); }
 
+        // Quality Bar §5. Rows outside the viewport are never built (that is
+        // the whole point of this widget), so assistive tech has no way to
+        // discover how long the list is by walking it — the count has to be
+        // stated here or it is unavailable.
+        ctx.semantics(
+            super::SemanticsProps::new(rosace_core::Role::List)
+                .value(format!("{} items", self.count)),
+        );
+
         ctx.record(DrawCommand::PushClip { rect: vp });
         let effective_clip = ctx.clip_rect
             .and_then(|parent| intersect_rect(parent, vp))

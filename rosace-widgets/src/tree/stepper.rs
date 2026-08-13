@@ -42,6 +42,9 @@ pub struct Stepper {
     foreground: Option<Color>,
     border: Option<(Color, f32)>,
     on_change: Option<Arc<dyn Fn(i64) + Send + Sync>>,
+    /// Accessible name — what is being stepped ("Quantity"). Without it the
+    /// control announces a bare number.
+    label: Option<String>,
 }
 
 impl Stepper {
@@ -59,8 +62,12 @@ impl Stepper {
             foreground: None,
             border: None,
             on_change: None,
+            label: None,
         }
     }
+
+    /// Name this control for assistive tech ("Quantity", "Guests").
+    pub fn label(mut self, l: impl Into<String>) -> Self { self.label = Some(l.into()); self }
     /// Lower bound (inclusive). The − button dims and stops firing there.
     pub fn min(mut self, v: i64) -> Self { self.min = v; self }
     /// Upper bound (inclusive). The + button dims and stops firing there.
@@ -120,8 +127,12 @@ impl Widget for Stepper {
 
         let r = ctx.rect;
         ctx.semantics(
-            super::SemanticsProps::new(rosace_core::Role::Slider)
-                .label("stepper")
+            // `Role::Slider` was wrong: it tells assistive tech to offer
+            // continuous adjust gestures (VoiceOver swipe-up/down, TalkBack
+            // seek) for a control that only supports two discrete presses.
+            // The label was also a hardcoded, non-localizable "stepper".
+            super::SemanticsProps::new(rosace_core::Role::SpinButton)
+                .label(self.label.as_deref().unwrap_or("Stepper"))
                 .value(self.value.to_string()),
         );
 

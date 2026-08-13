@@ -86,6 +86,15 @@ impl Widget for Menu {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        // Quality Bar §5. The rows declare `Role::MenuItem` individually, but
+        // nothing declared the GROUP — so a screen reader read loose menu
+        // items with no indication they belonged together or how many there
+        // were.
+        ctx.semantics(
+            super::SemanticsProps::new(rosace_core::Role::Menu)
+                .value(format!("{} items", self.items.len())),
+        );
+
         let (bg, fg, outline) = {
             let t = &ctx.theme.colors;
             // Default panel is TRANSLUCENT (the overlay pass alpha-blends

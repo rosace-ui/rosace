@@ -61,7 +61,16 @@ impl Widget for NavItem {
         // NavRail items are navigation destinations — <a> in the real-world
         // HTML shape (<nav><ul><li><a>...) a nav rail maps to (D107).
         let mut sem = super::SemanticsProps::new(rosace_core::Role::Link).label(&self.label);
-        if let Some(n) = self.badge { sem = sem.value(n.to_string()); }
+        // The SELECTED destination is painted as a pill and was never
+        // announced, so a screen-reader user could not tell which page they
+        // were on. Selection outranks the badge count when both apply — the
+        // badge is a detail, "you are here" is the primary fact.
+        sem = match (self.active, self.badge) {
+            (true, Some(n)) => sem.value(format!("selected, {n}")),
+            (true, None) => sem.value("selected"),
+            (false, Some(n)) => sem.value(n.to_string()),
+            (false, None) => sem,
+        };
         ctx.semantics(sem);
         let r = ctx.rect;
 
