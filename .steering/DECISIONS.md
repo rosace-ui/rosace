@@ -1798,6 +1798,52 @@ small in practice, the additive fix is a `.scales_with_text()` builder
 opting an individual icon in — deliberately NOT a global default, per the
 "no blanket defaults" rule that D111 established.
 
+### D135 — The system back intent is a request the app may decline (2026-08-13)
+
+Android's back button/gesture and iOS's left-edge swipe deliver
+`InputEvent::BackPressed`. The engine resolves it in one fixed order:
+
+1. an open, dismissible overlay closes;
+2. else the registered navigator pops;
+3. else the app DECLINES, and the platform does its default.
+
+**Why declining matters.** Back is not a key press, it is a request with a
+platform-owned fallback — Android finishes the activity, iOS does nothing.
+Swallowing it at the root would trap the user in an app they cannot leave
+with the control the OS gave them, which is the most common complaint about
+hand-rolled back handling on Android. So `back_pressed()` returns a bool and
+the host acts on it.
+
+**Why overlays come first.** A dialog over a screen must take the press
+alone. Popping both in one gesture is the classic bug this ordering exists
+to prevent.
+
+**Why a registry.** `ScreenNav<R>` is generic over the app's route type and
+owned by app code; the engine cannot name `R`. So `ScreenNav` registers a
+handler in `rosace_core::nav_back` on construction and the engine calls it.
+Thread-local, for the reason the dirty set is (D-flake, 2026-08-13): a
+process-global lets one engine's navigator answer another engine's back.
+
+Single slot, last registration wins. Nested navigators (a stack per tab) need
+a focus/visibility notion the framework does not have; last-wins is
+predictable and documented rather than half-guessed.
+
+**Android wires two paths.** `onBackPressed` covers API 24-33 and still
+fires on 34 in compatibility mode; `OnBackInvokedCallback` (API 33+) also
+delivers the predictive-back gesture, which never routes through
+`onBackPressed`. Apps targeting SDK 35 get predictive back on by default, so
+the deprecated path alone would break on the next targetSdk bump.
+
+**iOS fires on gesture END, not interactively.** A live interactive pop — the
+screen tracking your finger and settling either way on release — needs
+`ScreenTransition` to be drivable from a progress value, which it is not.
+Completion-triggered navigation with the ordinary animation is correct and
+honest; interactive tracking is the named follow-up.
+
+**Not covered, deliberately:** a `WillPopScope`-style per-screen intercept
+(so a screen with unsaved edits can confirm) is the obvious next layer and is
+not built.
+
 D-DEF-001  ROSACE Studio design          → Phase 4
 D-DEF-002  Wide color / HDR              → Phase 3
 D-DEF-003  2D bidirectional scroll       → Phase 3

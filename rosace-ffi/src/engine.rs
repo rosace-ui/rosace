@@ -192,6 +192,21 @@ impl Engine {
         }
     }
 
+    /// Deliver a system back intent and answer whether the app consumed it.
+    ///
+    /// SYNCHRONOUS, unlike every other input: Android must decide right now
+    /// whether to finish the activity, and cannot wait for the next frame to
+    /// find out. So this runs a frame immediately and reports the outcome.
+    ///
+    /// `false` means the app declined and the platform should do its default
+    /// — leave the app on Android, nothing on iOS. See
+    /// `rosace_core::nav_back` for the resolution order.
+    pub fn back_pressed(&mut self) -> bool {
+        self.pending_events.push(rosace_platform::InputEvent::BackPressed);
+        self.frame();
+        self.frame_engine.back_was_handled()
+    }
+
     /// This engine's current semantic tree (D132) — the accessibility model
     /// the native host republishes to VoiceOver/TalkBack. Reads the render
     /// tree, so it is only meaningful after at least one `frame()`.

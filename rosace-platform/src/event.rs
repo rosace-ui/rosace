@@ -10,6 +10,15 @@ pub enum InputEvent {
     /// Mouse scroll wheel / trackpad. `delta_y` < 0 = scroll up, > 0 = scroll
     /// down; `delta_x` < 0 = scroll left, > 0 = scroll right.
     Scroll        { x: f32, y: f32, delta_x: f32, delta_y: f32 },
+    /// The system asked to go back: Android's back button or back gesture,
+    /// iOS's left-edge swipe. NOT a key press — it is a request the app may
+    /// decline, and the platform does its own default when it does (Android
+    /// leaves the app; iOS does nothing).
+    ///
+    /// The engine resolves it in one order — dismissible overlay, then the
+    /// registered navigator, then decline — described in
+    /// `rosace_core::nav_back`.
+    BackPressed,
     /// Trackpad pinch-to-zoom (macOS/iOS only — winit's `PinchGesture`,
     /// Phase 32 `InteractiveViewer`). `delta` mirrors winit's own field:
     /// positive = magnify, negative = shrink, NOT a multiplier.

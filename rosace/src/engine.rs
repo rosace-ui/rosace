@@ -231,6 +231,12 @@ pub struct FrameEngine {
     /// logged as WIDGET_FINDINGS L15: the suite runs tests in parallel, each
     /// with its own engine, all of them component 0.
     root_component_id: rosace_core::types::ComponentId,
+    /// Whether the most recent `BackPressed` was consumed.
+    ///
+    /// The native host has to know: Android must finish the activity when
+    /// the app declines, and must NOT when it popped a screen. Read straight
+    /// after the paint that carried the event.
+    last_back_handled: bool,
     /// Overlays emitted during BUILD (`Dialog::emit`/`Snackbar::emit`) —
     /// kept until the next rebuild so they survive cache-hit frames (see
     /// the clear-before-build comment in `paint`).
@@ -383,6 +389,7 @@ impl FrameEngine {
             prev_mounted: HashSet::new(),
             element_cache: HashMap::new(),
             root_component_id,
+            last_back_handled: false,
             build_overlays: Vec::new(),
             render_tree: Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
             overlay_trees: std::collections::HashMap::new(),
@@ -478,6 +485,10 @@ impl FrameEngine {
     /// `paint()` once into a throwaway `SkiaCanvas` purely to populate the
     /// render tree, then read this, with no real window/GPU needed
     /// (`SkiaCanvas` is a plain in-memory CPU pixmap).
+    /// Did the last [`rosace_platform::InputEvent::BackPressed`] get
+    /// consumed? See [`Self::last_back_handled`]'s field doc.
+    pub fn back_was_handled(&self) -> bool { self.last_back_handled }
+
     pub fn semantics(&self) -> rosace_core::SemanticNode {
         self.render_tree.borrow().collect_semantics()
     }
@@ -1889,6 +1900,22 @@ impl FrameEngine {
                     if let Some(cb) = self.render_tree.borrow().zoom_test(*x, *y) {
                         cb(*delta);
                     }
+                }
+                rosace_platform::InputEvent::BackPressed => {
+                    // Resolution order (rosace_core::nav_back):
+                    //   1. a dismissible overlay closes
+                    //   2. else the registered navigator pops
+                    //   3. else nothing — the platform does its default
+                    //
+                    // Overlays first is what stops the classic bug of a
+                    // single back press closing a dialog AND the screen
+                    // underneath it.
+                    let dismissed = overlay_routes.iter().rev()
+                        .find_map(|r| r.on_tap.clone())
+                        .map(|on_tap| { on_tap(); true })
+                        .unwrap_or(false);
+                    let handled = dismissed || rosace_core::nav_back::dispatch_back();
+                    self.last_back_handled = handled;
                 }
                 rosace_platform::InputEvent::KeyDown {
                     key: rosace_platform::Key::Escape
@@ -5208,6 +5235,119 @@ mod tests {
 
         request(u64::MAX, A11yAction::Activate);
         e.paint(&mut a, &mut b, &[]); // must not panic
+    }
+
+
+    /// The system back intent, resolved in the documented order.
+    ///
+    /// Android's back button and iOS's edge swipe were not wired at all:
+    /// pressing back on a screen three deep EXITED the app instead of going
+    /// back. This drives the real path — a nav stack, a real overlay, and
+    /// `InputEvent::BackPressed` — rather than calling `dispatch_back`
+    /// directly, because the ordering between overlays and the navigator is
+    /// the part that is easy to get wrong.
+    #[test]
+    fn back_closes_an_overlay_first_then_pops_then_declines() {
+        use rosace_nav::ScreenNav;
+        use rosace_widgets::OverlayApi;
+        use std::sync::Mutex;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        #[derive(Clone, PartialEq, Debug)]
+        enum R { Home, Detail }
+
+        struct App {
+            depth: Arc<Mutex<usize>>,
+            dialog: Arc<Mutex<bool>>,
+            // Captured so the test can open the dialog directly instead of
+            // guessing a coordinate that hits the button.
+            open_atom: Arc<OnceLock<rosace_state::Atom<bool>>>,
+        }
+        impl Component for App {
+            fn build(&self, ctx: &mut Context) -> Element {
+                let nav = ScreenNav::new(ctx, R::Home);
+                // Push a second screen ONCE, so there is somewhere to pop
+                // back to. Guarded by its own state: an unguarded
+                // `if depth == 1 { push }` re-pushes on the rebuild that
+                // the pop itself triggers, so back would appear to do
+                // nothing.
+                let seeded = ctx.state(false);
+                if !seeded.get() {
+                    seeded.set(true);
+                    nav.push(R::Detail);
+                }
+                *self.depth.lock().unwrap() = nav.depth();
+
+                let open = ctx.state(false);
+                let _ = self.open_atom.set(open.clone());
+                *self.dialog.lock().unwrap() = open.get();
+                let o = open.clone();
+                rosace_widgets::tree::Button::new("Open")
+                    .on_press(move || o.set(true))
+                    .dialog(open.clone(), || Box::new(
+                        rosace_widgets::tree::Dialog::new("Hi").message("there"),
+                    ))
+                    .into_element()
+            }
+        }
+
+        let depth = Arc::new(Mutex::new(0));
+        let dialog = Arc::new(Mutex::new(false));
+        let open_atom = Arc::new(OnceLock::new());
+        let mut e = FrameEngine::new(
+            Box::new(App {
+                depth: depth.clone(),
+                dialog: dialog.clone(),
+                open_atom: open_atom.clone(),
+            }),
+            rosace_render::FontCache::embedded(),
+        );
+        let (mut a, mut b) = (SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200));
+
+        let back = || rosace_platform::InputEvent::BackPressed;
+
+        e.paint(&mut a, &mut b, &[]);
+        assert_eq!(*depth.lock().unwrap(), 2, "pushed a second screen");
+
+        // Open the dialog, then back must close IT and leave the stack alone.
+        open_atom.get().unwrap().set(true);
+        e.paint(&mut a, &mut b, &[]);
+        assert!(*dialog.lock().unwrap(), "the dialog should be open");
+
+        e.paint(&mut a, &mut b, &[back()]);
+        e.paint(&mut a, &mut b, &[]);
+        assert!(e.back_was_handled(), "closing an overlay consumes the intent");
+        assert!(!*dialog.lock().unwrap(), "back must close the dialog");
+        assert_eq!(*depth.lock().unwrap(), 2,
+            "back must NOT also pop the screen under the dialog");
+
+        // Now back pops the screen.
+        e.paint(&mut a, &mut b, &[back()]);
+        e.paint(&mut a, &mut b, &[]);
+        assert!(e.back_was_handled(), "popping consumes the intent");
+        assert_eq!(*depth.lock().unwrap(), 1, "back must pop to the root");
+    }
+
+    /// At the root the app must DECLINE, so Android leaves the app rather
+    /// than trapping the user in it.
+    #[test]
+    fn back_at_the_root_is_declined_so_the_platform_can_act() {
+        use rosace_nav::ScreenNav;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct RootOnly;
+        impl Component for RootOnly {
+            fn build(&self, ctx: &mut Context) -> Element {
+                let _nav = ScreenNav::new(ctx, 0u8);
+                rosace_widgets::tree::Text::new("root").into_element()
+            }
+        }
+        let mut e = FrameEngine::new(Box::new(RootOnly), rosace_render::FontCache::embedded());
+        let (mut a, mut b) = (SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200));
+        e.paint(&mut a, &mut b, &[]);
+        e.paint(&mut a, &mut b, &[rosace_platform::InputEvent::BackPressed]);
+        assert!(!e.back_was_handled(),
+            "a root navigator must not swallow back — the user could not leave the app");
     }
 
 }

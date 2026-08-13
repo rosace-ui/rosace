@@ -15,6 +15,7 @@ pub mod error_boundary;
 pub mod ime_hint;
 pub mod lifecycle;
 pub mod media_query;
+pub mod nav_back;
 pub mod persist;
 pub mod platform;
 pub mod render_object;

@@ -121,12 +121,30 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
             .ext::<NavTransitionStyle>()
             .map(|s| s.style)
             .unwrap_or_else(|| NavTransitionStyle::default_for_platform(rosace_core::use_platform()));
-        Self {
+        let nav = Self {
             atom,
             previous,
             transition,
             style,
+        };
+
+        // Answer the system back intent (Android's back button/gesture,
+        // iOS's left-edge swipe). Registered every build — cheap, and it
+        // keeps the handler pointing at the CURRENT atoms rather than a
+        // stale clone from the first frame.
+        //
+        // Returns false at the root so the platform does its default. On
+        // Android that means leaving the app, which is correct: swallowing
+        // back at the root traps the user in an app they cannot exit with
+        // the control the OS gave them.
+        {
+            let handler_nav = nav.clone();
+            rosace_core::nav_back::set_back_handler(std::sync::Arc::new(move || {
+                handler_nav.can_pop() && handler_nav.pop()
+            }));
         }
+
+        nav
     }
 
     /// Override the transition style regardless of the platform default or

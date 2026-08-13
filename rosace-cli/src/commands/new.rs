@@ -1560,6 +1560,8 @@ fn android_main_activity_kt(bundle_id: &str, crate_lib_name: &str) -> String {
         r#"package {package}
 
 import android.app.Activity
+import android.os.Build
+import android.window.OnBackInvokedDispatcher
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
@@ -1832,6 +1834,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
     private external fun nativeKey(handle: Long, key: Int)
     private external fun nativeText(handle: Long, character: Int)
     private external fun nativeSemanticsJson(handle: Long): String?
+    private external fun nativeBackPressed(handle: Long): Boolean
     private external fun nativeTextInputActive(): Boolean
     private external fun nativeFocusedKeyboardType(): Int
     // Platform Channel (D127) — the generic bidirectional method-call bridge
@@ -1874,6 +1877,41 @@ class MainActivity : Activity(), SurfaceHolder.Callback {{
         )
         surfaceView.holder.addCallback(this)
         setContentView(surfaceView)
+
+        // System back -> ROSACE. Without this, back EXITS the app even three
+        // screens deep, because nothing ever reached the navigator.
+        //
+        // Two paths on purpose. `onBackPressed` below covers API 24-33 and
+        // still fires on 34 in compatibility mode; `OnBackInvokedCallback`
+        // is the API 33+ one that ALSO delivers the predictive-back gesture,
+        // which never routes through `onBackPressed`. Apps targeting SDK 35
+        // get predictive back enabled by default, so wiring only the
+        // deprecated path would break the moment targetSdk is raised.
+        if (Build.VERSION.SDK_INT >= 33) {{
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT
+            ) {{
+                if (!handleBack()) finish()
+            }}
+        }}
+    }}
+
+    /// Offer the back intent to ROSACE. `true` = consumed (an overlay closed
+    /// or the navigator popped); `false` = the app declined and the platform
+    /// should do its default.
+    private fun handleBack(): Boolean =
+        engineHandle != 0L && nativeBackPressed(engineHandle)
+
+    @Deprecated("Superseded by OnBackInvokedCallback on API 33+; still the path below 33.")
+    override fun onBackPressed() {{
+        // Declining must LEAVE the app. Swallowing back at the root traps
+        // the user in an app they cannot exit with the control the OS gave
+        // them — the single most common complaint about hand-rolled back
+        // handling on Android.
+        if (!handleBack()) {{
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+        }}
     }}
 
     /// Show/hide/reconfigure the soft keyboard to match the engine's focused
@@ -2235,6 +2273,9 @@ func rsc_string_free(_ ptr: UnsafeMutablePointer<CChar>?)
 
 // Accessibility (D132): the engine's semantic tree as JSON, pulled on
 // demand. See `MetalView`'s UIAccessibilityContainer conformance below.
+@_silgen_name("rsc_engine_back_pressed")
+func rsc_engine_back_pressed(_ engine: RscEngine?) -> Int32
+
 @_silgen_name("rsc_engine_semantics_json")
 func rsc_engine_semantics_json(_ engine: RscEngine?) -> UnsafeMutablePointer<CChar>?
 
@@ -2516,6 +2557,19 @@ final class EngineViewController: UIViewController, UIKeyInput {
             }
         }
 
+        // Left-edge swipe -> back. iOS users expect this everywhere, and a
+        // UIKit app gets it free from UINavigationController; ROSACE draws
+        // its own navigation, so there is no navigation controller to
+        // provide it and it has to be wired explicitly.
+        //
+        // A screen-edge PAN recognizer rather than a plain swipe: it is the
+        // one UIKit reserves for this gesture, so it does not fight the
+        // scroll views and drags inside the app.
+        let edgeBack = UIScreenEdgePanGestureRecognizer(
+            target: self, action: #selector(handleEdgePan(_:)))
+        edgeBack.edges = .left
+        view.addGestureRecognizer(edgeBack)
+
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .default)
         displayLink = link
@@ -2621,6 +2675,22 @@ final class EngineViewController: UIViewController, UIKeyInput {
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         syncMediaQuery()
+    }
+
+    /// Fires once per completed edge swipe.
+    ///
+    /// On `.ended` only: a live interactive pop — the screen tracking your
+    /// finger and settling either way on release — needs the transition to
+    /// be drivable from a progress value, which `ScreenTransition` does not
+    /// expose yet. Triggering on completion gives the correct navigation
+    /// with the ordinary animation, and is honest about not being
+    /// interactive rather than half-implementing it.
+    ///
+    /// The result is ignored: unlike Android there is no platform default to
+    /// fall back to, so a declined swipe simply does nothing.
+    @objc private func handleEdgePan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
+        guard recognizer.state == .ended, let engine = engine else { return }
+        _ = rsc_engine_back_pressed(engine)
     }
 
     @objc private func tick() {
@@ -3327,6 +3397,28 @@ pub unsafe extern "C" fn rsc_engine_semantics_json(
     std::ffi::CString::new(text).unwrap_or_default().into_raw()
 }
 
+/// Deliver a system back intent (Android's back button/gesture, iOS's
+/// left-edge swipe) and report whether the app consumed it.
+///
+/// Returns 1 when ROSACE handled it — a dismissible overlay closed, or the
+/// navigator popped — and 0 when it declined, meaning the platform should do
+/// its own default (Android finishes the activity; iOS does nothing).
+///
+/// SYNCHRONOUS on purpose: Android must decide immediately whether to finish
+/// the activity and cannot wait for the next frame to learn the answer, so
+/// this runs a frame inline.
+///
+/// # Safety
+/// `engine` must be a live pointer from `rsc_engine_init`.
+#[no_mangle]
+pub unsafe extern "C" fn rsc_engine_back_pressed(engine: *mut Engine) -> i32 {
+    if engine.is_null() {
+        return 0;
+    }
+    let engine = unsafe { &mut *engine };
+    if engine.back_pressed() { 1 } else { 0 }
+}
+
 /// Frees a string previously returned by `rsc_platform_channel_take_outgoing`,
 /// `rsc_platform_channel_dispatch`, or `rsc_engine_semantics_json`.
 ///
@@ -3659,6 +3751,28 @@ pub extern "system" fn Java_{jni_prefix}_nativeSemanticsJson(
     let ptr = handle as *mut AndroidEngine;
     let text = rosace_ffi::semantics_json(unsafe {{ &(*ptr).engine }});
     env.new_string(text).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}}
+
+/// System back (button or gesture) -> ROSACE. Returns true when the app
+/// consumed it, false when the Activity should finish.
+///
+/// Runs a frame inline rather than queueing: the Kotlin side has to decide
+/// whether to call `finish()` right now, and cannot wait for the next
+/// Choreographer tick to learn the answer.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_{jni_prefix}_nativeBackPressed(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JObject,
+    handle: jni::sys::jlong,
+) -> jni::sys::jboolean {{
+    if handle == 0 {{
+        return 0;
+    }}
+    // An `AndroidEngine`, not a bare `Engine` — see `nativeSemanticsJson`
+    // for the segfault that mis-cast caused.
+    let ptr = handle as *mut AndroidEngine;
+    if unsafe {{ (*ptr).engine.back_pressed() }} {{ 1 }} else {{ 0 }}
 }}
 
 /// The host's ONE per-frame poll (alongside `nativeFrame`) — drains every
