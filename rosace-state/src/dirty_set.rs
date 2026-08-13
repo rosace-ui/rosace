@@ -57,6 +57,47 @@ static FORCE_GLOBAL: AtomicBool = AtomicBool::new(true);
 /// the thread-local gave us in the first place.
 static INBOX: Mutex<Option<HashMap<ThreadId, Vec<ComponentId>>>> = Mutex::new(None);
 
+thread_local! {
+    /// Which atom most recently dirtied each component.
+    ///
+    /// A side channel rather than a change to the dirty set's own type, so
+    /// nothing on the hot path pays for it. Exists purely so the tracing
+    /// layer can answer "what made this rebuild?" with the atom's identity
+    /// instead of a shrug — `RebuildCause::AtomChanged(id)` needs the id,
+    /// and `mark_dirty` was throwing it away at the one point that knew it.
+    ///
+    /// Debug-only: `trace!` compiles out in release, so recording causes
+    /// there would be pure cost.
+    static LAST_CAUSE: RefCell<HashMap<ComponentId, rosace_trace::event::AtomId>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Record that `atom` dirtied `ids`, then mark them.
+///
+/// Callers that know the source should prefer this over [`mark_dirty`]; the
+/// extra argument is what makes a rebuild traceable back to a write.
+pub fn mark_dirty_from(atom: rosace_trace::event::AtomId, ids: &[ComponentId]) {
+    #[cfg(debug_assertions)]
+    LAST_CAUSE.with(|m| {
+        let mut m = m.borrow_mut();
+        for &id in ids {
+            m.insert(id, atom);
+        }
+    });
+    let _ = atom;
+    mark_dirty(ids);
+}
+
+/// The atom that most recently dirtied `id`, if one did.
+///
+/// Consumed by the tracing layer; always `None` in release.
+pub fn last_cause(id: ComponentId) -> Option<rosace_trace::event::AtomId> {
+    #[cfg(debug_assertions)]
+    { return LAST_CAUSE.with(|m| m.borrow().get(&id).copied()); }
+    #[allow(unreachable_code)]
+    { let _ = id; None }
+}
+
 /// Mark components dirty on behalf of `owner`, from a different thread.
 ///
 /// Callers should use [`mark_dirty`] and let `Atom` decide; this is the
@@ -84,6 +125,20 @@ pub fn mark_dirty_for_thread(owner: ThreadId, ids: &[ComponentId]) {
 /// `threads[i]` is where `ids[i]` lives. Grouping matters: a `GlobalAtom`
 /// can legitimately have subscribers on several threads, and marking them
 /// all on one would leave the rest never rebuilding.
+pub fn mark_dirty_per_subscriber_from(
+    atom: rosace_trace::event::AtomId,
+    ids: &[ComponentId],
+    threads: &[ThreadId],
+) {
+    #[cfg(debug_assertions)]
+    LAST_CAUSE.with(|m| {
+        let mut m = m.borrow_mut();
+        for &id in ids { m.insert(id, atom); }
+    });
+    let _ = atom;
+    mark_dirty_per_subscriber(ids, threads);
+}
+
 pub fn mark_dirty_per_subscriber(ids: &[ComponentId], threads: &[ThreadId]) {
     let here = std::thread::current().id();
     let mut local: Vec<ComponentId> = Vec::new();

@@ -861,7 +861,33 @@ impl FrameEngine {
         let cache_key = root_component_id.0;
         let element = if root_is_dirty || !self.element_cache.contains_key(&cache_key) {
             let mut ctx = rosace_core::Context::new(root_component_id);
+            // Time the build and report WHY it ran. `ComponentRebuild` has
+            // existed since the trace crate was written and was never
+            // emitted, so the DevTools lifecycle timeline showed mounts and
+            // unmounts with a hole where the actual work happens — the one
+            // question a reactive framework exists to answer ("what made
+            // this rebuild, and what did it cost?") had no data behind it.
+            let build_start = std::time::Instant::now();
             let el = root.build(&mut ctx);
+            #[cfg(debug_assertions)]
+            {
+                use rosace_trace::{event::{RebuildCause, RosaceTrace}, trace};
+                // `global_dirty` means something invalidated everything (first
+                // frame, resize, a theme/media-query push); otherwise this id
+                // was in the dirty set, which only an atom write puts it in.
+                // Name the atom when we know it. `global_dirty` means
+                // something invalidated everything (first frame, resize, an
+                // OS theme/text-scale push) and no single atom is to blame.
+                let cause = match rosace_state::dirty_set::last_cause(root_component_id) {
+                    Some(atom) if !global_dirty => RebuildCause::AtomChanged(atom),
+                    _ => RebuildCause::Manual,
+                };
+                trace!(RosaceTrace::ComponentRebuild {
+                    id: root_component_id,
+                    cause,
+                    duration: build_start.elapsed(),
+                });
+            }
             self.element_cache.insert(cache_key, el.clone());
             self.build_overlays = drain_overlays();
             el
@@ -5441,6 +5467,64 @@ mod tests {
         assert!(nav.pop(), "an allowing guard lets the pop through");
         e.paint(&mut a, &mut b, &[]);
         assert_eq!(*depth.lock().unwrap(), 1, "back at the root");
+    }
+
+
+    /// A rebuild must be traceable back to the atom that caused it.
+    ///
+    /// `ComponentRebuild` existed since the trace crate was written and was
+    /// never emitted, so the DevTools lifecycle timeline showed mounts and
+    /// unmounts with a hole exactly where the work happens. Worse, the cause
+    /// was unknowable: `mark_dirty` threw the atom id away at the one point
+    /// that had it, so even once emitted the answer to "why did this
+    /// rebuild?" would have been a shrug.
+    #[test]
+    fn a_rebuild_is_traced_with_the_atom_that_caused_it() {
+        use rosace_trace::event::{RebuildCause, RosaceTrace};
+        use std::sync::Mutex;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct Sink(Arc<Mutex<Vec<RebuildCause>>>);
+        impl rosace_trace::TraceSubscriber for Sink {
+            fn on_trace(&self, e: &RosaceTrace) {
+                if let RosaceTrace::ComponentRebuild { cause, .. } = e {
+                    self.0.lock().unwrap().push(cause.clone());
+                }
+            }
+        }
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        rosace_trace::TRACING_BUS.clear_subscribers();
+        rosace_trace::TRACING_BUS.add_subscriber(Arc::new(Sink(seen.clone())));
+
+        struct Counter(Arc<OnceLock<rosace_state::Atom<i32>>>);
+        impl Component for Counter {
+            fn build(&self, ctx: &mut Context) -> Element {
+                let n = ctx.state(0i32);
+                let _ = self.0.set(n.clone());
+                rosace_widgets::tree::Text::new(n.get().to_string()).into_element()
+            }
+        }
+
+        let atom_out = Arc::new(OnceLock::new());
+        let mut e = FrameEngine::new(Box::new(Counter(atom_out.clone())),
+                                     rosace_render::FontCache::embedded());
+        let (mut a, mut b) = (SkiaCanvas::new(200, 100), SkiaCanvas::new(200, 100));
+        e.paint(&mut a, &mut b, &[]); // first frame: globally dirty
+        seen.lock().unwrap().clear();
+
+        // A real atom write is the only thing that dirties this component.
+        let atom = atom_out.get().unwrap().clone();
+        atom.set(7);
+        e.paint(&mut a, &mut b, &[]);
+
+        let events = seen.lock().unwrap().clone();
+        rosace_trace::TRACING_BUS.clear_subscribers();
+        assert!(!events.is_empty(), "the rebuild emitted no ComponentRebuild at all");
+        match &events[0] {
+            RebuildCause::AtomChanged(id) => assert_eq!(*id, atom.id(),
+                "traced the wrong atom as the cause"),
+            other => panic!("expected AtomChanged, got {other:?} — the cause is not being carried"),
+        }
     }
 
 }
