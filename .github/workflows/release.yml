@@ -71,6 +71,20 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: scripts/publish_crates.sh --live
 
+      # The CHANGELOG section is written as "UNRELEASED" while a version is
+      # being prepared, so main never claims something is published that is
+      # not. At tag time it becomes true, so stamp the real date.
+      - name: Stamp the changelog date
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          sed -i "s/^## \[${GITHUB_REF_NAME#v}\] — UNRELEASED/## [${GITHUB_REF_NAME#v}] — $DATE/" CHANGELOG.md
+          sed -i "/^> Prepared and verified, awaiting a /,+2d" CHANGELOG.md
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --cached --quiet || git commit -m "chore: stamp ${GITHUB_REF_NAME} release date"
+          git push origin HEAD:main || echo "::warning::could not push the stamped changelog"
+
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

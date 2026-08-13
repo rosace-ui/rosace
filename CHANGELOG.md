@@ -7,7 +7,11 @@ Releases are tag-driven: pushing `vX.Y.Z` runs `.github/workflows/release.yml`,
 which verifies the tag matches the workspace version, tests, dry-runs, then
 publishes all 26 crates to crates.io in dependency order.
 
-## [0.1.1] — 2026-08-13
+## [0.1.1] — UNRELEASED
+
+> Prepared and verified, awaiting a `v0.1.1` tag. Everything below is on
+> `main` but is **not on crates.io yet** — `cargo add rosace` still gives you
+> 0.1.0.
 
 First release since 0.1.0, and mostly a correctness pass: a systematic audit
 of all 76 widgets against the project's own quality bar turned up defects that
