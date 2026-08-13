@@ -71,15 +71,25 @@ impl Widget for Scaffold {
             },
         };
 
-        // Measure app bar
-        let bar_h = self.app_bar.as_ref()
-            .map(|w| w.layout(&ctx.layout_ctx(Constraints::tight(total.size.width, 44.0))).height)
-            .unwrap_or(0.0);
-
-        // Measure bottom bar
-        let bottom_h = self.bottom_bar.as_ref()
-            .map(|w| w.layout(&ctx.layout_ctx(Constraints::tight(total.size.width, 48.0))).height)
-            .unwrap_or(0.0);
+        // Measure the bars LOOSE, so each reports the height it actually
+        // needs.
+        //
+        // These were `Constraints::tight(width, 44.0)` / `tight(.., 48.0)`,
+        // which FORCE the height — the bar's own `layout` result was
+        // discarded and the constant used instead. That silently defeated
+        // two things: an explicit `AppBar::height(56.0)`, and `AppBar`'s
+        // deliberate growth with the OS text-size setting (its `layout` has
+        // a comment explaining that the theme height is a minimum, not a
+        // ceiling, added after raised Dynamic Type clipped the title on
+        // iOS). Inside a Scaffold — the normal case — none of that applied.
+        //
+        // The old constants stay as FLOORS, so an ordinary bar is unchanged.
+        let measure_bar = |w: &super::BoxedWidget, floor: f32| {
+            let c = Constraints::loose(total.size.width, total.size.height);
+            w.layout(&ctx.layout_ctx(c)).height.max(floor)
+        };
+        let bar_h = self.app_bar.as_ref().map(|w| measure_bar(w, 44.0)).unwrap_or(0.0);
+        let bottom_h = self.bottom_bar.as_ref().map(|w| measure_bar(w, 48.0)).unwrap_or(0.0);
 
         // Paint app bar
         if let Some(bar) = &self.app_bar {
@@ -91,7 +101,12 @@ impl Widget for Scaffold {
 
         // Content area (below bar, above bottom bar)
         let content_y = total.origin.y + bar_h;
-        let content_h = total.size.height - bar_h - bottom_h;
+        // Clamped: a window shorter than its own chrome (a phone in
+        // landscape with both bars, a tiny embedded view) otherwise yields a
+        // NEGATIVE height that flows straight into every child rect below.
+        // The safe-area rect above already uses `.max(0.0)` for exactly this
+        // class of problem — this line was the one that missed it.
+        let content_h = (total.size.height - bar_h - bottom_h).max(0.0);
 
         // Measure nav rail
         let rail_w = self.nav_rail.as_ref()
@@ -146,5 +161,107 @@ impl Widget for Scaffold {
                 size: fab_size,
             }));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_render::{FontCache, PictureRecorder};
+    use crate::tree::RenderTree;
+    use std::{cell::RefCell, rc::Rc};
+
+    /// Paint a scaffold into `h` px tall and return every child rect the
+    /// render tree recorded.
+    fn child_rects(build: impl FnOnce() -> Scaffold, w: f32, h: f32) -> Vec<Rect> {
+        let font = FontCache::embedded();
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: w, height: h } },
+                &font,
+                rosace_theme::built_in::dark_theme(),
+                tree.clone(),
+            );
+            build().paint(&mut ctx);
+        }
+        // Walk from the root; RenderTree exposes children, not a length.
+        let t = tree.borrow();
+        fn walk(t: &RenderTree, id: usize, out: &mut Vec<Rect>) {
+            if let Some(r) = t.node(id).cached_rect { out.push(r); }
+            for &c in &t.node(id).children { walk(t, c, out); }
+        }
+        let mut out = Vec::new();
+        walk(&t, RenderTree::ROOT, &mut out);
+        out
+    }
+
+    /// A window shorter than its own chrome must not produce negative rects.
+    ///
+    /// `content_h = height - bar_h - bottom_h` was unclamped, while the
+    /// safe-area rect 25 lines above it already used `.max(0.0)` for exactly
+    /// this. A phone in landscape with both bars, or a small embedded view,
+    /// pushed a negative height into every child rect below.
+    #[test]
+    fn a_window_shorter_than_its_own_chrome_never_yields_a_negative_rect() {
+        let rects = child_rects(
+            || Scaffold::new(super::super::Container::new())
+                .app_bar(super::super::AppBar::new("Title"))
+                .bottom_bar(super::super::Container::new().height(48.0)),
+            320.0,
+            40.0, // shorter than the app bar alone
+        );
+        assert!(!rects.is_empty(), "the scaffold must still paint something");
+        for r in &rects {
+            assert!(r.size.width >= 0.0 && r.size.height >= 0.0,
+                "negative rect {r:?} in a 40px-tall window");
+        }
+    }
+
+    /// A bar whose height comes from its CONTENT gets the real space to
+    /// measure in.
+    ///
+    /// The bars used to be measured with `Constraints::tight(width, 44.0)`.
+    /// That does NOT force `AppBar` or a fixed-height `Container` — both
+    /// return their own height and ignore the incoming one — so the tight
+    /// constraint was inert for the common cases. What it did do was cap
+    /// `avail_h` at the assumed height, so a content-sized bar measured its
+    /// children against 44px of room instead of the window.
+    #[test]
+    fn a_content_sized_bar_measures_against_the_real_space() {
+        let tall_child = 120.0_f32;
+        let rects = child_rects(
+            || Scaffold::new(super::super::Container::new())
+                // No explicit height: this bar is as tall as its child.
+                .app_bar(super::super::Container::new()
+                    .child(super::super::Container::new().height(tall_child))),
+            320.0,
+            600.0,
+        );
+        let bar = rects.iter()
+            .find(|r| r.origin.y == 0.0 && (r.size.width - 320.0).abs() < 0.5)
+            .expect("the app bar rect should be full-width at the top");
+        assert_eq!(
+            bar.size.height, tall_child,
+            "a content-sized bar was measured against the assumed height, not the window",
+        );
+    }
+
+    /// ...and the designed height still acts as a FLOOR, so an ordinary bar
+    /// is unchanged by the switch to loose constraints.
+    #[test]
+    fn a_short_bar_is_still_floored_at_the_designed_height() {
+        let rects = child_rects(
+            || Scaffold::new(super::super::Container::new())
+                .app_bar(super::super::Container::new().height(10.0)),
+            320.0,
+            600.0,
+        );
+        assert!(
+            rects.iter().all(|r| r.size.height >= 10.0),
+            "a 10px bar should be floored, not shrunk further: {rects:?}",
+        );
     }
 }
