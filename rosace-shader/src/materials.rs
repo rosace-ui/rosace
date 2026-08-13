@@ -303,6 +303,7 @@ mod tests {
 
     #[test]
     fn patch_time_writes_offset_zero() {
+        let _g = crate::test_serial();
         let mut buf = vec![0u8; 16];
         patch_time(&mut buf, 3.5);
         assert_eq!(&buf[0..4], &3.5f32.to_le_bytes());
@@ -311,6 +312,7 @@ mod tests {
 
     #[test]
     fn patch_time_noop_on_short_buffer() {
+        let _g = crate::test_serial();
         let mut buf = vec![0u8; 2];
         patch_time(&mut buf, 9.0); // must not panic
         assert_eq!(buf, vec![0u8; 2]);
@@ -318,6 +320,7 @@ mod tests {
 
     #[test]
     fn gradient_material_time_is_at_offset_zero() {
+        let _g = crate::test_serial();
         let m = gradient(Color::rgb(255, 0, 0), Color::rgb(0, 0, 255), 0.0, 1.0);
         assert_eq!(m.pipeline, GRADIENT_MATERIAL);
         // time defaults to 0.0 at the standard slot, patchable each frame.
@@ -327,6 +330,7 @@ mod tests {
 
     #[test]
     fn starter_materials_register_without_panicking() {
+        let _g = crate::test_serial();
         let _ = crate::take_pending_shaders(); // clear
         register_starter_materials();
         let drained = crate::take_pending_shaders();
@@ -339,6 +343,7 @@ mod tests {
 
     #[test]
     fn glass_material_has_no_fallback() {
+        let _g = crate::test_serial();
         let m = glass(26.0);
         assert_eq!(m.pipeline, GLASS_MATERIAL);
         assert_eq!(m.fallback, None, "an opaque fallback would itself get sampled by the shader");

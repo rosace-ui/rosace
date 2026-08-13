@@ -146,7 +146,19 @@ pub fn take_pending_shaders() -> Vec<(PipelineId, ShaderSpec)> {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+pub(crate) fn test_serial() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 mod tests {
+    // The pending-shader queue is a process-global that these tests both
+    // register into and DRAIN, so in parallel one test's `take` swallows
+    // another's registration. Shared with materials.rs via
+    // `crate::test_serial()` so both modules take the same lock — a
+    // per-module lock would not help, since they race with each other.
+
     use super::*;
     use rosace_macros::ShaderUniforms;
 
@@ -161,6 +173,7 @@ mod tests {
 
     #[test]
     fn scalar_then_vec4_pads_to_vec4_alignment() {
+        let _g = crate::test_serial();
         let v = ScalarThenVec4 { a: 1.5, b: [1.0, 2.0, 3.0, 4.0] };
         let bytes = v.to_bytes();
         // a at 0..4, pad 4..16 (vec4 aligns to 16), b at 16..32.
@@ -180,6 +193,7 @@ mod tests {
 
     #[test]
     fn scalars_pack_tightly_then_round_to_sixteen() {
+        let _g = crate::test_serial();
         let v = ScalarsOnly { a: 0.5, b: 7, c: -3 };
         let bytes = v.to_bytes();
         // 3 × 4 bytes = 12, rounded up to 16.
@@ -198,6 +212,7 @@ mod tests {
 
     #[test]
     fn scalar_fits_in_vec3_tail_padding() {
+        let _g = crate::test_serial();
         let u = Vec3ThenScalar { v: [1.0, 2.0, 3.0], s: 9.0 };
         let bytes = u.to_bytes();
         // vec3 at 0..12 (align 16, size 12); f32 (align 4) fits at 12..16 —
@@ -216,6 +231,7 @@ mod tests {
 
     #[test]
     fn vec2_alignment_inserts_padding_after_odd_scalar() {
+        let _g = crate::test_serial();
         let u = Vec2Pair { a: [1.0, 2.0], b: 3.0, c: [4.0, 5.0] };
         let bytes = u.to_bytes();
         // a at 0..8; b at 8..12; c needs align 8 → pad 12..16, c at 16..24;
@@ -234,6 +250,7 @@ mod tests {
 
     #[test]
     fn mat4_is_sixty_four_column_major_order_preserved() {
+        let _g = crate::test_serial();
         let mut m = [[0.0f32; 4]; 4];
         m[0][0] = 1.0;
         m[3][3] = 2.0;
@@ -245,6 +262,7 @@ mod tests {
 
     #[test]
     fn with_backdrop_sets_the_flag_and_defaults_to_false() {
+        let _g = crate::test_serial();
         assert!(!ShaderSpec::new("// a").wants_backdrop);
         assert!(ShaderSpec::new("// a").with_backdrop().wants_backdrop);
     }
@@ -253,6 +271,7 @@ mod tests {
 
     #[test]
     fn user_pipeline_id_rejects_reserved_builtin_range() {
+        let _g = crate::test_serial();
         let result = std::panic::catch_unwind(|| PipelineId::user(3));
         assert!(result.is_err(), "ids below BUILTIN_MAX must panic in user()");
         assert_eq!(PipelineId::user(0x100).raw(), 0x100);
@@ -260,6 +279,7 @@ mod tests {
 
     #[test]
     fn register_then_take_drains_in_order_and_empties() {
+        let _g = crate::test_serial();
         // Serialize against any other test touching the global queue.
         let _ = take_pending_shaders();
         register_shader(PipelineId::user(0x200), ShaderSpec::new("// a"));

@@ -21,6 +21,7 @@
 //! assert_eq!(focus.focus_next(), Some(1)); // wraps
 //! ```
 
+pub mod actions;
 pub mod focus;
 pub mod focus_node;
 pub mod node;

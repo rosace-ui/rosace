@@ -396,6 +396,17 @@ impl RenderTree {
         &mut self.nodes[id]
     }
 
+    /// The painted rect of a node, if it exists and was painted.
+    ///
+    /// Bounds-checked: callers can hold a node id from a PREVIOUS frame — an
+    /// accessibility action names a node from the tree that was published
+    /// last frame, and the tree may have shrunk since. Indexing directly
+    /// would panic on a list that got shorter between the announcement and
+    /// the user acting on it.
+    pub fn node_rect(&self, id: NodeId) -> Option<Rect> {
+        self.nodes.get(id).and_then(|n| n.cached_rect)
+    }
+
     pub fn node(&self, id: NodeId) -> &TreeNode {
         &self.nodes[id]
     }

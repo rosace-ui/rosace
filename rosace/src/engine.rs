@@ -760,6 +760,51 @@ impl FrameEngine {
     /// rather than by the caller re-deriving it, since `dirty_ids` is
     /// drained by `take_dirty_components()` below and can only be read once
     /// per frame.
+    /// Drain queued accessibility actions into synthetic input events.
+    ///
+    /// A published semantic id packs the render-tree node and its
+    /// semantics-entry index; `split_node_id` is the inverse of the packing
+    /// in `collect_semantics`. A node with no painted rect (never laid out,
+    /// or scrolled out of view) is skipped rather than dispatched at a
+    /// nonsense coordinate.
+    fn drain_a11y_actions(&self) -> Vec<rosace_platform::InputEvent> {
+        use rosace_core::a11y::actions::{take, A11yAction};
+        let requests = take();
+        if requests.is_empty() {
+            return Vec::new();
+        }
+        let tree = self.render_tree.borrow();
+        let mut out = Vec::with_capacity(requests.len() * 2);
+        for req in requests {
+            let (node_id, _entry) = rosace_core::a11y::actions::split_node_id(req.node_id);
+            let Some(rect) = tree.node_rect(node_id) else { continue };
+            let (x, y) = (
+                rect.origin.x + rect.size.width / 2.0,
+                rect.origin.y + rect.size.height / 2.0,
+            );
+            match req.action {
+                // Down AND up: a press that never releases leaves the control
+                // stuck in its pressed visual, and any release-driven
+                // behaviour (a Dismissible commit, a slider settle) never
+                // runs.
+                A11yAction::Activate => {
+                    out.push(rosace_platform::InputEvent::MouseDown {
+                        x, y, button: rosace_platform::MouseButton::Left,
+                    });
+                    out.push(rosace_platform::InputEvent::MouseUp {
+                        x, y, button: rosace_platform::MouseButton::Left,
+                    });
+                }
+                // Not routed yet: moving keyboard focus without activating
+                // needs a focus lookup by node, which the FocusManager does
+                // not expose. Dropped deliberately, so assistive tech can
+                // fall back rather than believe it succeeded.
+                A11yAction::Focus => {}
+            }
+        }
+        out
+    }
+
     pub fn paint(
         &mut self,
         canvas: &mut SkiaCanvas,
@@ -1318,7 +1363,20 @@ impl FrameEngine {
         // dismiss or are swallowed by Block; PassThrough falls through.
         // Anything unclaimed goes to the render-tree walk, where later
         // siblings (painted on top) win structurally.
-        for event in events {
+        // ── Accessibility actions (D132 follow-up) ──────────────────────
+        //
+        // A screen-reader user selects a control and issues an *activate*
+        // action rather than tapping it. Requests are queued by the platform
+        // bridges (which sit below this crate and cannot call dispatch) and
+        // drained here, on the UI thread, once per frame.
+        //
+        // They are turned into ORDINARY input events aimed at the node's
+        // centre rather than invoking its callback directly. That way an
+        // activation does exactly what a tap does — press state, focus
+        // changes, whatever overlay it opens — instead of becoming a second
+        // dispatch path that drifts from the real one.
+        let a11y_events = self.drain_a11y_actions();
+        for event in events.iter().chain(a11y_events.iter()) {
             // ── DevTools element inspector interception (D123/O2) ────────
             // F12 toggles it regardless of state; while enabled it OWNS the
             // pointer — hover highlights, click selects, Escape steps back
@@ -5085,4 +5143,71 @@ mod tests {
         engine.paint(&mut canvas, &mut overlay, &[click(60.0, submit_y), mouse_up(60.0, submit_y)]);
         assert!(submitted.load(std::sync::atomic::Ordering::Relaxed), "a real click on a now-enabled submit button must run Form::submit's callback");
     }
+
+    /// A screen-reader activation must press the real control.
+    ///
+    /// Roles and labels shipped in D132 while activation did not: assistive
+    /// tech could read the UI and then not use it. This drives the whole
+    /// path — publish the tree, find a button by its LABEL the way a screen
+    /// reader would, queue an Activate against the id the tree published,
+    /// and assert the button's own `on_press` ran.
+    #[test]
+    fn an_accessibility_activation_presses_the_control() {
+        use rosace_core::a11y::actions::{request, A11yAction};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let pressed = Arc::new(AtomicBool::new(false));
+        struct OneButton(Arc<AtomicBool>);
+        impl Component for OneButton {
+            fn build(&self, _c: &mut Context) -> Element {
+                let hit = self.0.clone();
+                rosace_widgets::tree::Button::new("Save")
+                    .on_press(move || hit.store(true, Ordering::SeqCst))
+                    .into_element()
+            }
+        }
+
+        let mut e = FrameEngine::new(Box::new(OneButton(pressed.clone())),
+                                     rosace_render::FontCache::embedded());
+        let (mut a, mut b) = (SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200));
+        e.paint(&mut a, &mut b, &[]);
+
+        // Locate the button the way assistive tech does: by its announced
+        // label, not by a coordinate the test computed.
+        fn find(n: &rosace_core::SemanticNode, label: &str) -> Option<u64> {
+            if n.label.as_deref() == Some(label) { return n.id; }
+            n.children.iter().find_map(|c| find(c, label))
+        }
+        let id = find(&e.semantics(), "Save").expect("the button must be announced");
+
+        assert!(!pressed.load(Ordering::SeqCst), "not pressed before the action");
+        request(id, A11yAction::Activate);
+        e.paint(&mut a, &mut b, &[]);
+        assert!(pressed.load(Ordering::SeqCst),
+            "an Activate action did not reach the button's on_press");
+    }
+
+    /// A stale id must not panic. Assistive tech acts on the tree it was
+    /// last given, which may name a node that no longer exists — a row in a
+    /// list that shortened between the announcement and the tap.
+    #[test]
+    fn an_activation_for_a_vanished_node_is_ignored() {
+        use rosace_core::a11y::actions::{request, A11yAction};
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct Empty;
+        impl Component for Empty {
+            fn build(&self, _c: &mut Context) -> Element {
+                rosace_widgets::tree::Spacer::new(8.0).into_element()
+            }
+        }
+        let mut e = FrameEngine::new(Box::new(Empty), rosace_render::FontCache::embedded());
+        let (mut a, mut b) = (SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200));
+        e.paint(&mut a, &mut b, &[]);
+
+        request(u64::MAX, A11yAction::Activate);
+        e.paint(&mut a, &mut b, &[]); // must not panic
+    }
+
 }

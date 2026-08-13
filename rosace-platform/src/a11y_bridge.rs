@@ -88,16 +88,27 @@ impl ActivationHandler for Activation {
 
 /// Assistive tech can request actions (click, focus, scroll-into-view).
 ///
-/// Deliberately a no-op for now: honouring them means routing back into the
-/// engine's hit-test/dispatch path, which lives above this crate. Announcing
-/// and navigating the tree — the part that makes the app *readable* to a
-/// screen reader, and queryable by automation — works without it. Wiring
-/// actions is the natural follow-up, and is called out as such in D132 rather
-/// than silently pretended.
+/// This crate sits BELOW the engine and cannot reach its dispatch path, so a
+/// request is queued (`rosace_core::a11y::actions`) and the engine drains it
+/// on the next frame. That also puts the widget callback back on the UI
+/// thread — AppKit delivers these on its own.
+///
+/// Only Click and Focus are forwarded. The rest (scroll-into-view, increment,
+/// decrement, value setting) need per-widget support that does not exist yet,
+/// and silently swallowing them is more honest than pretending: assistive
+/// tech can then fall back rather than believe the action succeeded.
 struct Actions;
 
 impl ActionHandler for Actions {
-    fn do_action(&mut self, _request: ActionRequest) {}
+    fn do_action(&mut self, request: ActionRequest) {
+        use accesskit::Action;
+        let action = match request.action {
+            Action::Click => rosace_core::a11y::actions::A11yAction::Activate,
+            Action::Focus => rosace_core::a11y::actions::A11yAction::Focus,
+            _ => return,
+        };
+        rosace_core::a11y::actions::request(request.target_node.0, action);
+    }
 }
 
 struct Deactivation;
