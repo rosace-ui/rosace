@@ -76,7 +76,10 @@ pub enum ScrollbarVisibility {
 pub struct ScrollbarStyle {
     pub visibility: ScrollbarVisibility,
     /// Thumb fill.
-    pub color: Color,
+    /// `None` = the active theme's `outline`, resolved at paint time. A
+    /// fixed default here meant the one colour this widget owns ignored the
+    /// theme, and was a dark-theme blue-grey in a light app.
+    pub color: Option<Color>,
     /// Track background drawn behind the thumb along the whole scrollable
     /// edge. `None` (default) draws no track, matching the previous
     /// thumb-only look.
@@ -96,7 +99,7 @@ impl Default for ScrollbarStyle {
     fn default() -> Self {
         Self {
             visibility: ScrollbarVisibility::Always,
-            color: Color::rgb(50, 55, 85),
+            color: None,
             track_color: None,
             thickness: 3.0,
             radius: 1.5,
@@ -221,7 +224,7 @@ impl ScrollView {
 
     pub fn axis(mut self, a: ScrollAxis) -> Self { self.axis = a; self }
     pub fn no_scrollbar(mut self) -> Self { self.scrollbar.visibility = ScrollbarVisibility::Hidden; self }
-    pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar.color = c; self }
+    pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar.color = Some(c); self }
     /// Full scrollbar style (visibility mode, color, track, thickness,
     /// radius, inset, minimum thumb length) in one call.
     pub fn scrollbar_style(mut self, s: ScrollbarStyle) -> Self { self.scrollbar = s; self }
@@ -737,8 +740,9 @@ impl ScrollView {
                 ctx.fill_rrect(track, st.radius, with_alpha(track_color));
             }
         }
-        if let Some(r) = v_thumb { ctx.fill_rrect(r, st.radius, with_alpha(st.color)); }
-        if let Some(r) = h_thumb { ctx.fill_rrect(r, st.radius, with_alpha(st.color)); }
+        let thumb_col = st.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.outline));
+        if let Some(r) = v_thumb { ctx.fill_rrect(r, st.radius, with_alpha(thumb_col)); }
+        if let Some(r) = h_thumb { ctx.fill_rrect(r, st.radius, with_alpha(thumb_col)); }
     }
 }
 

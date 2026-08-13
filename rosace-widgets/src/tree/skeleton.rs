@@ -11,7 +11,8 @@ pub struct Skeleton {
     /// Base hue the shimmer is drawn in (white by default) — the actual
     /// painted colors are this RGB at varying alpha (see `paint`), so
     /// overriding it doesn't need separate base/highlight builders.
-    color: Color,
+    /// `None` = the theme's `on_surface` (see `color`).
+    color: Option<Color>,
     /// Sweep top-to-bottom instead of left-to-right.
     vertical: bool,
     /// Set by [`Self::circle`] — the shimmer band would bleed past the
@@ -21,16 +22,18 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
-    pub fn new() -> Self { Self { width: None, height: 16.0, radius: 6.0, color: Color::rgb(255, 255, 255), vertical: false, is_circle: false } }
+    pub fn new() -> Self { Self { width: None, height: 16.0, radius: 6.0, color: None, vertical: false, is_circle: false } }
     pub fn width(mut self, w: f32) -> Self { self.width = Some(w); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
-    /// Shimmer hue (white by default).
-    pub fn color(mut self, c: Color) -> Self { self.color = c; self }
+    /// Shimmer hue. Defaults to the theme's `on_surface`, so the shimmer
+    /// reads against whatever surface the skeleton sits on; it used to be
+    /// hardcoded white and was near-invisible on a light theme.
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
     /// Sweep the shimmer top-to-bottom instead of the default left-to-right.
     pub fn vertical(mut self, v: bool) -> Self { self.vertical = v; self }
     /// A circular avatar-sized skeleton.
-    pub fn circle(size: f32) -> Self { Self { width: Some(size), height: size, radius: size / 2.0, color: Color::rgb(255, 255, 255), vertical: false, is_circle: true } }
+    pub fn circle(size: f32) -> Self { Self { width: Some(size), height: size, radius: size / 2.0, color: None, vertical: false, is_circle: true } }
 }
 
 impl Default for Skeleton { fn default() -> Self { Self::new() } }
@@ -49,7 +52,8 @@ impl Widget for Skeleton {
             super::SemanticsProps::new(rosace_core::Role::ProgressBar).label("Loading"),
         );
         let r = ctx.rect;
-        let (cr, cg, cb) = (self.color.r, self.color.g, self.color.b);
+        let shimmer = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.on_surface));
+        let (cr, cg, cb) = (shimmer.r, shimmer.g, shimmer.b);
         let base = Color::rgba(cr, cg, cb, 30);
         let hi = Color::rgba(cr, cg, cb, 95);
 

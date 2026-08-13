@@ -69,7 +69,15 @@ impl Widget for Card {
         let r = ctx.rect;
 
         if self.elevation > 0.5 {
-            ctx.fill_shadow_rrect(r, self.radius, Color::rgba(0, 0, 0, 80), self.elevation);
+            let shadow = ctx.tc(ctx.theme.colors.shadow);
+            ctx.fill_shadow_rrect(
+                r,
+                self.radius,
+                // The token carries the hue; 80 is the elevation alpha this
+                // widget has always used, kept as a real constant.
+                Color::rgba(shadow.r, shadow.g, shadow.b, 80),
+                self.elevation,
+            );
         }
 
         let material = resolve_material::<CardMaterial>(&ctx.theme, self.material.as_ref());

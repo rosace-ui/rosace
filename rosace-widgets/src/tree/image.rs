@@ -127,7 +127,10 @@ impl Widget for Image {
             // visually distinct from the neutral "intentional placeholder"
             // box below so a failed load doesn't masquerade as a
             // deliberate one.
-            ctx.fill_rect(dest_rect, Color::rgb(60, 30, 30));
+            let err = ctx.tc(ctx.theme.colors.error);
+            // A tint of the error colour, not a fixed maroon — the box has to
+            // read as "failed" against whatever surface it lands on.
+            ctx.fill_rect(dest_rect, Color::rgba(err.r, err.g, err.b, 60));
             let icon_size = (w.min(h) * 0.4).clamp(16.0, 32.0);
             let icon_rect = Rect {
                 origin: Point { x: x + (w - icon_size) / 2.0, y: y + (h - icon_size) / 2.0 },
@@ -135,18 +138,19 @@ impl Widget for Image {
             };
             super::Icon::new(super::IconKind::Close)
                 .size(icon_size)
-                .color(Color::rgb(200, 90, 90))
+                .color(err)
                 .paint(&mut ctx.child(icon_rect));
             return;
         }
 
         // Placeholder: colored box + icon.
         ctx.fill_rect(dest_rect, self.inner.placeholder_color);
-        ctx.fill_circle(Point { x: x + w / 2.0, y: y + h / 2.0 - 15.0 }, 12.0, Color::rgb(100, 110, 140));
+        let deco = ctx.tc(ctx.theme.colors.outline);
+        ctx.fill_circle(Point { x: x + w / 2.0, y: y + h / 2.0 - 15.0 }, 12.0, deco);
         ctx.fill_rect(Rect {
             origin: Point { x: x + w / 2.0 - 20.0, y: y + h / 2.0 + 5.0 },
             size: Size { width: 40.0, height: 20.0 },
-        }, Color::rgb(80, 90, 120));
+        }, deco);
     }
 }
 

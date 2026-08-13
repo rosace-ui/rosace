@@ -35,7 +35,9 @@ pub struct ListView {
     item_extent: f32,
     builder: Arc<dyn Fn(usize) -> BoxedWidget + Send + Sync>,
     pub show_scrollbar: bool,
-    pub scrollbar_color: Color,
+    /// `None` = the theme's `outline`. This used to be a hardcoded
+    /// dark-theme blue-grey that was wrong in a light theme.
+    pub scrollbar_color: Option<Color>,
 }
 
 impl ListView {
@@ -51,7 +53,7 @@ impl ListView {
             item_extent: item_extent.max(1.0),
             builder: Arc::new(builder),
             show_scrollbar: true,
-            scrollbar_color: Color::rgb(50, 55, 85),
+            scrollbar_color: None,
         }
     }
 
@@ -119,11 +121,19 @@ impl Widget for ListView {
         if self.show_scrollbar && content_h > vp.size.height {
             let ratio = vp.size.height / content_h;
             let bar_h = (vp.size.height * ratio).max(16.0);
-            let bar_y = vp.origin.y + (scroll / content_h) * vp.size.height;
+            // Clamped to the track: unclamped, at max scroll the thumb ran
+            // past the bottom by up to its own height. `ScrollView` clamps
+            // exactly this (see its `draw_scrollbars`).
+            let track_top = vp.origin.y;
+            let track_h = (vp.size.height - bar_h).max(0.0);
+            let bar_y = (track_top + (scroll / content_h) * vp.size.height)
+                .clamp(track_top, track_top + track_h);
+            let bar_col = self.scrollbar_color
+                .unwrap_or_else(|| ctx.tc(ctx.theme.colors.outline));
             ctx.fill_rect(Rect {
                 origin: Point { x: vp.origin.x + vp.size.width - 4.0, y: bar_y },
                 size: Size { width: 3.0, height: bar_h },
-            }, self.scrollbar_color);
+            }, bar_col);
         }
     }
 }

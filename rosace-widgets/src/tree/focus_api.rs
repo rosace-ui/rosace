@@ -13,12 +13,23 @@ use super::{Widget, PaintCtx};
 pub struct WithFocus<W: Widget> {
     inner:      W,
     node:       FocusNode,
+    /// `None` = the active theme's `colors.primary`.
+    ring_color: Option<Color>,
+    /// `None` = a square ring. Set this to match a rounded child's corners.
+    radius:     Option<f32>,
 }
 
 impl<W: Widget + 'static> WithFocus<W> {
     pub fn new(inner: W, node: FocusNode) -> Self {
-        Self { inner, node }
+        Self { inner, node, ring_color: None, radius: None }
     }
+
+    /// Override the focus-ring colour (defaults to the theme's primary).
+    pub fn ring_color(mut self, c: Color) -> Self { self.ring_color = Some(c); self }
+
+    /// Round the focus ring to match the wrapped widget's corners — a square
+    /// halo around a rounded Button or TextInput reads as a rendering bug.
+    pub fn radius(mut self, r: f32) -> Self { self.radius = Some(r); self }
 
     /// Wire an explicit Tab-forward neighbor.
     pub fn focus_next_node(self, next: FocusNode) -> Self {
@@ -48,13 +59,19 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithFocus<W> {
         self.inner.paint(ctx);
 
         // Draw a 2px focus ring when focused.
+        //
+        // The colour comes from the theme so this ring matches the ones the
+        // controls draw for themselves (`switch`, `checkbox`, `chip` all read
+        // `colors.primary`); it used to be a fixed blue that matched nothing.
+        // The radius is settable because a square halo around a rounded
+        // Button or TextInput reads as a rendering bug.
         if self.node.is_focused() {
             let rect = ctx.rect;
-            ctx.recorder.push(DrawCommand::StrokeRect {
-                rect,
-                color: Color::rgba(100, 160, 255, 220),
-                width: 2.0,
-            });
+            let color = self.ring_color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.primary));
+            match self.radius {
+                Some(r) if r > 0.0 => ctx.stroke_rrect(rect, r, color, 2.0),
+                _ => ctx.recorder.push(DrawCommand::StrokeRect { rect, color, width: 2.0 }),
+            }
         }
     }
     // layout, flex_factor: protocol defaults delegate to the child.

@@ -48,7 +48,9 @@ impl Widget for CircularProgress {
         match self.value {
             Some(v) => {
                 // Track ring + value arc from 12 o'clock, clockwise.
-                let track = self.track.unwrap_or(Color::rgba(255, 255, 255, 28));
+                // A white track is invisible on a light theme.
+                let ts = ctx.tc(ctx.theme.colors.on_surface);
+                let track = self.track.unwrap_or(Color::rgba(ts.r, ts.g, ts.b, 28));
                 ctx.fill_arc(center, radius, self.thickness, 0.0, 360.0, track);
                 if v > 0.0 {
                     ctx.fill_arc(center, radius, self.thickness, -90.0, 360.0 * v, color);

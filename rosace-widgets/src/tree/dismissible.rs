@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
-use rosace_render::Color;
 
 use super::{avail_w, BoxedWidget, Children, LayoutCtx, PaintCtx, Widget};
 
@@ -151,7 +150,9 @@ impl Widget for Dismissible {
 /// Default background: a red panel with a trash icon anchored to the side
 /// being revealed (the side opposite the drag direction).
 fn draw_default_background(ctx: &mut PaintCtx, r: Rect, dx: f32) {
-    let red = Color::rgb(220, 62, 54);
+    // The destructive affordance follows the theme's error tokens, so an
+    // app with its own palette gets its own red rather than this one.
+    let red = ctx.tc(ctx.theme.colors.error);
     ctx.fill_rect(r, red);
     const ICON: f32 = 22.0;
     let cy = r.origin.y + (r.size.height - ICON) / 2.0;
@@ -160,7 +161,8 @@ fn draw_default_background(ctx: &mut PaintCtx, r: Rect, dx: f32) {
     } else {
         r.origin.x + 18.0 // revealed on the left
     };
-    let icon = super::Icon::new(super::IconKind::Trash).size(ICON).color(Color::rgb(255, 255, 255));
+    let on_red = ctx.tc(ctx.theme.colors.on_error);
+    let icon = super::Icon::new(super::IconKind::Trash).size(ICON).color(on_red);
     icon.paint(&mut ctx.child(Rect { origin: Point { x: cx, y: cy }, size: Size { width: ICON, height: ICON } }));
 }
 

@@ -141,6 +141,11 @@ impl Dialog {
                     .input(InputBehavior::Block)
                     .focus(FocusBehavior::Trap)
                     .scrim(ScrimConfig {
+                        // A modal scrim is black in every theme by design
+                        // (Material specifies black at a fixed opacity) —
+                        // it dims whatever is behind it rather than
+                        // participating in the palette. Deliberate constant,
+                        // not an unswept literal.
                         color: Color::rgba(0, 0, 0, 160),
                         on_tap: Some(Arc::new(on_dismiss)),
                         exclude_rect: None,
@@ -259,7 +264,8 @@ impl Widget for Dialog {
                 ctx.fill_rect(r, surface);
             }
         } else {
-            ctx.fill_shadow_rrect(r, self.radius, Color::rgba(0, 0, 0, 100), 16.0);
+            let sh = ctx.tc(ctx.theme.colors.shadow);
+            ctx.fill_shadow_rrect(r, self.radius, Color::rgba(sh.r, sh.g, sh.b, 100), 16.0);
             if let Some(m) = &material {
                 if let Some(fallback) = m.fallback {
                     draw_rounded_rect_pub(ctx, r, fallback, self.radius);

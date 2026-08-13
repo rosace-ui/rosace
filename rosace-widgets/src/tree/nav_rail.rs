@@ -129,8 +129,13 @@ impl Widget for NavItem {
 /// A vertical navigation sidebar (section headers + nav items).
 pub struct NavRail {
     pub width: f32,
-    pub background: Color,
-    pub border_color: Color,
+    /// `None` = the theme's `surface`. Every colour in this file used to be
+    /// a hardcoded dark-theme literal, so the rail's chrome ignored the
+    /// app's palette entirely while `NavItem`'s own colours resolved
+    /// correctly — a half-themed widget.
+    pub background: Option<Color>,
+    /// `None` = the theme's `outline`.
+    pub border_color: Option<Color>,
     items: Vec<NavRailEntry>,
 }
 
@@ -145,13 +150,15 @@ impl NavRail {
     pub fn new() -> Self {
         Self {
             width: 232.0,
-            background: Color::rgb(11, 12, 22),
-            border_color: Color::rgb(32, 35, 58),
+            background: None,
+            border_color: None,
             items: Vec::new(),
         }
     }
     pub fn width(mut self, w: f32) -> Self { self.width = w; self }
-    pub fn background(mut self, c: Color) -> Self { self.background = c; self }
+    pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    /// The hairline separating the rail from the content beside it.
+    pub fn border_color(mut self, c: Color) -> Self { self.border_color = Some(c); self }
     pub fn item(mut self, i: NavItem) -> Self { self.items.push(NavRailEntry::Item(i)); self }
     pub fn section(mut self, label: impl Into<String>) -> Self {
         self.items.push(NavRailEntry::Section(label.into())); self
@@ -174,11 +181,11 @@ impl Widget for NavRail {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let r = ctx.rect;
-        ctx.fill_rect(r, self.background);
+        ctx.fill_rect(r, self.background.unwrap_or_else(|| ctx.tc(ctx.theme.colors.surface)));
         ctx.fill_rect(Rect {
             origin: Point { x: r.origin.x + r.size.width - 1.0, y: r.origin.y },
             size: Size { width: 1.0, height: r.size.height },
-        }, self.border_color);
+        }, self.border_color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.outline)));
 
         let mut y = r.origin.y;
         let _item_c = Constraints::tight(self.width, 32.0);
@@ -201,7 +208,7 @@ impl Widget for NavRail {
                     ctx.draw_text_at(
                         label,
                         Point { x: r.origin.x + 14.0, y: y + 4.0 },
-                        Color::rgb(80, 85, 118), 8.0,
+                        with_alpha(ctx.tc(ctx.theme.colors.on_surface), 0.55), 8.0,
                     );
                     y += 20.0;
                 }
@@ -209,7 +216,7 @@ impl Widget for NavRail {
                     ctx.fill_rect(Rect {
                         origin: Point { x: r.origin.x, y },
                         size: Size { width: self.width, height: 1.0 },
-                    }, Color::rgb(24, 26, 44));
+                    }, with_alpha(ctx.tc(ctx.theme.colors.outline), 0.5));
                     y += 10.0;
                 }
                 NavRailEntry::Custom(w) => {

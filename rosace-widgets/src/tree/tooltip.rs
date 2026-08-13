@@ -36,9 +36,30 @@ impl Default for TooltipStyle {
 }
 
 impl TooltipStyle {
-    /// Resolve from the active theme's extension, else the default.
+    /// Resolve from the active theme's extension, else derive from the
+    /// theme's own palette.
+    ///
+    /// This used to fall back to `Default`, which hardcodes a dark bubble —
+    /// so an app on a light theme that had not registered a `TooltipStyle`
+    /// ext got a dark tip against light chrome. A tooltip is an inverted
+    /// surface by convention (it must read as floating ABOVE the content),
+    /// so the derivation swaps surface and on-surface rather than using them
+    /// directly.
     fn resolve(theme: &rosace_theme::ThemeData) -> Self {
-        theme.ext::<TooltipStyle>().copied().unwrap_or_default()
+        if let Some(ext) = theme.ext::<TooltipStyle>().copied() {
+            return ext;
+        }
+        let to_c = |c: rosace_theme::Color| Color::rgba(
+            (c.r * 255.0) as u8, (c.g * 255.0) as u8,
+            (c.b * 255.0) as u8, (c.a * 255.0) as u8,
+        );
+        let inv = to_c(theme.colors.on_surface);
+        Self {
+            background: Color::rgba(inv.r, inv.g, inv.b, 245),
+            text_color: to_c(theme.colors.surface),
+            font_size: theme.typography.body_small.size,
+            ..Self::default()
+        }
     }
 }
 

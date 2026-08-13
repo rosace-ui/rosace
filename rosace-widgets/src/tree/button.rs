@@ -123,7 +123,10 @@ impl Widget for Button {
             ButtonVariant::Secondary => (ctx.tc(t.secondary),  ctx.tc(t.on_secondary), None),
             ButtonVariant::Ghost     => (Color::rgba(0,0,0,0), ctx.tc(t.primary),      Some(ctx.tc(t.outline))),
             ButtonVariant::Link      => (Color::rgba(0,0,0,0), ctx.tc(t.primary),      None),
-            ButtonVariant::Danger    => (Color::rgb(180, 50,  50), Color::rgb(255, 230, 230), None),
+            ButtonVariant::Danger    => (ctx.tc(t.error), ctx.tc(t.on_error), None),
+            // No `success` token exists in `ColorScheme` (Material's own
+            // scheme has none either), so this stays a documented semantic
+            // constant rather than being forced onto an unrelated token.
             ButtonVariant::Success   => (Color::rgb( 40, 160, 80), Color::rgb(220, 255, 230), None),
         };
 

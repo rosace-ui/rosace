@@ -201,7 +201,12 @@ enum IconSource {
 pub struct Icon {
     source: IconSource,
     pub size: f32,
-    pub color: Color,
+    /// `None` = resolve from the active theme's `colors.on_surface` at paint
+    /// time. This used to be a plain `Color` defaulting to a fixed pale
+    /// blue-grey, so `Icon` never read `ctx.theme` at all and EVERY unstyled
+    /// icon in every app ignored the theme — wrong in a light theme, and
+    /// wrong against any non-default surface.
+    pub color: Option<Color>,
     /// Accessible name, when the icon carries meaning of its own.
     ///
     /// `None` (the default) makes the icon **decorative**: it is left out of
@@ -235,7 +240,7 @@ impl Icon {
     }
 
     fn from_source(source: IconSource) -> Self {
-        Self { source, size: 16.0, color: Color::rgb(180, 184, 210), semantic_label: None }
+        Self { source, size: 16.0, color: None, semantic_label: None }
     }
 
     pub fn size(mut self, s: f32) -> Self { self.size = s; self }
@@ -247,7 +252,7 @@ impl Icon {
         self.semantic_label = Some(label.into());
         self
     }
-    pub fn color(mut self, c: Color) -> Self { self.color = c; self }
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
 }
 
 impl Widget for Icon {
@@ -265,7 +270,7 @@ impl Widget for Icon {
         let cx = r.origin.x + r.size.width / 2.0;
         let cy = r.origin.y + r.size.height / 2.0;
         let s = self.size;
-        let c = self.color;
+        let c = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.on_surface));
 
         let glyph = match &self.source {
             IconSource::Kind(k)  => k.codepoint(),

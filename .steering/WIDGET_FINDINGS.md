@@ -145,3 +145,37 @@ shared root causes** — worth investigating these before doing 46 individual wi
   same builder API Grid already has (#27).
 - Give Button a "Link" variant (#41).
 - Clarify Table vs DataTable distinction (#25), Progress vs Slider distinction (#39).
+
+## L15 — engine text-input tests share state and flake (pre-existing)
+
+Confirmed against an unmodified tree (stashed working copy): `cargo test -p
+rosace --lib` fails roughly 1 run in 3, and **the failing test differs each
+time** — `a_slow_second_click_does_not_count_as_a_double_click`,
+`a_quick_press_and_release_does_not_trigger_long_press_select`,
+`alt_arrow_moves_by_word_then_insert_lands_at_the_word_boundary` have all
+been seen.
+
+The symptom is not an off-by-one: the document itself comes back mangled.
+One run expected `"hello woXrld"` and got `"ello worlXd"` — the leading `h`
+is missing AND the insert landed at a different offset, which a caret-
+position bug alone cannot produce. That points at keystrokes crossing
+between concurrently running engines, not at the logic each test is
+asserting.
+
+Each of these builds its own `headless_text_input_engine()`, so the engine's
+own click/caret state (`last_click_at`, `click_count`, …) is per-instance and
+not the culprit. The shared thing is elsewhere — the focus registry, the
+active-editable pointer, or the background long-press/caret timers (see
+[[feedback_background_timer_test_races]], which records an earlier round of
+exactly this class).
+
+`ANIMATION_GLOBAL_TEST_LOCK` is held by some of these tests but plainly not
+by all the ones that can interfere.
+
+NOT caused by the widget audit work; logged here so it is not rediscovered.
+Worth fixing before it erodes trust in the suite — a suite that fails 1 run
+in 3 for unrelated reasons trains you to ignore red.
+
+Fixed while confirming the above: `rosace-state`'s `dirty_set` tests raced
+on the same process-global (each called `reset_to_global_dirty` at the top,
+which is not enough when the suite runs in parallel). Now serialized.

@@ -7,8 +7,12 @@ use super::container::draw_rounded_rect_pub;
 pub struct Badge {
     pub label: String,
     pub dot: bool,
-    pub color: Color,
-    pub text_color: Color,
+    /// `None` = the active theme's `colors.error` for a status dot,
+    /// `colors.primary` for a labelled badge. Both used to be hardcoded, so
+    /// the widget ignored the app's palette entirely.
+    pub color: Option<Color>,
+    /// `None` = the active theme's `colors.on_primary`.
+    pub text_color: Option<Color>,
     /// `None` = read from the active theme's `typography.label_small`
     /// (D127 "environment" track — see `Checkbox::resolved_font_size`'s doc
     /// for the reasoning).
@@ -29,19 +33,19 @@ impl Badge {
         Self {
             label: text.into(),
             dot: false,
-            color: Color::rgb(110, 75, 210),
-            text_color: Color::rgb(230, 232, 245),
+            color: None,
+            text_color: None,
             font_size: None,
         }
     }
 
     pub fn dot() -> Self {
-        Self { dot: true, label: String::new(), color: Color::rgb(235, 75, 75),
-               text_color: Color::rgb(255,255,255), font_size: None }
+        Self { dot: true, label: String::new(), color: None,
+               text_color: None, font_size: None }
     }
 
-    pub fn color(mut self, c: Color) -> Self { self.color = c; self }
-    pub fn text_color(mut self, c: Color) -> Self { self.text_color = c; self }
+    pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
+    pub fn text_color(mut self, c: Color) -> Self { self.text_color = Some(c); self }
 
     fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
         self.font_size.unwrap_or(theme.typography.label_small.size)
@@ -69,18 +73,22 @@ impl Widget for Badge {
             // A bare status dot carries no text — nothing to announce.
             let cx = ctx.rect.origin.x + 4.0;
             let cy = ctx.rect.origin.y + 4.0;
-            ctx.fill_circle(Point { x: cx, y: cy }, 4.0, self.color);
+            // A bare dot is a status indicator, so it defaults to `error`.
+            let dot_col = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.error));
+            ctx.fill_circle(Point { x: cx, y: cy }, 4.0, dot_col);
             return;
         }
         ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Text).label(&self.label));
         let font_size = self.resolved_font_size(&ctx.theme);
         let r = ctx.rect;
-        draw_rounded_rect_pub(ctx, r, self.color, r.size.height / 2.0);
+        let bg = self.color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.primary));
+        draw_rounded_rect_pub(ctx, r, bg, r.size.height / 2.0);
         let text_w = ctx.font.measure_text(&self.label, font_size);
         let tx = ((r.size.width - text_w) / 2.0).max(0.0);
         let line_h = ctx.font.line_height(font_size);
         let ty = ((r.size.height - line_h) / 2.0).max(0.0);
-        ctx.text(&self.label, tx, ty, self.text_color, font_size);
+        let fg = self.text_color.unwrap_or_else(|| ctx.tc(ctx.theme.colors.on_primary));
+        ctx.text(&self.label, tx, ty, fg, font_size);
     }
 }
 

@@ -112,7 +112,8 @@ impl Widget for Toast {
             (self.background.unwrap_or_else(|| ctx.tc(t.surface_variant)),
              self.color.unwrap_or_else(|| ctx.tc(t.on_surface)))
         };
-        ctx.fill_shadow_rrect(r, radius, Color::rgba(0, 0, 0, 90), 10.0);
+        let sh = ctx.tc(ctx.theme.colors.shadow);
+        ctx.fill_shadow_rrect(r, radius, Color::rgba(sh.r, sh.g, sh.b, 90), 10.0);
         draw_rounded_rect_pub(ctx, r, bg, radius);
 
         let accent = self.resolve_accent(ctx);

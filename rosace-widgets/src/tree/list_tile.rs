@@ -148,7 +148,10 @@ impl Widget for ListTile {
             let emphasis = ctx.animate_to(target, 0.0);
             if emphasis > 0.0 {
                 let a = (14.0 * emphasis * 2.0).min(255.0) as u8;
-                ctx.fill_rect(ctx.rect, rosace_render::Color::rgba(255, 255, 255, a));
+                // A white wash is invisible on a light theme. Every OTHER
+                // colour in this file already resolves from a token.
+                let w = ctx.tc(ctx.theme.colors.on_surface);
+                ctx.fill_rect(ctx.rect, rosace_render::Color::rgba(w.r, w.g, w.b, a));
             }
         }
         let t = &ctx.theme.colors;
