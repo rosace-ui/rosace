@@ -52,6 +52,8 @@ impl Accordion {
     pub fn title_size(mut self, s: f32) -> Self { self.title_size = s; self }
 }
 
+/// Designed header height — a MINIMUM. `header_height` grows it to fit
+/// scaled text; taken literally it clipped the title at large OS text sizes.
 const HEADER_H: f32 = 44.0;
 /// Default horizontal inset. Overridable via `Accordion::padding`.
 const PAD_H: f32 = 14.0;
@@ -59,6 +61,11 @@ const PAD_H: f32 = 14.0;
 impl Accordion {
     /// Inset around the header text and the expanded body.
     pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = Some(p); self }
+
+    /// Header height: the designed 44 unless scaled text needs more.
+    fn header_height(&self, font: &rosace_render::FontCache, font_size: f32) -> f32 {
+        super::text_fit_height(HEADER_H, font, font_size)
+    }
 
     fn insets(&self) -> EdgeInsets {
         self.padding.unwrap_or(EdgeInsets::symmetric(PAD_H, 0.0))
@@ -68,7 +75,7 @@ impl Accordion {
 impl Widget for Accordion {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let w = super::avail_w(ctx.constraints);
-        let mut h = HEADER_H;
+        let mut h = self.header_height(ctx.font, self.title_size);
         if self.expanded.get() {
             let bc = Constraints::loose(w - self.insets().total_h(), f32::INFINITY);
             h += self.body.layout(&ctx.with_constraints(bc)).height + 12.0;
@@ -107,11 +114,15 @@ impl Widget for Accordion {
         }
 
         // Header
-        let header = Rect { origin: r.origin, size: Size { width: r.size.width, height: HEADER_H } };
+        // Resolved ONCE and reused everywhere below: layout and paint
+        // disagreeing on the header height puts the chevron and the body at
+        // different offsets than the hit region.
+        let header_h = self.header_height(ctx.font, self.title_size);
+        let header = Rect { origin: r.origin, size: Size { width: r.size.width, height: header_h } };
         let lh = ctx.font.line_height(self.title_size);
         ctx.draw_text_at(
             &self.title,
-            Point { x: r.origin.x + self.insets().left, y: r.origin.y + (HEADER_H - lh) / 2.0 },
+            Point { x: r.origin.x + self.insets().left, y: r.origin.y + (header_h - lh) / 2.0 },
             fg,
             self.title_size,
         );
@@ -125,7 +136,7 @@ impl Widget for Accordion {
         // Android (no OS-level font-fallback there, unlike desktop).
         let chev_size = self.title_size + 2.0;
         let cx = r.origin.x + r.size.width - self.insets().right - chev_size;
-        let cy = r.origin.y + (HEADER_H - chev_size) / 2.0;
+        let cy = r.origin.y + (header_h - chev_size) / 2.0;
         let chev_rect = Rect { origin: Point { x: cx, y: cy }, size: Size { width: chev_size, height: chev_size } };
         if t < 1.0 {
             let a = (255.0 * (1.0 - t)) as u8;
@@ -156,7 +167,7 @@ impl Widget for Accordion {
             let bc = Constraints::loose(r.size.width - pad.total_h(), f32::INFINITY);
             let bs = self.body.layout(&ctx.layout_ctx(bc));
             let body_rect = Rect {
-                origin: Point { x: r.origin.x + pad.left, y: r.origin.y + HEADER_H + 4.0 },
+                origin: Point { x: r.origin.x + pad.left, y: r.origin.y + header_h + 4.0 },
                 size: Size { width: r.size.width - pad.total_h(), height: bs.height },
             };
             // Fade the body in along the same eased factor.

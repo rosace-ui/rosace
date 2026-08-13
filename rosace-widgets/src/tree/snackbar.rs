@@ -118,7 +118,9 @@ impl Widget for Snackbar {
         let avail = ctx.constraints.max_width_f32();
         // Android-style docked bar: edge-to-edge full width.
         let w = avail.max(content_w.min(avail));
-        Size { width: w, height: self.height }
+        // 46 clears the tap-target minimum but was FIXED, so a raised OS
+        // text size grew the message inside a bar that did not.
+        Size { width: w, height: super::text_fit_height(self.height, ctx.font, font_size) }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

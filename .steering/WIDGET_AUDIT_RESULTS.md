@@ -17,9 +17,9 @@ Updated as work lands. The audit is the backlog; this is the burn-down.
 | B4 | `MAX_TRANSFORM_DIM` never enforced | **FIXED** — also de-duplicated `ScrollView::MAX_TL_DIM`, a second copy of the same number |
 | P1 | `len()*0.6` text estimates (5 widgets) | **FIXED** 292dd7b |
 | — | Icons scaled but were centred unscaled | **FIXED** ea9c8a0 (D134) |
-| P2 | Fixed heights that clip scaled text (~25) | **FIXED** for interactive controls; static ones (accordion, snackbar, tab, avatar, bottom_nav, menu row, nav_rail item, list_tile title-only) still open |
+| P2 | Fixed heights that clip scaled text (~25) | **FIXED** — interactive controls, plus accordion, snackbar, tab, menu row, nav_rail item. `avatar`, `bottom_nav` and `list_tile`'s title-only branch remain |
 | P3 | Hardcoded colours (~20 widgets) | **FIXED** f2f9628 |
-| P4 | Touch targets under 44px (~15) | **FIXED** for switch/checkbox/radio/button/chip/dropdown/segmented/stepper; slider, rating_bar, tab, menu row, nav_rail item, date_picker cells still open |
+| P4 | Touch targets under 44px (~15) | **FIXED** — switch, checkbox, radio, button, chip, dropdown, segmented, stepper, slider, rating_bar, tab, menu row, nav_rail item. Only `date_picker` cells remain (they are grid cells sized by the calendar, not a control height) |
 | P5 | Theme-forced fields with no builder | **FIXED** f2f9628 (folded into P3: avatar, badge, chip, progress_bar, nav_rail, list_view, scroll_view, skeleton all moved to `Option<Color>` + builder) |
 | P6 | No `.padding(..)` (most of the library) | in progress — `Dialog`, `ListTile`, `Accordion` done; `Menu`, `Snackbar`, `Toast`, `TimePicker`, `TextInput`, `TextArea`, `ScrollView`, `ListView`, `NavRail` still hardcoded |
 | P7 | No tests (~20 widgets) | in progress — `padding`, `list_view`, `positioned`, `wrap`, `scaffold`, `transform_layer`, `responsive`, `row`, `column` done |

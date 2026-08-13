@@ -49,6 +49,15 @@ impl Menu {
 
     pub fn min_width(mut self, w: f32) -> Self { self.min_width = w; self }
     pub fn row_height(mut self, h: f32) -> Self { self.row_height = h; self }
+
+    /// Effective row height: the designed value, floored at the tap-target
+    /// minimum and grown to fit scaled text. 34px rows were both under the
+    /// minimum (Quality Bar §6) and fixed, so raised OS text clipped inside
+    /// them — and a menu is a list of small targets stacked together, which
+    /// is the worst case for mistapping.
+    fn resolved_row_height(&self, font: &rosace_render::FontCache, font_size: f32) -> f32 {
+        super::control_height(self.row_height, font, font_size)
+    }
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
     /// Menu surface fill color (theme's `surface` if unset).
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
@@ -81,7 +90,7 @@ impl Widget for Menu {
             .map(|(label, _)| ctx.font.measure_text(label, font_size))
             .fold(0.0_f32, f32::max);
         let width = (widest + PAD_H * 2.0).max(self.min_width);
-        let height = self.items.len() as f32 * self.row_height + PAD_V * 2.0;
+        let height = self.items.len() as f32 * self.resolved_row_height(ctx.font, font_size) + PAD_V * 2.0;
         ctx.constraints.constrain(Size { width, height })
     }
 
@@ -117,6 +126,10 @@ impl Widget for Menu {
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
         ctx.stroke_rrect(r, self.radius, Color { a: 120, ..outline }, 1.0);
         let font_size = self.resolved_font_size(&ctx.theme);
+        // The SAME value layout used — a paint that recomputed from
+        // `self.row_height` would place rows at one pitch inside a panel
+        // sized for another, and the hit rects with them.
+        let row_h = self.resolved_row_height(ctx.font, font_size);
         let line_h = ctx.font.line_height(font_size);
         let hi = ctx.tc(ctx.theme.colors.on_surface);
         let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -125,9 +138,9 @@ impl Widget for Menu {
             let row = Rect {
                 origin: rosace_core::types::Point {
                     x: r.origin.x,
-                    y: r.origin.y + PAD_V + i as f32 * self.row_height,
+                    y: r.origin.y + PAD_V + i as f32 * row_h,
                 },
-                size: Size { width: r.size.width, height: self.row_height },
+                size: Size { width: r.size.width, height: row_h },
             };
             // Child ctx per row — hit rect is clip-aware AND hover/press are
             // tracked per-row so we can highlight the item under the pointer.
@@ -141,7 +154,7 @@ impl Widget for Menu {
                 };
                 child.fill_rrect(inset, 8.0, with_alpha(hi, if prs { 0.16 } else { 0.09 }));
             }
-            let ty = row.origin.y + (self.row_height - line_h) / 2.0;
+            let ty = row.origin.y + (row_h - line_h) / 2.0;
             child.draw_text_at(label, rosace_core::types::Point { x: row.origin.x + PAD_H, y: ty }, fg, font_size);
             child.semantics(super::SemanticsProps::new(rosace_core::Role::MenuItem).label(label));
             child.register_hit(Arc::clone(cb));
@@ -167,4 +180,60 @@ mod tests {
             .item("Item one", || {});
         assert_eq!(base.layout(&ctx), customized.layout(&ctx));
     }
+
+    /// Menu rows were 34px — under the minimum, and a menu is a column of
+    /// adjacent targets, which is the worst case for mistapping.
+    #[test]
+    fn rows_clear_the_tap_target_minimum() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let c = rosace_layout::Constraints::loose(400.0, 600.0);
+        let ctx = LayoutCtx::new(c, &font, &theme);
+
+        let m = Menu::new().item("Cut", || {}).item("Copy", || {}).item("Paste", || {});
+        let h = m.layout(&ctx).height;
+        let rows = (h - PAD_V * 2.0) / 3.0;
+        assert!(rows >= crate::tree::MIN_TAP_TARGET, "row pitch {rows} is under the minimum");
+    }
+
+    /// Layout and paint must use the SAME row height.
+    ///
+    /// They were separate expressions — layout summed `resolved_row_height`
+    /// while paint stepped by the raw `row_height` field. That places rows
+    /// at one pitch inside a panel sized for another, and drags the hit
+    /// rects out of alignment with the text, which reads as "the menu
+    /// selects the wrong item near the bottom".
+    #[test]
+    fn painted_rows_are_spaced_the_same_as_the_panel_was_sized() {
+        use rosace_render::{DrawCommand, PictureRecorder};
+        use crate::tree::RenderTree;
+        use std::{cell::RefCell, rc::Rc};
+
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let m = Menu::new().item("Cut", || {}).item("Copy", || {}).item("Paste", || {});
+        let laid = m.layout(&LayoutCtx::new(
+            rosace_layout::Constraints::loose(400.0, 600.0), &font, &theme));
+
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: rosace_core::types::Point { x: 0.0, y: 0.0 }, size: laid },
+                &font, theme, Rc::new(RefCell::new(RenderTree::new())),
+            );
+            m.paint(&mut ctx);
+        }
+        // Row text baselines, in paint order.
+        let ys: Vec<f32> = rec.finish().commands.iter().filter_map(|c| match c {
+            DrawCommand::DrawText { origin, .. } => Some(origin.y),
+            _ => None,
+        }).collect();
+        assert_eq!(ys.len(), 3, "one label per row");
+        let pitch = ys[1] - ys[0];
+        let expected = (laid.height - PAD_V * 2.0) / 3.0;
+        assert!((pitch - expected).abs() < 0.5,
+            "painted pitch {pitch} != the {expected} the panel was sized for");
+    }
+
 }

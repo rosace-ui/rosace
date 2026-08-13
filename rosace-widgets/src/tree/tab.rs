@@ -118,9 +118,20 @@ impl Widget for TabBar {
             // its parent like any other unbounded-width content.
             let font_size = self.resolved_font_size(ctx.theme);
             let w = self.natural_total_width(ctx.font, font_size).max(avail_w(ctx.constraints));
-            return Size { width: w, height: self.height };
+            return Size {
+                width: w,
+                height: super::control_height(self.height, ctx.font, font_size),
+            };
         }
-        Size { width: avail_w(ctx.constraints), height: self.height }
+        // 40px was under the tap-target minimum, and fixed, so a raised OS
+        // text size grew the labels inside a bar that stayed put. Unlike a
+        // Button the bar IS the visual, so this genuinely gets taller —
+        // Material's own tab bar is 48.
+        let font_size = self.resolved_font_size(ctx.theme);
+        Size {
+            width: avail_w(ctx.constraints),
+            height: super::control_height(self.height, ctx.font, font_size),
+        }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

@@ -54,7 +54,15 @@ impl NavItem {
 impl Widget for NavItem {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
-        Size { width: constraints.max_width_f32(), height: self.height }
+        // 36px was under the tap-target minimum and fixed, so raised OS
+        // text grew the label inside a row that stayed put. A nav rail is a
+        // column of adjacent targets, so an undersized row means picking the
+        // wrong destination, not just missing.
+        let font_size = self.resolved_font_size(ctx.theme);
+        Size {
+            width: constraints.max_width_f32(),
+            height: super::control_height(self.height, ctx.font, font_size),
+        }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
@@ -202,7 +210,14 @@ impl Widget for NavRail {
         for entry in &self.items {
             match entry {
                 NavRailEntry::Item(item) => {
-                    let h = item.height;
+                    // ASK the item rather than reading its raw `height`
+                    // field: `NavItem::layout` floors that at the tap-target
+                    // minimum and grows it for scaled text, so reading the
+                    // field would stack rows at one pitch while each item
+                    // laid itself out at another.
+                    let h = item.layout(&ctx.layout_ctx(
+                        Constraints::loose(self.width, r.size.height),
+                    )).height;
                     item.paint(&mut ctx.child(Rect {
                         origin: Point { x: r.origin.x, y },
                         size: Size { width: self.width, height: h },
@@ -235,5 +250,65 @@ impl Widget for NavRail {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_render::{DrawCommand, FontCache, PictureRecorder};
+    use crate::tree::RenderTree;
+    use std::{cell::RefCell, rc::Rc};
+
+    fn env() -> (FontCache, rosace_theme::ThemeData) {
+        (FontCache::embedded(), rosace_theme::built_in::dark_theme())
+    }
+
+    /// 36px items were under the minimum. A rail is a COLUMN of adjacent
+    /// targets, so an undersized row means landing on the wrong destination,
+    /// not merely missing.
+    #[test]
+    fn a_nav_item_clears_the_tap_target_minimum() {
+        let (font, theme) = env();
+        let ctx = LayoutCtx::new(rosace_layout::Constraints::loose(232.0, 600.0), &font, &theme);
+        let h = NavItem::new("Inbox").layout(&ctx).height;
+        assert!(h >= crate::tree::MIN_TAP_TARGET, "item height {h} is under the minimum");
+    }
+
+    /// The rail must STACK items at the height each one lays out at.
+    ///
+    /// It read `item.height` — the raw field — while `NavItem::layout`
+    /// floors that at the tap target. Rows would then be spaced 36 apart
+    /// while each drew itself 44 tall: overlapping labels, and hit rects
+    /// sliding further out of alignment with every row down the rail.
+    #[test]
+    fn the_rail_stacks_items_at_their_laid_out_height_not_the_raw_field() {
+        let (font, theme) = env();
+        let rail = NavRail::new()
+            .item(NavItem::new("One"))
+            .item(NavItem::new("Two"))
+            .item(NavItem::new("Three"));
+
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 },
+                       size: Size { width: 232.0, height: 600.0 } },
+                &font, theme.clone(), Rc::new(RefCell::new(RenderTree::new())),
+            );
+            rail.paint(&mut ctx);
+        }
+        let ys: Vec<f32> = rec.finish().commands.iter().filter_map(|c| match c {
+            DrawCommand::DrawText { origin, .. } => Some(origin.y),
+            _ => None,
+        }).collect();
+        assert!(ys.len() >= 3, "one label per item, got {}", ys.len());
+
+        let ctx = LayoutCtx::new(rosace_layout::Constraints::loose(232.0, 600.0), &font, &theme);
+        let expected = NavItem::new("One").layout(&ctx).height;
+        let pitch = ys[1] - ys[0];
+        assert!((pitch - expected).abs() < 0.5,
+            "rail stacked at {pitch} but each item lays out at {expected}");
     }
 }
