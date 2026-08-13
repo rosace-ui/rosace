@@ -32,7 +32,9 @@ pub enum ScrollAxis {
 /// exists for the much narrower remaining case — one large *non-virtualized*
 /// widget subtree (e.g. a single big `Image`) — where it's correct but not
 /// GPU-accelerated.
-pub const MAX_TL_DIM: f32 = 4096.0;
+/// Deprecated alias — the cap now lives with the layer it constrains.
+/// Kept so existing callers keep compiling.
+pub const MAX_TL_DIM: f32 = super::transform_layer::MAX_TRANSFORM_DIM as f32;
 
 /// How strongly the `Bounce` spring recovers WHILE wheel/trackpad momentum
 /// events are still arriving (as opposed to full-strength once they've

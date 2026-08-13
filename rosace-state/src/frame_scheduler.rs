@@ -64,10 +64,20 @@ pub fn fire_after_ms(ms: u64, f: impl FnOnce() + 'static) {
 
 #[cfg(test)]
 mod tests {
+    /// `FRAME_REQUESTED` is a process-global `AtomicBool` and every test
+    /// here sets and consumes it. Run in parallel they interleave — one
+    /// test's `take` swallows another's `request` — which showed up as
+    /// `take_clears_flag` failing about one workspace run in ten.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     use super::*;
 
     #[test]
     fn frame_not_requested_initially() {
+        let _g = serial();
         // Clear any state left by other tests.
         take_frame_requested();
         assert!(!take_frame_requested());
@@ -75,6 +85,7 @@ mod tests {
 
     #[test]
     fn request_frame_sets_flag() {
+        let _g = serial();
         take_frame_requested();
         request_frame();
         assert!(take_frame_requested());
@@ -82,6 +93,7 @@ mod tests {
 
     #[test]
     fn take_clears_flag() {
+        let _g = serial();
         request_frame();
         assert!(take_frame_requested());
         assert!(!take_frame_requested());
@@ -89,6 +101,7 @@ mod tests {
 
     #[test]
     fn multiple_requests_collapse_to_one() {
+        let _g = serial();
         take_frame_requested();
         request_frame();
         request_frame();

@@ -14,7 +14,7 @@ Updated as work lands. The audit is the backlog; this is the burn-down.
 | B1 | Password plaintext on the a11y bus | **FIXED** 803cc93 |
 | B2 | `Image::fit(..)` did nothing | **FIXED** 803cc93 |
 | B3 | `AbsorbPointer` blocked only clicks | **FIXED** 803cc93 |
-| B4 | `MAX_TRANSFORM_DIM` never enforced | open |
+| B4 | `MAX_TRANSFORM_DIM` never enforced | **FIXED** — also de-duplicated `ScrollView::MAX_TL_DIM`, a second copy of the same number |
 | P1 | `len()*0.6` text estimates (5 widgets) | **FIXED** 292dd7b |
 | — | Icons scaled but were centred unscaled | **FIXED** ea9c8a0 (D134) |
 | P2 | Fixed heights that clip scaled text (~25) | **FIXED** for interactive controls; static ones (accordion, snackbar, tab, avatar, bottom_nav, menu row, nav_rail item, list_tile title-only) still open |

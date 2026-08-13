@@ -22,7 +22,42 @@ pub struct TransformLayer<W: Widget + Send + Sync + 'static> {
 }
 
 /// Physical-pixel cap for TransformLayer content (D082).
+///
+/// The offscreen texture is allocated at `logical_size * render_scale()`, so
+/// the cap is PHYSICAL — a logical-only check passes content that then
+/// cannot fit its texture on a 2x/3x display.
+///
+/// This was declared and never enforced: `child_size` went straight into the
+/// `TransformLayerEntry` unclamped, so the documented cap did not exist on
+/// this path. `ScrollView` had been carrying its own private copy of the
+/// same number to compensate; it now reads this one.
 pub const MAX_TRANSFORM_DIM: u32 = 4096;
+
+/// Clamp a logical size so its PHYSICAL texture stays within
+/// [`MAX_TRANSFORM_DIM`] on both axes.
+fn clamp_to_texture_cap(size: Size) -> Size {
+    let scale = rosace_state::render_scale().max(0.01);
+    let max_logical = MAX_TRANSFORM_DIM as f32 / scale;
+    if size.width <= max_logical && size.height <= max_logical {
+        return size;
+    }
+    #[cfg(debug_assertions)]
+    {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            eprintln!(
+                "[ROSACE] TransformLayer: content {:.0}x{:.0} exceeds the \
+                 {MAX_TRANSFORM_DIM}px physical texture cap at {scale}x and \
+                 was clamped. Content past the cap will not paint.",
+                size.width, size.height,
+            );
+        });
+    }
+    Size {
+        width:  size.width.min(max_logical),
+        height: size.height.min(max_logical),
+    }
+}
 
 impl<W: Widget + Send + Sync + 'static> TransformLayer<W> {
     pub fn new(child: W, viewport_h: f32, scroll_y: Atom<f32>) -> Self {
@@ -40,7 +75,9 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
         // Viewport size is what we occupy in the parent layout.
         let unconstrained = Constraints::loose(ctx.constraints.max_width_f32(), f32::INFINITY);
         let child_lctx = LayoutCtx::new(unconstrained, ctx.font, ctx.theme);
-        let child_size = self.child.layout(&child_lctx);
+        // Enforce the D082 texture cap. Unclamped, an over-tall child asks
+        // the platform for a texture it cannot allocate.
+        let child_size = clamp_to_texture_cap(self.child.layout(&child_lctx));
         Size {
             width:  child_size.width,
             height: self.viewport_h.min(child_size.height),
@@ -111,5 +148,45 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
                 height: self.viewport_h.min(vp_rect.size.height),
             },
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The D082 cap is PHYSICAL, so the logical limit shrinks as the display
+    /// scale rises. Declared but never applied until 2026-08-13: `child_size`
+    /// went into the entry unclamped, so an over-tall child asked the
+    /// platform for a texture it could not allocate.
+    #[test]
+    fn content_is_clamped_to_the_physical_texture_cap() {
+        let cap = MAX_TRANSFORM_DIM as f32;
+
+        rosace_state::set_render_scale(1.0);
+        let ok = Size { width: 800.0, height: 2000.0 };
+        assert_eq!(clamp_to_texture_cap(ok), ok, "under the cap: untouched");
+
+        let over = Size { width: 800.0, height: 9000.0 };
+        let c = clamp_to_texture_cap(over);
+        assert_eq!(c.height, cap, "height clamped to the cap at 1x");
+        assert_eq!(c.width, 800.0, "the axis under the cap is left alone");
+
+        // At 2x the SAME logical size needs twice the texture, so the
+        // logical limit halves. A logical-only check would have passed this.
+        rosace_state::set_render_scale(2.0);
+        let c2 = clamp_to_texture_cap(Size { width: 800.0, height: 3000.0 });
+        assert_eq!(c2.height, cap / 2.0, "logical limit halves at 2x");
+
+        rosace_state::set_render_scale(1.0);
+    }
+
+    /// A zero or nonsense scale must not produce an infinite or NaN limit.
+    #[test]
+    fn a_degenerate_scale_does_not_produce_an_infinite_limit() {
+        rosace_state::set_render_scale(0.0);
+        let c = clamp_to_texture_cap(Size { width: 1.0e9, height: 1.0e9 });
+        assert!(c.width.is_finite() && c.height.is_finite(), "got {c:?}");
+        rosace_state::set_render_scale(1.0);
     }
 }
