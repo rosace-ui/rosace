@@ -58,8 +58,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Catches a packaging problem (a missing include, a path dep with no
-      # version) BEFORE anything irreversible happens.
+      # Packs every tarball and checks every manifest — a missing include, a
+      # path dep with no version, an unset license — BEFORE anything
+      # irreversible happens. It runs --no-verify internally; see the comment
+      # in the script for why building the tarball against registry deps
+      # cannot work on a release that changes a cross-crate API.
       - name: Dry-run publish
         run: scripts/publish_crates.sh
 

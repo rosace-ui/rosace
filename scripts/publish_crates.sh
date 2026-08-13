@@ -105,7 +105,23 @@ for crate in "${CRATES[@]}"; do
       sleep 2
     done
   else
-    if ! cargo publish --dry-run -p "$crate"; then
+    # --no-verify is REQUIRED here, not a shortcut.
+    #
+    # `cargo publish --dry-run` resolves each crate's dependencies from the
+    # REGISTRY, where the new version does not exist yet. So the moment a
+    # release adds an API in an upstream crate (say rosace-core), the dry run
+    # of every downstream crate builds against the PREVIOUS published version
+    # and fails with "method not found" — an error about the old release, not
+    # about anything wrong with this one. It fails 100% of the time on any
+    # release that changes a cross-crate API, which makes it useless as a gate.
+    #
+    # With --no-verify the dry run still does the part only it can do: pack
+    # the tarball and check the manifest (missing `version` on a path dep,
+    # files outside the crate dir, an unset `license`/`description`). The
+    # actual compile is already covered by `cargo test --workspace` on the
+    # real source tree, which is a STRONGER check than building the tarball
+    # against stale registry deps.
+    if ! cargo publish --dry-run --no-verify -p "$crate"; then
       echo
       echo "DRY RUN FAILED at $crate. Fix the issue, then resume with:"
       echo "  scripts/publish_crates.sh --from $crate"

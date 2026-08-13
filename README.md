@@ -314,6 +314,32 @@ Rosace is not yet open for general contributions while the foundation is being l
 - **Feature requests & ideas** — open a discussion issue before building anything
 - **Pull requests** — please open an issue first so we can align on scope; keep PRs small and focused
 
+### AI-assisted contributions are welcome
+
+This project was built with AI assistance and says so above, so it would be
+strange to hold that against anyone else. **Use whatever tools you like.**
+There is no stigma here and no "human-written only" rule.
+
+What matters is not how the code was produced, but whether it is correct,
+whether you understand it, and whether you can show your work. Four things,
+for every PR:
+
+1. **Say you used AI.** One line. It is context, not a confession — it tells a
+   reviewer where to look harder. This is the one non-negotiable.
+2. **Prove it works** — either you tested it manually and the PR says *what you
+   did and what you saw*, or the change carries **>80% test coverage** on what
+   it touches. "Tested, works" is not a report.
+3. **Write a detailed report** — what you found, how, what you changed, what
+   you deliberately did not, and anything you are unsure about.
+4. **Screenshots for anything visual** — before/after, light and dark if colour
+   is involved, a recording if motion is. A widget change without one cannot be
+   reviewed.
+
+What gets a PR rejected is never the AI: it is undisclosed use, an unproven
+claim, a missing screenshot, or code the author cannot explain.
+
+Full detail in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 Architectural decisions that govern the project are recorded in [`.steering/DECISIONS.md`](.steering/DECISIONS.md). Read it before opening a PR — decisions marked `LOCKED` are not open for debate unless a new decision supersedes them.
 
 ---
