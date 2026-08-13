@@ -1,7 +1,7 @@
 use rosace_core::types::{Point, Size};
 use rosace_render::Color;
 use rosace_state::Atom;
-use super::{Widget, LayoutCtx, PaintCtx};
+use super::{EdgeInsets, Widget, LayoutCtx, PaintCtx};
 use super::container::draw_rounded_rect_pub;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +23,8 @@ pub enum ToastKind {
 ///
 /// [`OverlayApi::toast`]: super::overlay_api::OverlayApi::toast
 pub struct Toast {
+    /// `None` = `EdgeInsets::symmetric(PAD_H, PAD_V)`.
+    padding: Option<EdgeInsets>,
     pub message: String,
     pub kind: ToastKind,
     /// `None` = read from the active theme's `typography.body_medium`
@@ -37,15 +39,15 @@ pub struct Toast {
 
 impl Toast {
     pub fn info(message: impl Into<String>) -> Self {
-        Self { message: message.into(), kind: ToastKind::Info, font_size: None, background: None, color: None, accent: None, radius: None }
+        Self { padding: None, message: message.into(), kind: ToastKind::Info, font_size: None, background: None, color: None, accent: None, radius: None }
     }
 
     pub fn success(message: impl Into<String>) -> Self {
-        Self { message: message.into(), kind: ToastKind::Success, font_size: None, background: None, color: None, accent: None, radius: None }
+        Self { padding: None, message: message.into(), kind: ToastKind::Success, font_size: None, background: None, color: None, accent: None, radius: None }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
-        Self { message: message.into(), kind: ToastKind::Error, font_size: None, background: None, color: None, accent: None, radius: None }
+        Self { padding: None, message: message.into(), kind: ToastKind::Error, font_size: None, background: None, color: None, accent: None, radius: None }
     }
 
     /// Pill fill color (theme's `surface_variant` if unset).
@@ -92,18 +94,26 @@ const PAD_V: f32 = 10.0;
 const DOT: f32 = 8.0;
 const GAP: f32 = 10.0;
 
+impl Toast {
+    /// Inset around this widget's content.
+    pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = Some(p); self }
+
+    fn insets(&self) -> EdgeInsets { self.padding.unwrap_or(EdgeInsets::symmetric(PAD_H, PAD_V)) }
+}
+
 impl Widget for Toast {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let font_size = self.resolved_font_size(ctx.theme);
         let text_w = ctx.font.measure_text(&self.message, font_size);
         let line_h = ctx.font.line_height(font_size);
         ctx.constraints.constrain(Size {
-            width: PAD_H * 2.0 + DOT + GAP + text_w,
-            height: PAD_V * 2.0 + line_h.max(DOT),
+            width: self.insets().total_h() + DOT + GAP + text_w,
+            height: self.insets().total_v() + line_h.max(DOT),
         })
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        let pad = self.insets();
         ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Alert).label(&self.message));
         let r = ctx.rect;
         let radius = self.radius.unwrap_or(r.size.height / 2.0);
@@ -118,7 +128,7 @@ impl Widget for Toast {
 
         let accent = self.resolve_accent(ctx);
         ctx.fill_circle(Point {
-            x: r.origin.x + PAD_H + DOT / 2.0,
+            x: r.origin.x + pad.left + DOT / 2.0,
             y: r.origin.y + r.size.height / 2.0,
         }, DOT / 2.0, accent);
 
@@ -127,7 +137,7 @@ impl Widget for Toast {
         ctx.draw_text_at(
             &self.message,
             Point {
-                x: r.origin.x + PAD_H + DOT + GAP,
+                x: r.origin.x + pad.left + DOT + GAP,
                 y: r.origin.y + (r.size.height - line_h) / 2.0,
             },
             fg,

@@ -21,7 +21,7 @@ Updated as work lands. The audit is the backlog; this is the burn-down.
 | P3 | Hardcoded colours (~20 widgets) | **FIXED** f2f9628 |
 | P4 | Touch targets under 44px (~15) | **FIXED** — switch, checkbox, radio, button, chip, dropdown, segmented, stepper, slider, rating_bar, tab, menu row, nav_rail item. Only `date_picker` cells remain (they are grid cells sized by the calendar, not a control height) |
 | P5 | Theme-forced fields with no builder | **FIXED** f2f9628 (folded into P3: avatar, badge, chip, progress_bar, nav_rail, list_view, scroll_view, skeleton all moved to `Option<Color>` + builder) |
-| P6 | No `.padding(..)` (most of the library) | in progress — `Dialog`, `ListTile`, `Accordion` done; `Menu`, `Snackbar`, `Toast`, `TimePicker`, `TextInput`, `TextArea`, `ScrollView`, `ListView`, `NavRail` still hardcoded |
+| P6 | No `.padding(..)` (most of the library) | **FIXED** — Dialog, ListTile, Accordion, Menu, Snackbar, Toast, TextInput, TextArea, ScrollView, ListView, NavRail. (`TimePicker` left: its `PAD` positions a fixed-size dial, not content.) |
 | P7 | No tests (~20 widgets) | in progress — `padding`, `list_view`, `positioned`, `wrap`, `scaffold`, `transform_layer`, `responsive`, `row`, `column` done |
 | A | Missing/incorrect semantics (~12) | **FIXED**; day-cell grid FIXED; a11y **Activate** now works on desktop, Focus + mobile still open |
 

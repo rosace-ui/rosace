@@ -129,6 +129,8 @@ impl Default for ScrollbarStyle {
 /// and `::controlled` always use the base path — programmatic control and
 /// snapshot modes need exact, un-composited semantics.
 pub struct ScrollView {
+    /// `None` = no inset — content is flush to the viewport.
+    padding: Option<super::EdgeInsets>,
     child: BoxedWidget,
     /// Fixed offset for [`ScrollView::fixed`] snapshot mode.
     fixed_offset: Option<f32>,
@@ -167,6 +169,7 @@ impl ScrollView {
     /// `.gpu_layer()` call needed for the common case.
     pub fn new(child: impl Widget + 'static) -> Self {
         Self {
+            padding: None,
             child: Box::new(child),
             fixed_offset: None,
             controller: None,
@@ -227,6 +230,11 @@ impl ScrollView {
     pub fn axis(mut self, a: ScrollAxis) -> Self { self.axis = a; self }
     pub fn no_scrollbar(mut self) -> Self { self.scrollbar.visibility = ScrollbarVisibility::Hidden; self }
     pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar.color = Some(c); self }
+
+    /// Inset the scrolled CONTENT without insetting the viewport, so the
+    /// scrollbar still tracks the full height and content does not sit
+    /// under it. Previously impossible: the child was laid out flush.
+    pub fn padding(mut self, p: super::EdgeInsets) -> Self { self.padding = Some(p); self }
     /// Full scrollbar style (visibility mode, color, track, thickness,
     /// radius, inset, minimum thumb length) in one call.
     pub fn scrollbar_style(mut self, s: ScrollbarStyle) -> Self { self.scrollbar = s; self }
@@ -239,6 +247,17 @@ impl ScrollView {
     /// and base paint paths so content is measured identically either way.
     fn child_constraints(&self, vp: Rect) -> Constraints {
         use rosace_layout::AxisBound;
+        // Content padding narrows the CHILD without narrowing the viewport,
+        // so the scrollbar still tracks the full height and content does not
+        // sit underneath it.
+        let pad = self.padding.unwrap_or_default();
+        let vp = Rect {
+            origin: vp.origin,
+            size: Size {
+                width: (vp.size.width - pad.total_h()).max(0.0),
+                height: (vp.size.height - pad.total_v()).max(0.0),
+            },
+        };
         match self.axis {
             ScrollAxis::Vertical => Constraints {
                 min_width: vp.size.width,
@@ -438,8 +457,12 @@ impl ScrollView {
             ScrollAxis::Both       => (-scroll_x, -scroll_y),
         };
 
+        let pad = self.padding.unwrap_or_default();
         let child_rect = Rect {
-            origin: Point { x: vp.origin.x + ox, y: vp.origin.y + oy },
+            origin: Point {
+                x: vp.origin.x + ox + pad.left,
+                y: vp.origin.y + oy + pad.top,
+            },
             size: child_size,
         };
 

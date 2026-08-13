@@ -23,6 +23,8 @@ use super::text_edit::{
 /// `.on_change()`. What this widget's own render-tree node persists is
 /// only the ephemeral editing chrome (caret position, selection).
 pub struct TextInput {
+    /// `None` = 10px on each side, the long-standing default.
+    padding: Option<super::EdgeInsets>,
     pub value: String,
     pub placeholder: String,
     pub focused: bool,
@@ -70,6 +72,7 @@ impl TextInput {
             keyboard_type: rosace_core::KeyboardType::default(),
             field: None,
             filters: Vec::new(),
+            padding: None,
             leading: None,
             trailing: None,
             on_trailing: None,
@@ -87,6 +90,15 @@ impl TextInput {
     pub fn on_trailing(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_trailing = Some(Arc::new(f)); self
     }
+    /// Inset between the box edge and the text. An adornment
+    /// (`leading`/`trailing`) still reserves its own square zone; this is
+    /// the padding used when there is none on that side.
+    pub fn padding(mut self, p: super::EdgeInsets) -> Self { self.padding = Some(p); self }
+
+    fn insets(&self) -> super::EdgeInsets {
+        self.padding.unwrap_or(super::EdgeInsets::symmetric(10.0, 0.0))
+    }
+
     pub fn value(mut self, v: impl Into<String>) -> Self { self.value = v.into(); self }
     pub fn placeholder(mut self, p: impl Into<String>) -> Self { self.placeholder = p.into(); self }
     /// Seed this input as focused on its FIRST paint only (a one-shot
@@ -283,9 +295,16 @@ impl Widget for TextInput {
         // field (leading icon) / password field (trailing eye) with no
         // separate widget. `left_inset`/`right_inset` replace the flat 10px
         // padding wherever it positioned text/caret/hit-test.
-        let base_pad = 10.0_f32;
-        let left_inset = if self.leading.is_some() { self.height } else { base_pad };
-        let right_inset = if self.trailing.is_some() { self.height } else { base_pad };
+        // NOTE: the `layout.x_of(..).unwrap_or(r.origin.x + left_inset)`
+        // fallbacks below now use this inset instead of a hardcoded 10.0,
+        // which was wrong whenever a `leading` adornment widened it. NOT
+        // covered by a test: the obvious one (empty focused field with a
+        // leading icon) never reaches the fallback, because `x_of` resolves
+        // even at position 0. Verifying it needs a case where the glyph
+        // layout is genuinely absent — worth doing, not yet done.
+        let pad = self.insets();
+        let left_inset = if self.leading.is_some() { self.height } else { pad.left };
+        let right_inset = if self.trailing.is_some() { self.height } else { pad.right };
         let inset = left_inset;
         let visible_w = (r.size.width - left_inset - right_inset).max(0.0);
         let cursor_byte = char_byte_offset(&display, state.cursor());
@@ -361,7 +380,7 @@ impl Widget for TextInput {
                 // pre-themeable look). Handles + the glass lens paint
                 // AFTER the text, further down.
                 let sel_style = ctx.theme.ext::<super::SelectionStyle>().cloned().unwrap_or_default();
-                let x0 = layout.x_of(sel_start).unwrap_or(r.origin.x + 10.0);
+                let x0 = layout.x_of(sel_start).unwrap_or(r.origin.x + left_inset);
                 let x1 = layout.x_of(sel_end).unwrap_or(x0);
                 ctx.fill_rect(Rect {
                     origin: Point { x: x0, y: r.origin.y + ty },
@@ -373,7 +392,7 @@ impl Widget for TextInput {
             // CJK-composition convention, marking the uncommitted text
             // that's still being composed.
             if let Some((ims, ime_)) = state.ime_range {
-                let x0 = layout.x_of(ims).unwrap_or(r.origin.x + 10.0);
+                let x0 = layout.x_of(ims).unwrap_or(r.origin.x + left_inset);
                 let x1 = layout.x_of(ime_).unwrap_or(x0);
                 ctx.fill_rect(Rect {
                     origin: Point { x: x0, y: r.origin.y + ty + line_h - 1.0 },
@@ -384,7 +403,7 @@ impl Widget for TextInput {
             // Report this field's caret rect to the platform (D116 Step
             // 6) so the OS's CJK candidate window anchors near it instead
             // of wherever it defaults to.
-            let cursor_x = layout.x_of(state.cursor()).unwrap_or(r.origin.x + 10.0);
+            let cursor_x = layout.x_of(state.cursor()).unwrap_or(r.origin.x + left_inset);
             rosace_core::set_ime_cursor_area(Some(Rect {
                 origin: Point { x: cursor_x, y: r.origin.y + ty },
                 size: Size { width: 2.0, height: line_h },
@@ -445,7 +464,7 @@ impl Widget for TextInput {
         if is_focused {
             if let Some((sel_start, sel_end)) = state.selection_range() {
                 let sel_style = ctx.theme.ext::<super::SelectionStyle>().cloned().unwrap_or_default();
-                let x0 = layout.x_of(sel_start).unwrap_or(r.origin.x + 10.0);
+                let x0 = layout.x_of(sel_start).unwrap_or(r.origin.x + left_inset);
                 let x1 = layout.x_of(sel_end).unwrap_or(x0);
                 // Grip anchors stay at the line BOTTOM in both kinds —
                 // `engine.rs`'s handle_anchor targets exactly that point,
@@ -855,5 +874,7 @@ mod tests {
         let json = format!("{:?}", tree.borrow().collect_semantics());
         assert!(json.contains("a@b.com"), "a non-obscured value must reach the semantic tree: {json}");
     }
+
+
 
 }

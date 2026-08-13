@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
-use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_h};
+use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, EdgeInsets, avail_h};
 use super::container::draw_rounded_rect_pub;
 
 fn with_alpha(c: Color, a: f32) -> Color {
@@ -145,6 +145,8 @@ impl Widget for NavItem {
 
 /// A vertical navigation sidebar (section headers + nav items).
 pub struct NavRail {
+    /// `None` = entries flush to the rail edges.
+    padding: Option<EdgeInsets>,
     pub width: f32,
     /// `None` = the theme's `surface`. Every colour in this file used to be
     /// a hardcoded dark-theme literal, so the rail's chrome ignored the
@@ -169,11 +171,14 @@ impl NavRail {
             width: 232.0,
             background: None,
             border_color: None,
+            padding: None,
             items: Vec::new(),
         }
     }
     pub fn width(mut self, w: f32) -> Self { self.width = w; self }
     pub fn background(mut self, c: Color) -> Self { self.background = Some(c); self }
+    /// Inset the entries from the rail's edges.
+    pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = Some(p); self }
     /// The hairline separating the rail from the content beside it.
     pub fn border_color(mut self, c: Color) -> Self { self.border_color = Some(c); self }
     pub fn item(mut self, i: NavItem) -> Self { self.items.push(NavRailEntry::Item(i)); self }
@@ -199,6 +204,10 @@ impl Widget for NavRail {
     fn paint(&self, ctx: &mut PaintCtx) {
         let r = ctx.rect;
         ctx.fill_rect(r, self.background.unwrap_or_else(|| ctx.tc(ctx.theme.colors.surface)));
+        // Entries are placed inside the padded band; the rail's own fill and
+        // border above still cover the full rect.
+        let pad = self.padding.unwrap_or_default();
+        let r = pad.shrink(r);
         ctx.fill_rect(Rect {
             origin: Point { x: r.origin.x + r.size.width - 1.0, y: r.origin.y },
             size: Size { width: 1.0, height: r.size.height },

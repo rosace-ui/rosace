@@ -31,6 +31,8 @@ use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h, intersec
 /// })
 /// ```
 pub struct ListView {
+    /// `None` = rows flush to the viewport edges.
+    pub padding: Option<super::EdgeInsets>,
     count: usize,
     item_extent: f32,
     builder: Arc<dyn Fn(usize) -> BoxedWidget + Send + Sync>,
@@ -54,6 +56,7 @@ impl ListView {
             builder: Arc::new(builder),
             show_scrollbar: true,
             scrollbar_color: None,
+            padding: None,
         }
     }
 
@@ -62,6 +65,9 @@ impl ListView {
     /// `outline`). Was reachable only by assigning the public field, which
     /// breaks the builder chain.
     pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar_color = Some(c); self }
+    /// Inset the rows from the viewport edges. Rows were laid out flush, so
+    /// a list could not be padded without wrapping every row.
+    pub fn padding(mut self, p: super::EdgeInsets) -> Self { self.padding = Some(p); self }
 }
 
 /// The half-open range of row indices that intersect the viewport.
@@ -125,14 +131,15 @@ impl Widget for ListView {
 
         for i in first..last {
             let row = (self.builder)(i);
+            let pad = self.padding.unwrap_or_default();
             let row_rect = Rect {
                 origin: Point {
-                    x: vp.origin.x,
+                    x: vp.origin.x + pad.left,
                     y: vp.origin.y + i as f32 * self.item_extent - scroll,
                 },
-                size: Size { width: vp.size.width, height: self.item_extent },
+                size: Size { width: (vp.size.width - pad.total_h()).max(0.0), height: self.item_extent },
             };
-            let lctx = ctx.layout_ctx(Constraints::tight(vp.size.width, self.item_extent));
+            let lctx = ctx.layout_ctx(Constraints::tight((vp.size.width - pad.total_h()).max(0.0), self.item_extent));
             let _ = row.layout(&lctx);
             let mut row_ctx = ctx.child(row_rect);
             row_ctx.clip_rect = Some(effective_clip);

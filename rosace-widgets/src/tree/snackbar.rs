@@ -15,12 +15,14 @@ use rosace_render::Color;
 use rosace_state::Atom;
 
 use super::container::draw_rounded_rect_pub;
-use super::{LayoutCtx, PaintCtx, Widget};
+use super::{EdgeInsets, LayoutCtx, PaintCtx, Widget};
 
 const PAD_H: f32 = 16.0;
 const GAP: f32 = 16.0;
 
 pub struct Snackbar {
+    /// `None` = `EdgeInsets::symmetric(PAD_H, 0.0)`.
+    padding: Option<EdgeInsets>,
     message: String,
     action_label: Option<String>,
     on_action: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -38,6 +40,7 @@ pub struct Snackbar {
 impl Snackbar {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
+            padding: None,
             message: message.into(),
             action_label: None,
             on_action: None,
@@ -102,6 +105,13 @@ impl Snackbar {
     }
 }
 
+impl Snackbar {
+    /// Inset around this widget's content.
+    pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = Some(p); self }
+
+    fn insets(&self) -> EdgeInsets { self.padding.unwrap_or(EdgeInsets::symmetric(PAD_H, 0.0)) }
+}
+
 impl Widget for Snackbar {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         // A snackbar is a BAR, not a pill (user-reported: intrinsic width
@@ -114,7 +124,7 @@ impl Widget for Snackbar {
             .as_ref()
             .map(|a| GAP + ctx.font.measure_text(a, font_size))
             .unwrap_or(0.0);
-        let content_w = PAD_H * 2.0 + text_w + action_w;
+        let content_w = self.insets().total_h() + text_w + action_w;
         let avail = ctx.constraints.max_width_f32();
         // Android-style docked bar: edge-to-edge full width.
         let w = avail.max(content_w.min(avail));
@@ -124,6 +134,7 @@ impl Widget for Snackbar {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        let pad = self.insets();
         // Hoisted theme reads (borrow must end before mutable painting).
         let (bg, fg, action_fg) = {
             let t = &ctx.theme.colors;
@@ -144,14 +155,14 @@ impl Widget for Snackbar {
         let ty = r.origin.y + (r.size.height - line_h) / 2.0;
         ctx.draw_text_at(
             &self.message,
-            Point { x: r.origin.x + PAD_H, y: ty },
+            Point { x: r.origin.x + pad.left, y: ty },
             fg,
             font_size,
         );
 
         if let Some(label) = &self.action_label {
             let aw = ctx.font.measure_text(label, font_size);
-            let ax = r.origin.x + r.size.width - PAD_H - aw;
+            let ax = r.origin.x + r.size.width - pad.right - aw;
             // The action gets its own hit slot (a button inside an alert).
             let hit = Rect {
                 origin: Point { x: ax - 8.0, y: r.origin.y },

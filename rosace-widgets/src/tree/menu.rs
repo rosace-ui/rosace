@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rosace_core::types::{Rect, Size};
 use rosace_render::Color;
-use super::{Widget, LayoutCtx, PaintCtx};
+use super::{EdgeInsets, Widget, LayoutCtx, PaintCtx};
 use super::container::draw_rounded_rect_pub;
 
 type Item = (String, Arc<dyn Fn() + Send + Sync>);
@@ -22,6 +22,8 @@ type Item = (String, Arc<dyn Fn() + Send + Sync>);
 ///
 /// [`OverlayApi::dropdown`]: super::overlay_api::OverlayApi::dropdown
 pub struct Menu {
+    /// `None` = `EdgeInsets::symmetric(PAD_H, PAD_V)`.
+    padding: Option<EdgeInsets>,
     items: Vec<Item>,
     pub min_width: f32,
     pub row_height: f32,
@@ -37,6 +39,7 @@ pub struct Menu {
 impl Menu {
     pub fn new() -> Self {
         Self {
+            padding: None,
             items: Vec::new(),
             min_width: 180.0,
             row_height: 34.0,
@@ -83,14 +86,22 @@ impl Default for Menu {
 const PAD_V: f32 = 6.0;
 const PAD_H: f32 = 14.0;
 
+impl Menu {
+    /// Inset around this widget's content.
+    pub fn padding(mut self, p: EdgeInsets) -> Self { self.padding = Some(p); self }
+
+    fn insets(&self) -> EdgeInsets { self.padding.unwrap_or(EdgeInsets::symmetric(PAD_H, PAD_V)) }
+}
+
 impl Widget for Menu {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let font_size = self.resolved_font_size(ctx.theme);
         let widest = self.items.iter()
             .map(|(label, _)| ctx.font.measure_text(label, font_size))
             .fold(0.0_f32, f32::max);
-        let width = (widest + PAD_H * 2.0).max(self.min_width);
-        let height = self.items.len() as f32 * self.resolved_row_height(ctx.font, font_size) + PAD_V * 2.0;
+        let pad = self.insets();
+        let width = (widest + pad.total_h()).max(self.min_width);
+        let height = self.items.len() as f32 * self.resolved_row_height(ctx.font, font_size) + pad.total_v();
         ctx.constraints.constrain(Size { width, height })
     }
 
@@ -130,6 +141,7 @@ impl Widget for Menu {
         // `self.row_height` would place rows at one pitch inside a panel
         // sized for another, and the hit rects with them.
         let row_h = self.resolved_row_height(ctx.font, font_size);
+        let pad = self.insets();
         let line_h = ctx.font.line_height(font_size);
         let hi = ctx.tc(ctx.theme.colors.on_surface);
         let with_alpha = |c: Color, a: f32| Color::rgba(c.r, c.g, c.b, (a.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -138,7 +150,7 @@ impl Widget for Menu {
             let row = Rect {
                 origin: rosace_core::types::Point {
                     x: r.origin.x,
-                    y: r.origin.y + PAD_V + i as f32 * row_h,
+                    y: r.origin.y + pad.top + i as f32 * row_h,
                 },
                 size: Size { width: r.size.width, height: row_h },
             };
@@ -155,7 +167,7 @@ impl Widget for Menu {
                 child.fill_rrect(inset, 8.0, with_alpha(hi, if prs { 0.16 } else { 0.09 }));
             }
             let ty = row.origin.y + (row_h - line_h) / 2.0;
-            child.draw_text_at(label, rosace_core::types::Point { x: row.origin.x + PAD_H, y: ty }, fg, font_size);
+            child.draw_text_at(label, rosace_core::types::Point { x: row.origin.x + pad.left, y: ty }, fg, font_size);
             child.semantics(super::SemanticsProps::new(rosace_core::Role::MenuItem).label(label));
             child.register_hit(Arc::clone(cb));
         }

@@ -34,6 +34,8 @@ use super::text_edit::{
 /// commands — a large document's PAINT cost stays bounded even though its
 /// LAYOUT cost does not yet (a named follow-up, not this step's exit bar).
 pub struct TextArea {
+    /// `None` = 10px on every side, the long-standing default.
+    padding: Option<super::EdgeInsets>,
     pub value: String,
     pub placeholder: String,
     pub focused: bool,
@@ -65,6 +67,7 @@ impl TextArea {
             focused: false,
             width: None,
             height: 160.0,
+            padding: None,
             font_size: None,
             radius: 6.0,
             background: None,
@@ -80,6 +83,13 @@ impl TextArea {
             scrollbar_color: Color::rgb(60, 65, 95),
         }
     }
+    /// Inset between the box edge and the text.
+    pub fn padding(mut self, p: super::EdgeInsets) -> Self { self.padding = Some(p); self }
+
+    fn insets(&self) -> super::EdgeInsets {
+        self.padding.unwrap_or(super::EdgeInsets::all(10.0))
+    }
+
     pub fn value(mut self, v: impl Into<String>) -> Self { self.value = v.into(); self }
     pub fn placeholder(mut self, p: impl Into<String>) -> Self { self.placeholder = p.into(); self }
     pub fn focused(mut self) -> Self { self.focused = true; self }
@@ -233,9 +243,13 @@ impl Widget for TextArea {
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
         ctx.stroke_rrect(r, self.radius, border, if is_focused { 1.5 } else { 1.0 });
 
-        const PAD: f32 = 10.0;
+        // Resolved once; `PAD` was a file const, so the field could not be
+        // inset at all.
+        let ins = self.insets();
+        let pad_l = ins.left;
+        let pad_t = ins.top;
         let line_h = ctx.font.line_height(font_size);
-        let max_w = (r.size.width - PAD * 2.0).max(1.0);
+        let max_w = (r.size.width - ins.total_h()).max(1.0);
         let has_value = !self.value.is_empty();
 
         let chars: Vec<char> = self.value.chars().collect();
@@ -247,7 +261,7 @@ impl Widget for TextArea {
         // Using bare `content_h` here left the last line's bottom exactly
         // PAD px past the clip at max scroll — a real clipped-last-line
         // bug caught live.
-        let content_extent = content_h + PAD * 2.0;
+        let content_extent = content_h + ins.total_v();
 
         let ctrl = ctx.scroll_controller();
         let vp_s = [r.size.width, r.size.height];
@@ -275,10 +289,10 @@ impl Widget for TextArea {
             let cursor_y = cursor_line as f32 * line_h;
             if cursor_y < scroll_y {
                 scroll_y = cursor_y;
-            } else if cursor_y + line_h + PAD * 2.0 > scroll_y + r.size.height {
+            } else if cursor_y + line_h + ins.total_v() > scroll_y + r.size.height {
                 // `+ PAD * 2.0`: the caret line must clear the bottom clip
                 // edge with its padding, mirroring `content_extent` above.
-                scroll_y = cursor_y + line_h + PAD * 2.0 - r.size.height;
+                scroll_y = cursor_y + line_h + ins.total_v() - r.size.height;
             }
             scroll_y = scroll_y.clamp(0.0, max_scroll);
         }
@@ -288,7 +302,7 @@ impl Widget for TextArea {
 
         // `- PAD`: a line whose bottom pokes into the top padding band is
         // still partially visible and must paint (the clip trims it).
-        let first_visible = (((scroll_y - PAD) / line_h).floor().max(0.0)) as usize;
+        let first_visible = (((scroll_y - pad_t) / line_h).floor().max(0.0)) as usize;
         let last_visible = (((scroll_y + r.size.height) / line_h).ceil() as usize).min(n_lines);
 
         let boundaries = grapheme_boundaries(&self.value);
@@ -310,12 +324,12 @@ impl Widget for TextArea {
 
         let mut lines: Vec<LineLayout> = Vec::with_capacity(n_lines);
         for (i, &(ls, le)) in ranges.iter().enumerate() {
-            let y = r.origin.y + PAD + i as f32 * line_h - scroll_y;
+            let y = r.origin.y + pad_t + i as f32 * line_h - scroll_y;
             let bchars: Vec<usize> = boundaries.iter().copied().filter(|&c| c >= ls && c <= le).collect();
             let lb = char_byte_offset(&self.value, ls);
             let bx: Vec<f32> = bchars.iter().map(|&c| {
                 let cb = char_byte_offset(&self.value, c);
-                r.origin.x + PAD + ctx.font.measure_text(&self.value[lb..cb], font_size)
+                r.origin.x + pad_l + ctx.font.measure_text(&self.value[lb..cb], font_size)
             }).collect();
             lines.push(LineLayout { char_range: (ls, le), y, height: line_h, boundary_chars: bchars, boundary_x: bx });
 
@@ -401,7 +415,7 @@ impl Widget for TextArea {
                 } else {
                     let ub = char_byte_offset(&self.value, le);
                     let line_text = &self.value[lb..ub];
-                    ctx.draw_text_at(line_text, Point { x: r.origin.x + PAD, y }, text_color, font_size);
+                    ctx.draw_text_at(line_text, Point { x: r.origin.x + pad_l, y }, text_color, font_size);
                 }
             }
 
@@ -427,7 +441,7 @@ impl Widget for TextArea {
         }
 
         if !has_value {
-            ctx.text(&self.placeholder, PAD, PAD, text_color, font_size);
+            ctx.text(&self.placeholder, pad_l, pad_t, text_color, font_size);
         }
         if is_focused {
             super::request_animation();
