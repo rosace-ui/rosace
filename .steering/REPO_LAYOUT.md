@@ -12,8 +12,10 @@ Tezzera/                    github.com/rosace-ui/rosace          ← THIS repo
 │
 ├── examples/               github.com/rosace-ui/rosace-examples ← own repo
 │   └── showcase/           the widget catalog app
-└── page/                   github.com/rosace-ui/rosace-page     ← own repo
-                            the website (rosace.godwinj.com)
+├── page/                   github.com/rosace-ui/rosace-page     ← own repo
+│                           the website (rosace.godwinj.com)
+└── wiki/                   github.com/rosace-ui/rosace.wiki     ← own repo
+                            GENERATED from docs/ — never edit here
 ```
 
 ## The rule
@@ -52,11 +54,11 @@ docs/  ──  scripts/docs_to_wiki.py  ──▶  rosace.wiki.git
 Edits made in the wiki UI are silently destroyed by the next regeneration.
 That is the one rule worth remembering about it.
 
-You may clone it in for convenience — `.gitignore` already covers `/wiki/`
-and `*.wiki/`, pre-emptively, so it cannot be swept into this repo:
+It is cloned in at `wiki/` for convenience; `.gitignore` covers `/wiki/`
+and `*.wiki/`, so it cannot be swept into this repo:
 
 ```sh
-git clone https://github.com/rosace-ui/rosace.wiki.git wiki
+git clone https://github.com/rosace-ui/rosace.wiki.git wiki   # if missing
 python3 scripts/docs_to_wiki.py --wiki wiki --check   # dry run, link guard
 python3 scripts/docs_to_wiki.py --wiki wiki           # write
 git -C wiki commit -am "Regenerate from docs/" && git -C wiki push
@@ -70,6 +72,13 @@ directory does.
 
 `--check` writes nothing and fails on any unresolvable inter-page link, so
 it is the thing to run after editing `docs/`.
+
+**Run `--check` before every release.** Nothing automates it — no CI job,
+no git hook — so the published wiki drifts silently whenever `docs/` is
+edited and the script is not run. It had drifted on 6 of 21 pages when the
+wiki was first cloned in (2026-08-13), including a Glossary entry still
+naming `fontdue` after the Phase 30 swap to `swash`. Readers were being
+told the wrong text stack.
 
 ## `docs/` is NOT one of them
 
