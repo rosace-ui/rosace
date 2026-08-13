@@ -1,5 +1,10 @@
 [package]
 description = "rsc: the ROSACE CLI for scaffolding, running, building, and analyzing apps"
+# crates.io discovery — these are the fields its search ranks on,
+# separate from `description`. Five keywords max; categories must come
+# from the fixed crates.io list.
+keywords = ["gui", "cli", "scaffolding", "cross-platform", "rosace"]
+categories = ["command-line-utilities", "development-tools", "gui"]
 name = "rosace-cli"
 version.workspace = true
 edition.workspace = true

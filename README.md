@@ -17,6 +17,15 @@
 
 ---
 
+**Rosace is a declarative, cross-platform GUI framework for Rust.** Write your
+interface once and ship it as a native app on **macOS, Windows, Linux, the web
+(WebAssembly), iOS and Android** — with GPU rendering through
+[wgpu](https://wgpu.rs), fine-grained reactive state, a real text stack (input,
+selection, OS IME), platform accessibility (VoiceOver, TalkBack, AccessKit),
+and hot reload. Pure Rust, clean-room, no Electron and no web view.
+
+---
+
 > **0.1.0 — first release, published on crates.io.** Rosace is still under active development: APIs are unstable and large parts are still being built. Not production-ready yet — but what's here already runs fast, and it's now installable, not just clonable.
 
 ---

@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 description = "ROSACE UI framework — single-crate SDK entry point"
+# crates.io discovery — these are the fields its search ranks on,
+# separate from `description`. Five keywords max; categories must come
+# from the fixed crates.io list.
+keywords = ["gui", "ui", "framework", "cross-platform", "declarative"]
+categories = ["gui", "rendering", "wasm"]
 
 # ── Dependency layer rules ────────────────────────────────────────────────────
 #
