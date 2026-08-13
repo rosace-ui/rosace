@@ -27,8 +27,16 @@ Cargo.lock
 /hotreload_test/
 /mobile_journey/
 
-# The rosace-examples repo, nested here for easy context (framework source
-# and example apps side by side) but git-independent — its own repo, own
-# remote (github.com/rosace-ui/rosace-examples), own history. Never tracked
-# or committed by this repo's git.
+# ── Nested sibling repos ──────────────────────────────────────────────
+# These live inside this folder so everything ROSACE is in one place, but
+# each is GIT-INDEPENDENT: its own repo, own remote, own history. This
+# repo never tracks or commits them. Each is the source of truth for its
+# own contents — clone or pull it separately.
+#
+#   examples/  github.com/rosace-ui/rosace-examples   example apps + showcase
+#   page/      github.com/rosace-ui/rosace-page       the website (rosace.godwinj.com)
+#
+# NOTE: `docs/` is NOT one of these — it is tracked by THIS repo (the
+# mdBook guide + architecture books). Don't confuse the two.
 /examples/
+/page/
