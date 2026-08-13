@@ -1,5 +1,5 @@
 [package]
-description = "40+ built-in widgets for ROSACE: Button, Card, Dialog, Dropdown, and more"
+description = "75+ built-in widgets for ROSACE: Button, Card, Dialog, ListView, and more"
 name = "rosace-widgets"
 version.workspace = true
 edition.workspace = true

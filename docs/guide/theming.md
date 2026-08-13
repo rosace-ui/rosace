@@ -124,7 +124,18 @@ let style = theme.ext::<BadgeStyle>().cloned().unwrap_or(BadgeStyle { corner_rad
 
 ## Platform-adaptive theming: `Themes`
 
-A single `.theme(...)` is enough for most apps. If you want iOS to look Cupertino and Android to look Material from the same codebase, hand the app a **`Themes` bundle** instead — a platform-keyed map with a required fallback:
+A single `.theme(...)` is enough for most apps. If you want one platform to
+carry its own design system — Material's structural app bar on Android, say —
+hand the app a **`Themes` bundle** instead: a platform-keyed map with a
+required fallback.
+
+> **One design system (D133).** ROSACE ships `material()` and nothing else.
+> A `cupertino()` theme existed briefly and was withdrawn: it only restyled
+> the accent colour and the app bar's alignment and height, which reads as
+> iOS-ish without any of the structural work that makes a control feel
+> native. Half a platform look is worse than one deliberate one. The
+> `Themes`/`Platform` mechanism below is untouched and is exactly how a
+> third-party skin plugs in.
 
 ```rust
 use rosace::prelude::*;
@@ -141,7 +152,7 @@ The framework resolves this **once at startup**, keyed by the real running `Plat
 App::new().themes(themes).platform(Platform::Ios).launch(MyApp);
 ```
 
-`rsc new` wires this up for you automatically: if you scaffold a project that targets iOS and/or Android, it generates a `themes()` function in `src/theme.rs` and calls `.themes(theme::themes())` in `App::launch` — Cupertino on iOS, Material on Android, `light()` everywhere else.
+`rsc new` wires this up for you automatically: if you scaffold a project that targets iOS and/or Android, it generates a `themes()` function in `src/theme.rs` and calls `.themes(theme::themes())` in `App::launch` — Material on Android, the base theme everywhere else, iOS included.
 
 ## What `AppBarStyle` controls
 

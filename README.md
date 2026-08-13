@@ -28,7 +28,7 @@ One Rust codebase → native-feeling apps on **desktop, web, iOS, and Android**.
 | | |
 |---|---|
 | 🎨 **Declarative GPU shaders** | Shapes, glassmorphism, backdrop blur and custom effects are **SDF shader pipelines on the GPU** — declared like any other widget. No manual draw calls, no `unsafe`. Shape/effect rendering moved off CPU rasterization onto wgpu; general canvas drawing (text, paths) is still a CPU (tiny-skia) rasterizer composited onto the GPU layer — a hybrid pipeline, not fully GPU-native yet. |
-| 🌗 **Dynamic theming** | Material 3 **and** Cupertino out of the box, an exhaustive compile-checked token system, and **runtime theme switching** — change one atom and every subscribed widget repaints. Platform-adaptive by default. |
+| 🌗 **Dynamic theming** | One deliberate design system (Material 3), an exhaustive compile-checked token system, and **runtime theme switching** — change one atom and every subscribed widget repaints. Platform-adaptive where it matters, and third-party skins plug into the same bundle. |
 | 🔥 **Hot reload + in-app DevTools** | A three-tier hot-reload engine (live data-swap → dylib code-swap → hot-restart) picks the fastest path per platform. A built-in **flight recorder** and trace bus record every frame, state change, and event for live debugging. |
 | ⚡ **Fine-grained reactivity** | `Atom<T>` state with **subscriber-precise rebuilds** — no virtual-DOM diff, no re-render-the-world. Change state, and only the components that read it repaint. |
 | ⌨️ **Real text stack** | `TextInput`/`TextArea` with true keyboard editing, selection, **OS IME** (CJK composition), context menus, and `rosace-forms` validation — not a painted-on illusion. |
@@ -197,59 +197,63 @@ A showcase of built-in widgets in action:
 | Crate | Description |
 |---|---|
 | **Core** | |
-| `rosace` | Main entry point, app launcher |
+| `rosace` | Main entry point, app launcher — the single dependency most apps need |
 | `rosace-macros` | Proc-macros: `#[component]`, `view!{}` |
-| `rosace-core` | Component model, element tree, lifecycle hooks |
+| `rosace-view-syntax` | The `view!` grammar, shared by the macro and the hot-reload runtime |
+| `rosace-core` | Component model, element tree, lifecycle hooks, **a11y**, **i18n** |
 | **State & Reactivity** | |
-| `rosace-state` | `Atom<T>`, `use_atom()`, `GlobalAtom`, batched updates |
+| `rosace-state` | `Atom<T>`, `use_atom`, `GlobalAtom`, subscriber-precise dirty tracking |
 | **Layout & Rendering** | |
-| `rosace-layout` | Flexure engine: Column, Row, Stack, Flex, Grid, Wrap, SizedBox, AspectRatio |
-| `rosace-render` | GPU/CPU hybrid render (wgpu shaders + tiny-skia fallback), dirty regions |
-| `rosace-compositor` | GPU layer compositing, sRGB gamma, texture caching |
-| `rosace-shader` | Shader registry, SDF pipelines for shapes, glyph atlas |
-| `rosace-shaping` | Text shaping (fallback shaper; full HarfBuzz-class shaping deferred) |
-| `rosace-bidi` | Bidirectional text layout |
-| `rosace-scroll` | Scroll layer, momentum, overscroll |
+| `rosace-layout` | Flex layout: Column, Row, Stack, Grid, Wrap |
+| `rosace-render` | GPU/CPU hybrid renderer, glyph atlas, dirty-region tracking |
+| `rosace-compositor` | wgpu compositor — the only crate that touches wgpu types |
+| `rosace-shader` | Shader pipeline types + registration queue (zero wgpu dependency) |
 | **Text & Input** | |
-| `rosace-text` | TextInput, TextArea, clipboard, OS IME |
-| `rosace-ime` | Native input-method-engine integration |
-| `rosace-forms` | Form fields, validation, submission |
+| `rosace-text` | TextInput, TextArea, clipboard, OS IME, **shaping**, **bidi** |
 | **Widgets** | |
-| `rosace-widgets` | 40+ built-in widgets: Button, Card, Dialog, Dropdown, … |
-| `rosace-a11y` | Accessibility tree, roles, focus management, semantic HTML |
-| **Animation & Interaction** | |
-| `rosace-anim` / `rosace-animate` | Animation primitives + high-level API (Tween, Timeline, easing) |
-| `rosace-nav-anim` | Route transitions |
-| `rosace-gesture` | Touch gestures: scroll, drag, pinch |
-| **Navigation** | |
-| `rosace-nav` | Navigator, Router, route stack, guards |
+| `rosace-widgets` | 75+ widgets: Button, Card, Dialog, ListView, … plus **forms**, **scroll** |
+| **Animation & Navigation** | |
+| `rosace-animate` | Tween, Timeline, easing, springs |
+| `rosace-nav` | Navigator, Router, route stack, guards, **route transitions** |
 | **Styling & Theme** | |
-| `rosace-theme` | Platform themes (Material 3, Cupertino), token system |
+| `rosace-theme` | Material 3, design tokens, the platform `Themes` bundle |
 | `rosace-style` | Style primitives |
 | **Platform & FFI** | |
-| `rosace-platform` | Windowing (winit), platform events, scroll layers |
+| `rosace-platform` | Windowing (winit), platform events, **gestures**, **web SEO**, AccessKit |
 | `rosace-ffi` | Native mobile-host FFI bridge (real iOS/Android hosts) |
 | **DevTools & Debugging** | |
-| `rosace-trace` | Event bus, ring buffer, flight recorder |
-| `rosace-devtools` | In-app DevTools |
-| `rosace-hot-reload` | File-watching + rebuild primitive for hot reload |
+| `rosace-trace` | Event bus, ring buffer, flight recorder, logging |
+| `rosace-devtools` | In-app DevTools overlay |
+| `rosace-hot-reload` | File-watching + rebuild primitive |
 | **Persistence & Networking** | |
-| `rosace-storage` | SQLite-backed persistence (`state_permanent`) |
-| `rosace-net` / `rosace-ws` | HTTP + WebSocket client, `use_query`, `use_websocket` |
+| `rosace-storage` | SQLite-backed persistence (`state_permanent`), **file access** |
+| `rosace-net` | HTTP + **WebSocket** client, `use_query`, `use_websocket` |
 | `rosace-media` | Image/video, camera access |
-| **Web & I18n** | |
-| `rosace-web-seo` | Semantic HTML shadow tree for web SEO |
-| `rosace-i18n` | Internationalization |
 | **CLI & Tooling** | |
 | `rosace-cli` | `rsc`: new, dev, run, build, package, analyze, snapshot |
+| `rosace-asset-codegen` | Build-time typed asset codegen |
+| `rosace-test-utils` | Headless widget/render test harness |
+
+> **26 crates, down from 39** (D131). Thirteen small crates were folded into
+> the ones they were always used with — the **bold** entries above are those
+> merged modules, still importable at the same paths through `rosace`. If you
+> remember `rosace-forms`, `rosace-a11y`, `rosace-ws` or `rosace-web-seo` as
+> separate dependencies: `forms → widgets::forms`, `a11y → core::a11y`,
+> `ws → net::ws`, `web-seo → platform::web_seo`. The public API did not change.
 
 ---
 
 ## Development Phases
 
-**Landed:** reactive state · Flexure layout · GPU-native render (wgpu SDF shapes + glyph atlas) · animation system · 40+ widgets · Material 3 + Cupertino theming · desktop platforms · web (WASM + SEO) · real iOS/Android native hosts · text stack (TextInput/IME/forms) · app lifecycle · three-tier hot reload · event tracing & flight recorder.
+**Landed:** reactive state · Flexure layout · GPU-native render (wgpu SDF shapes + glyph atlas) · animation system · 75+ widgets · Material 3 theming · desktop platforms · web (WASM + SEO) · real iOS/Android native hosts · platform accessibility (VoiceOver/TalkBack/AccessKit) · text stack (TextInput/IME/forms) · app lifecycle · three-tier hot reload · event tracing & flight recorder.
 
-**In progress / next:** networking hooks live-verification · persistence tiers (encrypted Keychain/Keystore) · widget expansion (DatePicker, DataTable, rich text/emoji) · declarative shader materials · mobile UI polish · web GPU presenter.
+**In progress / next:** widget quality sweep (a systematic audit against a
+published [quality bar](.steering/WIDGET_QUALITY_BAR.md) — theme tokens, OS
+text scaling, 44px touch targets, semantics) · accessibility **actions**
+(roles and labels ship today; activating a control from a screen reader does
+not yet) · networking hooks live-verification · persistence tiers (encrypted
+Keychain/Keystore) · declarative shader materials · mobile UI polish · web GPU
+presenter.
 
 ### Multi-platform status
 - ✅ Desktop (macOS, Windows, Linux)
