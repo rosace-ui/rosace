@@ -64,6 +64,24 @@ impl ListView {
     pub fn scrollbar_color(mut self, c: Color) -> Self { self.scrollbar_color = Some(c); self }
 }
 
+/// The half-open range of row indices that intersect the viewport.
+///
+/// Extracted from `paint` so it can be tested directly: this arithmetic is
+/// the entire point of a virtualized list, and getting it wrong either drops
+/// visible rows or quietly builds thousands of invisible ones.
+///
+/// `scroll` may be NEGATIVE during an overscroll bounce, which is why `first`
+/// clamps before the cast — an `as usize` on a negative float saturates to 0
+/// on some paths and is a trap worth not relying on.
+fn visible_window(scroll: f32, viewport_h: f32, item_extent: f32, count: usize) -> (usize, usize) {
+    if item_extent <= 0.0 || count == 0 {
+        return (0, 0);
+    }
+    let first = (scroll / item_extent).floor().max(0.0) as usize;
+    let last = (((scroll + viewport_h) / item_extent).ceil().max(0.0) as usize).min(count);
+    (first.min(last), last)
+}
+
 impl Widget for ListView {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         // The list is a viewport: it fills the available space; content
@@ -103,9 +121,7 @@ impl Widget for ListView {
             .unwrap_or(vp);
 
         // The visible window — the only rows that ever exist this frame.
-        let first = (scroll / self.item_extent).floor().max(0.0) as usize;
-        let last = (((scroll + vp.size.height) / self.item_extent).ceil() as usize)
-            .min(self.count);
+        let (first, last) = visible_window(scroll, vp.size.height, self.item_extent, self.count);
 
         for i in first..last {
             let row = (self.builder)(i);
@@ -148,5 +164,81 @@ impl Widget for ListView {
                 size: Size { width: 3.0, height: bar_h },
             }, bar_col);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_render::{FontCache, PictureRecorder};
+    use crate::tree::RenderTree;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc as StdArc;
+    use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn the_window_covers_exactly_the_rows_touching_the_viewport() {
+        // 300px viewport, 50px rows: 6 full rows, so 0..6 at rest.
+        assert_eq!(visible_window(0.0, 300.0, 50.0, 1000), (0, 6));
+        // Scrolled by two whole rows.
+        assert_eq!(visible_window(100.0, 300.0, 50.0, 1000), (2, 8));
+        // Scrolled by half a row: the partially visible row at each end
+        // must be built, or the list shows a gap while dragging.
+        assert_eq!(visible_window(25.0, 300.0, 50.0, 1000), (0, 7));
+    }
+
+    #[test]
+    fn the_window_is_clamped_to_the_row_count() {
+        // Near the end, `last` must not run past `count`.
+        assert_eq!(visible_window(400.0, 300.0, 50.0, 10), (8, 10));
+        // A viewport taller than all the content.
+        assert_eq!(visible_window(0.0, 5000.0, 50.0, 10), (0, 10));
+    }
+
+    /// `scroll` goes negative during an overscroll bounce.
+    #[test]
+    fn an_overscroll_bounce_never_produces_an_inverted_range() {
+        let (first, last) = visible_window(-80.0, 300.0, 50.0, 1000);
+        assert!(first <= last, "inverted range {first}..{last}");
+        assert_eq!(first, 0, "cannot scroll above the first row");
+    }
+
+    /// Degenerate inputs must not panic or produce a huge range.
+    #[test]
+    fn a_zero_extent_or_empty_list_yields_an_empty_window() {
+        assert_eq!(visible_window(0.0, 300.0, 0.0, 100), (0, 0));
+        assert_eq!(visible_window(0.0, 300.0, 50.0, 0), (0, 0));
+    }
+
+    /// The actual guarantee, measured rather than reasoned about: a list of
+    /// 10,000 rows must BUILD only the visible handful. This is the property
+    /// the whole widget exists for, and it had no test.
+    #[test]
+    fn ten_thousand_rows_build_only_the_visible_ones() {
+        let built = StdArc::new(AtomicUsize::new(0));
+        let counter = built.clone();
+
+        let font = FontCache::embedded();
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 },
+                       size: Size { width: 300.0, height: 300.0 } },
+                &font,
+                rosace_theme::built_in::dark_theme(),
+                tree,
+            );
+            ListView::builder(10_000, 50.0, move |_i| {
+                counter.fetch_add(1, Ordering::Relaxed);
+                Box::new(super::super::Spacer::new(1.0))
+            })
+            .paint(&mut ctx);
+        }
+
+        let n = built.load(Ordering::Relaxed);
+        assert!(n > 0, "nothing was built at all");
+        assert!(n <= 8, "built {n} rows for a 300px viewport — virtualization is not working");
     }
 }

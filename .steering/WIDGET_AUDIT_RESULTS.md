@@ -22,7 +22,7 @@ Updated as work lands. The audit is the backlog; this is the burn-down.
 | P4 | Touch targets under 44px (~15) | **FIXED** for switch/checkbox/radio/button/chip/dropdown/segmented/stepper; slider, rating_bar, tab, menu row, nav_rail item, date_picker cells still open |
 | P5 | Theme-forced fields with no builder | **FIXED** f2f9628 (folded into P3: avatar, badge, chip, progress_bar, nav_rail, list_view, scroll_view, skeleton all moved to `Option<Color>` + builder) |
 | P6 | No `.padding(..)` (most of the library) | open |
-| P7 | No tests (~20 widgets) | open |
+| P7 | No tests (~20 widgets) | in progress — `padding`, `list_view`, `positioned`, `wrap`, `scaffold`, `transform_layer`, `responsive`, `row`, `column` done |
 | A | Missing/incorrect semantics (~12) | **FIXED** (day-cell grid + a11y actions still open) |
 
 Every fix above was confirmed to FAIL against the unfixed code before
