@@ -1880,6 +1880,38 @@ straight through a guard meant to block it.
 apply and blocking wins. Recorded rather than solved — solving it needs the
 transition to expose which screen is incoming.
 
+### D137 — Reactivity is an open seam, not an `Atom` monopoly (2026-08-13)
+
+`rosace_state::external::Subscribers` lets any third-party reactive source —
+a BLoC, a signal library, a store, a channel — drive rebuilds without being
+an `Atom` and without the engine knowing it exists.
+
+Three operations, which is exactly what the built-in `Atom` itself uses:
+`add(component_id)` while a component reads you, `notify()` when the value
+changes, `remove(id)` from `Context::on_cleanup`. No trait to implement, no
+registration, no widget subclass.
+
+**Why this is not optional.** Customization, adaptivity and plugins are
+stated project principles. A reactive framework whose only reactive primitive
+is its own is closed by construction: every alternative state library has to
+either wrap `Atom` (losing its own semantics) or fork the engine.
+
+**Dirty marks are routed to the SUBSCRIBER's thread**, recorded at subscribe
+time. Three related facts made this necessary:
+
+* A thread-local dirty set (needed so two engines cannot drain each other's
+  marks) means a worker thread's `mark_dirty` lands where no engine reads it.
+  A finished HTTP request then never repaints — `use_query` was broken by
+  exactly this for a few hours.
+* Recording the owner at ATOM CREATION is not enough: a `GlobalAtom` is a
+  `OnceLock`, so its creating thread is whichever one touched it first, which
+  is not where its subscribers live.
+* A `GlobalAtom` can have subscribers on several threads at once, so marks
+  are grouped per subscriber rather than sent to one thread.
+
+**Granularity is per COMPONENT**, the same as `Atom` — a plugin is not
+second-class, but nobody gets subtree-scoped rebuilds yet.
+
 D-DEF-001  ROSACE Studio design          → Phase 4
 D-DEF-002  Wide color / HDR              → Phase 3
 D-DEF-003  2D bidirectional scroll       → Phase 3

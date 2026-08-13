@@ -15,6 +15,7 @@ pub mod atom_id_gen;
 pub mod batch;
 pub mod cleanup_store;
 pub mod dirty_set;
+pub mod external;
 pub mod frame_scheduler;
 pub mod global_atom;
 pub mod pan_momentum;
@@ -195,3 +196,4 @@ mod tests {
         let _: AsyncState<i32> = AsyncState::Refreshing(42);
     }
 }
+pub use external::Subscribers;

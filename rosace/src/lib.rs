@@ -607,6 +607,8 @@ fn theme_color(c: &rosace_theme::Color) -> Color {
 
 // Core
 pub use rosace_core::{Component, Context, Element};
+/// The plugin seam for foreign reactive sources (BLoC, signals, stores).
+pub use rosace_state::Subscribers;
 pub use rosace_render::canvas::Color;
 
 // Accessibility + focus

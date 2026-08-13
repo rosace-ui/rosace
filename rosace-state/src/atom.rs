@@ -48,6 +48,18 @@ struct AtomInner<T> {
     id: AtomId,
     value: T,
     subscribers: Vec<ComponentId>,
+    /// The thread each subscriber lives on, parallel to `subscribers`.
+    ///
+    /// A write from a worker thread must dirty the SUBSCRIBER's thread, not
+    /// its own: an async result (`use_query` finishing an HTTP call on a
+    /// spawned thread) would otherwise mark a set no engine reads — the UI
+    /// wakes, finds nothing dirty, never rebuilds.
+    ///
+    /// Recorded at SUBSCRIBE time rather than at atom creation. A
+    /// `GlobalAtom` is a `OnceLock`, so its creating thread is whichever one
+    /// happened to touch it first — which is not necessarily, or even
+    /// usually, where its subscribers live.
+    subscriber_threads: Vec<std::thread::ThreadId>,
     /// Notified after every value change.  Stored as `Arc` so it can be
     /// cloned out of the lock before being called.
     on_change: Option<OnChangeFn>,
@@ -82,6 +94,7 @@ impl<T: 'static> Atom<T> {
                 id,
                 value,
                 subscribers: Vec::new(),
+                subscriber_threads: Vec::new(),
                 on_change: None,
             })),
         }
@@ -146,6 +159,7 @@ impl<T: 'static> Atom<T> {
 
         guard.value = value;
         let subscribers = guard.subscribers.clone();
+        let threads = guard.subscriber_threads.clone();
         let on_change = guard.on_change.clone();
         drop(guard);
 
@@ -161,7 +175,7 @@ impl<T: 'static> Atom<T> {
         if crate::batch::is_batching() {
             crate::batch::queue_dirty(atom_id, subscribers);
         } else {
-            crate::dirty_set::mark_dirty(&subscribers);
+            crate::dirty_set::mark_dirty_per_subscriber(&subscribers, &threads);
             crate::frame_scheduler::request_frame();
             if let Some(cb) = on_change {
                 cb(atom_id, subscribers);
@@ -179,12 +193,13 @@ impl<T: 'static> Atom<T> {
         let atom_id = guard.id;
         guard.value = value;
         let subscribers = guard.subscribers.clone();
+        let threads = guard.subscriber_threads.clone();
         let on_change = guard.on_change.clone();
         drop(guard);
         if crate::batch::is_batching() {
             crate::batch::queue_dirty(atom_id, subscribers);
         } else {
-            crate::dirty_set::mark_dirty(&subscribers);
+            crate::dirty_set::mark_dirty_per_subscriber(&subscribers, &threads);
             crate::frame_scheduler::request_frame();
             if let Some(cb) = on_change {
                 cb(atom_id, subscribers);
@@ -215,6 +230,7 @@ impl<T: 'static> Atom<T> {
 
         guard.value = new_value;
         let subscribers = guard.subscribers.clone();
+        let threads = guard.subscriber_threads.clone();
         let on_change = guard.on_change.clone();
         drop(guard);
 
@@ -230,7 +246,7 @@ impl<T: 'static> Atom<T> {
         if crate::batch::is_batching() {
             crate::batch::queue_dirty(atom_id, subscribers);
         } else {
-            crate::dirty_set::mark_dirty(&subscribers);
+            crate::dirty_set::mark_dirty_per_subscriber(&subscribers, &threads);
             crate::frame_scheduler::request_frame();
             if let Some(cb) = on_change {
                 cb(atom_id, subscribers);
@@ -246,12 +262,13 @@ impl<T: 'static> Atom<T> {
         let atom_id = guard.id;
         guard.value = new_value;
         let subscribers = guard.subscribers.clone();
+        let threads = guard.subscriber_threads.clone();
         let on_change = guard.on_change.clone();
         drop(guard);
         if crate::batch::is_batching() {
             crate::batch::queue_dirty(atom_id, subscribers);
         } else {
-            crate::dirty_set::mark_dirty(&subscribers);
+            crate::dirty_set::mark_dirty_per_subscriber(&subscribers, &threads);
             crate::frame_scheduler::request_frame();
             if let Some(cb) = on_change {
                 cb(atom_id, subscribers);
@@ -264,15 +281,25 @@ impl<T: 'static> Atom<T> {
     /// Duplicate registrations are silently ignored.
     pub fn subscribe(&self, component_id: ComponentId) {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if !guard.subscribers.contains(&component_id) {
-            guard.subscribers.push(component_id);
+        let here = std::thread::current().id();
+        if let Some(i) = guard.subscribers.iter().position(|&c| c == component_id) {
+            // Re-subscribing from a different thread re-homes it: a
+            // component only ever builds on one thread, so the latest
+            // subscribe is the truth.
+            guard.subscriber_threads[i] = here;
+            return;
         }
+        guard.subscribers.push(component_id);
+        guard.subscriber_threads.push(here);
     }
 
     /// Removes `component_id` from the subscriber list.
     pub fn unsubscribe(&self, component_id: ComponentId) {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.subscribers.retain(|&id| id != component_id);
+        if let Some(i) = guard.subscribers.iter().position(|&c| c == component_id) {
+            guard.subscribers.remove(i);
+            guard.subscriber_threads.remove(i);
+        }
     }
 
     /// Sets the callback invoked after each value change (outside the
@@ -291,5 +318,37 @@ impl<T: 'static> Atom<T> {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .on_change = Some(Arc::new(f));
+    }
+
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A background thread writing an atom must rebuild the SUBSCRIBER's
+    /// component, not dirty its own thread's set.
+    ///
+    /// `use_query` and every async hook depend on this: the worker finishes
+    /// an HTTP call and writes the result atom from its own thread. Marking
+    /// locally means the UI thread wakes, finds nothing dirty, and never
+    /// rebuilds — the request completes and the screen never updates. That
+    /// regression was live for a few hours and is why this test exists.
+    #[test]
+    fn a_write_from_another_thread_dirties_the_subscribing_thread() {
+        use rosace_trace::event::ComponentId;
+        crate::dirty_set::reset_to_global_dirty();
+        let _ = crate::dirty_set::take_dirty_components();
+
+        let atom = Atom::new(crate::next_atom_id(), 0i32);
+        atom.subscribe(ComponentId(4242)); // subscribed HERE
+
+        let a = atom.clone();
+        std::thread::spawn(move || a.set(99)).join().unwrap();
+
+        let dirty = crate::dirty_set::take_dirty_components();
+        assert!(dirty.contains(&ComponentId(4242)),
+            "the subscribing thread never saw the off-thread write; got {dirty:?}");
     }
 }

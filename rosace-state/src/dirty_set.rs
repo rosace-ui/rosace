@@ -1,6 +1,8 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::thread::ThreadId;
 use rosace_trace::event::ComponentId;
 
 thread_local! {
@@ -39,6 +41,80 @@ thread_local! {
 /// Erring toward an EXTRA rebuild is safe; missing one loses user input.
 static FORCE_GLOBAL: AtomicBool = AtomicBool::new(true);
 
+/// Marks that arrived from ANOTHER thread, addressed to the thread that owns
+/// the atom.
+///
+/// A thread-local dirty set alone is wrong in the other direction: a
+/// background worker finishing an HTTP request writes the result atom from
+/// ITS thread, and `mark_dirty` would then dirty a set no engine ever reads.
+/// The UI thread wakes on `request_frame`, finds nothing dirty, and never
+/// rebuilds — every async hook (`use_query`, and anything spawning a thread)
+/// silently stops updating. That regression was real and shipped for exactly
+/// as long as it took to write a test for it.
+///
+/// Keyed by the OWNING thread rather than broadcast, so two engines on two
+/// threads still cannot consume each other's marks — which is the isolation
+/// the thread-local gave us in the first place.
+static INBOX: Mutex<Option<HashMap<ThreadId, Vec<ComponentId>>>> = Mutex::new(None);
+
+/// Mark components dirty on behalf of `owner`, from a different thread.
+///
+/// Callers should use [`mark_dirty`] and let `Atom` decide; this is the
+/// explicit route for a foreign reactive source (a BLoC, a stream adapter)
+/// that knows which thread its subscribers live on.
+pub fn mark_dirty_for_thread(owner: ThreadId, ids: &[ComponentId]) {
+    if ids.is_empty() { return; }
+    if owner == std::thread::current().id() {
+        mark_dirty(ids);
+        return;
+    }
+    if let Ok(mut guard) = INBOX.lock() {
+        guard.get_or_insert_with(HashMap::new)
+            .entry(owner)
+            .or_default()
+            .extend_from_slice(ids);
+    }
+    // Wake the owning loop; without this the marks sit until something else
+    // happens to request a frame.
+    crate::frame_scheduler::request_frame();
+}
+
+/// Mark each subscriber on the thread it subscribed from.
+///
+/// `threads[i]` is where `ids[i]` lives. Grouping matters: a `GlobalAtom`
+/// can legitimately have subscribers on several threads, and marking them
+/// all on one would leave the rest never rebuilding.
+pub fn mark_dirty_per_subscriber(ids: &[ComponentId], threads: &[ThreadId]) {
+    let here = std::thread::current().id();
+    let mut local: Vec<ComponentId> = Vec::new();
+    for (i, &id) in ids.iter().enumerate() {
+        match threads.get(i) {
+            Some(&t) if t != here => mark_dirty_for_thread(t, &[id]),
+            // No recorded thread (a subscriber added before this bookkeeping
+            // existed) is treated as local, which is the old behaviour.
+            _ => local.push(id),
+        }
+    }
+    if !local.is_empty() {
+        mark_dirty(&local);
+    }
+}
+
+/// Move this thread's inbox into its local set.
+fn drain_inbox() {
+    let me = std::thread::current().id();
+    let taken = INBOX.lock().ok().and_then(|mut g| {
+        g.as_mut().and_then(|m| m.remove(&me))
+    });
+    if let Some(ids) = taken {
+        DIRTY.with(|d| {
+            let mut guard = d.borrow_mut();
+            let set = guard.get_or_insert_with(HashSet::new);
+            set.extend(ids);
+        });
+    }
+}
+
 /// Mark the given components dirty for the next frame.
 ///
 /// Called by `Atom::set()` for every subscriber when the atom's value changes.
@@ -57,6 +133,7 @@ pub fn mark_dirty(ids: &[ComponentId]) {
 /// Check if `ALL` components should be rebuilt this frame (when no specific
 /// dirty set is recorded — e.g. first frame, or full-refresh event).
 pub fn is_global_dirty() -> bool {
+    drain_inbox();
     DIRTY.with(|d| d.borrow().is_none()) || FORCE_GLOBAL.load(Ordering::Relaxed)
 }
 
@@ -67,6 +144,8 @@ pub fn is_global_dirty() -> bool {
 /// dirty this frame" — new atom writes after this call will call `mark_dirty`
 /// and populate the set for the NEXT frame.
 pub fn take_dirty_components() -> HashSet<ComponentId> {
+    // Anything a worker thread addressed to us becomes part of THIS frame.
+    drain_inbox();
     FORCE_GLOBAL.store(false, Ordering::Relaxed);
     DIRTY.with(|d| {
         let mut guard = d.borrow_mut();
