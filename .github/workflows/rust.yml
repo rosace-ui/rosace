@@ -28,11 +28,20 @@ jobs:
     - name: Build
       run: cargo build --workspace --verbose
     - name: Run tests
-      # --test-threads=1: several tests assert on shared global/engine state
-      # (timers, media query, clipboard) that races under parallel execution
-      # — passes clean single-threaded, confirmed 2026-08-04. Real bugs,
-      # not this test-isolation gap, still fail single-threaded the same way.
-      run: xvfb-run -a cargo test --workspace --verbose -- --test-threads=1
+      # Runs PARALLEL (the default) as of 2026-08-13. It was pinned to
+      # --test-threads=1 to work around tests racing on shared global state.
+      # That workaround was hiding a real framework bug: the dirty set was
+      # process-global while the state store beside it was thread-local, so
+      # two live engines dropped each other's rebuilds — and dropped the
+      # user's keystrokes with them. Serial execution made the symptom
+      # invisible.
+      #
+      # The races are fixed at the source now (thread-local dirty set; the
+      # theme-provider and frame-scheduler tests serialized on their own
+      # locks), verified over 12 consecutive clean workspace runs. Running
+      # parallel is what makes a REGRESSION of that class fail here instead
+      # of shipping.
+      run: xvfb-run -a cargo test --workspace --verbose
 
   clippy:
     runs-on: ubuntu-latest

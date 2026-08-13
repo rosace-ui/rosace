@@ -1,0 +1,80 @@
+name: Release
+
+# Tag-based releases. Publishing is triggered by pushing a version tag, never
+# by a branch push and never by hand from a laptop:
+#
+#   git tag v0.1.1 && git push origin v0.1.1
+#
+# Why tags rather than running scripts/publish_crates.sh locally: a crates.io
+# publish is IRREVERSIBLE (you can yank, you cannot unpublish), and a local
+# run publishes whatever happens to be in the working tree — including
+# uncommitted edits. A tag names an exact commit, so what ships is exactly
+# what is recorded.
+#
+# One-time setup: add CARGO_REGISTRY_TOKEN under
+# Settings -> Secrets and variables -> Actions. Generate it at
+# https://crates.io/settings/tokens with the "publish-update" and
+# "publish-new" scopes.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The tag is the only thing a human types, so it is the only thing that
+      # can be wrong. Tagging v0.2.0 against a tree that still says 0.1.1
+      # would publish 0.1.1 under a v0.2.0 tag and the mismatch would be
+      # permanent — crates.io has no unpublish.
+      - name: Tag must match the workspace version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "tag=$TAG  workspace=$VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::Tag v$TAG does not match the workspace version $VERSION."
+            echo "::error::Bump [workspace.package] version in Cargo.toml, or retag."
+            exit 1
+          fi
+
+      - name: Install clipboard deps
+        # Same reason as the Rust workflow: the Linux clipboard tests need a
+        # real X selection or they silently no-op instead of failing loud.
+        run: sudo apt-get update && sudo apt-get install -y xvfb xclip
+
+      - name: Test
+        run: xvfb-run -a cargo test --workspace --verbose
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Catches a packaging problem (a missing include, a path dep with no
+      # version) BEFORE anything irreversible happens.
+      - name: Dry-run publish
+        run: scripts/publish_crates.sh
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: scripts/publish_crates.sh --live
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # CHANGELOG.md section for this tag, if one exists.
+          NOTES=$(awk "/^## \\[?${GITHUB_REF_NAME#v}\\]?/{f=1;next} /^## /{f=0} f" CHANGELOG.md || true)
+          if [ -z "$NOTES" ]; then NOTES="See CHANGELOG.md."; fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "$NOTES"

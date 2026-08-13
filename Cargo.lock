@@ -2521,7 +2521,7 @@ dependencies = [
 
 [[package]]
 name = "rosace"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "libloading",
@@ -2552,7 +2552,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-animate"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-state",
@@ -2562,11 +2562,11 @@ dependencies = [
 
 [[package]]
 name = "rosace-asset-codegen"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "rosace-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "resvg",
  "rosace-core",
@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-compositor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "pollster 0.3.0",
@@ -2586,7 +2586,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-state",
  "rosace-trace",
@@ -2594,7 +2594,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-devtools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-render",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-ffi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "jni 0.21.1",
  "ndk-sys 0.6.0+11769913",
@@ -2625,14 +2625,14 @@ dependencies = [
 
 [[package]]
 name = "rosace-hot-reload"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-trace",
 ]
 
 [[package]]
 name = "rosace-layout"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-trace",
@@ -2640,7 +2640,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2650,14 +2650,14 @@ dependencies = [
 
 [[package]]
 name = "rosace-media"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-trace",
 ]
 
 [[package]]
 name = "rosace-nav"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-animate",
  "rosace-core",
@@ -2668,7 +2668,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-net"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-state",
@@ -2679,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-platform"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -2705,7 +2705,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-layout",
@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-shader"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-macros",
@@ -2728,7 +2728,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-state"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-trace",
  "wasm-bindgen",
@@ -2737,7 +2737,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rfd",
  "rosace-core",
@@ -2747,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-style"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-theme",
@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-test-utils"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-platform",
@@ -2764,7 +2764,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-text"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-render",
@@ -2773,7 +2773,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-theme"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-core",
  "rosace-state",
@@ -2782,7 +2782,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-thirdparty-material-test"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace",
  "rosace-render",
@@ -2791,14 +2791,14 @@ dependencies = [
 
 [[package]]
 name = "rosace-trace"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "web-time",
 ]
 
 [[package]]
 name = "rosace-view-syntax"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "syn 2.0.118",
@@ -2806,7 +2806,7 @@ dependencies = [
 
 [[package]]
 name = "rosace-widgets"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rosace-animate",
  "rosace-core",

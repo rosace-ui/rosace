@@ -6,7 +6,7 @@
   <p><strong>The UI framework Rust deserved from day one.</strong></p>
 
   ![Status](https://img.shields.io/badge/status-active-brightgreen)
-  ![Version](https://img.shields.io/badge/crates.io-0.1.0-orange)
+  ![Version](https://img.shields.io/badge/crates.io-0.1.1-orange)
   ![Rendering](https://img.shields.io/badge/rendering-GPU%2FCPU%20hybrid%20(wgpu)-8A2BE2)
   ![Performance](https://img.shields.io/badge/target-120fps-ff69b4)
   ![Platforms](https://img.shields.io/badge/platforms-desktop%20·%20web%20·%20iOS%20·%20Android-blue)
@@ -26,7 +26,7 @@ and hot reload. Pure Rust, clean-room, no Electron and no web view.
 
 ---
 
-> **0.1.0 — first release, published on crates.io.** Rosace is still under active development: APIs are unstable and large parts are still being built. Not production-ready yet — but what's here already runs fast, and it's now installable, not just clonable.
+> **0.1.1 — published on crates.io.** Rosace is still under active development: APIs are unstable and large parts are still being built. Not production-ready yet — but what's here already runs fast, and it's installable, not just clonable. See the [changelog](CHANGELOG.md); 0.1.1 removes `cupertino()` and consolidates 39 crates into 26.
 
 ---
 
