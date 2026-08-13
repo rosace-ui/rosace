@@ -23,6 +23,7 @@ pub use tree::{Alignment, Children, Semantics, SemanticsProps, Widget};
 pub use tree::PaintCtx;
 pub use tree::{HitTarget, ScrollTarget};
 pub use tree::{AbsorbPointer, IgnorePointer};
+pub use tree::{breakpoint, Responsive};
 pub use tree::{LongPressable, PressApi, Pressable};
 pub use tree::BoxedWidget;
 pub use tree::WidgetApp;
