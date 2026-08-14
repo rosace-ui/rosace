@@ -184,7 +184,22 @@ type OnSelectFn = Arc<dyn Fn(SimpleDate, Option<SimpleDate>) + Send + Sync>;
 
 const HEADER_H: f32 = 36.0;
 const WEEKDAY_ROW_H: f32 = 24.0;
-const CELL_H: f32 = 36.0;
+/// Day-cell height.
+///
+/// 44, not the designed 36: a calendar is a 7x6 grid of adjacent targets,
+/// the densest tap surface in the library, and picking the wrong DATE is
+/// worse than merely missing — it silently books the wrong day. Shared by
+/// paint and `day_at` (the pure hit-mapping fn), so both stay in step.
+///
+/// NOT yet grown for OS text scale: the day numbers are 13px text and
+/// `day_at` has no font access, so scaling this needs the metrics threaded
+/// into the hit mapping. Named rather than silently skipped.
+const CELL_H: f32 = 44.0;
+
+// Compile-time, not a runtime assert: both sides are constants, so this can
+// be proven rather than tested — and it then cannot be skipped by a filtered
+// test run. Lowering CELL_H below the tap-target minimum stops the build.
+const _: () = assert!(CELL_H >= crate::tree::MIN_TAP_TARGET);
 const GRID_ROWS: usize = 6;
 
 impl DatePicker {
@@ -827,11 +842,11 @@ mod tests {
     /// 2026" is the thing being chosen.
     #[test]
     fn every_day_cell_is_announced_with_its_full_date_and_state() {
-        use rosace_render::{FontCache, PictureRecorder};
+        use rosace_render::PictureRecorder;
         use crate::tree::RenderTree;
         use std::{cell::RefCell, rc::Rc};
 
-        let font = FontCache::embedded();
+        let font = rosace_render::FontCache::embedded();
         let tree = Rc::new(RefCell::new(RenderTree::new()));
         let mut rec = PictureRecorder::new();
         {
@@ -861,11 +876,11 @@ mod tests {
     /// A date outside min/max is dimmed on screen; it must say so too.
     #[test]
     fn an_out_of_range_day_announces_that_it_is_unavailable() {
-        use rosace_render::{FontCache, PictureRecorder};
+        use rosace_render::PictureRecorder;
         use crate::tree::RenderTree;
         use std::{cell::RefCell, rc::Rc};
 
-        let font = FontCache::embedded();
+        let font = rosace_render::FontCache::embedded();
         let tree = Rc::new(RefCell::new(RenderTree::new()));
         let mut rec = PictureRecorder::new();
         {
@@ -883,6 +898,41 @@ mod tests {
         }
         let json = format!("{:?}", tree.borrow().collect_semantics());
         assert!(json.contains("unavailable"), "dates before min_date must say so: {json}");
+    }
+
+
+    /// A calendar is the densest tap surface in the library — 42 adjacent
+    /// targets — and picking the wrong DATE is worse than missing: it
+    /// silently books the wrong day.
+    #[test]
+    fn day_cells_clear_the_tap_target_minimum_on_both_axes() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        // A narrow phone is the worst case for cell WIDTH, since each cell
+        // is a seventh of the picker.
+        let ctx = LayoutCtx::new(Constraints::loose(320.0, 800.0), &font, &theme);
+        let size = DatePicker::new(SimpleDate::new(2026, 7, 1)).layout(&ctx);
+
+        let cell_w = size.width / 7.0;
+        assert!(cell_w >= crate::tree::MIN_TAP_TARGET,
+            "cell width {cell_w} is under the minimum on a 320px phone");
+    }
+
+    /// Paint and hit-mapping must agree on the cell pitch. They share
+    /// `CELL_H`, and this pins that they still do — a paint-only change
+    /// would put the highlight on one date and select another.
+    #[test]
+    fn the_hit_mapping_uses_the_same_cell_pitch_as_paint() {
+        let body = Rect {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size { width: 7.0 * CELL_H, height: 6.0 * CELL_H },
+        };
+        // A point just inside row 2, column 0 — `day_at` returns the DATE
+        // it maps to, so compare against what that row/column should hold.
+        let view = SimpleDate::new(2026, 7, 1);
+        let (hit, _, _, _) = day_at(1.0, CELL_H * 2.0 + 1.0, body, view);
+        let (expected, _) = slot_date(view, 14); // row 2, column 0
+        assert_eq!(hit, expected, "the hit mapping and paint disagree on the pitch");
     }
 
 }

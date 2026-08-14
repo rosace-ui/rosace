@@ -105,7 +105,16 @@ impl Default for BottomNavigationBar {
 
 impl Widget for BottomNavigationBar {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        Size { width: avail_w(ctx.constraints), height: self.height }
+        // 56 is the designed bar height and was fixed, so raised OS text
+        // grew the labels inside a bar that stayed put. The bar IS the
+        // visual here (unlike a padded control), so it genuinely gets
+        // taller — which is correct: the alternative is clipped labels on
+        // the app's primary navigation.
+        let label_h = ctx.font.line_height(self.resolved_font_size(ctx.theme));
+        Size {
+            width: avail_w(ctx.constraints),
+            height: self.height.max(label_h + 34.0),
+        }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

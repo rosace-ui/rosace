@@ -136,7 +136,14 @@ impl Widget for ListTile {
                 let content_h = line_h_title + 2.0 + line_h_sub * sub_lines as f32;
                 self.height.max(content_h + 12.0)
             }
-            None => self.height,
+            None => {
+                // The subtitle branch above already grows with scaled text;
+                // this one returned the designed height flat, so a
+                // title-only row clipped its title at raised OS text sizes
+                // while an otherwise identical row WITH a subtitle did not.
+                let line_h = ctx.font.line_height(self.resolved_title_size(ctx.theme));
+                self.height.max(line_h + 12.0)
+            }
         };
         Size { width, height }
     }
@@ -293,4 +300,29 @@ mod tests {
         let padded_x = first_text_x(ListTile::new("Title").padding(EdgeInsets::all(32.0)));
         assert_eq!(padded_x, 32.0, "an explicit inset must move the title");
     }
+
+    /// A title-only row must grow with scaled text, like the subtitle
+    /// branch already did.
+    ///
+    /// The two branches diverged: with a subtitle the height was
+    /// `max(designed, content)`, without one it returned the designed
+    /// height flat. So an otherwise identical row clipped its title at
+    /// raised OS text sizes purely because it had no subtitle — asserted
+    /// with a large title size rather than by moving `text_scale`, which is
+    /// a process-global the parallel suite shares.
+    #[test]
+    fn a_title_only_row_grows_with_its_title_like_the_subtitle_branch() {
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let c = rosace_layout::Constraints::loose(400.0, 600.0);
+        let ctx = LayoutCtx::new(c, &font, &theme);
+
+        let normal = ListTile::new("Title").layout(&ctx).height;
+        let big = ListTile::new("Title").title_size(40.0).layout(&ctx).height;
+        assert!(big > normal,
+            "a title-only row did not grow for larger type: {normal} -> {big}");
+        assert!(big >= font.line_height(40.0),
+            "the row must clear its own line box");
+    }
+
 }
