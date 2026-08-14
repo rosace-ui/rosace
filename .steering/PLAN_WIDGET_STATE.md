@@ -59,22 +59,116 @@ would be a different design with different reasoning.
 
 ## 3. The design
 
-### One method, no new widget kind
+### Two tiers, because they answer different questions
+
+An earlier draft of this plan claimed no new widget kind was needed, on the
+grounds that any widget can already hold node state. That is true for
+APPEARANCE state and false for anything else, and the difference matters:
+
+**Under a targeted frame nothing rebuilds.** A `Column` constructed with two
+children still holds those two `BoxedWidget`s, and no state change can alter
+them, because nothing re-ran to produce different ones. So a widget can change
+how it LOOKS from its own state, but it cannot change WHAT IT CONTAINS unless
+it owns a closure that re-runs.
+
+That gives two tiers, and both are needed:
+
+| tier | who | can change | lifecycle |
+|---|---|---|---|
+| `ctx.widget_state()` | any widget | its own appearance | none needed |
+| **`LifecycleBuilder`** | opt-in | its own CHILDREN | mount / dispose / app phase |
+
+`Button` is tier 1 today and needs nothing more. Tier 2 is this framework's
+equivalent of Flutter's `StatefulWidget` — the mechanism is the same.
+
+### The name: `LifecycleBuilder`
+
+Candidates considered: `Stateful`, `LifeCycleWidget`, `LifeCycleAwareBuilder`.
+
+* **No `Widget` suffix.** None of the 82 built-in widgets has one — `Button`,
+  `Card`, `ScrollView`, `RepaintBoundary`, `ScreenTransitionView`.
+  `LifeCycleWidget` would be the sole exception and would read as though other
+  widgets are not widgets.
+* **One word, `Lifecycle`.** `rosace_core::app_lifecycle::LifecycleState`
+  already exists. `LifeCycle` would contradict our own type.
+* **`Builder` is load-bearing, not decorative.** Owning a build closure is the
+  actual distinguishing feature — it is the only reason this widget can change
+  its CHILDREN on a targeted frame, when nothing rebuilds. The name should say
+  the thing that makes it different, and "lifecycle-aware" alone does not:
+  every widget participates in a lifecycle.
+* **`Stateful`** would buy Flutter recognition but describes tier 1 as well as
+  tier 2 (any widget can hold state via `ctx.widget_state`), so it names the
+  wrong distinction.
+
+### `LifecycleBuilder` — the API
+
+```rust
+LifecycleBuilder::new(|| Counter { n: 0 })  // createState — runs once, on mount
+    .on_mount(|st|        { /* subscribe */ })
+    .on_dispose(|st|      { /* release  */ })
+    .on_lifecycle(|st, phase| { /* Active/Inactive/Background/Suspended */ })
+    .build(|st| {
+        let s = st.clone();
+        Column::new()
+            .child(Button::new("+").on_press(move || s.update(|c| c.n += 1)))
+            .child(Text::new(st.get().n.to_string()))
+            .boxed()
+    })
+```
+
+The mapping to Flutter is one-to-one on purpose:
+
+| Flutter | here |
+|---|---|
+| `createState()` | `LifecycleBuilder::new(init)` |
+| `initState()` | `.on_mount` |
+| `dispose()` | `.on_dispose` |
+| `didChangeAppLifecycleState()` | `.on_lifecycle` |
+| `build()` | `.build` |
+| `setState(() => ..)` | `st.update(..)` |
+
+`st` is `Arc`-backed and `Send + Sync`, so it can be captured by the
+`Arc<dyn Fn() + Send + Sync>` handlers that hit callbacks require. `update`
+mutates and marks the node — there is no `setState` wrapper to forget.
+
+`on_lifecycle` builds on `rosace_core::app_lifecycle`, which already exists
+(`LifecycleState`, `app_lifecycle()`, `set_app_lifecycle`). A phase change
+dirties globally, so it lands as a structural frame and every registered
+`LifecycleBuilder` is visited — no separate subscription registry needed.
+
+### The build result must be cached on the node
+
+`layout` and `paint` both need the built child. Calling the closure from each
+would run it twice per frame — the exact mistake `Row`/`Column` just had fixed
+in `9b4ba78`, where a two-pass measure doubled every child's layout.
+
+So the built `BoxedWidget` is stored on the node and reused within a frame,
+rebuilt only when the state changed or the frame is structural. `BoxedWidget`
+is `Send + Sync` (the `Widget` trait requires both), so it can live there.
+
+Worth naming honestly: a node holding a built widget subtree is a small step
+toward the node BEING the element tree, which is what A7 concluded the design
+already wants. It is consistent with that direction, not against it.
+
+### One method, available to every widget
 
 ```rust
 let open = ctx.widget_state(|| false);   // node-owned, survives repaints
 open.set(true);                          // marks this node dirty
 ```
 
-There is deliberately **no `Stateful` widget type**. Every widget can
-already hold node state — `Button` does — so a second widget kind would add
-a concept, a name to argue about, and a migration, to enable something the
-node already supports. A widget that never calls `widget_state` never gets
-state.
+Available to EVERY widget, not only `LifecycleBuilder`. A widget that never
+calls it never gets state, and `Button` shows why the tier exists at all:
+appearance-only state needs no closure and no lifecycle.
 
-This also answers "does every widget need the refresh capability?": they
-already have it. Today only the dispatcher can reach it. This opens the same
-door to the widget itself.
+This answers "does every widget need the refresh capability?" — they already
+have it. Today only the input dispatcher can reach it (`set_hover`,
+`set_pressed`). This opens the same door to the widget itself.
+
+The dividing line between the tiers is exactly one thing: **can it change its
+children?** If yes it needs a closure that re-runs, which means
+`LifecycleBuilder`. If it only changes how it draws, tier 1 is enough and
+adding a builder would be ceremony for nothing.
 
 ### No explicit `refresh()` in the common path
 
@@ -102,6 +196,66 @@ stops there; changed size propagates to the parent and repeats.
 Measuring is cheaper and more correct than any annotation a caller could
 write, and a wrong annotation fails silently as a rendering bug. This is the
 same principle that rejected `refresh_paint`/`refresh_layout`.
+
+### Removal callbacks — how a node learns it left the tree
+
+Components already have this: `ctx.on_cleanup(f)` registers into
+`cleanup_store` keyed by `ComponentId`, and the engine fires it from
+`prev_mounted.difference(&new_mounted)` on unmount.
+
+**Nodes have nothing.** There is no `Drop for TreeNode`, no dispose hook, and
+`finalize`'s `children.truncate(cursor)` detaches a node without running
+anything. A subscription or timer held in node state would leak silently, with
+no `ComponentUnmount` trace to show for it.
+
+The tree already knows the exact moment; it discards the information:
+
+```rust
+let cursor = self.nodes[id].cursor;
+self.nodes[id].children.truncate(cursor);            // ids dropped on the floor
+// becomes
+let removed: Vec<NodeId> = self.nodes[id].children.drain(cursor..).collect();
+```
+
+Those are the roots of removed subtrees. Precise and O(removed).
+
+**Do NOT copy the component approach here.** `prev_mounted.difference(..)` is
+O(all nodes) every frame, and components only need it because `ComponentId` is
+a positional walk counter with no structural signal. The arena has one.
+
+**There are exactly two removal paths, and both already exist:**
+
+| path | when |
+|---|---|
+| `finalize` truncate | the child count shrank — `if flag { A }` went false |
+| `adopt_tag` reset | the slot changed widget type — `A` became `B` |
+
+A parent that replayed from cache is not in `begun_this_frame` and so is not
+truncated — correct, because nothing was removed there.
+
+**The trap:** `adopt_tag` clears node state today WITHOUT firing anything. If
+dispose hooks only into truncate, swapping a `TextField` for a `Button` drops a
+subscription without cancelling it. Both paths must fire it.
+
+Disposal runs depth-first, children before parents, so a parent's cleanup never
+runs while its children still hold references.
+
+### Reclamation: free the contents, keep the slot
+
+`node_rect`'s own documentation records that node ids ESCAPE the frame:
+
+> callers can hold a node id from a PREVIOUS frame — an accessibility action
+> names a node from the tree that was published last frame, and the tree may
+> have shrunk since
+
+So recycling ids through a free list would let a stale id silently address a
+DIFFERENT widget — an accessibility action activating the wrong button. That is
+worse than the leak it fixes.
+
+Therefore: drop the state, caches and pictures (essentially all the memory) and
+mark the slot dead, so a stale id resolves to "gone" rather than to someone
+else. Reusing slots needs a generation counter on `NodeId`; that is a wider
+change and must not ride along here.
 
 ### Storage and identity
 
@@ -186,13 +340,15 @@ interactions stay structural, and the work does not reach users.
 
 **In:**
 1. `PaintCtx::widget_state::<T>()` plus the node storage and the mark queue.
+1b. `LifecycleBuilder` — state + build closure + on_mount/on_dispose/on_lifecycle.
+1c. `on_dispose` fired from BOTH removal paths, depth-first; contents freed,
+    slot kept dead (no id recycling).
 2. Convert the 9 open/close widgets to `value + on_change`, keeping the
    `Atom` as an OPTIONAL override (`Carousel::page`'s existing shape).
 3. `TransformLayer::scroll_y` becomes optional the same way.
 4. Public node-level dirty mark for plugins.
 
 **Out:**
-* No new widget kind, no `Stateful` type, no naming decision.
 * No engine or walker changes.
 * No `Element` work — that is A7, deliberately deferred.
 * `RectReader` and `RepaintBoundary::repaint_when` untouched.
