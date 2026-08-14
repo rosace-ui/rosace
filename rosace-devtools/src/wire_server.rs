@@ -12,21 +12,36 @@
 //! database: it needs a size, then an eviction policy, then a way to ask for
 //! history, and every app pays for it whether or not anyone connects.
 //!
-//! # Why HTTP and Server-Sent Events
+//! # Why HTTP, and how it is still bidirectional
 //!
 //! A browser cannot open a raw TCP socket, so a web client needs something
-//! it speaks natively. The options were WebSocket (a handshake, a framing
-//! layer, and either a dependency or ~150 lines of protocol) or SSE (plain
-//! HTTP, `data: …\n\n`, and `EventSource` built into every browser). The
-//! traffic here is one-directional — the app talks, the client listens — so
-//! the WebSocket's duplex channel would be paid for and unused.
+//! it speaks natively. That left WebSocket (a handshake, a framing layer,
+//! and either a dependency or ~150 lines of protocol) or plain HTTP.
+//!
+//! Traffic is NOT one-directional. A client that only watches is half a
+//! tool: picking a widget on screen, highlighting a node, toggling select
+//! mode — those are the client DRIVING the app. So there are two channels
+//! rather than one duplex socket:
+//!
+//! * **down** — SSE (`EventSource`, built into every browser), for the
+//!   continuous stream;
+//! * **up** — `POST /command`, for the occasional instruction.
+//!
+//! The asymmetry matches the traffic: events fire constantly and must not
+//! cost a round trip, while commands are user-initiated and rare, where a
+//! POST's overhead is irrelevant. WebSocket would collapse both into one
+//! connection and buy a duplex channel whose downstream half SSE already
+//! covers — worth it only if commands ever become high-frequency (live
+//! hover-tracking from the client, say). The command shape below would not
+//! change if that swap ever happens.
 //!
 //! Endpoints:
 //!
-//! * `GET /events` — SSE stream of [`WireEvent`]s
-//! * `GET /tree`   — a [`TreeSnapshot`] as JSON, on demand
-//! * `GET /`       — a plain-text index, so opening the port in a browser
-//!                   explains itself instead of showing nothing
+//! * `GET  /events`  — SSE stream of [`WireEvent`]s
+//! * `GET  /tree`    — a [`TreeSnapshot`] as JSON, on demand
+//! * `POST /command` — a [`WireCommand`] from the client
+//! * `GET  /`        — a plain-text index, so opening the port in a browser
+//!                     explains itself instead of showing nothing
 //!
 //! # Reaching it from a device
 //!
@@ -66,6 +81,23 @@ use rosace_trace::TraceSubscriber;
 
 use crate::wire::{TreeSnapshot, WireEvent};
 
+/// An instruction from the client.
+///
+/// Deliberately a small closed set. A general "eval this" escape hatch would
+/// be easier and is the wrong shape: this port exists in debug builds on a
+/// developer's machine, and an open-ended command channel is an open-ended
+/// hole. Each variant maps to something `ElementInspector` already does.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum WireCommand {
+    /// Turn widget-select mode on or off.
+    SelectMode { on: bool },
+    /// Highlight a node without selecting it (client hovering the tree).
+    Hover { node: Option<usize> },
+    /// Select a node (client clicking the tree).
+    Select { node: Option<usize> },
+}
+
 /// Produces the current tree when a client asks for one.
 ///
 /// A callback rather than a stored snapshot: the render tree lives on the UI
@@ -80,9 +112,27 @@ struct Clients {
     streams: Vec<TcpStream>,
 }
 
+/// Commands waiting for the UI thread.
+///
+/// A POST arrives on the server thread, and everything a command touches —
+/// the inspector, the render tree — belongs to the UI thread. So commands
+/// are QUEUED and drained on a frame boundary, the same shape accessibility
+/// actions and the back intent already use. Acting on them inline would mean
+/// mutating UI state from a socket thread.
+///
+/// Bounded: a client that spams commands while no frame runs must not grow
+/// this without limit.
+#[derive(Default)]
+struct Commands {
+    pending: Vec<WireCommand>,
+}
+
+const MAX_PENDING_COMMANDS: usize = 64;
+
 /// The tap. Hold it to keep the server alive; drop it and the port closes.
 pub struct WireServer {
     clients: Arc<Mutex<Clients>>,
+    commands: Arc<Mutex<Commands>>,
     port: u16,
 }
 
@@ -95,17 +145,19 @@ impl WireServer {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let port = listener.local_addr()?.port();
         let clients: Arc<Mutex<Clients>> = Arc::default();
+        let commands: Arc<Mutex<Commands>> = Arc::default();
 
         let accept_clients = clients.clone();
+        let accept_commands = commands.clone();
         std::thread::Builder::new()
             .name("rosace-devtools-wire".into())
             .spawn(move || {
                 for stream in listener.incoming().flatten() {
-                    handle(stream, &accept_clients, tree.as_ref());
+                    handle(stream, &accept_clients, &accept_commands, tree.as_ref());
                 }
             })?;
 
-        Ok(Self { clients, port })
+        Ok(Self { clients, commands, port })
     }
 
     /// The bound port — useful when `start(0, ..)` chose one.
@@ -117,6 +169,18 @@ impl WireServer {
     /// serialisation is skipped entirely when nobody is listening.
     pub fn client_count(&self) -> usize {
         self.clients.lock().map(|c| c.streams.len()).unwrap_or(0)
+    }
+
+    /// Drain the commands a client has sent since the last call.
+    ///
+    /// Call once per frame from the UI thread. Returns them in arrival
+    /// order; the queue is emptied.
+    pub fn take_commands(&self) -> Vec<WireCommand> {
+        let mut g = match self.commands.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        std::mem::take(&mut g.pending)
     }
 
     /// A [`TraceSubscriber`] that forwards events to connected clients.
@@ -153,7 +217,12 @@ impl TraceSubscriber for WireSubscriber {
     }
 }
 
-fn handle(mut stream: TcpStream, clients: &Arc<Mutex<Clients>>, tree: Option<&TreeProvider>) {
+fn handle(
+    mut stream: TcpStream,
+    clients: &Arc<Mutex<Clients>>,
+    commands: &Arc<Mutex<Commands>>,
+    tree: Option<&TreeProvider>,
+) {
     use std::io::{BufRead, BufReader};
 
     let mut reader = BufReader::new(match stream.try_clone() {
@@ -164,9 +233,50 @@ fn handle(mut stream: TcpStream, clients: &Arc<Mutex<Clients>>, tree: Option<&Tr
     if reader.read_line(&mut request).is_err() {
         return;
     }
-    let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+    let mut parts = request.split_whitespace();
+    let method = parts.next().unwrap_or("GET").to_string();
+    let path = parts.next().unwrap_or("/").to_string();
 
     match path.as_str() {
+        "/command" if method == "POST" => {
+            // Read headers for Content-Length, then exactly that many bytes.
+            // Reading to EOF would block: the client keeps the connection
+            // open waiting for our reply.
+            let mut len = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 { break; }
+                let trimmed = line.trim_end();
+                if trimmed.is_empty() { break; }
+                if let Some(v) = trimmed.strip_prefix("Content-Length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; len];
+            let ok = len > 0 && std::io::Read::read_exact(&mut reader, &mut body).is_ok();
+            let reply = if !ok {
+                "{\"error\":\"empty body\"}".to_string()
+            } else {
+                match serde_json::from_slice::<WireCommand>(&body) {
+                    Ok(cmd) => {
+                        let mut g = match commands.lock() {
+                            Ok(g) => g,
+                            Err(e) => e.into_inner(),
+                        };
+                        if g.pending.len() < MAX_PENDING_COMMANDS {
+                            g.pending.push(cmd);
+                            "{\"ok\":true}".to_string()
+                        } else {
+                            // Say so rather than silently dropping: a client
+                            // spamming a stalled app should learn that.
+                            "{\"error\":\"command queue full\"}".to_string()
+                        }
+                    }
+                    Err(e) => format!("{{\"error\":\"{}\"}}", e).replace('"', "'"),
+                }
+            };
+            let _ = write_json(&mut stream, &reply);
+        }
         "/events" => {
             // SSE: headers, then the socket stays open and becomes a sink.
             let head = "HTTP/1.1 200 OK\r\n\
@@ -309,4 +419,66 @@ mod tests {
         }
         assert_eq!(server.client_count(), 0);
     }
+
+    fn post(port: u16, body: &str) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        write!(s, "POST /command HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{}",
+               body.len(), body).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut out = String::new();
+        let _ = s.read_to_string(&mut out);
+        out
+    }
+
+    /// The client must be able to DRIVE the app, not just watch it. Widget
+    /// select mode is the case that made a one-way channel insufficient.
+    #[test]
+    fn a_client_command_reaches_the_ui_thread_queue() {
+        let server = WireServer::start(0, None).expect("bind");
+        assert!(server.take_commands().is_empty(), "nothing queued yet");
+
+        let reply = post(server.port(), r#"{"cmd":"select_mode","on":true}"#);
+        assert!(reply.contains("\"ok\":true"), "command rejected: {reply}");
+
+        let cmds = server.take_commands();
+        assert_eq!(cmds, vec![WireCommand::SelectMode { on: true }]);
+        assert!(server.take_commands().is_empty(), "draining must empty the queue");
+    }
+
+    #[test]
+    fn hover_and_select_carry_a_node_and_can_clear_it() {
+        let server = WireServer::start(0, None).expect("bind");
+        post(server.port(), r#"{"cmd":"hover","node":12}"#);
+        post(server.port(), r#"{"cmd":"select","node":null}"#);
+        assert_eq!(server.take_commands(), vec![
+            WireCommand::Hover { node: Some(12) },
+            WireCommand::Select { node: None },
+        ]);
+    }
+
+    /// Malformed input must be refused, not queued — a socket on a
+    /// developer's machine still deserves a closed command set.
+    #[test]
+    fn an_unknown_command_is_rejected_rather_than_queued() {
+        let server = WireServer::start(0, None).expect("bind");
+        let reply = post(server.port(), r#"{"cmd":"rm_rf","path":"/"}"#);
+        assert!(reply.contains("error"), "should have been refused: {reply}");
+        assert!(server.take_commands().is_empty(), "nothing unknown may reach the app");
+    }
+
+    /// A client spamming a stalled app must not grow the queue without
+    /// limit, and should be TOLD rather than silently dropped.
+    #[test]
+    fn the_command_queue_is_bounded_and_says_so() {
+        let server = WireServer::start(0, None).expect("bind");
+        let mut saw_full = false;
+        for _ in 0..(MAX_PENDING_COMMANDS + 10) {
+            if post(server.port(), r#"{"cmd":"select_mode","on":true}"#).contains("queue full") {
+                saw_full = true;
+            }
+        }
+        assert!(saw_full, "an over-full queue must report it");
+        assert_eq!(server.take_commands().len(), MAX_PENDING_COMMANDS);
+    }
+
 }
