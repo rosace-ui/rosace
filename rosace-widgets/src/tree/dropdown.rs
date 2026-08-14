@@ -110,10 +110,10 @@ impl Widget for Dropdown {
         let chev_kind = if is_open { super::IconKind::ChevronUp } else { super::IconKind::ChevronDown };
         let chev = super::Icon::new(chev_kind).size(14.0).color(with_alpha(fg, dim));
         let cy = r.origin.y + (r.size.height - chev.size) / 2.0;
-        chev.paint(&mut ctx.child(Rect {
+        ctx.paint_child(Rect {
             origin: Point { x: r.origin.x + r.size.width - chev.size - 8.0, y: cy },
             size: Size { width: chev.size, height: chev.size },
-        }));
+        }, &chev);
 
         if !self.disabled {
             let open = self.open.clone();

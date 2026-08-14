@@ -115,7 +115,7 @@ impl Widget for DrawerPanel {
             }
             None => ctx.fill_rect(r, bg),
         }
-        self.panel.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &*self.panel);
     }
 }
 

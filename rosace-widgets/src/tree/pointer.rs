@@ -18,7 +18,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for IgnorePointer<W> {
     fn paint(&self, ctx: &mut PaintCtx) {
         ctx.set_pointer_mode(1); // transparent
         let r = ctx.rect;
-        self.child.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &self.child);
     }
 }
 
@@ -36,6 +36,6 @@ impl<W: Widget + Send + Sync + 'static> Widget for AbsorbPointer<W> {
     fn paint(&self, ctx: &mut PaintCtx) {
         ctx.set_pointer_mode(2); // absorb
         let r = ctx.rect;
-        self.child.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &self.child);
     }
 }

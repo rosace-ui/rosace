@@ -198,10 +198,10 @@ impl Widget for Container {
             };
             if self.clip {
                 ctx.record(DrawCommand::PushClip { rect });
-                child.paint(&mut ctx.child(child_rect));
+                ctx.paint_child(child_rect, &*child);
                 ctx.record(DrawCommand::PopClip);
             } else {
-                child.paint(&mut ctx.child(child_rect));
+                ctx.paint_child(child_rect, &*child);
             }
         }
     }

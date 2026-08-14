@@ -77,7 +77,7 @@ impl Widget for Responsive {
         // decided AFTER seeing our `layout` — not the incoming constraints.
         let child = (self.builder)(ctx.rect.size);
         let r = ctx.rect;
-        child.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &*child);
     }
 }
 

@@ -140,17 +140,15 @@ impl Widget for Accordion {
         let chev_rect = Rect { origin: Point { x: cx, y: cy }, size: Size { width: chev_size, height: chev_size } };
         if t < 1.0 {
             let a = (255.0 * (1.0 - t)) as u8;
-            super::Icon::new(super::IconKind::ChevronRight)
+            ctx.paint_child(chev_rect, &super::Icon::new(super::IconKind::ChevronRight)
                 .size(chev_size)
-                .color(Color::rgba(fg.r, fg.g, fg.b, a))
-                .paint(&mut ctx.child(chev_rect));
+                .color(Color::rgba(fg.r, fg.g, fg.b, a)));
         }
         if t > 0.0 {
             let a = (255.0 * t) as u8;
-            super::Icon::new(super::IconKind::ChevronDown)
+            ctx.paint_child(chev_rect, &super::Icon::new(super::IconKind::ChevronDown)
                 .size(chev_size)
-                .color(Color::rgba(fg.r, fg.g, fg.b, a))
-                .paint(&mut ctx.child(chev_rect));
+                .color(Color::rgba(fg.r, fg.g, fg.b, a)));
         }
 
         let atom = self.expanded.clone();
@@ -174,7 +172,7 @@ impl Widget for Accordion {
             if t < 1.0 {
                 super::request_animation();
             }
-            self.body.paint(&mut ctx.child(body_rect));
+            ctx.paint_child(body_rect, &*self.body);
         }
     }
 }

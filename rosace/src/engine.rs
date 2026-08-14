@@ -493,6 +493,17 @@ impl FrameEngine {
         self.render_tree.borrow().collect_semantics()
     }
 
+    /// A read-only projection of the render tree — structure, geometry, type
+    /// tags and interaction state.
+    ///
+    /// `RenderTree::inspect` has existed for the DevTools picker, but the
+    /// tree itself is a private `Rc<RefCell<..>>` field, so nothing outside
+    /// the engine could reach it. That made caching and identity behaviour
+    /// testable only by instrumenting the walker by hand.
+    pub fn inspect_tree(&self) -> Vec<rosace_widgets::tree::InspectNode> {
+        self.render_tree.borrow().inspect()
+    }
+
     // ── Text editing dispatch (D112/Phase 28 Step 1) ────────────────────
     //
     // `TextInput::paint` can't mutate its own render-tree node (`paint`

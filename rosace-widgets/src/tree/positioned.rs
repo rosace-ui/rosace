@@ -57,7 +57,7 @@ impl Widget for Positioned {
             (None, None) => s.origin.y,
         };
         let rect = Rect { origin: Point { x, y }, size: Size { width: w, height: h } };
-        self.child.paint(&mut ctx.child(rect));
+        ctx.paint_child(rect, &*self.child);
     }
 }
 

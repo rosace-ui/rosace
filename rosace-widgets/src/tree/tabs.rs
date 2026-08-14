@@ -149,14 +149,14 @@ impl Widget for Tabs {
         }
         if self.scrollable {
             bar = bar.scrollable(true);
-            ScrollView::new(bar).axis(ScrollAxis::Horizontal).paint(&mut ctx.child(bar_rect));
+            ctx.paint_child(bar_rect, &ScrollView::new(bar).axis(ScrollAxis::Horizontal));
         } else {
-            bar.paint(&mut ctx.child(bar_rect));
+            ctx.paint_child(bar_rect, &bar);
         }
 
         // The active content.
         if let Some(content) = self.contents.get(self.selected) {
-            content.paint(&mut ctx.child(content_rect));
+            ctx.paint_child(content_rect, &*content);
         }
     }
 }

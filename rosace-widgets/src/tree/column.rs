@@ -181,7 +181,7 @@ impl Widget for Column {
         for (i, child) in self.children.iter().enumerate() {
             let pos = result.child_positions[i];
             let child_rect = rect_at(offset(inner_rect.origin, pos.x, pos.y), sizes[i]);
-            child.paint(&mut ctx.child(child_rect));
+            ctx.paint_child(child_rect, &*child);
         }
     }
 }

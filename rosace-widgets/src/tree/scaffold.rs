@@ -93,10 +93,10 @@ impl Widget for Scaffold {
 
         // Paint app bar
         if let Some(bar) = &self.app_bar {
-            bar.paint(&mut ctx.child(Rect {
+            ctx.paint_child(Rect {
                 origin: total.origin,
                 size: Size { width: total.size.width, height: bar_h },
-            }));
+            }, &*bar);
         }
 
         // Content area (below bar, above bottom bar)
@@ -115,10 +115,10 @@ impl Widget for Scaffold {
 
         // Paint nav rail
         if let Some(rail) = &self.nav_rail {
-            rail.paint(&mut ctx.child(Rect {
+            ctx.paint_child(Rect {
                 origin: Point { x: total.origin.x, y: content_y },
                 size: Size { width: rail_w, height: content_h },
-            }));
+            }, &*rail);
         }
 
         // Measure right sidebar
@@ -128,27 +128,27 @@ impl Widget for Scaffold {
 
         // Paint right sidebar
         if let Some(rsb) = &self.sidebar_right {
-            rsb.paint(&mut ctx.child(Rect {
+            ctx.paint_child(Rect {
                 origin: Point { x: total.origin.x + total.size.width - rsb_w, y: content_y },
                 size: Size { width: rsb_w, height: content_h },
-            }));
+            }, &*rsb);
         }
 
         // Paint body
         let body_x = total.origin.x + rail_w;
         let body_w = total.size.width - rail_w - rsb_w;
-        self.body.paint(&mut ctx.child(Rect {
+        ctx.paint_child(Rect {
             origin: Point { x: body_x, y: content_y },
             size: Size { width: body_w, height: content_h },
-        }));
+        }, &self.body);
 
         // Paint bottom bar
         if let Some(bb) = &self.bottom_bar {
             super::set_bottom_overlay_inset(bottom_h);
-            bb.paint(&mut ctx.child(Rect {
+            ctx.paint_child(Rect {
                 origin: Point { x: total.origin.x, y: total.origin.y + total.size.height - bottom_h },
                 size: Size { width: total.size.width, height: bottom_h },
-            }));
+            }, &*bb);
         }
 
         // FAB (bottom-right)
@@ -156,10 +156,10 @@ impl Widget for Scaffold {
             let fab_size = fab.layout(&ctx.layout_ctx(Constraints::loose(60.0, 60.0)));
             let fab_x = total.origin.x + total.size.width - fab_size.width - 20.0;
             let fab_y = total.origin.y + total.size.height - bottom_h - fab_size.height - 20.0;
-            fab.paint(&mut ctx.child(Rect {
+            ctx.paint_child(Rect {
                 origin: Point { x: fab_x, y: fab_y },
                 size: fab_size,
-            }));
+            }, &*fab);
         }
     }
 }

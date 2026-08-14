@@ -487,6 +487,34 @@ impl<'a> PaintCtx<'a> {
         }
     }
 
+    /// Paint `child` into its own node, giving that node TYPE IDENTITY.
+    ///
+    /// Prefer this over `child.paint(&mut ctx.child(rect))`. Both create a
+    /// node at the next slot; only this one records WHAT is in the slot, so
+    /// the tree can tell a `Button` replacing a `TextField` from a `Button`
+    /// repainting. See [`RenderTree::adopt_tag`] for what that prevents.
+    ///
+    /// [`Self::child`] stays for the other use of a node — declaring a bare
+    /// region for hit-testing or semantics without a widget to paint
+    /// (`ctx.child(hit).register_hit(..)`). Those nodes have no widget, so
+    /// there is no type to record and nothing to cache.
+    pub fn paint_child(&mut self, rect: Rect, child: &dyn Widget) {
+        let node = self.tree.borrow_mut().slot(self.node, true);
+        self.tree.borrow_mut().adopt_tag(node, child.type_tag());
+        self.tree.borrow_mut().node_mut(node).cached_rect = Some(rect);
+        let mut cctx = PaintCtx {
+            recorder: self.recorder,
+            rect,
+            font: self.font,
+            theme: self.theme.clone(),
+            tree: Rc::clone(&self.tree),
+            node,
+            owner: self.owner,
+            clip_rect: self.clip_rect,
+        };
+        child.paint(&mut cctx);
+    }
+
     /// Like [`Self::child`], but the child's node is found by an explicit
     /// stable `key` (`RenderTree::keyed_slot`) instead of positional call
     /// order — used ONLY by `ScreenTransitionView` so a screen keeps its
@@ -1235,6 +1263,19 @@ pub trait Widget: Send + Sync {
     /// Declare this widget's children. Drives every default below.
     fn children(&self) -> Children<'_> { Children::None }
 
+    /// This widget's concrete type name, usable through `dyn Widget`.
+    ///
+    /// The render tree keys a node's persistent state and caches on the type
+    /// occupying that slot, so it needs the concrete name even when all it
+    /// holds is a trait object. A default method body is instantiated per
+    /// `impl`, and the vtable entry points at that instantiation — so
+    /// `type_name::<Self>()` here reports the real type, not `dyn Widget`.
+    ///
+    /// Do not override. It exists to be called, not implemented.
+    fn type_tag(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     /// Measure under `ctx.constraints` and return a size within them.
     ///
     /// Defaults: leaf → smallest allowed size; `One` → the child's size;
@@ -1265,12 +1306,12 @@ pub trait Widget: Send + Sync {
             Children::None => {}
             Children::One(c) => {
                 let r = ctx.rect;
-                c.paint(&mut ctx.child(r));
+                ctx.paint_child(r, &*c);
             }
             Children::Many(cs) => {
                 let r = ctx.rect;
                 for c in cs {
-                    c.paint(&mut ctx.child(r));
+                    ctx.paint_child(r, &*c);
                 }
             }
         }
@@ -1310,6 +1351,12 @@ impl Widget for Box<dyn Widget> {
     fn layout(&self, ctx: &LayoutCtx) -> Size { (**self).layout(ctx) }
     fn paint(&self, ctx: &mut PaintCtx)       { (**self).paint(ctx) }
     fn flex_factor(&self) -> f32              { (**self).flex_factor() }
+    /// Forward, or every boxed child reports `Box<dyn Widget>` as its type
+    /// and the render tree cannot tell any two of them apart — which is the
+    /// entire point of the tag. Containers hold `Vec<BoxedWidget>`, so
+    /// without this the forwarding impl would swallow the identity of the
+    /// majority of widgets in any real tree.
+    fn type_tag(&self) -> &'static str        { (**self).type_tag() }
 }
 
 // ── WidgetBox — bridges Widget into the Element tree ─────────────────────────

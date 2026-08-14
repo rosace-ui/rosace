@@ -59,7 +59,7 @@ impl Widget for Wrap {
                 origin: Point { x: r.origin.x + rel.origin.x, y: r.origin.y + rel.origin.y },
                 size: rel.size,
             };
-            child.paint(&mut ctx.child(rect));
+            ctx.paint_child(rect, &*child);
         }
     }
 }

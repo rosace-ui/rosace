@@ -136,10 +136,9 @@ impl Widget for Image {
                 origin: Point { x: x + (w - icon_size) / 2.0, y: y + (h - icon_size) / 2.0 },
                 size: Size { width: icon_size, height: icon_size },
             };
-            super::Icon::new(super::IconKind::Close)
+            ctx.paint_child(icon_rect, &super::Icon::new(super::IconKind::Close)
                 .size(icon_size)
-                .color(err)
-                .paint(&mut ctx.child(icon_rect));
+                .color(err));
             return;
         }
 

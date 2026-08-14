@@ -90,7 +90,7 @@ impl Widget for WillPopScope {
             rosace_core::nav_back::register_will_pop(f.clone());
         }
         let r = ctx.rect;
-        self.child.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &*self.child);
     }
     // layout: the protocol default delegates to the child — this adds no box.
 }

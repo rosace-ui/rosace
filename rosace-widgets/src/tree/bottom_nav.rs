@@ -206,10 +206,10 @@ impl Widget for BottomNavigationBar {
                 let content_h = icon_box + 3.0 + line_h;
                 let top = slot.origin.y + (slot.size.height - content_h) / 2.0;
                 let is = icon.layout(&slot_ctx.layout_ctx(Constraints::loose(icon_box, icon_box)));
-                icon.paint(&mut slot_ctx.child(Rect {
+                slot_ctx.paint_child(Rect {
                     origin: Point { x: slot.origin.x + (slot.size.width - is.width) / 2.0, y: top },
                     size: is,
-                }));
+                }, &*icon);
                 label_y = top + icon_box + 3.0;
             }
 

@@ -158,14 +158,14 @@ impl Widget for Dismissible {
         // Background revealed behind the sliding content.
         if dx.abs() > 0.001 {
             match &self.background {
-                Some(bg) => bg.paint(&mut ctx.child(r)),
+                Some(bg) => ctx.paint_child(r, &**bg),
                 None => draw_default_background(ctx, r, dx),
             }
         }
 
         let child_rect = Rect { origin: Point { x: r.origin.x + dx, y: r.origin.y }, size: r.size };
         ctx.record(rosace_render::DrawCommand::PushClip { rect: r });
-        self.child.paint(&mut ctx.child(child_rect));
+        ctx.paint_child(child_rect, &*self.child);
         ctx.record(rosace_render::DrawCommand::PopClip);
     }
 }
@@ -186,7 +186,7 @@ fn draw_default_background(ctx: &mut PaintCtx, r: Rect, dx: f32) {
     };
     let on_red = ctx.tc(ctx.theme.colors.on_error);
     let icon = super::Icon::new(super::IconKind::Trash).size(ICON).color(on_red);
-    icon.paint(&mut ctx.child(Rect { origin: Point { x: cx, y: cy }, size: Size { width: ICON, height: ICON } }));
+    ctx.paint_child(Rect { origin: Point { x: cx, y: cy }, size: Size { width: ICON, height: ICON } }, &icon);
 }
 
 #[cfg(test)]

@@ -162,6 +162,6 @@ impl<W: Widget + 'static> Widget for Semantics<W> {
         }
         // Pass-through paint — annotation must not change what is drawn.
         let r = ctx.rect;
-        self.child.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &self.child);
     }
 }

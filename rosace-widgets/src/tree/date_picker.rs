@@ -528,7 +528,7 @@ impl Widget for DatePicker {
             }
             let isz = 22.0;
             let ir = Rect { origin: Point { x: c.x - isz / 2.0, y: c.y - isz / 2.0 }, size: Size { width: isz, height: isz } };
-            super::Icon::new(kind).size(isz).color(pal.on_bg).paint(&mut btn.child(ir));
+            btn.paint_child(ir, &super::Icon::new(kind).size(isz).color(pal.on_bg));
             if years_mode {
                 let ctrl_y = ctrl.clone();
                 let target_base = year_base + if back { -12 } else { 12 };

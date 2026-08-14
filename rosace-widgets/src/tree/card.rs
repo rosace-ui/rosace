@@ -107,7 +107,7 @@ impl Widget for Card {
 
         // Child
         let inner = self.padding.shrink(r);
-        self.child.paint(&mut ctx.child(inner));
+        ctx.paint_child(inner, &*self.child);
     }
 }
 

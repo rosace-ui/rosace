@@ -198,7 +198,7 @@ impl Widget for Sheet {
             origin: Point { x: r.origin.x, y: r.origin.y + self.handle_space() },
             size: Size { width: r.size.width, height: r.size.height - self.handle_space() },
         };
-        self.child.paint(&mut ctx.child(self.padding.shrink(content)));
+        ctx.paint_child(self.padding.shrink(content), &*self.child);
     }
 }
 

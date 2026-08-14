@@ -39,7 +39,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for Hero<W> {
                 hero::register(self.tag.clone(), role, rect, picture);
             }
             None => {
-                self.inner.paint(&mut ctx.child(rect));
+                ctx.paint_child(rect, &self.inner);
             }
         }
     }

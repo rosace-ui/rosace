@@ -255,7 +255,7 @@ impl Widget for Grid {
                     origin: Point { x: r.origin.x + rel.origin.x, y: r.origin.y + rel.origin.y },
                     size: rel.size,
                 };
-                child.paint(&mut ctx.child(rect));
+                ctx.paint_child(rect, &*child);
             }
             return;
         }
@@ -270,7 +270,7 @@ impl Widget for Grid {
             for (col, idx) in (i..end).enumerate() {
                 let x = r.origin.x + col as f32 * (cw + self.spacing);
                 let rect = Rect { origin: Point { x, y }, size: Size { width: cw, height: row_h } };
-                self.children[idx].paint(&mut ctx.child(rect));
+                ctx.paint_child(rect, &*self.children[idx]);
             }
             y += row_h + self.run_spacing;
             i += self.columns;

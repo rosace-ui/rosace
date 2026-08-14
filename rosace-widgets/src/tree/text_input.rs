@@ -550,7 +550,7 @@ impl Widget for TextInput {
                 origin: Point { x: r.origin.x + (self.height - cw) / 2.0, y: r.origin.y + (self.height - ch) / 2.0 },
                 size: Size { width: cw, height: ch },
             };
-            w.paint(&mut ctx.child(rect));
+            ctx.paint_child(rect, &*w);
         }
         if let Some(w) = &self.trailing {
             let sz = adorn(w, ctx.font, &ctx.theme);

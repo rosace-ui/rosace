@@ -278,7 +278,7 @@ impl Widget for Table {
                         origin: Point { x: x + pad, y: y + pad },
                         size: Size { width: s.width.min(content_w), height: s.height },
                     };
-                    cell.paint(&mut ctx.child(rect));
+                    ctx.paint_child(rect, &*cell);
                 }
                 x += w + self.h_spacing;
             }

@@ -52,7 +52,7 @@ impl Widget for Stack {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         for child in &self.children {
-            child.paint(&mut ctx.child(ctx.rect));
+            ctx.paint_child(ctx.rect, &*child);
         }
     }
 }

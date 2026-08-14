@@ -42,7 +42,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for Pressable<W> {
         // Inventing a label here would override the child's real text.
         ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button));
         let r = ctx.rect;
-        self.child.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &self.child);
     }
     // layout, flex_factor: protocol defaults delegate to the child.
 }
@@ -72,7 +72,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for LongPressable<W> {
         // library-wide.
         ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Button));
         let r = ctx.rect;
-        self.child.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &self.child);
     }
 }
 

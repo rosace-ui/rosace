@@ -126,13 +126,13 @@ impl Widget for FloatingActionButton {
         if let Some(icon) = &self.icon {
             let inner = self.size * 0.45;
             let is = icon.layout(&ctx.layout_ctx(Constraints::loose(inner, inner)));
-            icon.paint(&mut ctx.child(Rect {
+            ctx.paint_child(Rect {
                 origin: Point {
                     x: r.origin.x + (r.size.width - is.width) / 2.0,
                     y: r.origin.y + (r.size.height - is.height) / 2.0,
                 },
                 size: is,
-            }));
+            }, &*icon);
         } else {
             let text = self.label.as_deref().unwrap_or("+");
             let px = self.size * 0.4;

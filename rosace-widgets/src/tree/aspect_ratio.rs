@@ -33,6 +33,6 @@ impl Widget for AspectRatio {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let r = ctx.rect;
-        self.child.paint(&mut ctx.child(r));
+        ctx.paint_child(r, &*self.child);
     }
 }

@@ -210,10 +210,10 @@ impl Widget for ListTile {
         if let Some(lead) = &self.leading {
             let ls = lead.layout(&ctx.layout_ctx(Constraints::loose(32.0, r.size.height)));
             let ly = r.origin.y + (r.size.height - ls.height) / 2.0;
-            lead.paint(&mut ctx.child(Rect {
+            ctx.paint_child(Rect {
                 origin: Point { x, y: ly },
                 size: ls,
-            }));
+            }, &*lead);
             x += ls.width + 10.0;
         }
 
@@ -222,7 +222,7 @@ impl Widget for ListTile {
             let ts = trail.layout(&ctx.layout_ctx(Constraints::loose(60.0, r.size.height)));
             let ty = r.origin.y + (r.size.height - ts.height) / 2.0;
             let tx = r.origin.x + r.size.width - pad.right - ts.width;
-            trail.paint(&mut ctx.child(Rect { origin: Point { x: tx, y: ty }, size: ts }));
+            ctx.paint_child(Rect { origin: Point { x: tx, y: ty }, size: ts }, &*trail);
             ts.width + pad.right
         } else { pad.right };
 

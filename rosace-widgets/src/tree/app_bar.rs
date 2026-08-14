@@ -176,7 +176,7 @@ impl Widget for AppBar {
         if let Some(lead) = &self.leading {
             let ls = lead.layout(&ctx.layout_ctx(Constraints::loose(160.0, height)));
             let ly = r.origin.y + (r.size.height - ls.height) / 2.0;
-            lead.paint(&mut ctx.child(Rect { origin: Point { x: lx, y: ly }, size: ls }));
+            ctx.paint_child(Rect { origin: Point { x: lx, y: ly }, size: ls }, &*lead);
             lx += ls.width + 12.0;
         }
 
@@ -187,7 +187,7 @@ impl Widget for AppBar {
             let as_ = action.layout(&ctx.layout_ctx(Constraints::loose(160.0, height)));
             ax -= as_.width + 6.0;
             let ay = r.origin.y + (r.size.height - as_.height) / 2.0;
-            action.paint(&mut ctx.child(Rect { origin: Point { x: ax, y: ay }, size: as_ }));
+            ctx.paint_child(Rect { origin: Point { x: ax, y: ay }, size: as_ }, &*action);
         }
 
         // Title — the space BETWEEN leading and actions is always the clip

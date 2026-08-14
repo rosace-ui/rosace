@@ -180,10 +180,10 @@ impl Widget for Button {
             let content_w = is.width + ICON_GAP + text_w;
             let start_x = ((r.size.width - content_w) / 2.0).max(4.0);
             let iy = r.origin.y + (r.size.height - is.height) / 2.0;
-            icon.paint(&mut ctx.child(Rect {
+            ctx.paint_child(Rect {
                 origin: Point { x: r.origin.x + start_x, y: iy },
                 size: is,
-            }));
+            }, &*icon);
             ctx.text(&self.label, start_x + is.width + ICON_GAP, ty, fg, font_size);
         } else {
             let tx = ((r.size.width - text_w) / 2.0).max(4.0);

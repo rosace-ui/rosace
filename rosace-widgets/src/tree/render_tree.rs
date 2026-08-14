@@ -274,6 +274,71 @@ impl RenderTree {
         self.begin(Self::ROOT);
     }
 
+    /// Claim `node` for a widget of type `tag`, discarding everything the
+    /// PREVIOUS occupant left behind if the type changed. Returns true when a
+    /// reset happened.
+    ///
+    /// # Why a slot needs a type
+    ///
+    /// Node identity is positional: `slot()` hands out the child at the
+    /// parent's cursor. That is the right default — it keeps a widget's scroll
+    /// position and edit buffer across repaints without anyone declaring a key.
+    /// It is wrong the moment a slot changes what KIND of widget lives there:
+    ///
+    /// ```ignore
+    /// if flag { col.child(Button) } else { col.child(TextField) }
+    /// ```
+    ///
+    /// Both branches paint one child, so the slot is reused and `finalize`'s
+    /// truncate never fires. Without a type check the `TextField`'s edit
+    /// buffer, focus and press state survive into the `Button` — and, once
+    /// nodes cache pictures, so does its appearance.
+    ///
+    /// `walk_element` has always done this for element boundaries
+    /// (`rosace/src/lib.rs`). Nested nodes never had it: `PaintCtx::child`
+    /// writes only `cached_rect`, so every node inside a component's widget
+    /// tree carried `tag == ""` and could not tell one widget from another.
+    ///
+    /// # What is NOT reset
+    ///
+    /// Per-paint declarations (hits, semantics, overlays, scroll regions) are
+    /// already cleared by `begin`, so they are not touched here. This clears
+    /// only what PERSISTS across paints and would otherwise leak between two
+    /// unrelated widgets.
+    pub fn adopt_tag(&mut self, node: NodeId, tag: &'static str) -> bool {
+        let n = &mut self.nodes[node];
+        if n.tag == tag {
+            return false;
+        }
+        // A brand-new node has tag "" and is being claimed for the first time.
+        // Clearing default-valued fields is a no-op, so this costs nothing and
+        // keeps one code path instead of two.
+        n.tag = tag;
+
+        // Caches — same set walk_element clears on a mismatch.
+        n.last_constraints = None;
+        n.cached_size = None;
+        n.cached_picture = None;
+        n.cached_rect = None;
+        n.paint_dirty = true;
+
+        // Persistent widget state. A different widget type must never inherit
+        // these: an edit buffer belonging to a TextField appearing inside a
+        // Button is a data leak, not just a visual bug.
+        n.text_edit = Default::default();
+        n.scroll_ctrl = None;
+        n.focus_node = None;
+        n.anim = None;
+        n.anim_channels.clear();
+
+        // Interaction state is dispatcher-owned and refers to the widget that
+        // was there. Leaving it set would paint the new widget pre-hovered or
+        // stuck pressed.
+        n.hovered = false;
+        n.pressed = false;
+        true
+    }
+
     /// Reset a node for a fresh paint: clears its declarations (the picture
     /// cache fields persist — the walker manages those explicitly).
     pub fn reset(&mut self, node: NodeId) {
@@ -1563,6 +1628,64 @@ mod tests {
             t.scroll_test(50.0, 50.0, 0.0, -10.0).is_some(),
             "the ignored node's own scroll target is skipped, but the one behind it still wins"
         );
+    }
+
+
+    /// A slot that changes WIDGET TYPE must not hand the newcomer the old
+    /// widget's state.
+    ///
+    /// The shape that produces this is a branch whose child COUNT is
+    /// unchanged — `if flag { Button } else { TextField }`. One child either
+    /// way, so the slot is reused and `finalize`'s truncate never fires.
+    /// Without a type check the TextField's edit buffer, focus and press
+    /// state survive into the Button.
+    ///
+    /// Asserted on state rather than on `tag` because the tag is the
+    /// mechanism, not the promise. What must hold is that nothing leaks.
+    #[test]
+    fn a_slot_changing_widget_type_does_not_inherit_the_old_widgets_state() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let n = t.slot(RenderTree::ROOT, true);
+
+        // Frame 1: a text field lives here, with real state on it.
+        t.adopt_tag(n, "TextField");
+        t.node_mut(n).text_edit.scroll_x = 42.0;
+        t.node_mut(n).text_edit.selection = Default::default();
+        t.node_mut(n).pressed = true;
+        t.node_mut(n).hovered = true;
+        t.node_mut(n).cached_size = Some(Size { width: 10.0, height: 10.0 });
+
+        // Frame 2: the branch flipped and a button occupies the same slot.
+        let reset = t.adopt_tag(n, "Button");
+        assert!(reset, "a type change must report that it reset the slot");
+
+        let node = t.node(n);
+        assert_eq!(node.text_edit.scroll_x, 0.0,
+            "the previous widget's edit state leaked into a different widget");
+        assert!(!node.pressed, "stale press state would paint the button held down");
+        assert!(!node.hovered, "stale hover state would paint the button pre-hovered");
+        assert!(node.cached_size.is_none(), "a stale size would misplace the new widget");
+        assert!(node.paint_dirty, "the new widget must be painted, not replayed");
+    }
+
+    /// The same widget type re-occupying its slot must KEEP its state — that
+    /// is the whole point of positional identity, and the common case by far.
+    /// A type check that also reset on a match would throw away every scroll
+    /// position and caret on every frame.
+    #[test]
+    fn a_slot_keeping_its_widget_type_keeps_its_state() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let n = t.slot(RenderTree::ROOT, true);
+
+        t.adopt_tag(n, "TextField");
+        t.node_mut(n).text_edit.scroll_x = 7.0;
+
+        let reset = t.adopt_tag(n, "TextField");
+        assert!(!reset, "an unchanged type must not report a reset");
+        assert_eq!(t.node(n).text_edit.scroll_x, 7.0,
+            "repainting the same widget threw away its state");
     }
 
 }

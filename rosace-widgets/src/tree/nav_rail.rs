@@ -111,7 +111,7 @@ impl Widget for NavItem {
         if let Some(lead) = &self.leading {
             let ls = lead.layout(&ctx.layout_ctx(Constraints::loose(20.0, r.size.height)));
             let ly = r.origin.y + (r.size.height - ls.height) / 2.0;
-            lead.paint(&mut ctx.child(Rect { origin: Point { x: lx, y: ly }, size: ls }));
+            ctx.paint_child(Rect { origin: Point { x: lx, y: ly }, size: ls }, &*lead);
             lx += ls.width + 8.0;
         }
 
@@ -227,10 +227,10 @@ impl Widget for NavRail {
                     let h = item.layout(&ctx.layout_ctx(
                         Constraints::loose(self.width, r.size.height),
                     )).height;
-                    item.paint(&mut ctx.child(Rect {
+                    ctx.paint_child(Rect {
                         origin: Point { x: r.origin.x, y },
                         size: Size { width: self.width, height: h },
-                    }));
+                    }, &*item);
                     y += h;
                 }
                 NavRailEntry::Section(label) => {
@@ -254,7 +254,7 @@ impl Widget for NavRail {
                 }
                 NavRailEntry::Custom(w) => {
                     let size = w.layout(&ctx.layout_ctx(Constraints::loose(self.width, r.size.height - (y - r.origin.y))));
-                    w.paint(&mut ctx.child(Rect { origin: Point { x: r.origin.x, y }, size }));
+                    ctx.paint_child(Rect { origin: Point { x: r.origin.x, y }, size }, &*w);
                     y += size.height;
                 }
             }

@@ -285,7 +285,7 @@ impl Widget for Dialog {
         }
 
         let inner_rect = self.padding.unwrap_or(EdgeInsets::all(PADDING)).shrink(r);
-        self.build_inner().paint(&mut ctx.child(inner_rect));
+        ctx.paint_child(inner_rect, &*self.build_inner());
     }
 }
 
