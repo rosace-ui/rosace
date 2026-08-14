@@ -238,6 +238,48 @@ pub fn take_bottom_overlay_inset() -> f32 { BOTTOM_OVERLAY_INSET.with(|v| v.repl
 /// Frame loop: did any widget request continuous animation this frame?
 pub fn take_animation_request() -> bool { ANIM_REQUEST.with(|a| a.replace(false)) }
 
+/// Run `f` and report whether IT asked for another frame, without disturbing
+/// what the surrounding paint had already asked for.
+///
+/// Needed because a self-animating widget requests its next frame *from
+/// inside its own `paint`*. Once painting can be skipped by replaying a
+/// cached picture, a spinner that replays would silently stop requesting and
+/// freeze mid-spin. So a node that animates itself must never replay — and
+/// the only way to know that is to watch the flag across its paint.
+fn scoped_animation_request<R>(f: impl FnOnce() -> R) -> (R, bool) {
+    let outer = ANIM_REQUEST.with(|a| a.replace(false));
+    let out = f();
+    let mine = ANIM_REQUEST.with(|a| a.replace(outer || false));
+    if mine {
+        ANIM_REQUEST.with(|a| a.set(true));
+    }
+    (out, mine)
+}
+
+thread_local! {
+    static STRUCTURAL_FRAME: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Tell the widget layer whether this frame may reuse cached pictures.
+///
+/// **Structural** (the default, and what every frame was before per-node
+/// caching): a component rebuilt, the window resized, the theme changed. The
+/// widget objects are all NEW, and a node has no way to tell a fresh-but-
+/// identical widget from a genuinely changed one — the only way to find out
+/// what it draws is to draw it. So caches are ignored and everything
+/// repaints, exactly as before.
+///
+/// **Targeted**: nothing rebuilt; only nodes explicitly marked dirty changed,
+/// which today means hover and press. Those nodes re-record and their
+/// siblings replay.
+///
+/// Getting this wrong in the unsafe direction — claiming targeted when
+/// something rebuilt — shows a stale picture, so the default is structural
+/// and the engine opts in per frame.
+pub fn set_structural_frame(v: bool) { STRUCTURAL_FRAME.with(|s| s.set(v)); }
+/// Whether this frame must ignore cached pictures. See [`set_structural_frame`].
+pub fn is_structural_frame() -> bool { STRUCTURAL_FRAME.with(|s| s.get()) }
+
 /// Seconds since process start — a shared clock for time-driven widgets.
 pub fn anim_clock() -> f32 {
     use std::sync::OnceLock;
@@ -499,20 +541,72 @@ impl<'a> PaintCtx<'a> {
     /// (`ctx.child(hit).register_hit(..)`). Those nodes have no widget, so
     /// there is no type to record and nothing to cache.
     pub fn paint_child(&mut self, rect: Rect, child: &dyn Widget) {
-        let node = self.tree.borrow_mut().slot(self.node, true);
-        self.tree.borrow_mut().adopt_tag(node, child.type_tag());
+        // `reset: false` — a node that ends up replaying must KEEP the hit
+        // regions, semantics and scroll viewports it declared during its last
+        // real paint. `begin` (what `reset: true` calls) clears exactly those,
+        // and the widget only re-declares them by running. Resetting here and
+        // then replaying would render a widget that looks right and cannot be
+        // clicked. The repaint path below resets explicitly instead.
+        let node = self.tree.borrow_mut().slot(self.node, false);
+        let retagged = self.tree.borrow_mut().adopt_tag(node, child.type_tag());
+
+        let replay = !retagged
+            && !is_structural_frame()
+            && {
+                let t = self.tree.borrow();
+                let n = t.node(node);
+                !n.needs_paint
+                    && n.cached_picture.is_some()
+                    // Same place as well as same content. A moved widget could
+                    // in principle be re-blitted with `replay_offset`, but its
+                    // hit regions are world-space and declared during paint, so
+                    // moving the pixels without re-running would leave the
+                    // clickable area behind. Re-record until that is handled.
+                    && n.cached_rect == Some(rect)
+                    // A widget that drives its own animation asks for the next
+                    // frame from inside `paint`. If it replays it stops asking
+                    // and freezes mid-animation.
+                    && !n.self_animating
+            };
+
+        if replay {
+            let pic = self.tree.borrow().node(node).cached_picture.clone()
+                .expect("checked above");
+            for cmd in &pic.commands {
+                self.recorder.push(cmd.clone());
+            }
+            return;
+        }
+
+        self.tree.borrow_mut().reset(node);
         self.tree.borrow_mut().node_mut(node).cached_rect = Some(rect);
-        let mut cctx = PaintCtx {
-            recorder: self.recorder,
-            rect,
-            font: self.font,
-            theme: self.theme.clone(),
-            tree: Rc::clone(&self.tree),
-            node,
-            owner: self.owner,
-            clip_rect: self.clip_rect,
-        };
-        child.paint(&mut cctx);
+
+        // Record into a sub-recorder so this child's commands can be kept as
+        // its own picture, then splice them into the parent's stream.
+        let mut sub = PictureRecorder::new();
+        let ((), animating) = scoped_animation_request(|| {
+            let mut cctx = PaintCtx {
+                recorder: &mut sub,
+                rect,
+                font: self.font,
+                theme: self.theme.clone(),
+                tree: Rc::clone(&self.tree),
+                node,
+                owner: self.owner,
+                clip_rect: self.clip_rect,
+            };
+            child.paint(&mut cctx);
+        });
+
+        let pic = sub.finish();
+        for cmd in &pic.commands {
+            self.recorder.push(cmd.clone());
+        }
+        let mut t = self.tree.borrow_mut();
+        let n = t.node_mut(node);
+        n.cached_picture = Some(Arc::new(pic));
+        n.needs_paint = false;
+        n.self_animating = animating;
     }
 
     /// Like [`Self::child`], but the child's node is found by an explicit

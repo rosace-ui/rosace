@@ -929,9 +929,8 @@ impl FrameEngine {
         let window_resized = events.iter().any(|e| matches!(
             e, rosace_platform::InputEvent::WindowResized { .. }
         ));
-        // A hover change repaints the widget subtree (the picture cache
-        // unit is the top-level native node, so localized damage needs
-        // the widgets to actually re-run paint — force it this frame).
+        // A hover change repaints the widget subtree: the widgets must
+        // actually re-run paint for the hovered one to change appearance.
         let hover_frame = self.forced_repaint;
         self.forced_repaint = false;
         let needs_paint = global_dirty
@@ -939,6 +938,28 @@ impl FrameEngine {
             || !canvas.has_drawn()   // fresh canvas after resize/scale change
             || window_resized
             || hover_frame;
+
+        // Classify the frame for the widget layer's picture caches.
+        //
+        // STRUCTURAL means something rebuilt: every widget object is new, and
+        // a node cannot tell a fresh-but-identical widget from a changed one
+        // without drawing it. Caches are ignored, exactly as before this
+        // existed.
+        //
+        // TARGETED means nothing rebuilt — the only changes are on nodes that
+        // were explicitly marked, which today means hover and press. Those
+        // re-record; their siblings replay.
+        //
+        // The unsafe direction is claiming targeted when something rebuilt,
+        // which shows a stale picture. So this is a whitelist: targeted
+        // requires that the ONLY reason we are painting is the forced-repaint
+        // flag, with no dirty component, no global dirty, no resize and a
+        // canvas that has already drawn something to keep.
+        let structural = global_dirty
+            || !dirty_ids.is_empty()
+            || window_resized
+            || !canvas.has_drawn();
+        rosace_widgets::tree::set_structural_frame(structural);
 
         if needs_paint {
         // Reset the `WillPopScope` guards ONLY when the widget tree is about

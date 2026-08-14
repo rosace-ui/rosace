@@ -192,6 +192,10 @@ pub struct TreeNode {
     /// (widget config, constraints, font, theme) and nothing else, so only
     /// those can invalidate it.
     pub needs_layout: bool,
+    /// This widget asked for another frame from inside its own `paint`
+    /// (a spinner, a shimmer). Such a node must never replay its cached
+    /// picture: replaying skips the request, and the animation stops.
+    pub self_animating: bool,
     /// This node's `cached_picture` is stale — re-run `paint`.
     ///
     /// A superset of [`Self::needs_layout`] in practice: anything that
@@ -340,6 +344,7 @@ impl RenderTree {
         n.cached_rect = None;
         n.needs_layout = true;
         n.needs_paint = true;
+        n.self_animating = false;
 
         // Persistent widget state. A different widget type must never inherit
         // these: an edit buffer belonging to a TextField appearing inside a
