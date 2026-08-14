@@ -196,7 +196,71 @@ Stage 2 must ship a test for the swapped-branch case specifically. It is
 the one where a stale picture is visible to the user and invisible to a
 pixel-comparing test that only ever renders one branch.
 
-### Thread-safety dictates the handle
+### One dirty mechanism, and the plugin gap
+
+`refresh()` is the public way a widget marks itself dirty, but it is not
+the only *call site* and should not be: `RenderTree::set_hover` and
+`set_pressed` mark `paint_dirty` on a node directly, and that is correct —
+interaction state is framework-internal and should not route through a
+public API. What matters is that both sit on ONE underlying mechanism, or
+two dirty paths drift apart and only one of them gets the cache
+invalidation right.
+
+**The plugin gap is real and not yet built.** The existing seam,
+`rosace_state::external::Subscribers`, is COMPONENT-granularity — its own
+docs say so. A BLoC or signal library can today only trigger a whole
+`build()`. Widget-granularity for plugins needs the node-level mark
+exposed as public API alongside `refresh()`. Without it, "customisation and
+plugins are core" holds for rebuilds but not for the fine-grained path this
+plan adds, and third parties are second-class exactly where it counts.
+
+### `Element` is not Flutter's Element — the names mislead
+
+Worth stating because the analogy is otherwise exactly right:
+
+| Flutter | ROSACE |
+|---|---|
+| Widget — immutable config, discarded | `Element` + the `Widget` objects |
+| **Element** — persistent, reconciles, adds/removes | **`RenderTree`'s `TreeNode` arena** |
+| RenderObject — layout/paint | `Widget::layout`/`paint` + the node's caches |
+
+Our `Element` tree is produced fresh by `build()` and thrown away each
+frame: it is the description, not the identity. The persistent reconciling
+layer is the arena, and add/remove already happens there via `slot()`'s
+cursor and `finalize()`'s truncate. ROSACE collapses Flutter's Element and
+RenderObject into `TreeNode`.
+
+**Consequence for `Stateful`.** With `refresh()` there is no rebuild, so no
+new `Element` tree is produced — a `Column` built with two children still
+holds those two `BoxedWidget`s, and a state flip cannot change them because
+nothing re-ran.
+
+So `Stateful` cannot merely hold state. It must hold a **builder closure**
+re-run on refresh, producing a fresh child widget tree that reconciles
+against the arena by slot, scoped to that `Stateful` alone. That is the
+"rebuild just this subtree" boundary `external.rs` notes exists for nobody
+today, and it is what makes conditional children work under `refresh()`
+rather than only under a full rebuild.
+
+### Moving a widget should re-blit, not re-record — with one catch
+
+`PaintCtx::replay_offset(picture, dx, dy)` already exists and translates
+every command; `RepaintBoundary` uses it. So a widget whose SIZE is
+unchanged and whose ORIGIN moved can be re-blitted. Today's replay check
+refuses on `cached_rect != child_rect`, so any move forces a full
+re-record; relaxing that to "same size, different origin -> replay_offset"
+is small and well supported.
+
+**The catch, and it is not optional.** Hit regions, scroll viewports and
+`cached_rect` are all WORLD-SPACE, and they are declared *during paint*.
+Re-blitting the picture without re-running paint moves the pixels and
+leaves the clickable region behind — a button that looks moved and responds
+at its old position. Same family as the open scrolled-click hit bug on web.
+
+A move must therefore offset the node's declared regions as well as its
+commands: a subtree walk translating `hits`, `hits_at`, `scrolls`,
+`nested_scrolls` and `cached_rect`. Mechanical, and required for
+correctness rather than polish.
 
 Hit callbacks are `Arc<dyn Fn() + Send + Sync>`; the render tree is
 `Rc<RefCell<..>>` and not `Send`. So a refresh handle cannot hold the tree.
