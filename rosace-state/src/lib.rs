@@ -15,6 +15,56 @@ pub mod atom_id_gen;
 pub mod batch;
 pub mod cleanup_store;
 pub mod dirty_set;
+
+/// Who is building right now, for attributing atom writes.
+///
+/// `RosaceTrace::AtomWrite` carries a `by: ComponentId` and it was
+/// HARDCODED to `ComponentId(0)`, so every write in the DevTools "who
+/// changed this state?" column named component 0 regardless of the truth.
+/// That was harmless while 0 meant "unknown" and became a real lie once
+/// engines started taking process-unique root ids beginning at 0 — the
+/// placeholder became indistinguishable from a genuine answer.
+///
+/// A write that happens OUTSIDE a build — from an event handler, a timer, a
+/// network callback, which is most of them — genuinely has no owning
+/// component, and reports [`UNKNOWN_COMPONENT`] rather than inventing one.
+/// The `location` field on the same event carries the file and line, which
+/// is usually the more useful answer anyway.
+pub mod current_component {
+    use std::cell::Cell;
+    use rosace_trace::event::ComponentId;
+
+    /// Reported when a write happens outside any build. Deliberately not 0,
+    /// which is a real component id.
+    pub const UNKNOWN_COMPONENT: ComponentId = ComponentId(u64::MAX);
+
+    thread_local! {
+        static CURRENT: Cell<Option<ComponentId>> = const { Cell::new(None) };
+    }
+
+    /// Marks `id` as building until the returned guard drops.
+    pub fn enter(id: ComponentId) -> Guard {
+        let previous = CURRENT.with(|c| c.replace(Some(id)));
+        Guard { previous }
+    }
+
+    /// Restores the previous builder on drop, so nesting works and an early
+    /// return or a panic cannot leave a stale id attributed to later writes.
+    pub struct Guard {
+        previous: Option<ComponentId>,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            CURRENT.with(|c| c.set(self.previous));
+        }
+    }
+
+    /// The component currently building, or [`UNKNOWN_COMPONENT`].
+    pub fn current() -> ComponentId {
+        CURRENT.with(|c| c.get()).unwrap_or(UNKNOWN_COMPONENT)
+    }
+}
 pub mod external;
 pub mod frame_scheduler;
 pub mod global_atom;

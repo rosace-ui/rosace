@@ -168,7 +168,7 @@ impl<T: 'static> Atom<T> {
             atom: atom_id,
             old: old_trace,
             new: new_trace,
-            by: rosace_trace::event::ComponentId(0),
+            by: crate::current_component::current(),
             location: rosace_trace::location!(),
         });
 
@@ -239,7 +239,7 @@ impl<T: 'static> Atom<T> {
             atom: atom_id,
             old: old_trace,
             new: new_trace,
-            by: rosace_trace::event::ComponentId(0),
+            by: crate::current_component::current(),
             location: rosace_trace::location!(),
         });
 
@@ -351,4 +351,50 @@ mod tests {
         assert!(dirty.contains(&ComponentId(4242)),
             "the subscribing thread never saw the off-thread write; got {dirty:?}");
     }
+
+    /// A write must say WHO wrote it, or admit it does not know.
+    ///
+    /// `by` was hardcoded to `ComponentId(0)`, which was a harmless
+    /// placeholder while 0 meant "unknown" — and became a real lie once
+    /// engines took process-unique root ids starting at 0. DevTools' "who
+    /// changed this state?" column would have named component 0 for every
+    /// row, indistinguishable from a genuine answer.
+    #[test]
+    fn a_write_is_attributed_to_the_building_component_or_admits_it_is_unknown() {
+        use crate::current_component::{enter, UNKNOWN_COMPONENT};
+        use rosace_trace::event::{ComponentId, RosaceTrace};
+        use std::sync::{Arc, Mutex};
+
+        struct Sink(Arc<Mutex<Vec<ComponentId>>>);
+        impl rosace_trace::TraceSubscriber for Sink {
+            fn on_trace(&self, e: &RosaceTrace) {
+                if let RosaceTrace::AtomWrite { by, .. } = e {
+                    self.0.lock().unwrap().push(*by);
+                }
+            }
+        }
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        rosace_trace::TRACING_BUS.clear_subscribers();
+        rosace_trace::TRACING_BUS.add_subscriber(Arc::new(Sink(seen.clone())));
+
+        let atom = Atom::new(crate::next_atom_id(), 0i32);
+
+        // Outside any build — an event handler, a timer, a network callback.
+        atom.set(1);
+
+        // Inside a build.
+        {
+            let _g = enter(ComponentId(77));
+            atom.set(2);
+        }
+
+        // ...and the guard restores, so the next write is unattributed again.
+        atom.set(3);
+
+        let got = seen.lock().unwrap().clone();
+        rosace_trace::TRACING_BUS.clear_subscribers();
+        assert_eq!(got, vec![UNKNOWN_COMPONENT, ComponentId(77), UNKNOWN_COMPONENT],
+            "attribution must follow the build scope, not a constant");
+    }
+
 }

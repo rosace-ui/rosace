@@ -860,6 +860,10 @@ impl FrameEngine {
 
         let cache_key = root_component_id.0;
         let element = if root_is_dirty || !self.element_cache.contains_key(&cache_key) {
+            // Attribute atom writes that happen DURING this build to this
+            // component; writes from event handlers land outside it and
+            // report UNKNOWN_COMPONENT rather than borrowing an id.
+            let _building = rosace_state::current_component::enter(root_component_id);
             let mut ctx = rosace_core::Context::new(root_component_id);
             // Time the build and report WHY it ran. `ComponentRebuild` has
             // existed since the trace crate was written and was never
