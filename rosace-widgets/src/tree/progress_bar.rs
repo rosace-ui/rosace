@@ -80,3 +80,90 @@ impl Widget for ProgressBar {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rosace_core::types::Point;
+    use rosace_render::{DrawCommand, FontCache, PictureRecorder};
+    use crate::tree::{PaintCtx, RenderTree};
+    use std::{cell::RefCell, rc::Rc};
+
+    /// Every rounded rect drawn, in paint order: track first, then fill.
+    fn rrects(bar: ProgressBar, w: f32) -> Vec<(Rect, f32)> {
+        let font = FontCache::embedded();
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: w, height: 6.0 } },
+                &font,
+                rosace_theme::built_in::dark_theme(),
+                Rc::new(RefCell::new(RenderTree::new())),
+            );
+            bar.paint(&mut ctx);
+        }
+        rec.finish().commands.iter().filter_map(|c| match c {
+            DrawCommand::FillRRect { rect, radius, .. } => Some((*rect, *radius)),
+            _ => None,
+        }).collect()
+    }
+
+    #[test]
+    fn the_fill_width_is_the_value_fraction_of_the_track() {
+        let parts = rrects(ProgressBar::new(0.25), 200.0);
+        assert_eq!(parts.len(), 2, "track + fill");
+        assert_eq!(parts[0].0.size.width, 200.0, "track spans the full width");
+        assert_eq!(parts[1].0.size.width, 50.0, "fill is 25%");
+    }
+
+    /// A zero (or negative) value must draw NO fill, not a zero-width sliver
+    /// that still renders as a rounded dot at the left edge.
+    #[test]
+    fn a_zero_value_draws_the_track_only() {
+        assert_eq!(rrects(ProgressBar::new(0.0), 200.0).len(), 1);
+        assert_eq!(rrects(ProgressBar::new(-5.0), 200.0).len(), 1, "clamped, not negative");
+    }
+
+    #[test]
+    fn a_value_above_one_is_clamped_to_the_track() {
+        let parts = rrects(ProgressBar::new(3.0), 200.0);
+        assert_eq!(parts[1].0.size.width, 200.0, "never overruns the track");
+    }
+
+    /// The fill must not be rounded harder than it is wide.
+    ///
+    /// The default radius is half the HEIGHT, so at a low value the fill was
+    /// narrower than its own corner radius and painted a lozenge wider than
+    /// the geometry implied — progress appearing to start at ~3% when the
+    /// value was 0.5%.
+    #[test]
+    fn a_barely_started_fill_is_not_rounded_wider_than_itself() {
+        let parts = rrects(ProgressBar::new(0.005), 200.0);
+        let (fill, radius) = parts[1];
+        assert!(radius <= fill.size.width / 2.0 + 0.001,
+            "radius {radius} exceeds half the {}px fill", fill.size.width);
+    }
+
+    /// A ProgressBar announces a percentage; without a name a screen reader
+    /// says "50%" and nothing else.
+    #[test]
+    fn it_announces_its_value_and_an_explicit_label() {
+        let font = FontCache::embedded();
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 200.0, height: 6.0 } },
+                &font,
+                rosace_theme::built_in::dark_theme(),
+                tree.clone(),
+            );
+            ProgressBar::new(0.5).label("Uploading photos").paint(&mut ctx);
+        }
+        let json = format!("{:?}", tree.borrow().collect_semantics());
+        assert!(json.contains("Uploading photos"), "the label must be announced: {json}");
+        assert!(json.contains("50%"), "the value must be announced");
+    }
+}

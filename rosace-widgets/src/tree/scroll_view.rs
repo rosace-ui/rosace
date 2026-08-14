@@ -797,3 +797,69 @@ impl Widget for ScrollView {
         }
     }
 }
+
+#[cfg(test)]
+mod widget_tests {
+    use super::*;
+    use rosace_core::types::Point;
+
+    fn sz(w: f32, h: f32) -> Size { Size { width: w, height: h } }
+
+    /// The GPU-vs-CPU decision is made in PHYSICAL pixels.
+    ///
+    /// The offscreen scroll texture is allocated at `extent * render_scale`
+    /// and capped, so a logical-only check passes content that then cannot
+    /// fit its texture on a 2x display — and the bottom of a long list is
+    /// silently clipped. This is the one place where "it looked fine on my
+    /// machine" is guaranteed, because the developer's display scale decides.
+    #[test]
+    fn the_gpu_path_is_gated_on_physical_pixels_not_logical() {
+        let sv = ScrollView::new(super::super::Spacer::new(1.0));
+        let vp = sz(400.0, 800.0);
+        let tall = sz(400.0, 3000.0); // fits at 1x, does NOT at 2x
+
+        rosace_state::set_render_scale(1.0);
+        assert!(sv.should_auto_gpu(vp, tall), "3000px fits the cap at 1x");
+
+        rosace_state::set_render_scale(2.0);
+        assert!(!sv.should_auto_gpu(vp, tall),
+            "3000 logical is 6000 physical at 2x — past the cap, so CPU");
+
+        rosace_state::set_render_scale(1.0);
+    }
+
+    /// No overflow means nothing to scroll, so no offscreen texture either.
+    #[test]
+    fn content_that_fits_never_takes_the_gpu_path() {
+        let sv = ScrollView::new(super::super::Spacer::new(1.0));
+        rosace_state::set_render_scale(1.0);
+        assert!(!sv.should_auto_gpu(sz(400.0, 800.0), sz(400.0, 500.0)));
+    }
+
+    /// `Both` must consider whichever axis is larger — gating on height
+    /// alone would send a very wide horizontal scroller down a path whose
+    /// texture cannot hold it.
+    #[test]
+    fn a_two_axis_view_gates_on_the_larger_extent() {
+        let sv = ScrollView::new(super::super::Spacer::new(1.0)).axis(ScrollAxis::Both);
+        rosace_state::set_render_scale(1.0);
+        assert!(!sv.should_auto_gpu(sz(400.0, 800.0), sz(9000.0, 900.0)),
+            "9000px wide is past the cap even though the height is modest");
+        rosace_state::set_render_scale(1.0);
+    }
+
+    /// Padding narrows the CHILD, never the viewport — the scrollbar has to
+    /// keep tracking the full height, and content must not slide under it.
+    #[test]
+    fn padding_narrows_the_child_but_not_the_viewport() {
+        let vp = Rect { origin: Point { x: 0.0, y: 0.0 }, size: sz(400.0, 800.0) };
+
+        let bare = ScrollView::new(super::super::Spacer::new(1.0));
+        let padded = ScrollView::new(super::super::Spacer::new(1.0))
+            .padding(super::super::EdgeInsets::symmetric(20.0, 0.0));
+
+        let bare_w = bare.child_constraints(vp).max_width_f32();
+        let padded_w = padded.child_constraints(vp).max_width_f32();
+        assert_eq!(padded_w, bare_w - 40.0, "the child loses the inset");
+    }
+}
