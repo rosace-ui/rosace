@@ -11,6 +11,9 @@
 //! println!("{}", console.render());
 //! ```
 
+pub mod wire;
+#[cfg(debug_assertions)]
+pub mod wire_server;
 pub mod atom_inspector;
 pub mod component_inspector;
 pub mod dev_console;
