@@ -43,6 +43,18 @@ consult `!paint_dirty`, so both are defeated. Changing one `Text` from `1`
 to `2` re-layouts and re-records all 100 widgets on screen. **Hover does the
 same** — same line.
 
+**2b. `Row`/`Column` no longer double-measure** (fixed 2026-08-14,
+`9b4ba78`). Both ran two passes over their children, the first keeping only
+the main-axis extent and the second re-measuring the same children with
+identical constraints. Now the first pass keeps each `Size` and the second
+reuses it: 2× → 1× layout calls per non-flex child.
+
+Worth recording because the obvious inference is wrong: it does **not**
+compound with depth. Each `Row`/`Column` memoises `measure` by constraints
+(`measure_cache`), so a parent's second call on a nested flex child hits
+that cache rather than recursing. Measured on nested Columns at depth 5 —
+486 → 243 leaf layouts, a flat 2×, not 2^depth.
+
 **3. Caches exist ONLY at element boundaries.** `cached_size`,
 `last_constraints` and `cached_picture` are written in exactly one place:
 `walk_element` (`rosace/src/lib.rs:444`, `445`, `499`). Every other
@@ -118,19 +130,66 @@ uses `child_keyed`, which already exists, is tested, and is used today by
 
 ## Stages
 
-Each ships green and is independently useful.
+Each ships green and is independently useful — **except the first two,
+which do not separate.** See below.
 
-**Stage 1 — targeted repaint frames.**
-Split `forced_repaint` into "repaint everything" (resize) and "repaint the
-nodes I marked". `root_is_dirty || hover_frame` becomes `root_is_dirty` on
-targeted frames.
-*Fixes hover-repaints-the-whole-screen on its own, with no new API.*
+**Stage 1 — targeted repaint frames. CANNOT SHIP ALONE (verified
+2026-08-14).**
+The original claim was that splitting `forced_repaint` into "repaint
+everything" and "repaint the nodes I marked" fixes
+hover-repaints-the-whole-screen *on its own, with no new API*. That is
+wrong, and the reason is finding 3 above taken to its conclusion.
 
-**Stage 2 — per-node cache boundaries.**
+Instrumenting the one place `cached_picture` is written
+(`rosace/src/lib.rs:499`) over a ten-child `Column` prints exactly one line:
+
+    [PICCACHE] node 1 tag=..::column::Column PAINTED
+
+**One** node holds a picture for the entire screen. So "repaint only the
+nodes I marked" and "repaint everything" are the same instruction — there
+is one node to mark. Worse, dropping `hover_frame` from `subtree_dirty`
+would leave that single node clean, so the whole screen would replay a
+picture recorded *before* the hover: hover would stop working rather than
+get cheaper.
+
+Stage 1 has no standalone effect. It is the frame-classification half of
+Stage 2 and lands with it.
+
+**Stage 2 — per-node cache boundaries.** *(absorbs Stage 1)*
 `cached_size` / `last_constraints` / `cached_picture` on nodes created by
-`PaintCtx::child`, with the two skip checks. Reuses `ctx.capture` and
-`ctx.replay_offset` from `RepaintBoundary`.
+`PaintCtx::child`, with the two skip checks.
 *The load-bearing stage. Everything after it is small.*
+
+Two things found while verifying, which shape the work:
+
+**The marking already exists.** `RenderTree::set_hover` and `set_pressed`
+(`render_tree.rs:665`, `684`) already set `paint_dirty = true` on the exact
+node entered and the exact node left, and clear it on the old one. That
+precision is thrown away today only because those nested nodes have nowhere
+to cache — so the engine falls back to forcing a global repaint. Give them
+a cache and hover becomes surgical with no new marking code.
+
+**Frames must be classified, and this is the stale-cache hazard.** A nested
+node's `paint_dirty` is set by hover/press, but *nothing* sets it when the
+widget's content changes — a rebuilt tree hands the node a brand-new widget
+object it cannot compare against the old one (that is Phase 2 below). If
+nested nodes cache unconditionally, a `Text` going `1` → `2` would replay
+the stale `1`. So:
+
+* **Structural frame** — element rebuilt, `global_dirty`, or resize:
+  propagate dirty downward, everything repaints. Today's behaviour, kept
+  deliberately, because it is the safe one.
+* **Targeted frame** — no rebuild, only hover/press/marked nodes changed:
+  do not propagate; only `paint_dirty` nodes repaint, siblings replay.
+
+That classification *is* Stage 1, which is why the two fuse.
+
+**The mechanical part.** Caching per node requires the framework to own a
+sub-recorder around each child paint, which the current idiom does not
+allow — `child.paint(&mut ctx.child(rect))` gives no "after the child
+painted" hook. It becomes `ctx.paint_child(rect, child)`, with the
+framework doing the cache check, the sub-recorder and the store. 80 call
+sites across 48 files, uniform enough to convert mechanically.
 
 **Stage 3 — size-change propagation.**
 After a dirty node re-layouts, compare against `cached_size`; if it differs,
