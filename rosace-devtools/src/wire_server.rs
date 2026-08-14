@@ -98,13 +98,27 @@ pub enum WireCommand {
     Select { node: Option<usize> },
 }
 
-/// Produces the current tree when a client asks for one.
+/// The most recently published snapshots, readable from the socket thread.
 ///
-/// A callback rather than a stored snapshot: the render tree lives on the UI
-/// thread behind an `Rc<RefCell<..>>` and cannot be shared, and a snapshot
-/// taken in advance would be stale by the time anyone reads it. The app
-/// installs this from somewhere that CAN see the tree.
-pub type TreeProvider = Arc<dyn Fn() -> TreeSnapshot + Send + Sync>;
+/// PUBLISHED by the UI thread, not pulled from it. The first version of this
+/// took a `Fn() -> TreeSnapshot` callback, which was unsound: the callback
+/// runs on the socket thread, while the render tree is an `Rc<RefCell<..>>`
+/// owned by the UI thread and cannot be touched from anywhere else. It
+/// compiled only because the closure was `Send + Sync` while what it would
+/// have captured is not.
+///
+/// So the direction is inverted. The UI thread calls
+/// [`WireServer::publish_tree`] on a frame boundary, where it legitimately
+/// holds the tree, and the socket thread serves whatever was last published.
+///
+/// This does hold ONE snapshot, which bends "ROSACE stores nothing" — but a
+/// single latest value is a cache, not a history: it has a fixed size, no
+/// retention policy and nothing to evict. A client asking "what is on
+/// screen" has to be answered from somewhere.
+#[derive(Default)]
+struct Published {
+    tree: Option<TreeSnapshot>,
+}
 
 /// Connected clients. Writing to a dead socket simply drops it.
 #[derive(Default)]
@@ -133,6 +147,7 @@ const MAX_PENDING_COMMANDS: usize = 64;
 pub struct WireServer {
     clients: Arc<Mutex<Clients>>,
     commands: Arc<Mutex<Commands>>,
+    published: Arc<Mutex<Published>>,
     port: u16,
 }
 
@@ -141,23 +156,23 @@ impl WireServer {
     /// one, which [`Self::port`] then reports.
     ///
     /// Loopback only, deliberately — see the module docs.
-    pub fn start(port: u16, tree: Option<TreeProvider>) -> std::io::Result<Self> {
+    pub fn start(port: u16) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let port = listener.local_addr()?.port();
         let clients: Arc<Mutex<Clients>> = Arc::default();
         let commands: Arc<Mutex<Commands>> = Arc::default();
+        let published: Arc<Mutex<Published>> = Arc::default();
 
-        let accept_clients = clients.clone();
-        let accept_commands = commands.clone();
+        let (ac, acm, ap) = (clients.clone(), commands.clone(), published.clone());
         std::thread::Builder::new()
             .name("rosace-devtools-wire".into())
             .spawn(move || {
                 for stream in listener.incoming().flatten() {
-                    handle(stream, &accept_clients, &accept_commands, tree.as_ref());
+                    handle(stream, &ac, &acm, &ap);
                 }
             })?;
 
-        Ok(Self { clients, commands, port })
+        Ok(Self { clients, commands, published, port })
     }
 
     /// The bound port — useful when `start(0, ..)` chose one.
@@ -169,6 +184,19 @@ impl WireServer {
     /// serialisation is skipped entirely when nobody is listening.
     pub fn client_count(&self) -> usize {
         self.clients.lock().map(|c| c.streams.len()).unwrap_or(0)
+    }
+
+    /// Publish the current tree. Call from the UI thread, where the render
+    /// tree is legitimately reachable.
+    ///
+    /// Cheap when nobody is connected — check [`Self::client_count`] first
+    /// if building the snapshot itself is expensive.
+    pub fn publish_tree(&self, snapshot: TreeSnapshot) {
+        let mut g = match self.published.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        g.tree = Some(snapshot);
     }
 
     /// Drain the commands a client has sent since the last call.
@@ -221,7 +249,7 @@ fn handle(
     mut stream: TcpStream,
     clients: &Arc<Mutex<Clients>>,
     commands: &Arc<Mutex<Commands>>,
-    tree: Option<&TreeProvider>,
+    published: &Arc<Mutex<Published>>,
 ) {
     use std::io::{BufRead, BufReader};
 
@@ -291,11 +319,20 @@ fn handle(
             }
         }
         "/tree" => {
-            let body = tree.map(|t| t().to_json())
-                // Honest about the difference between "no tree" and "no
-                // provider installed" — a client seeing an empty array would
-                // otherwise conclude the app has no widgets.
-                .unwrap_or_else(|| "{\"error\":\"no tree provider installed\"}".into());
+            let body = {
+                let g = match published.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                match &g.tree {
+                    Some(t) => t.to_json(),
+                    // Honest about the difference between "an app with no
+                    // widgets" and "the app has not published yet" — an
+                    // empty array would say the first when it means the
+                    // second.
+                    None => "{\"error\":\"no tree published yet\"}".to_string(),
+                }
+            };
             let _ = write_json(&mut stream, &body);
         }
         _ => {
@@ -346,21 +383,38 @@ mod tests {
     }
 
     #[test]
-    fn a_tree_request_returns_the_providers_snapshot() {
-        let provider: TreeProvider = Arc::new(|| TreeSnapshot { nodes: Vec::new() });
-        let server = WireServer::start(0, Some(provider)).expect("bind");
+    fn a_tree_request_returns_what_the_ui_thread_published() {
+        let server = WireServer::start(0).expect("bind");
+        server.publish_tree(TreeSnapshot { nodes: Vec::new() });
         let body = get(server.port(), "/tree");
         assert!(body.contains("application/json"), "must be JSON: {body}");
         assert!(body.contains("\"nodes\""), "must carry the snapshot: {body}");
     }
 
-    /// "No provider installed" and "an app with no widgets" must not look
-    /// the same to a client.
+    /// "Nothing published yet" and "an app with no widgets" must not look
+    /// the same to a client — an empty array would say the second.
     #[test]
-    fn a_tree_request_with_no_provider_says_so_rather_than_returning_empty() {
-        let server = WireServer::start(0, None).expect("bind");
+    fn a_tree_request_before_anything_is_published_says_so() {
+        let server = WireServer::start(0).expect("bind");
         let body = get(server.port(), "/tree");
-        assert!(body.contains("no tree provider"), "got: {body}");
+        assert!(body.contains("no tree published"), "got: {body}");
+    }
+
+    /// Publishing replaces rather than accumulates: one latest value, which
+    /// is a cache, not a history.
+    #[test]
+    fn publishing_again_replaces_the_previous_snapshot() {
+        use crate::wire::WireNode;
+        let server = WireServer::start(0).expect("bind");
+        server.publish_tree(TreeSnapshot { nodes: Vec::new() });
+        server.publish_tree(TreeSnapshot { nodes: vec![WireNode {
+            id: 9, parent: None, children: vec![], tag: "Marker", rect: None,
+            semantics: vec![], hit_count: 0, scroll_count: 0, overlay_count: 0,
+            has_editable: false, hovered: false, pressed: false,
+        }] });
+        let body = get(server.port(), "/tree");
+        assert!(body.contains("Marker"), "must serve the LATEST: {body}");
+        assert_eq!(body.matches("\"id\"").count(), 1, "one snapshot, not both");
     }
 
     /// The point of the whole module: an event emitted while a client is
@@ -369,7 +423,7 @@ mod tests {
     fn an_event_reaches_a_connected_client() {
         use rosace_trace::event::{ComponentId, RebuildCause};
 
-        let server = WireServer::start(0, None).expect("bind");
+        let server = WireServer::start(0).expect("bind");
         let sub = server.subscriber();
 
         let mut client = TcpStream::connect(("127.0.0.1", server.port())).expect("connect");
@@ -408,7 +462,7 @@ mod tests {
     #[test]
     fn emitting_with_no_client_is_a_no_op() {
         use rosace_trace::event::{ComponentId, RebuildCause};
-        let server = WireServer::start(0, None).expect("bind");
+        let server = WireServer::start(0).expect("bind");
         let sub = server.subscriber();
         for _ in 0..1000 {
             sub.on_trace(&RosaceTrace::ComponentRebuild {
@@ -434,7 +488,7 @@ mod tests {
     /// select mode is the case that made a one-way channel insufficient.
     #[test]
     fn a_client_command_reaches_the_ui_thread_queue() {
-        let server = WireServer::start(0, None).expect("bind");
+        let server = WireServer::start(0).expect("bind");
         assert!(server.take_commands().is_empty(), "nothing queued yet");
 
         let reply = post(server.port(), r#"{"cmd":"select_mode","on":true}"#);
@@ -447,7 +501,7 @@ mod tests {
 
     #[test]
     fn hover_and_select_carry_a_node_and_can_clear_it() {
-        let server = WireServer::start(0, None).expect("bind");
+        let server = WireServer::start(0).expect("bind");
         post(server.port(), r#"{"cmd":"hover","node":12}"#);
         post(server.port(), r#"{"cmd":"select","node":null}"#);
         assert_eq!(server.take_commands(), vec![
@@ -460,7 +514,7 @@ mod tests {
     /// developer's machine still deserves a closed command set.
     #[test]
     fn an_unknown_command_is_rejected_rather_than_queued() {
-        let server = WireServer::start(0, None).expect("bind");
+        let server = WireServer::start(0).expect("bind");
         let reply = post(server.port(), r#"{"cmd":"rm_rf","path":"/"}"#);
         assert!(reply.contains("error"), "should have been refused: {reply}");
         assert!(server.take_commands().is_empty(), "nothing unknown may reach the app");
@@ -470,7 +524,7 @@ mod tests {
     /// limit, and should be TOLD rather than silently dropped.
     #[test]
     fn the_command_queue_is_bounded_and_says_so() {
-        let server = WireServer::start(0, None).expect("bind");
+        let server = WireServer::start(0).expect("bind");
         let mut saw_full = false;
         for _ in 0..(MAX_PENDING_COMMANDS + 10) {
             if post(server.port(), r#"{"cmd":"select_mode","on":true}"#).contains("queue full") {
