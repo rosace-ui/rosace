@@ -15,6 +15,7 @@
 - **[A4] Handler / closure holes (interactive hot reload)** — 🟡 NULLARY DONE + live-verified; arg-handlers deferred
 - **[A5] `rsc new` dependency mode (path in dev → crate version at release)** — 🔨 IN PROGRESS (P1)
 - **[A6] Asset system (declare → typed codegen → per-platform resolve → load, hot-reloadable)** — 📐 DESIGNED; to build (P2)
+- **[A7] Collapse `Element` into `Widget` (one description type)** — ⏸ DEFERRED (analysed 2026-08-14; too big to run alongside the invalidation work)
 
 ---
 
@@ -254,3 +255,69 @@ behind an HTTP API). (Originally mis-logged here as the user's point; it was not
 
 **Relates:** the inflater (rosace-widgets template), [A4] handler-registry,
 [A2] data layer, D123 (observability/DevTools), D107 (web semantic-tree shadow).
+
+---
+
+## A7 — Collapse `Element` into `Widget` (one description type)
+
+**Status: ⏸ DEFERRED (analysed 2026-08-14). Sound, and explicitly parked —
+too big to run alongside the invalidation/boundary work.**
+
+**The finding: there is no element TREE.** `walk_element` never recurses into
+`children` (zero hits for `n.children` in `rosace/src/lib.rs`), so both
+`NativeElement.children` and `ComponentElement.children` are `Vec<Element>`
+that are always empty and never read. `key` is the same — `with_key` sets it,
+nothing consults it. What exists is a ONE-DEEP wrapper:
+
+    Component -> (recurse) -> Native(widget) -> [Widget tree takes over]
+
+Below the first `Native`, the real structure is the `Widget` tree via
+`children()` and `PaintCtx::child`.
+
+**Its three live jobs:** mark component boundaries (assign `ComponentId`,
+check `dirty_ids`, call `build()`); carry a component's root widget
+(`payload`); be cheap to clone for `element_cache`'s rebuild-skip.
+
+**Not a performance item.** `payload` is `Arc<dyn WidgetPayload>`, so cloning
+an `Element` is an Arc bump, not a deep copy, and layout/paint — the real
+costs — happen entirely on the widget/arena side. Removing it saves close to
+nothing at runtime. The case is simplicity and identity.
+
+**Every variant but one is already a widget:**
+
+| today | as a widget |
+|---|---|
+| `Element::Native(payload)` | the `Widget` itself |
+| `Element::Text(s)` | a `Text` widget |
+| `Element::Empty` | an empty widget |
+| `Element::Component(c)` | a `ComponentWidget` holding `Arc<dyn Component>`, building on demand |
+
+Collapsed, there is ONE description type (`Widget`) and ONE persistent tree
+(the arena) — simpler than today and simpler than Flutter, whose Element layer
+we would otherwise be re-inventing.
+
+**The real gain is identity.** `ComponentId(*position)` is assigned by a walk
+counter, so it shifts whenever the tree shape changes — the same bug class as
+slot aliasing. As widgets, components get arena node identity, which already
+supports keys through `keyed_children`. The rebuild-skip cache moves off the
+side `HashMap<u64, Element>` onto the node where persistent state already
+lives.
+
+**Consistent with D098, not against it.** D098 says "a user never types
+`Element` except `into_element()` at a component boundary." Deleting the type
+finishes that sentence.
+
+**Why it is deferred — the actual cost.** `WidgetPayload` exists in
+`rosace-core` precisely "so `NativeElement` can hold it without a circular
+dep": the `Widget` trait lives in `rosace-widgets`, `Component` in
+`rosace-core`. Making `Component` a `Widget` inverts that dependency. Solvable
+(move the `Widget` trait into `rosace-core`, or keep a thin type-erased seam),
+but it is a crate-layering change across the workspace — the wrong thing to
+have in flight while invalidation is also changing.
+
+**Do it when:** the boundary/caching work has landed and is stable. Not
+before — the boundaries key off identity, and this changes what identity is,
+so doing it after means one migration instead of two.
+
+**Relates:** `PLAN_REFRESHABLE_WIDGETS.md` (identity, keys, `child_keyed`),
+D098 (`WIDGET_PROTOCOL.md`, two-concept authoring surface).
