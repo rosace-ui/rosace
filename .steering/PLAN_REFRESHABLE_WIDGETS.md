@@ -147,6 +147,55 @@ This is the bulk of the work and where the risk is. It changes the paint
 path for every widget, so it lands behind a test that proves the cheap path
 is taken, not merely that pixels are right.
 
+### Conditional children, and the identity gap Stage 2 must close
+
+Nested nodes have **no type identity today**. `node.tag` is written in
+exactly one place — `rosace/src/lib.rs:410`, inside `walk_element`'s
+`Element::Native` arm. `PaintCtx::child` sets only `cached_rect`, so nodes
+inside a component's widget tree carry `tag == ""` forever.
+
+Harmless while those nodes hold no picture. A correctness bug the moment
+they do.
+
+Take a branch that swaps children:
+
+```rust
+if flag { col.child(Button) } else { col.child(TextField) }
+```
+
+Both branches paint one child, so slot 0 is REUSED and `finalize`'s
+`children.truncate(cursor)` never fires. That node keeps its `text_edit`
+state, its `hovered`/`pressed` flags, and — after Stage 2 — its cached
+picture. Flip the flag and the old widget stays on screen.
+
+So `paint_child` must do what `walk_element` already does at line 410: on
+`node.tag != type_name(child)`, hard-reset `last_constraints`,
+`cached_size`, `cached_picture` and set `paint_dirty`. Type change resets
+automatically, with nothing asked of the developer.
+
+**Where a differing child COUNT is already handled.** `finalize` truncates
+each painted parent's `children` to its cursor, so:
+
+* `true -> false` detaches the surplus node (it stays in the arena — the
+  Stage 7 leak, not a correctness problem).
+* `false -> true` finds the cursor past `children.len()` and pushes a FRESH
+  node, so the returning child starts with fresh state.
+
+That is Flutter's semantics — out of the tree means state disposed — and is
+the predictable answer. Keep it.
+
+**Where tags are NOT enough.** Same type, different logical item: remove
+item 3 from a list of ten `Container`s and every later one shifts up a
+slot. Every tag matches, so each inherits its previous neighbour's state
+and picture. This is the classic key problem and needs `child_keyed`, which
+already exists, is tested, and is what `ScreenTransitionView` uses so a
+screen keeps its own scroll position across navigation rather than
+aliasing onto whoever last held that slot.
+
+Stage 2 must ship a test for the swapped-branch case specifically. It is
+the one where a stale picture is visible to the user and invisible to a
+pixel-comparing test that only ever renders one branch.
+
 ### Thread-safety dictates the handle
 
 Hit callbacks are `Arc<dyn Fn() + Send + Sync>`; the render tree is
