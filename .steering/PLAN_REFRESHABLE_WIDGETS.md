@@ -88,13 +88,50 @@ r.update(|s| s.count += 1);   // that is the whole API
 The node is marked dirty. On the next frame:
 
 1. That node re-runs `layout` with its recorded constraints.
-2. **Size unchanged** → re-record its picture only. Parent untouched,
-   siblings replay from cache, damage covers this node.
+2. **Size unchanged** → re-record its picture only. Siblings replay from
+   cache, damage covers this node, and **nothing above it re-layouts**.
 3. **Size changed** → mark the parent dirty and repeat upward, stopping as
    soon as an ancestor's size stops changing.
 
 Step 3 is Flutter's relayout-boundary propagation, derived by comparison
 instead of declared by anyone.
+
+### Correction: "parent untouched" is false, and why
+
+An earlier draft of step 2 said *"Parent untouched."* That cannot hold,
+because `Picture` is a flat `Vec<DrawCommand>` (`rosace-render/src/picture.rs:9`)
+— fully flattened, with no nested or by-reference sub-pictures.
+
+If a parent is clean and replays *its own* cached picture, that picture
+still holds the **old** child's commands. The child's new colour would
+never reach the screen: a stale cache that renders plausible pixels, which
+is the failure mode this whole plan is meant to avoid.
+
+So three different things propagate three different distances, and
+conflating them is what produced the wrong claim:
+
+| | how far up |
+|---|---|
+| **Layout** | stops at the first ancestor whose size is unchanged — for a colour change, immediately |
+| **Display-list assembly** | to the app root, always |
+| **Rasterization** | damage rect only |
+
+Assembly is not recomputation, and that distinction is the entire win: on
+a ten-child `Column` with one child dirty, the nine siblings' `layout` and
+`paint` **do not run** — their recorded commands are copied. Ancestors
+re-run `paint` (their own background plus `paint_child` calls) but not
+`layout`. Ten widgets' paint logic becomes one, plus nine memcpys.
+
+**The additive fix, deliberately not in Stage 2.** Make pictures nest — a
+parent holding `Arc<Picture>` references to its children instead of their
+flattened commands. Then a dirty child swaps one `Arc`, assembly is O(1)
+rather than O(commands), the parent genuinely *is* untouched, and the walk
+stops at the dirty node instead of reaching the root.
+
+That is a change to `Picture`/`DrawCommand` in `rosace-render`, one layer
+below this work. Stage 2 is correct without it. Land the
+correct-but-copying version first rather than changing two layers at once;
+revisit when assembly shows up in a profile.
 
 ### Nested nodes become cache boundaries
 
