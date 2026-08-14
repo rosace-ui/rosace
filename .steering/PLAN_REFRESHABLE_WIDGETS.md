@@ -1,190 +1,195 @@
-# Plan — refreshable widgets, and honest rebuild granularity
+# Plan — one `refresh()`, and cache boundaries that make it mean something
 
-Status: PROPOSED, not started. Written 2026-08-14.
+Status: PROPOSED, not started. Written 2026-08-14, revised same day after
+verifying where caches actually live.
 
-## The problem, measured
+## The goal, in one line
 
-Change one `Text` from `1` to `2` in a screen of 100 widgets and **all 100
-re-layout and re-record their pictures**, and the damage rect covers the
-screen.
+`widget.refresh()` repaints that widget and nothing else — and the developer
+never thinks about paint versus layout.
 
-The chain, verified in code rather than assumed:
+## Why the developer must not choose
 
-1. `atom.set()` marks its subscribers dirty — precisely, by `ComponentId`
-   (`rosace-state/src/atom.rs`).
-2. Only ONE component exists. `walk_element` never recurses into
-   `Element::Native`'s `children` (grep for `n.children` in
-   `rosace/src/lib.rs` — no hits), and a `Widget` always becomes a
-   `NativeElement` with `children: vec![]`. So the walk finds exactly one
-   `Element::Component`: the root.
-3. The root rebuilds → `build()` produces all 100 widgets afresh.
-4. `subtree_dirty` (`rosace/src/lib.rs`, the `root_is_dirty || hover_frame`
-   argument) propagates down and sets `node.paint_dirty = true` on every
-   node.
-5. Both caches consult `!paint_dirty` — the layout cache and the picture
-   replay — so both are defeated. Everything re-layouts, everything
-   re-records, damage unions every rect.
+An earlier draft of this plan exposed `refresh_paint()` and
+`refresh_layout()`. That was wrong, and it was wrong against this project's
+own purpose.
 
-**The reactivity machinery is not the problem.** Subscription-by-read,
-subscriber-precise marking, per-component dirty checks and per-node damage
-tracking are all correct and already fine-grained. They are being handed a
-tree with one component in it, so "the dirty subtree" is always "everything".
+Whether a change affects SIZE depends on font metrics, the OS text scale,
+the incoming constraints and the widget's internals. A caller cannot know.
+And guessing wrong fails silently: pick the paint-only refresh when the size
+changed and you get stale layout, which presents as a rendering bug rather
+than an API misuse — expensive to diagnose, easy to ship.
 
-Two consequences worth naming plainly:
+The framework can simply *measure*. Re-running layout and comparing the
+result to the cached size is both cheaper and more correct than any
+annotation a developer could write. So:
 
-* The README's "subscriber-precise rebuilds — no re-render-the-world" is
-  currently the opposite of what happens.
-* **Hover repaints the whole screen too** — `hover_frame` is OR'd into
-  `subtree_dirty` on the same line.
+**One `refresh()`. The comparison decides the consequence.**
 
-## What we take from Flutter and Android, and what we refuse
+This is `RenderObject`'s model — `decoration = x` marks needs-paint,
+`constraints = y` marks needs-layout, and the caller says neither. We take
+the principle and skip the machinery.
 
-Not a port. Each borrowing is one idea, taken because it fits what is
-already here.
+## What is actually true today (verified)
 
-**From Flutter — the config/state split.** A `StatefulWidget` is cheap and
-disposable; its `State` is retained by the element. We take exactly that
-shape: the widget is rebuilt freely, the state lives on the render-tree node.
+**1. Only ONE component exists.** `walk_element` never recurses into
+`Element::Native`'s `children` (grep `n.children` in `rosace/src/lib.rs` —
+no hits), and a `Widget` always becomes a `NativeElement` with
+`children: vec![]`. So the walk finds one `Element::Component`: the root.
 
-We refuse the packaging. No `createState()`, no `State<T>` subclass, no
-`setState(() {})` whose closure exists only to signal. Closures give the same
-thing without the ceremony. We also refuse the third tree — Flutter has
-Widget/Element/RenderObject; ROSACE has element tree + render tree, and two
-is enough.
+**2. `subtree_dirty` flattens everything.** `root_is_dirty || hover_frame`
+propagates down and sets `paint_dirty = true` on every node. Both caches
+consult `!paint_dirty`, so both are defeated. Changing one `Text` from `1`
+to `2` re-layouts and re-records all 100 widgets on screen. **Hover does the
+same** — same line.
 
-**From Android — `invalidate()` versus `requestLayout()`.** A View
-distinguishes "my pixels changed" from "my size changed", and the second is
-much more expensive because it propagates to the parent. Our `TreeNode`
-already caches `cached_size` and `cached_picture` separately, so we get the
-same distinction almost free:
+**3. Caches exist ONLY at element boundaries.** `cached_size`,
+`last_constraints` and `cached_picture` are written in exactly one place:
+`walk_element` (`rosace/src/lib.rs:444`, `445`, `499`). Every other
+occurrence in the repo is test code.
 
-* `refresh_paint()` — invalidate the picture, keep the cached size. A
-  counter's text changing width-neutrally, a colour change, a hover state.
-* `refresh_layout()` — invalidate both. The widget's size may change, so the
-  parent must re-measure.
+Nested widget nodes — the ones `PaintCtx::child` creates for a `Column`'s
+children — get **`cached_rect` only**. Inside a component's widget tree,
+`Column::layout` calls `child.layout()` and `Column::paint` calls
+`child.paint()` as plain recursive calls. There is no cache boundary in
+there to skip work at.
 
-Defaulting to the cheap one and making the expensive one explicit is the
-whole value of copying this.
+**This is the finding that matters.** Without per-node caches, `refresh()`
+would be honest in its API and still repaint the whole subtree, because
+there is nothing to skip. The API was never the hard part.
 
-We refuse Android's `ViewGroup` mutation model — our widgets are values
-rebuilt from a builder, not long-lived mutable objects.
+**4. The precedent already exists.** `RepaintBoundary` caches a `Picture`
+and replays it, using `ctx.capture(rect, ..)` and `ctx.replay_offset(..)` —
+both already built. Its cache lives on the WIDGET instance (`self.cache`),
+which survives only because the cached element holds the same instance. Move
+that cache onto the NODE and it works for every widget, without the widget
+knowing.
 
 ## The design
 
+### One call
+
 ```rust
-Stateful::new(
-    // init — runs ONCE per render-tree node, not per frame
-    || Counter { n: 0 },
-    // build — runs on every paint of THIS node only
-    |s: &Counter, r: &Refresh<Counter>| {
-        let r = r.clone();
-        Button::new(s.n.to_string())
-            .on_press(move || r.update(|s| s.n += 1))
-    },
-)
+r.update(|s| s.count += 1);   // that is the whole API
 ```
 
-`r.update(f)` mutates the state and marks **only that node** dirty. Its
-siblings, ancestors and the other 99 widgets keep `paint_dirty == false`,
-hit the layout cache and the replay path, and contribute nothing to damage.
+The node is marked dirty. On the next frame:
 
-### Why this needs no component nesting
+1. That node re-runs `layout` with its recorded constraints.
+2. **Size unchanged** → re-record its picture only. Parent untouched,
+   siblings replay from cache, damage covers this node.
+3. **Size changed** → mark the parent dirty and repeat upward, stopping as
+   soon as an ancestor's size stops changing.
 
-The retained-state pattern already exists and is proven three times over:
-`ctx.scroll_controller()`, `ctx.focus_node()` and the animation channels all
-lazily create per-node state and keep it across frames, keyed by render-tree
-slot (`rosace-widgets/src/tree/mod.rs`). `Stateful` is a generic version of
-code that already ships.
+Step 3 is Flutter's relayout-boundary propagation, derived by comparison
+instead of declared by anyone.
 
-And a repaint-without-rebuild frame already exists: animation drives one via
-`take_animation_request()` → `forced_repaint`. On such a frame the root
-component is NOT dirty, so the cached element is reused and no `build()`
-runs — exactly the path a targeted refresh needs.
+### Nested nodes become cache boundaries
 
-### Thread-safety, which dictates the shape
+Give `PaintCtx::child`'s nodes the same three fields `walk_element` sets, and
+the same two checks:
 
-Hit callbacks are `Arc<dyn Fn() + Send + Sync>`, and the render tree is
-`Rc<RefCell<..>>` — not `Send`. So a `Refresh` handle **cannot hold the
-tree**. It holds:
+* skip layout when `last_constraints` match and `!paint_dirty`
+* replay `cached_picture` when `!paint_dirty` and the rect is unchanged
 
-* `Arc<Mutex<T>>` — the state, shared with the node
-* `NodeId` — plain `Copy`
+Then a `Column` painting ten children re-records only the dirty one.
 
-`update()` locks and mutates directly, then pushes the `NodeId` onto a
-thread-local refresh queue. The engine drains it on the next frame and marks
-those nodes dirty. Same queue-and-drain shape already used for accessibility
-actions (`rosace_core::a11y::actions`) and the back intent
-(`rosace_core::nav_back`) — a pattern with two working precedents rather
-than a new invention.
+This is the bulk of the work and where the risk is. It changes the paint
+path for every widget, so it lands behind a test that proves the cheap path
+is taken, not merely that pixels are right.
+
+### Thread-safety dictates the handle
+
+Hit callbacks are `Arc<dyn Fn() + Send + Sync>`; the render tree is
+`Rc<RefCell<..>>` and not `Send`. So a refresh handle cannot hold the tree.
+It holds `Arc<Mutex<T>>` (the state, shared with the node) and a `NodeId`
+(`Copy`). `update()` mutates directly, then pushes the id onto a
+thread-local queue the engine drains.
+
+Same queue-and-drain shape already used by `rosace_core::a11y::actions` and
+`rosace_core::nav_back` — two working precedents, not a new invention.
 
 ### Identity
 
-State is keyed by render-tree slot, which is positional — so a conditionally
-inserted sibling shifts slots and state migrates to the wrong widget.
-
-The render tree **already solves this**: `keyed_children` and
-`prune_keyed_children` exist and work (`PaintCtx::child_keyed`). `Stateful`
-takes an optional key and uses the keyed path. Unlike the element tree's
-unused `Element::key`, this one is real, tested and in use today by
+State is keyed by render-tree slot, which is positional: insert a row at the
+top of a list and every row's state shifts down one. `Stateful::keyed(id, ..)`
+uses `child_keyed`, which already exists, is tested, and is used today by
 `ScreenTransitionView`.
 
-## Staged plan
+## Stages
 
-Each stage ships green and is independently useful.
+Each ships green and is independently useful.
 
 **Stage 1 — targeted repaint frames.**
 Split `forced_repaint` into "repaint everything" (resize) and "repaint the
-nodes I marked". The one-line `root_is_dirty || hover_frame` becomes
-`root_is_dirty` for targeted frames.
-*Fixes hover-repaints-everything on its own, before any new API exists.*
+nodes I marked". `root_is_dirty || hover_frame` becomes `root_is_dirty` on
+targeted frames.
+*Fixes hover-repaints-the-whole-screen on its own, with no new API.*
 
-**Stage 2 — generic per-node state.**
-`ctx.widget_state::<T>(init)`, following the `scroll_controller` pattern
-exactly. Store as `Option<Arc<Mutex<dyn Any + Send + Sync>>>` on `TreeNode`.
+**Stage 2 — per-node cache boundaries.**
+`cached_size` / `last_constraints` / `cached_picture` on nodes created by
+`PaintCtx::child`, with the two skip checks. Reuses `ctx.capture` and
+`ctx.replay_offset` from `RepaintBoundary`.
+*The load-bearing stage. Everything after it is small.*
 
-**Stage 3 — the refresh queue.**
-Thread-local `Vec<NodeId>` plus `refresh_paint`/`refresh_layout`, drained by
-the engine, marking `paint_dirty` (and clearing `cached_size` for the layout
-variant).
+**Stage 3 — size-change propagation.**
+After a dirty node re-layouts, compare against `cached_size`; if it differs,
+mark the parent dirty and walk up until the size stops changing.
 
-**Stage 4 — the `Stateful` widget.**
-Ties 2 and 3 together with the closure API above, plus `keyed` identity.
+**Stage 4 — per-node state + the refresh queue.**
+`ctx.widget_state::<T>(init)` following the `scroll_controller` pattern
+exactly, plus the thread-local queue and its drain.
 
-**Stage 5 — prove it.**
-A test that builds 100 widgets, refreshes one, and asserts the other 99
-replay from cache and the damage rect covers only the refreshed node. This
-is the stage that makes the claim true rather than plausible, and it should
-be written to FAIL against today's code first.
+**Stage 5 — the `Stateful` widget.**
+Ties it together. One `update`. Optional `keyed`.
 
-**Stage 6 — arena reclamation.**
-The render-tree arena never frees (documented at `render_tree.rs:378`), so
-detached nodes keep their state, controllers and cached pictures forever.
-Tolerable when it was animation channels; a real leak once apps put their
-state there. Either reclaim orphans in `finalize` or add a free list.
+**Stage 6 — prove it.**
+Build 100 widgets, refresh one, assert the other 99 replay from cache and
+the damage rect covers only the refreshed node. **Written to fail against
+today's code first**, or it proves nothing.
 
-*Stage 6 is a prerequisite for calling this done, not an optimisation.*
+**Stage 7 — arena reclamation.**
+The arena never frees (`render_tree.rs:378`), so detached nodes keep their
+state, controllers and cached pictures forever. Tolerable when it held
+animation channels; a real leak once apps and cached pictures live there.
+*A prerequisite for calling this done, not an optimisation.*
+
+## Phase 2 — config comparison (approved, scoped separately)
+
+This plan makes `refresh()` precise. It does NOT make atom writes precise.
+
+A `GlobalAtom` change — a theme flip, an OS text-scale change — still marks
+the root dirty, so `build()` regenerates the whole widget tree. A node then
+has no way to know its new widget is equivalent to the old one: the widget
+is a fresh object, and the only way to find out whether the picture changed
+is to re-record it, which is the work we were trying to skip.
+
+The fix is Flutter's `updateRenderObject` shape — hand the node the new
+config, let it compare against the old, mark dirty only on a real
+difference. That needs widgets to be comparable: `PartialEq`, or a cheap
+config hash stored on the node. Mechanical across 82 widget files, but wide.
+
+Deliberately deferred, not forgotten. Refreshes are every keystroke; theme
+flips are user-initiated and rare, so the common case is worth fixing first.
 
 ## Non-goals
 
-Explicitly NOT in this plan, to keep it small:
+* **Component nesting / honouring `Element.key`.** Still a real gap. This
+  plan does not need it — per-node caches give per-widget granularity
+  without it. Revisit after.
+* **Removing `Atom`.** It stays. `GlobalAtom` backs the theme, media query
+  and app lifecycle — framework internals with no other home. What changes
+  is that local widget state stops needing it.
+* **An `InheritedWidget` equivalent.** Separate decision. `PaintCtx` already
+  carries `theme` and `font` down, which is the shape it would generalise.
 
-* **Component nesting / honouring `Element.key`.** Still a real gap, but
-  this plan does not need it. Revisit after.
-* **Removing `Atom`.** It stays as-is. `GlobalAtom` still backs the theme,
-  media query and app lifecycle — framework internals with no other home.
-  What changes is that local widget state stops needing it.
-* **An `InheritedWidget` equivalent.** Subtree-scoped values are a separate
-  decision. `PaintCtx` already carries `theme` and `font` down, which is the
-  shape it would generalise.
-* **A lighter state cell.** One atom costs ~150-200 bytes and 3-4
-  allocations (two `Vec`s for subscribers, a `Mutex`, an id) to hold a
-  `bool`. Component-owned state has exactly one subscriber and needs none of
-  that — but `Stateful` sidesteps it by not using `Atom` at all, so the
-  optimisation is moot here.
+## Risk, stated plainly
 
-## Why this order
+Stage 2 changes the paint path for all 82 widget files. The failure mode is
+a stale cache — a widget that should have repainted and did not — which is
+invisible in a headless test that only checks the final pixels. Stage 6's
+test must assert **which path was taken**, not just the output.
 
-Stage 1 delivers a real fix with no new API. Stage 5 is the proof, written
-to fail first. Stage 6 is where it becomes honest rather than merely
-working — shipping stages 1-5 without it trades a rebuild problem for a
-memory leak.
+The mitigating fact: `RepaintBoundary` has been doing exactly this caching
+in production, so the primitives are proven; what changes is where the cache
+lives.
