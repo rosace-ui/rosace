@@ -1612,6 +1612,24 @@ impl FrameEngine {
                         // no leaf at all but must still be draggable).
                         self.pending_scroll_chain = chain;
                         self.last_chain_point = Some((*x, *y));
+                        // Report what the hit-test resolved to. The gesture
+                        // panel has shipped empty since D123, and "the tap
+                        // did nothing" is the single most common report on
+                        // Android — a trace showing whether a handler was
+                        // found AT ALL separates "no hit region there" from
+                        // "found it and the callback did nothing", which are
+                        // very different bugs and currently indistinguishable
+                        // from the outside.
+                        #[cfg(debug_assertions)]
+                        {
+                            use rosace_trace::{event::{GestureKind, RosaceTrace}, trace};
+                            if let Some((_, positional)) = &leaf {
+                                trace!(RosaceTrace::GestureReceived {
+                                    kind: if *positional { GestureKind::Drag } else { GestureKind::Tap },
+                                    handler: root_component_id,
+                                });
+                            }
+                        }
                         if let Some((cb, positional)) = leaf {
                             if positional {
                                 // Positional hits (slider thumbs, pickers)
@@ -5525,6 +5543,57 @@ mod tests {
                 "traced the wrong atom as the cause"),
             other => panic!("expected AtomChanged, got {other:?} — the cause is not being carried"),
         }
+    }
+
+
+    /// A tap must be traceable. "The tap did nothing" is the most common
+    /// bug report on Android, and the gesture panel shipped empty — so
+    /// there was no way to tell "no hit region there" from "a handler ran
+    /// and did nothing", which are different bugs with different fixes.
+    #[test]
+    fn a_tap_emits_a_gesture_trace_when_it_finds_a_handler() {
+        use rosace_trace::event::{GestureKind, RosaceTrace};
+        use std::sync::Mutex;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        struct Sink(Arc<Mutex<Vec<GestureKind>>>);
+        impl rosace_trace::TraceSubscriber for Sink {
+            fn on_trace(&self, e: &RosaceTrace) {
+                if let RosaceTrace::GestureReceived { kind, .. } = e {
+                    self.0.lock().unwrap().push(kind.clone());
+                }
+            }
+        }
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        rosace_trace::TRACING_BUS.clear_subscribers();
+        rosace_trace::TRACING_BUS.add_subscriber(Arc::new(Sink(seen.clone())));
+
+        struct OneButton;
+        impl Component for OneButton {
+            fn build(&self, _c: &mut Context) -> Element {
+                // Inside a Column so the button does NOT fill the canvas —
+                // otherwise every coordinate is a hit and the miss case
+                // cannot be expressed.
+                rosace_widgets::tree::Column::new()
+                    .child(rosace_widgets::tree::Button::new("Tap me").on_press(|| {}))
+                    .into_element()
+            }
+        }
+        let mut e = FrameEngine::new(Box::new(OneButton), rosace_render::FontCache::embedded());
+        let (mut a, mut b) = (SkiaCanvas::new(300, 200), SkiaCanvas::new(300, 200));
+        e.paint(&mut a, &mut b, &[]);
+
+        // Miss first: empty space must NOT report a gesture, or the trace
+        // would say a handler was found when none was.
+        e.paint(&mut a, &mut b, &[click(290.0, 190.0)]);
+        assert!(seen.lock().unwrap().is_empty(), "a miss must not report a handler");
+
+        // Then a real hit on the button.
+        e.paint(&mut a, &mut b, &[click(20.0, 18.0)]);
+        let got = seen.lock().unwrap().clone();
+        rosace_trace::TRACING_BUS.clear_subscribers();
+        assert!(matches!(got.first(), Some(GestureKind::Tap)),
+            "a tap on a button must trace as Tap, got {got:?}");
     }
 
 }

@@ -48,6 +48,7 @@ pub enum QueryState {
 /// any late response (see the module doc).
 pub fn use_query(ctx: &mut Context, url: impl Into<String>) -> QueryState {
     let url = url.into();
+    let ctx_component = ctx.component_id();
     let state = ctx.state(QueryState::Idle);
     let active_url = ctx.state(String::new());
     let alive = ctx.state(Arc::new(AtomicBool::new(true)));
@@ -79,9 +80,34 @@ pub fn use_query(ctx: &mut Context, url: impl Into<String>) -> QueryState {
             let active_url = active_url.clone();
             let alive = alive.get();
             let thread_url = url;
+            // DevTools has shipped a network panel since D123 with nothing
+            // to show: `RequestStart`/`RequestEnd` were defined and rendered
+            // but never emitted. The id ties the pair together so the panel
+            // can match a completion to its request.
+            let component = ctx_component;
+            let req_id = rosace_trace::event::RequestId(
+                rosace_state::next_atom_id().0,
+            );
             std::thread::spawn(move || {
+                use rosace_trace::{event::{Method, RosaceTrace}, trace};
+                trace!(RosaceTrace::RequestStart {
+                    id: req_id,
+                    url: thread_url.clone(),
+                    method: Method::Get,
+                    component,
+                });
+                let started = std::time::Instant::now();
                 let client = HttpClient::new();
                 let result = client.get(&thread_url);
+                trace!(RosaceTrace::RequestEnd {
+                    id: req_id,
+                    status: result.as_ref().map(|r| r.status).unwrap_or(0),
+                    duration: started.elapsed(),
+                    // No response cache yet — reported honestly rather than
+                    // guessed, so the panel does not imply one exists.
+                    cached: false,
+                    size: result.as_ref().map(|r| r.body.len()).unwrap_or(0),
+                });
                 // Discard if the component unmounted or moved to another
                 // URL while we were in flight — this IS the auto-cleanup
                 // contract.

@@ -48,7 +48,10 @@ pub fn clear_method_call_handler(channel: &str) {
 /// `rsc_platform_channel_dispatch` FFI function) always gets *some* valid
 /// JSON back, never has to special-case "no result."
 pub fn dispatch(channel: &str, method: &str, args_json: &str) -> String {
+    use rosace_trace::{event::RosaceTrace, trace};
+
     let args: Value = serde_json::from_str(args_json).unwrap_or(Value::Null);
+    let started = std::time::Instant::now();
     let result = {
         let reg = registry().read().unwrap_or_else(|e| e.into_inner());
         match reg.get(channel) {
@@ -56,6 +59,26 @@ pub fn dispatch(channel: &str, method: &str, args_json: &str) -> String {
             None => Err(format!("no handler registered for channel '{channel}'")),
         }
     };
+
+    // The FFI boundary is where mobile bugs live and it was completely
+    // dark: `FfiCall`/`FfiError` were defined and rendered by DevTools but
+    // never emitted, so a channel call that silently failed on device
+    // looked identical to one that was never made.
+    //
+    // `fn_name` is `&'static str`, so it names the CHANNEL (a registered,
+    // long-lived name) rather than the per-call method, which is borrowed.
+    // The channel is the useful grouping anyway — "which bridge is slow" is
+    // the question you actually ask.
+    let name: &'static str = crate::platform_channel::leak_channel_name(channel);
+    match &result {
+        Ok(_) => {
+            trace!(RosaceTrace::FfiCall { fn_name: name, duration: started.elapsed() });
+        }
+        Err(e) => {
+            trace!(RosaceTrace::FfiError { fn_name: name, error: e.clone() });
+        }
+    }
+
     match result {
         Ok(v) => v.to_string(),
         Err(e) => serde_json::json!({ "error": e }).to_string(),
