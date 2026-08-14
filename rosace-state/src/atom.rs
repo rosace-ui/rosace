@@ -365,19 +365,28 @@ mod tests {
         use rosace_trace::event::{ComponentId, RosaceTrace};
         use std::sync::{Arc, Mutex};
 
-        struct Sink(Arc<Mutex<Vec<ComponentId>>>);
+        // `TRACING_BUS` is process-global, so this sink hears every atom
+        // write in the whole test binary, including ones on other threads
+        // running concurrently. Filtering to OUR atom is what makes the
+        // assertion about a sequence meaningful — without it the test fails
+        // intermittently under `--test-threads` > 1, and only under parallel
+        // runs, which is the worst kind of flake to chase.
+        struct Sink(Arc<Mutex<Vec<ComponentId>>>, rosace_trace::event::AtomId);
         impl rosace_trace::TraceSubscriber for Sink {
             fn on_trace(&self, e: &RosaceTrace) {
-                if let RosaceTrace::AtomWrite { by, .. } = e {
-                    self.0.lock().unwrap().push(*by);
+                if let RosaceTrace::AtomWrite { atom, by, .. } = e {
+                    if *atom == self.1 {
+                        self.0.lock().unwrap().push(*by);
+                    }
                 }
             }
         }
         let seen = Arc::new(Mutex::new(Vec::new()));
+        let id = crate::next_atom_id();
         rosace_trace::TRACING_BUS.clear_subscribers();
-        rosace_trace::TRACING_BUS.add_subscriber(Arc::new(Sink(seen.clone())));
+        rosace_trace::TRACING_BUS.add_subscriber(Arc::new(Sink(seen.clone(), id)));
 
-        let atom = Atom::new(crate::next_atom_id(), 0i32);
+        let atom = Atom::new(id, 0i32);
 
         // Outside any build — an event handler, a timer, a network callback.
         atom.set(1);

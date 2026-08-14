@@ -79,16 +79,29 @@ impl Column {
                 );
             });
         }
-        let fixed_h: f32 = self.children.iter()
-            .filter(|c| !flex_enabled || c.flex_factor() == 0.0)
-            .map(|c| c.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h))).height)
-            .sum::<f32>() + gap_total;
+        // Measure each non-flex child ONCE and KEEP the whole `Size`.
+        //
+        // This pass used to take `.height` and discard the rest, so the
+        // `sizes` pass below re-measured the same child with the identical
+        // constraints to recover it — every non-flex child laid out twice per
+        // frame, and the cost multiplied with nesting depth (a 4-deep flex
+        // tree measured its leaves 16 times). Row and Column are the most
+        // used containers in any app, so this was the hot path.
+        let mut measured: Vec<Option<Size>> = vec![None; self.children.len()];
+        let mut fixed_h: f32 = gap_total;
+        for (i, child) in self.children.iter().enumerate() {
+            if !flex_enabled || child.flex_factor() == 0.0 {
+                let s = child.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h)));
+                fixed_h += s.height;
+                measured[i] = Some(s);
+            }
+        }
 
         let flex_pool = (max_h - fixed_h).max(0.0);
         // `c` is shadowed by the closure's child parameter below.
         let cross_bound = c.max_width;
 
-        let sizes: Vec<Size> = self.children.iter().map(|c| {
+        let sizes: Vec<Size> = self.children.iter().enumerate().map(|(i, c)| {
             let ff = c.flex_factor();
             if ff > 0.0 && flex_enabled {
                 let h = flex_pool * ff / total_flex;
@@ -102,7 +115,17 @@ impl Column {
                     max_height: rosace_core::AxisBound::Bounded(h),
                 }))
             } else {
-                c.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h)))
+                // Reuse the measurement from the pass above: same child, same
+                // constraints, so the result is identical by construction.
+                // Falls back to measuring rather than panicking if that
+                // invariant is ever broken — a wrong size is a layout bug, a
+                // panic in layout takes the app down.
+                debug_assert!(measured[i].is_some(),
+                    "every non-flex child should have been measured above");
+                match measured[i] {
+                    Some(s) => s,
+                    None => c.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h))),
+                }
             }
         }).collect();
 
@@ -198,4 +221,55 @@ mod tests {
             assert!(s.height.is_finite(), "child height must be finite, got {}", s.height);
         }
     }
+
+    /// A non-flex child is measured ONCE, and mixing flex with non-flex
+    /// still sizes both correctly.
+    ///
+    /// The two passes existed because the flex pool needs the fixed children
+    /// measured first. Reusing that measurement is only safe because the
+    /// second pass used identical constraints for those children — this pins
+    /// both halves: the count, and that the flex split is unaffected.
+    #[test]
+    fn a_non_flex_child_is_measured_once_and_flex_still_splits_correctly() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct CountingBox(Arc<AtomicUsize>, f32);
+        impl Widget for CountingBox {
+            fn layout(&self, c: &LayoutCtx) -> Size {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                // Honour a tight main axis, as any real widget does — that is
+                // what makes the flex share observable at all.
+                let main = if c.constraints.min_height > 0.0 {
+                    c.constraints.min_height
+                } else {
+                    self.1
+                };
+                Size { height: main, width: self.1 }
+            }
+            fn paint(&self, _ctx: &mut PaintCtx) {}
+        }
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx = LayoutCtx::new(rosace_layout::Constraints::loose(300.0, 300.0), &font, &theme);
+
+        let w = Column::new()
+            .child(CountingBox(hits.clone(), 50.0))                       // fixed
+            .child(super::super::Expanded::new(CountingBox(hits.clone(), 10.0))); // flex
+
+        let sizes = w.layout_sizes(&ctx);
+        assert_eq!(sizes.len(), 2);
+
+        // The FIXED child keeps its own size; the FLEX child takes the rest.
+        assert_eq!(sizes[0].height, 50.0, "the fixed child is unchanged");
+        assert_eq!(sizes[1].height, 300.0 - 50.0, "the flex child takes the remainder");
+
+        // Two children, each measured once. Before this fix the fixed child
+        // was measured twice.
+        assert_eq!(hits.load(Ordering::SeqCst), 2,
+            "each child measured exactly once");
+    }
+
 }

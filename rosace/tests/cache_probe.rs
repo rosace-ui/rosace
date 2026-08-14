@@ -146,20 +146,30 @@ fn one_atom_change_currently_reprocesses_every_widget() {
     assert!(l1 > l0, "and every probe re-laid-out");
 }
 
-/// Layout runs TWICE per widget per frame: `Column::layout` measures its
-/// children, then `Column::paint` measures them again to place them.
+/// Layout runs ONCE per widget per frame.
 ///
-/// Pinned as an observation, not an endorsement. It doubles the cost of
-/// every layout pass, and Stage 2's per-node `cached_size` is what would let
-/// the second measure hit a cache instead of re-running.
+/// It used to run twice. `Row`/`Column::measure` made a first pass over the
+/// non-flex children purely to total the main axis for the flex pool, threw
+/// away everything but that one number, then re-measured each of those same
+/// children with the IDENTICAL constraints to recover the full `Size`. The
+/// paint path was already cheap — `layout_sizes` reuses `measure_cache` —
+/// so the doubling was entirely inside `measure`, and it compounded with
+/// nesting: a four-deep flex tree measured its leaves sixteen times.
+///
+/// The first pass now keeps each `Size` and the second reuses it. Flex
+/// children are still measured once, in the second pass only, because their
+/// tight main-axis constraint is not known until the pool is totalled.
+///
+/// This assertion is the regression guard. If it goes back to `PROBES * 2`,
+/// the reuse was undone — do not relax the number.
 #[test]
-fn layout_runs_twice_per_widget_per_frame() {
+fn layout_runs_once_per_widget_per_frame() {
     let mut h = harness();
     h.frame();
     let (layouts, paints) = h.counts.read();
     assert_eq!(paints, PROBES, "one paint each");
-    assert_eq!(layouts, PROBES * 2,
-        "measured twice each — once to size the Column, once to place them");
+    assert_eq!(layouts, PROBES,
+        "measured once each — the Column's two passes must share one measurement");
 }
 
 /// The atom's own dedup: writing the SAME value must not schedule a frame,
