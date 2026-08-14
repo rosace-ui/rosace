@@ -125,7 +125,7 @@ fn a_clean_frame_does_no_widget_work_at_all() {
 /// TODAY'S DEFICIENCY, pinned so the fix is visible.
 ///
 /// One atom change marks the root dirty, `subtree_dirty` propagates to every
-/// node, and both caches (layout and picture replay) consult `!paint_dirty`
+/// node, and both caches consult it — `!needs_layout` for the size, `!needs_paint`
 /// — so every widget re-layouts and re-records, however far it is from the
 /// thing that changed.
 ///

@@ -178,8 +178,26 @@ pub struct TreeNode {
     pub cached_picture: Option<Arc<Picture>>,
     /// World-space rect of the last paint (also the damage extent).
     pub cached_rect: Option<Rect>,
-    /// When true, the subtree must re-layout/re-paint this frame.
-    pub paint_dirty: bool,
+    /// This node's `cached_size` is stale — re-run `layout`.
+    ///
+    /// Separate from [`Self::needs_paint`] because the two have genuinely
+    /// different causes, and one flag doing both jobs made every appearance
+    /// change pay for a re-measure. A hover is the clearest case: it changes
+    /// how a widget LOOKS and cannot change how big it is.
+    ///
+    /// That last claim is structural, not a convention to be careful about:
+    /// `LayoutCtx` carries only `constraints`, `font` and `theme` — it has no
+    /// access to the node, so `layout` cannot observe `hovered`, `pressed` or
+    /// animation state even if a widget wanted to. Size is a function of
+    /// (widget config, constraints, font, theme) and nothing else, so only
+    /// those can invalidate it.
+    pub needs_layout: bool,
+    /// This node's `cached_picture` is stale — re-run `paint`.
+    ///
+    /// A superset of [`Self::needs_layout`] in practice: anything that
+    /// changes size also changes appearance, so re-running layout always sets
+    /// this too. The reverse does not hold, and that asymmetry is the point.
+    pub needs_paint: bool,
 
     // ── Interaction state (dispatcher-owned) ─────────────────────────────
     /// True while the cursor is over this node's hit/hover region.
@@ -320,7 +338,8 @@ impl RenderTree {
         n.cached_size = None;
         n.cached_picture = None;
         n.cached_rect = None;
-        n.paint_dirty = true;
+        n.needs_layout = true;
+        n.needs_paint = true;
 
         // Persistent widget state. A different widget type must never inherit
         // these: an edit buffer belonging to a TextField appearing inside a
@@ -727,11 +746,11 @@ impl RenderTree {
         }
         if let Some(old) = current {
             self.nodes[old].hovered = false;
-            self.nodes[old].paint_dirty = true;
+            self.nodes[old].needs_paint = true;
         }
         if let Some(new) = target {
             self.nodes[new].hovered = true;
-            self.nodes[new].paint_dirty = true;
+            self.nodes[new].needs_paint = true;
         }
         true
     }
@@ -746,11 +765,11 @@ impl RenderTree {
         }
         if let Some(old) = current {
             self.nodes[old].pressed = false;
-            self.nodes[old].paint_dirty = true;
+            self.nodes[old].needs_paint = true;
         }
         if let Some(new) = target {
             self.nodes[new].pressed = true;
-            self.nodes[new].paint_dirty = true;
+            self.nodes[new].needs_paint = true;
         }
         true
     }
@@ -1666,7 +1685,8 @@ mod tests {
         assert!(!node.pressed, "stale press state would paint the button held down");
         assert!(!node.hovered, "stale hover state would paint the button pre-hovered");
         assert!(node.cached_size.is_none(), "a stale size would misplace the new widget");
-        assert!(node.paint_dirty, "the new widget must be painted, not replayed");
+        assert!(node.needs_paint, "the new widget must be painted, not replayed");
+        assert!(node.needs_layout, "a different widget's size must be re-measured");
     }
 
     /// The same widget type re-occupying its slot must KEEP its state — that
@@ -1686,6 +1706,50 @@ mod tests {
         assert!(!reset, "an unchanged type must not report a reset");
         assert_eq!(t.node(n).text_edit.scroll_x, 7.0,
             "repainting the same widget threw away its state");
+    }
+
+
+    /// A hover change must invalidate APPEARANCE ONLY.
+    ///
+    /// One flag used to do both jobs, so moving the mouse re-measured every
+    /// widget it touched. That is pure waste: `LayoutCtx` carries only
+    /// constraints, font and theme, so `layout` has no way to observe hover
+    /// even if a widget wanted it to. Size cannot change, so it must not be
+    /// recomputed.
+    #[test]
+    fn hovering_invalidates_the_picture_but_never_the_size() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let n = t.slot(RenderTree::ROOT, true);
+        t.adopt_tag(n, "Button");
+
+        // Settle the node as a fully cached, clean one.
+        t.node_mut(n).cached_size = Some(Size { width: 80.0, height: 24.0 });
+        t.node_mut(n).needs_layout = false;
+        t.node_mut(n).needs_paint = false;
+
+        assert!(t.set_hover(Some(n)), "the hover target changed");
+
+        assert!(t.node(n).needs_paint, "a hover must re-record the picture");
+        assert!(!t.node(n).needs_layout,
+            "a hover re-measured the widget — layout cannot see hover, so this is pure waste");
+        assert_eq!(t.node(n).cached_size, Some(Size { width: 80.0, height: 24.0 }),
+            "the cached size must survive a hover");
+    }
+
+    /// Same for press, which shares the mechanism.
+    #[test]
+    fn pressing_invalidates_the_picture_but_never_the_size() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let n = t.slot(RenderTree::ROOT, true);
+        t.adopt_tag(n, "Button");
+        t.node_mut(n).needs_layout = false;
+        t.node_mut(n).needs_paint = false;
+
+        assert!(t.set_pressed(Some(n)));
+        assert!(t.node(n).needs_paint, "a press must re-record the picture");
+        assert!(!t.node(n).needs_layout, "a press cannot change a widget's size");
     }
 
 }

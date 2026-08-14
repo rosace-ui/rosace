@@ -406,18 +406,14 @@ fn walk_element(
 
                 {
                     let mut tree = ctx.tree.borrow_mut();
+                    tree.adopt_tag(node_id, n.tag);
                     let node = tree.node_mut(node_id);
-                    if node.tag != n.tag {
-                        // Type mismatch — hard cache reset.
-                        node.tag = n.tag;
-                        node.last_constraints = None;
-                        node.cached_size = None;
-                        node.cached_picture = None;
-                        node.cached_rect = None;
-                        node.paint_dirty = true;
-                    }
+                    // A rebuild hands this node a NEW widget object it cannot
+                    // compare against the old one, so both caches must go:
+                    // the config may have changed size and appearance alike.
                     if subtree_dirty {
-                        node.paint_dirty = true;
+                        node.needs_layout = true;
+                        node.needs_paint = true;
                     }
                 }
 
@@ -426,7 +422,7 @@ fn walk_element(
                     let tree = ctx.tree.borrow();
                     let node = tree.node(node_id);
                     if node.last_constraints == Some(constraints)
-                        && !node.paint_dirty
+                        && !node.needs_layout
                         && node.cached_size.is_some()
                     {
                         node.cached_size
@@ -443,7 +439,8 @@ fn walk_element(
                         let node = tree.node_mut(node_id);
                         node.last_constraints = Some(constraints);
                         node.cached_size = Some(s);
-                        node.paint_dirty = true;
+                        node.needs_layout = false;
+                        node.needs_paint = true;
                         s
                     }
                 };
@@ -455,7 +452,7 @@ fn walk_element(
                     let tree = ctx.tree.borrow();
                     let node = tree.node(node_id);
                     (
-                        !node.paint_dirty
+                        !node.needs_paint
                             && node.cached_picture.is_some()
                             && node.cached_rect == Some(child_rect),
                         node.cached_rect,
@@ -498,7 +495,7 @@ fn walk_element(
                     let node = tree.node_mut(node_id);
                     node.cached_picture = Some(Arc::new(picture));
                     node.cached_rect    = Some(child_rect);
-                    node.paint_dirty    = false;
+                    node.needs_paint    = false;
                 }
 
                 size
