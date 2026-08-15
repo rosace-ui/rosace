@@ -21,8 +21,8 @@ impl Wrap {
     fn arrange(&self, ctx: &LayoutCtx, max_w: f32) -> (Vec<Rect>, Size) {
         let mut rects = Vec::with_capacity(self.children.len());
         let (mut x, mut y, mut row_h, mut widest) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-        for c in &self.children {
-            let s = c.layout(&ctx.with_constraints(Constraints::loose(max_w, f32::INFINITY)));
+        for (i, c) in self.children.iter().enumerate() {
+            let s = ctx.layout_child_at(i, Constraints::loose(max_w, f32::INFINITY), &**c);
             if x > 0.0 && x + s.width > max_w {
                 x = 0.0; y += row_h + self.run_spacing; row_h = 0.0;
             }

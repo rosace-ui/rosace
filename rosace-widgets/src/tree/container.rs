@@ -123,7 +123,7 @@ impl Widget for Container {
                 (avail_w - self.padding.total_h()).max(0.0),
                 (avail_h - self.padding.total_v()).max(0.0),
             );
-            self.padding.grow(c.layout(&ctx.with_constraints(inner_c)))
+            self.padding.grow(ctx.layout_child(inner_c, &**c))
         }).unwrap_or(Size { width: 0.0, height: 0.0 });
 
         // With an alignment set, fill the available (bounded) space —
@@ -187,7 +187,7 @@ impl Widget for Container {
             let inner = self.padding.shrink(rect);
             let child_rect = if let Some(align) = self.align {
                 let inner_c = Constraints::loose(inner.size.width, inner.size.height);
-                let child_size = child.layout(&ctx.layout_ctx(inner_c));
+                let child_size = ctx.measure_child(inner_c, &**child);
                 let off = align.offset(inner.size, child_size);
                 Rect {
                     origin: Point { x: inner.origin.x + off.x, y: inner.origin.y + off.y },

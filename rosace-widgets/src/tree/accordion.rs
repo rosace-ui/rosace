@@ -163,7 +163,7 @@ impl Widget for Accordion {
         if open {
             let pad = self.insets();
             let bc = Constraints::loose(r.size.width - pad.total_h(), f32::INFINITY);
-            let bs = self.body.layout(&ctx.layout_ctx(bc));
+            let bs = ctx.measure_child(bc, &*self.body);
             let body_rect = Rect {
                 origin: Point { x: r.origin.x + pad.left, y: r.origin.y + header_h + 4.0 },
                 size: Size { width: r.size.width - pad.total_h(), height: bs.height },

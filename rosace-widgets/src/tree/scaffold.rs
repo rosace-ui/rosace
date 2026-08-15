@@ -84,6 +84,15 @@ impl Widget for Scaffold {
         // iOS). Inside a Scaffold — the normal case — none of that applied.
         //
         // The old constants stay as FLOORS, so an ordinary bar is unchanged.
+        // DELIBERATELY uncached (`layout_ctx`, not `measure_child`).
+        //
+        // `measure_child` caches on the slot `paint_child` will consume next,
+        // which is only the right node when the measure immediately precedes
+        // the paint of that same widget. Scaffold measures its bars up front
+        // to solve the layout arithmetic, then paints in a different order —
+        // the app bar's measurement landed on the slot that later holds a
+        // `Container`. Caught by `paint_child`'s slot-misalignment assertion,
+        // which is exactly what it is there for. Do not "optimise" this back.
         let measure_bar = |w: &super::BoxedWidget, floor: f32| {
             let c = Constraints::loose(total.size.width, total.size.height);
             w.layout(&ctx.layout_ctx(c)).height.max(floor)

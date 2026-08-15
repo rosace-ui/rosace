@@ -98,6 +98,20 @@ pub struct TreeNode {
     pub children: Vec<NodeId>,
     /// Child slot cursor for the current paint of this node.
     cursor: usize,
+    /// Child slot cursor for the current LAYOUT of this node.
+    ///
+    /// Separate from `cursor` because layout and paint are two independent
+    /// top-down walks over the same children: layout runs first for the whole
+    /// tree, then paint. Sharing one cursor would have layout consume slots
+    /// 0..n and paint then start at n, allocating a second set of nodes.
+    ///
+    /// Both walks visit a widget's children in the same order — the order its
+    /// `layout`/`paint` call them — so the same index resolves to the same
+    /// node. Widgets that lay out a different set than they paint would break
+    /// that; `paint_child`'s debug assertion catches it. (Verified for the
+    /// virtualized case: `ListView::layout` lays out no children at all and
+    /// does build/layout/paint together inside `paint`.)
+    layout_cursor: usize,
     /// Children addressed by [`RenderTree::keyed_slot`] instead of position
     /// — see the module doc's "Identity" section. Only [`ScreenTransitionView`]
     /// (`screen_transition_view.rs`) uses this; every other widget's children
@@ -175,6 +189,20 @@ pub struct TreeNode {
     // ── Picture cache (Phase 20 unification — was the flat RenderNode) ───
     /// Widget type name at this position; a mismatch resets the caches.
     pub tag: &'static str,
+    /// The tag the LAYOUT walk claimed for this slot this frame, or `""`.
+    ///
+    /// Layout and paint address children through separate cursors, on the
+    /// assumption that both visit a widget's children in the same order. When
+    /// a widget's `layout` measures a different set than its `paint` slots —
+    /// `Accordion` paints chevron, header, body but measures only the body —
+    /// the two disagree and a child silently inherits a sibling's cached size.
+    ///
+    /// So the layout walk records what it claimed, `paint_child` asserts it
+    /// still agrees, and the mismatch becomes a loud dev-time failure instead
+    /// of plausible-looking wrong output. Debug-only in effect: the field is
+    /// written unconditionally (one pointer store) but only read by
+    /// `debug_assert!`.
+    pub layout_tag: &'static str,
     /// Constraints used for the last successful layout pass.
     pub last_constraints: Option<Constraints>,
     /// Size returned by the last layout pass.
@@ -190,12 +218,15 @@ pub struct TreeNode {
     /// change pay for a re-measure. A hover is the clearest case: it changes
     /// how a widget LOOKS and cannot change how big it is.
     ///
-    /// That last claim is structural, not a convention to be careful about:
-    /// `LayoutCtx` carries only `constraints`, `font` and `theme` — it has no
-    /// access to the node, so `layout` cannot observe `hovered`, `pressed` or
-    /// animation state even if a widget wanted to. Size is a function of
-    /// (widget config, constraints, font, theme) and nothing else, so only
-    /// those can invalidate it.
+    /// That last claim is structural, not a convention to be careful about.
+    /// `LayoutCtx` does now carry the tree and this node (it must, to cache
+    /// per node), but it exposes only `layout_child`: `hovered()`, `pressed()`
+    /// and `animate_to()` live on `PaintCtx` alone. So `layout` still cannot
+    /// observe interaction state even if a widget wanted to — the guarantee
+    /// moved from "the field is absent" to "the API does not expose it", which
+    /// is how Flutter and Compose both draw the same line. Size remains a
+    /// function of (widget config, constraints, font, theme) and nothing else,
+    /// so only those can invalidate it.
     pub needs_layout: bool,
     /// The subtree a `Stateful` widget last built, kept so `layout` and
     /// `paint` share ONE build per frame rather than running the closure
@@ -397,6 +428,10 @@ impl RenderTree {
         let n = &mut self.nodes[node];
         n.cursor = 0;
         n.begun = true;
+        // NOT reset here. `begin` runs during PAINT, which happens after the
+        // whole layout walk; zeroing the layout cursor here would be harmless
+        // but misleading. `layout_child` resets its child's cursor before
+        // descending, exactly as `paint_child` relies on `slot(reset: true)`.
         n.hits.clear();
         n.hits_at.clear();
         n.nested_scrolls.clear();
@@ -439,6 +474,81 @@ impl RenderTree {
             self.begin(child);
         }
         child
+    }
+
+    /// Consume the next child slot of `parent` for the LAYOUT walk.
+    ///
+    /// The layout mirror of [`Self::slot`], driving `layout_cursor` instead of
+    /// `cursor` so the two walks cannot consume each other's slots. It never
+    /// calls `begin`: layout declares no hits, semantics or scroll regions, so
+    /// there is nothing to clear, and clearing would throw away declarations
+    /// the previous paint made and this frame's paint may replay.
+    pub fn layout_slot(&mut self, parent: NodeId) -> NodeId {
+        let cursor = self.nodes[parent].layout_cursor;
+        self.nodes[parent].layout_cursor += 1;
+
+        if cursor < self.nodes[parent].children.len() {
+            self.nodes[parent].children[cursor]
+        } else {
+            let id = self.nodes.len();
+            self.nodes.push(TreeNode::default());
+            self.nodes[id].parent = Some(parent);
+            self.nodes[parent].children.push(id);
+            id
+        }
+    }
+
+    /// The node `slot` would return next, WITHOUT consuming it.
+    ///
+    /// For measuring a child during `paint`: the widget needs the child's size
+    /// to compute its rect, then calls `paint_child(rect, child)` which
+    /// consumes this same slot. Peek-then-consume means both address one node,
+    /// so the measurement caches where the paint will look for it.
+    ///
+    /// Creates the node when the slot does not exist yet (first frame), so the
+    /// subsequent `slot` finds it rather than appending a second one.
+    pub fn peek_slot(&mut self, parent: NodeId) -> NodeId {
+        let cursor = self.nodes[parent].cursor;
+        if cursor < self.nodes[parent].children.len() {
+            self.nodes[parent].children[cursor]
+        } else {
+            let id = self.nodes.len();
+            self.nodes.push(TreeNode::default());
+            self.nodes[id].parent = Some(parent);
+            self.nodes[parent].children.push(id);
+            id
+        }
+    }
+
+    /// `parent`'s child at an EXPLICIT index, creating slots up to it.
+    ///
+    /// For containers whose `layout` makes more than one pass over their
+    /// children and does not touch every child on every pass — `Row`/`Column`
+    /// measure the non-flex children first, then the flex ones. A cursor would
+    /// hand those passes slots in skipping order (`[flex, fixed, fixed]` gives
+    /// the flex child slot 2 while paint gives it slot 0), silently aliasing
+    /// each child onto a sibling's cached size.
+    ///
+    /// Addressing by the loop index is exact and pass-order independent, and
+    /// it matches paint by construction: `paint_child` is called once per
+    /// child in the same order, so `children[i]` is the same node either way.
+    pub fn layout_slot_at(&mut self, parent: NodeId, index: usize) -> NodeId {
+        while self.nodes[parent].children.len() <= index {
+            let id = self.nodes.len();
+            self.nodes.push(TreeNode::default());
+            self.nodes[id].parent = Some(parent);
+            self.nodes[parent].children.push(id);
+        }
+        self.nodes[parent].children[index]
+    }
+
+    /// Reset `node`'s layout cursor so its children are addressed from 0.
+    ///
+    /// Called before a widget's `layout` runs — by `LayoutCtx::layout_child`
+    /// for nested widgets, and by `walk_element` for the element boundary,
+    /// which is where the layout walk enters the tree.
+    pub fn begin_layout(&mut self, node: NodeId) {
+        self.nodes[node].layout_cursor = 0;
     }
 
     /// Like [`Self::slot`], but the returned `NodeId` is resolved by an

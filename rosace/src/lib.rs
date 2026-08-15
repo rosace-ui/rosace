@@ -433,7 +433,18 @@ fn walk_element(
                 let size = match cached {
                     Some(s) => s,
                     None => {
-                        let lctx = ctx.layout_ctx(constraints);
+                        // Rooted at THIS element's node, not `ctx.node` (its
+                        // parent): the widget's own `layout_child` calls must
+                        // address its children's slots, or every nested
+                        // measurement would cache against the wrong node.
+                        ctx.tree.borrow_mut().begin_layout(node_id);
+                        let lctx = rosace_widgets::tree::LayoutCtx::with_tree(
+                            constraints,
+                            ctx.font,
+                            &ctx.theme,
+                            Rc::clone(&ctx.tree),
+                            node_id,
+                        );
                         let s = wb.0.layout(&lctx);
                         let mut tree = ctx.tree.borrow_mut();
                         let node = tree.node_mut(node_id);

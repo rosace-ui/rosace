@@ -176,7 +176,7 @@ impl Widget for Button {
         // AppBar button set one and nothing showed).
         const ICON_GAP: f32 = 6.0;
         if let Some(icon) = &self.icon {
-            let is = icon.layout(&ctx.layout_ctx(Constraints::loose(font_size + 4.0, font_size + 4.0)));
+            let is = ctx.measure_child(Constraints::loose(font_size + 4.0, font_size + 4.0), &**icon);
             let content_w = is.width + ICON_GAP + text_w;
             let start_x = ((r.size.width - content_w) / 2.0).max(4.0);
             let iy = r.origin.y + (r.size.height - is.height) / 2.0;

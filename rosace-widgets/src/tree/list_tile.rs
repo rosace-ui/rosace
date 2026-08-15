@@ -208,7 +208,7 @@ impl Widget for ListTile {
 
         // Leading
         if let Some(lead) = &self.leading {
-            let ls = lead.layout(&ctx.layout_ctx(Constraints::loose(32.0, r.size.height)));
+            let ls = ctx.measure_child(Constraints::loose(32.0, r.size.height), &**lead);
             let ly = r.origin.y + (r.size.height - ls.height) / 2.0;
             ctx.paint_child(Rect {
                 origin: Point { x, y: ly },
@@ -219,7 +219,7 @@ impl Widget for ListTile {
 
         // Trailing
         let trailing_w = if let Some(trail) = &self.trailing {
-            let ts = trail.layout(&ctx.layout_ctx(Constraints::loose(60.0, r.size.height)));
+            let ts = ctx.measure_child(Constraints::loose(60.0, r.size.height), &**trail);
             let ty = r.origin.y + (r.size.height - ts.height) / 2.0;
             let tx = r.origin.x + r.size.width - pad.right - ts.width;
             ctx.paint_child(Rect { origin: Point { x: tx, y: ty }, size: ts }, &*trail);

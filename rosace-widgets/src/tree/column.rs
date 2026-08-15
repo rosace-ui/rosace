@@ -96,7 +96,7 @@ impl Column {
         let mut fixed_h: f32 = gap_total;
         for (i, child) in self.children.iter().enumerate() {
             if !flex_enabled || child.flex_factor() == 0.0 {
-                let s = child.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h)));
+                let s = ctx.layout_child_at(i, Constraints::loose(max_w, max_h), &**child);
                 fixed_h += s.height;
                 measured[i] = Some(s);
             }
@@ -113,12 +113,12 @@ impl Column {
                 // Mirror of the fix in `row.rs` — see its comment. `max_w` is
                 // infinite inside a horizontal ScrollView, and baking that
                 // into a tight constraint hands the child an infinite width.
-                c.layout(&ctx.with_constraints(Constraints {
+                ctx.layout_child_at(i, Constraints {
                     min_width: 0.0,
                     max_width: cross_bound,
                     min_height: h,
                     max_height: rosace_core::AxisBound::Bounded(h),
-                }))
+                }, &**c)
             } else {
                 // Reuse the measurement from the pass above: same child, same
                 // constraints, so the result is identical by construction.
@@ -129,7 +129,7 @@ impl Column {
                     "every non-flex child should have been measured above");
                 match measured[i] {
                     Some(s) => s,
-                    None => c.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h))),
+                    None => ctx.layout_child_at(i, Constraints::loose(max_w, max_h), &**c),
                 }
             }
         }).collect();

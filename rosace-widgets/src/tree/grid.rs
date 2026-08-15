@@ -124,8 +124,8 @@ impl Grid {
     /// (uniform mode).
     fn measure(&self, ctx: &LayoutCtx, width: f32) -> (Vec<Size>, f32) {
         let cw = self.cell_width(width);
-        let sizes: Vec<Size> = self.children.iter()
-            .map(|c| c.layout(&ctx.with_constraints(Constraints::loose(cw, f32::INFINITY))))
+        let sizes: Vec<Size> = self.children.iter().enumerate()
+            .map(|(i, c)| ctx.layout_child_at(i, Constraints::loose(cw, f32::INFINITY), &**c))
             .collect();
         let mut y = 0.0;
         let mut i = 0;
@@ -146,8 +146,8 @@ impl Grid {
         let cw = self.cell_width(width);
         let mut col_h = vec![0.0f32; self.columns];
         let mut rects = Vec::with_capacity(self.children.len());
-        for c in &self.children {
-            let s = c.layout(&ctx.with_constraints(Constraints::loose(cw, f32::INFINITY)));
+        for (i, c) in self.children.iter().enumerate() {
+            let s = ctx.layout_child_at(i, Constraints::loose(cw, f32::INFINITY), &**c);
             // Shortest column; leftmost wins ties (the masonry convention).
             let mut col = 0;
             for (i, h) in col_h.iter().enumerate().skip(1) {

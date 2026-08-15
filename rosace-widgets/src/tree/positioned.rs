@@ -36,7 +36,7 @@ impl Widget for Positioned {
     fn paint(&self, ctx: &mut PaintCtx) {
         let s = ctx.rect; // full stack rect
         // Resolve size: explicit, else derived from opposite anchors, else measured.
-        let measured = self.child.layout(&ctx.layout_ctx(Constraints::loose(s.size.width, s.size.height)));
+        let measured = ctx.measure_child(Constraints::loose(s.size.width, s.size.height), &*self.child);
         let w = self.width.or_else(|| match (self.left, self.right) {
             (Some(l), Some(r)) => Some((s.size.width - l - r).max(0.0)),
             _ => None,

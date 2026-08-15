@@ -96,7 +96,7 @@ impl Row {
         let mut fixed_w: f32 = gap_total;
         for (i, child) in self.children.iter().enumerate() {
             if !flex_enabled || child.flex_factor() == 0.0 {
-                let s = child.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h)));
+                let s = ctx.layout_child_at(i, Constraints::loose(max_w, max_h), &**child);
                 fixed_w += s.width;
                 measured[i] = Some(s);
             }
@@ -120,12 +120,12 @@ impl Row {
                 // the text was drawn at y = NaN and the glyph walk panicked
                 // on an out-of-range cast. Found by the showcase's
                 // paint-every-page test.
-                c.layout(&ctx.with_constraints(Constraints {
+                ctx.layout_child_at(i, Constraints {
                     min_width: w,
                     max_width: rosace_core::AxisBound::Bounded(w),
                     min_height: 0.0,
                     max_height: cross_bound,
-                }))
+                }, &**c)
             } else {
                 // Reuse the measurement from the pass above: same child, same
                 // constraints, so the result is identical by construction.
@@ -136,7 +136,7 @@ impl Row {
                     "every non-flex child should have been measured above");
                 match measured[i] {
                     Some(s) => s,
-                    None => c.layout(&ctx.with_constraints(Constraints::loose(max_w, max_h))),
+                    None => ctx.layout_child_at(i, Constraints::loose(max_w, max_h), &**c),
                 }
             }
         }).collect();

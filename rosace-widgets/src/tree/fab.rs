@@ -125,7 +125,7 @@ impl Widget for FloatingActionButton {
 
         if let Some(icon) = &self.icon {
             let inner = self.size * 0.45;
-            let is = icon.layout(&ctx.layout_ctx(Constraints::loose(inner, inner)));
+            let is = ctx.measure_child(Constraints::loose(inner, inner), &**icon);
             ctx.paint_child(Rect {
                 origin: Point {
                     x: r.origin.x + (r.size.width - is.width) / 2.0,

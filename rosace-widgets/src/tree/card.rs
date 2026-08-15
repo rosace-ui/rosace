@@ -57,7 +57,7 @@ impl Widget for Card {
             (avail_w - self.padding.total_h()).max(0.0),
             (constraints.max_height_f32() - self.padding.total_v()).max(0.0),
         );
-        let child_size = self.child.layout(&ctx.with_constraints(inner_c));
+        let child_size = ctx.layout_child(inner_c, &*self.child);
         let total = self.padding.grow(child_size);
         constraints.constrain(Size {
             width:  self.width.unwrap_or(total.width),

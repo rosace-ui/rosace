@@ -735,6 +735,31 @@ impl<'a> PaintCtx<'a> {
         // then replaying would render a widget that looks right and cannot be
         // clicked. The repaint path below resets explicitly instead.
         let node = self.tree.borrow_mut().slot(self.node, false);
+
+        // Layout and paint walk the same children through separate cursors.
+        // If a widget's `layout` measures a different set than its `paint`
+        // slots, the two disagree and this child would inherit a sibling's
+        // cached size — plausible-looking, wrong, and invisible to any test
+        // that only compares pixels. Fail loudly in dev instead.
+        //
+        // The fix when this fires is NOT to force the indices to line up: it
+        // is to leave that widget's `layout` uncached (plain
+        // `ctx.with_constraints`) and let the paint-time `measure_child` do
+        // the caching, since that one peeks the slot paint will consume.
+        #[cfg(debug_assertions)]
+        {
+            let claimed = self.tree.borrow().node(node).layout_tag;
+            debug_assert!(
+                claimed.is_empty() || claimed == child.type_tag(),
+                "layout/paint slot misalignment: the layout walk put `{claimed}` in this \
+                 slot but paint is putting `{}` there. That widget's layout measures a \
+                 different set of children than its paint slots — leave its layout \
+                 uncached and measure during paint instead.",
+                child.type_tag(),
+            );
+        }
+        self.tree.borrow_mut().node_mut(node).layout_tag = "";
+
         let retagged = self.tree.borrow_mut().adopt_tag(node, child.type_tag());
 
         let replay = !retagged
@@ -1510,7 +1535,68 @@ impl<'a> PaintCtx<'a> {
     /// Needed when a widget measures children inside `paint()` (e.g. to position
     /// them). Uses the available rect as tight constraints.
     pub fn layout_ctx(&self, constraints: Constraints) -> LayoutCtx<'_> {
-        LayoutCtx::new(constraints, self.font, &self.theme)
+        LayoutCtx::with_tree(
+            constraints,
+            self.font,
+            &self.theme,
+            Rc::clone(&self.tree),
+            self.node,
+        )
+    }
+
+    /// Measure `child` during `paint`, caching on the node that
+    /// [`Self::paint_child`] will paint it into.
+    ///
+    /// Widgets that position children by their measured size have to measure
+    /// during paint (the rect is not known until then). Doing that through
+    /// `ctx.layout_ctx(c)` measured the child against the PARENT's node, so
+    /// nothing was cached per child and every frame re-measured.
+    ///
+    /// This peeks the slot `paint_child` will consume, so the measurement and
+    /// the paint address the same node.
+    pub fn measure_child(&self, constraints: Constraints, child: &dyn Widget) -> Size {
+        let node = self.tree.borrow_mut().peek_slot(self.node);
+        self.tree.borrow_mut().adopt_tag(node, child.type_tag());
+        // Recorded on both paths (cache hit and miss) so `paint_child` can
+        // check alignment regardless of whether any measuring actually ran.
+        self.tree.borrow_mut().node_mut(node).layout_tag = child.type_tag();
+
+        {
+            let t = self.tree.borrow();
+            let n = t.node(node);
+            // `!is_structural_frame()` is not optional, and the symmetry with
+            // `paint_child` is the reason. A rebuild hands this node a BRAND
+            // NEW widget object; the node cannot tell a fresh-but-identical
+            // widget from one whose content changed, so a matching
+            // `Constraints` proves nothing about the size. Reusing the cache
+            // here made a rebuilt `Text` keep its old width — output that
+            // looks plausible and is wrong, which is the exact failure mode
+            // these caches must never produce.
+            if !is_structural_frame()
+                && n.last_constraints == Some(constraints)
+                && !n.needs_layout
+            {
+                if let Some(size) = n.cached_size {
+                    return size;
+                }
+            }
+        }
+
+        self.tree.borrow_mut().begin_layout(node);
+        let size = child.layout(&LayoutCtx::with_tree(
+            constraints,
+            self.font,
+            &self.theme,
+            Rc::clone(&self.tree),
+            node,
+        ));
+
+        let mut t = self.tree.borrow_mut();
+        let n = t.node_mut(node);
+        n.last_constraints = Some(constraints);
+        n.cached_size      = Some(size);
+        n.needs_layout     = false;
+        size
     }
 }
 
@@ -1520,20 +1606,156 @@ impl<'a> PaintCtx<'a> {
 ///
 /// Carries the available constraints plus font and theme access so that widgets
 /// can measure text accurately without relying on character-count heuristics.
+///
+/// # Why it also carries the tree
+///
+/// It must, to cache a measurement per node — without a node there is nowhere
+/// to put `cached_size`, and layout would re-measure the whole tree on every
+/// non-idle frame (which it did, until this existed).
+///
+/// The safety property that the tree-less version provided is preserved by the
+/// API surface instead: the ONLY thing `tree`/`node` are used for is
+/// [`Self::layout_child`]. `hovered()`, `pressed()` and `animate_to()` remain
+/// on [`PaintCtx`] alone, so a widget's `layout` still provably cannot observe
+/// interaction state. That is what makes skipping layout for a hover sound.
+/// Flutter and Compose draw the line the same way.
 pub struct LayoutCtx<'a> {
     pub constraints: Constraints,
     pub font: &'a FontCache,
     pub theme: &'a ThemeData,
+    /// `None` in unit tests built through [`Self::new`], where there is no
+    /// engine and no arena. `layout_child` then measures uncached, so tests
+    /// keep working unchanged and only production paths get caching.
+    tree: Option<Rc<RefCell<RenderTree>>>,
+    node: render_tree::NodeId,
 }
 
 impl<'a> LayoutCtx<'a> {
+    /// Tree-less constructor, for unit tests and any caller with no arena.
+    /// Measurements taken through the returned context are never cached.
     pub fn new(constraints: Constraints, font: &'a FontCache, theme: &'a ThemeData) -> Self {
-        Self { constraints, font, theme }
+        Self { constraints, font, theme, tree: None, node: RenderTree::ROOT }
     }
 
-    /// Derive a child context with tighter constraints (font/theme are shared).
+    /// The engine/widget-side constructor: caches measurements on `node`.
+    pub fn with_tree(
+        constraints: Constraints,
+        font: &'a FontCache,
+        theme: &'a ThemeData,
+        tree: Rc<RefCell<RenderTree>>,
+        node: render_tree::NodeId,
+    ) -> Self {
+        Self { constraints, font, theme, tree: Some(tree), node }
+    }
+
+    /// This widget's node in the render tree, when there is one.
+    pub fn node_id(&self) -> render_tree::NodeId { self.node }
+
+    /// Derive a context with different constraints for the SAME widget.
+    ///
+    /// Use this when a widget re-measures ITSELF under a different bound. To
+    /// measure a CHILD, use [`Self::layout_child`] — that is what gives the
+    /// child its own node and its own cached size.
     pub fn with_constraints(&self, constraints: Constraints) -> LayoutCtx<'_> {
-        LayoutCtx { constraints, font: self.font, theme: self.theme }
+        LayoutCtx {
+            constraints,
+            font: self.font,
+            theme: self.theme,
+            tree: self.tree.clone(),
+            node: self.node,
+        }
+    }
+
+    /// Measure `child` in its own node, reusing the cached size when nothing
+    /// that could change it has changed.
+    ///
+    /// This is the layout mirror of [`PaintCtx::paint_child`], and the early
+    /// return below is Flutter's:
+    ///
+    /// ```dart
+    /// if (!_needsLayout && constraints == _constraints) return;
+    /// ```
+    ///
+    /// Flutter pairs that with a list of relayout-boundary roots so the walk
+    /// need not start at the top. We deliberately do not: reaching a boundary
+    /// directly requires the node to reach its own layout logic, and
+    /// `TreeNode` is a side-table that does not hold the widget. It is also
+    /// unnecessary — with this cache the top-down walk returns immediately at
+    /// every clean node, so the cost is the dirty spine plus one `Constraints`
+    /// comparison per sibling.
+    pub fn layout_child(&self, constraints: Constraints, child: &dyn Widget) -> Size {
+        self.measure_into(None, constraints, child)
+    }
+
+    /// [`Self::layout_child`], addressing the child by an EXPLICIT index
+    /// instead of call order.
+    ///
+    /// Required by any container whose `layout` makes more than one pass and
+    /// does not touch every child on each — `Row`/`Column` measure non-flex
+    /// children first, then flex ones, so call order is not slot order. See
+    /// [`RenderTree::layout_slot_at`] for what goes wrong without it.
+    pub fn layout_child_at(&self, index: usize, constraints: Constraints, child: &dyn Widget) -> Size {
+        self.measure_into(Some(index), constraints, child)
+    }
+
+    fn measure_into(&self, index: Option<usize>, constraints: Constraints, child: &dyn Widget) -> Size {
+        let Some(tree) = self.tree.as_ref() else {
+            // No arena (unit test): measure directly, cache nothing.
+            return child.layout(&LayoutCtx {
+                constraints,
+                font: self.font,
+                theme: self.theme,
+                tree: None,
+                node: self.node,
+            });
+        };
+
+        let node = match index {
+            Some(i) => tree.borrow_mut().layout_slot_at(self.node, i),
+            None    => tree.borrow_mut().layout_slot(self.node),
+        };
+        tree.borrow_mut().adopt_tag(node, child.type_tag());
+        // Recorded on both paths (cache hit and miss) so `paint_child` can
+        // check alignment regardless of whether any measuring actually ran.
+        tree.borrow_mut().node_mut(node).layout_tag = child.type_tag();
+
+        {
+            let t = tree.borrow();
+            let n = t.node(node);
+            // `!is_structural_frame()` is not optional, and the symmetry with
+            // `paint_child` is the reason. A rebuild hands this node a BRAND
+            // NEW widget object; the node cannot tell a fresh-but-identical
+            // widget from one whose content changed, so a matching
+            // `Constraints` proves nothing about the size. Reusing the cache
+            // here made a rebuilt `Text` keep its old width — output that
+            // looks plausible and is wrong, which is the exact failure mode
+            // these caches must never produce.
+            if !is_structural_frame()
+                && n.last_constraints == Some(constraints)
+                && !n.needs_layout
+            {
+                if let Some(size) = n.cached_size {
+                    return size;
+                }
+            }
+        }
+
+        tree.borrow_mut().begin_layout(node);
+        let size = child.layout(&LayoutCtx {
+            constraints,
+            font: self.font,
+            theme: self.theme,
+            tree: Some(Rc::clone(tree)),
+            node,
+        });
+
+        let mut t = tree.borrow_mut();
+        let n = t.node_mut(node);
+        n.last_constraints = Some(constraints);
+        n.cached_size      = Some(size);
+        n.needs_layout     = false;
+        n.layout_tag       = child.type_tag();
+        size
     }
 }
 

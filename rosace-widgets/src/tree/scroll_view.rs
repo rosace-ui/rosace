@@ -779,7 +779,7 @@ impl Widget for ScrollView {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let vp = ctx.rect;
-        let child_size = self.child.layout(&ctx.layout_ctx(self.child_constraints(vp)));
+        let child_size = ctx.measure_child(self.child_constraints(vp), &*self.child);
 
         // `::fixed` and `::controlled` always use the base path — exact,
         // un-composited semantics for programmatic control and snapshots.

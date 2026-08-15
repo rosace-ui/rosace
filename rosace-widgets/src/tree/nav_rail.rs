@@ -109,7 +109,7 @@ impl Widget for NavItem {
 
         // Leading icon
         if let Some(lead) = &self.leading {
-            let ls = lead.layout(&ctx.layout_ctx(Constraints::loose(20.0, r.size.height)));
+            let ls = ctx.measure_child(Constraints::loose(20.0, r.size.height), &**lead);
             let ly = r.origin.y + (r.size.height - ls.height) / 2.0;
             ctx.paint_child(Rect { origin: Point { x: lx, y: ly }, size: ls }, &*lead);
             lx += ls.width + 8.0;
@@ -253,7 +253,7 @@ impl Widget for NavRail {
                     y += 10.0;
                 }
                 NavRailEntry::Custom(w) => {
-                    let size = w.layout(&ctx.layout_ctx(Constraints::loose(self.width, r.size.height - (y - r.origin.y))));
+                    let size = ctx.measure_child(Constraints::loose(self.width, r.size.height - (y - r.origin.y)), &**w);
                     ctx.paint_child(Rect { origin: Point { x: r.origin.x, y }, size }, &*w);
                     y += size.height;
                 }
