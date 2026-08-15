@@ -415,7 +415,21 @@ pub fn has_dirty_nodes() -> bool {
 
 thread_local! {
     static STRUCTURAL_FRAME: Cell<bool> = const { Cell::new(true) };
+    static FRAME_ID: Cell<u64> = const { Cell::new(0) };
 }
+
+/// Monotonic frame counter.
+///
+/// `Row`/`Column` memoise their child measurements so `layout` and `paint`
+/// share one pass. That memo must be scoped to a FRAME: keyed only by
+/// constraints, it survives across frames and hands back a stale child size
+/// after that child re-laid-out — a grandchild that grew stayed at its old
+/// height, silently, with no error. Stamping the frame makes the memo do its
+/// real job (avoid the double measure) without pretending to be a cache.
+pub fn frame_id() -> u64 { FRAME_ID.with(|f| f.get()) }
+
+/// Advance the frame counter. The engine calls this once per painted frame.
+pub fn begin_frame() { FRAME_ID.with(|f| f.set(f.get().wrapping_add(1))); }
 
 /// Tell the widget layer whether this frame may reuse cached pictures.
 ///

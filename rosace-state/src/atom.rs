@@ -338,6 +338,7 @@ mod tests {
     #[test]
     fn a_write_from_another_thread_dirties_the_subscribing_thread() {
         use rosace_trace::event::ComponentId;
+        let _serial = crate::test_serial();
         crate::dirty_set::reset_to_global_dirty();
         let _ = crate::dirty_set::take_dirty_components();
 

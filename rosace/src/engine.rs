@@ -1011,6 +1011,7 @@ impl FrameEngine {
 
         // Begin the persistent render tree frame (D091). Repainted
         // nodes re-declare their regions; skipped subtrees keep theirs.
+        rosace_widgets::tree::begin_frame();
         self.render_tree.borrow_mut().start_frame();
         let mut paint_ctx = rosace_widgets::tree::PaintCtx {
             recorder: &mut recorder,

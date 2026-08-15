@@ -232,18 +232,18 @@ mod tests {
     /// must not interleave. Resetting it at the top of each is not enough:
     /// the suite runs in parallel, so one test's `reset` lands in the middle
     /// of the other's sequence. This was a real intermittent CI failure.
-    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::test_serial as SERIAL_FN;
 
     #[test]
     fn starts_globally_dirty() {
-        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = SERIAL_FN();
         reset_to_global_dirty();
         assert!(is_global_dirty());
     }
 
     #[test]
     fn mark_and_take() {
-        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = SERIAL_FN();
         reset_to_global_dirty();
         // Seed to "not globally dirty"
         let _ = take_dirty_components();

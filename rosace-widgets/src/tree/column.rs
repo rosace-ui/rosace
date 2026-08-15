@@ -15,7 +15,7 @@ pub struct Column {
     main_axis_alignment: MainAxisAlignment,
     cross_axis_alignment: CrossAxisAlignment,
     padding: EdgeInsets,
-    measure_cache: Mutex<Option<(Constraints, Vec<Size>)>>,
+    measure_cache: Mutex<Option<(u64, Constraints, Vec<Size>)>>,
 }
 
 impl Column {
@@ -53,8 +53,13 @@ impl Column {
         let c = ctx.constraints;
         {
             let cache = self.measure_cache.lock().unwrap();
-            if let Some((cached_c, ref sizes)) = *cache {
-                if cached_c == c { return sizes.clone(); }
+            if let Some((frame, cached_c, ref sizes)) = *cache {
+                // Same frame AND same constraints. Dropping the frame check
+                // makes this a cross-frame cache, which then returns a child's
+                // stale size after that child re-laid-out.
+                if frame == super::frame_id() && cached_c == c {
+                    return sizes.clone();
+                }
             }
         }
 
@@ -129,7 +134,7 @@ impl Column {
             }
         }).collect();
 
-        *self.measure_cache.lock().unwrap() = Some((c, sizes.clone()));
+        *self.measure_cache.lock().unwrap() = Some((super::frame_id(), c, sizes.clone()));
         sizes
     }
 
@@ -139,8 +144,10 @@ impl Column {
     /// always bounded, which would re-enable flex that layout disabled on an
     /// unbounded axis (children would change size between measure and paint).
     fn layout_sizes(&self, ctx: &LayoutCtx) -> Vec<Size> {
-        if let Some((_, sizes)) = &*self.measure_cache.lock().unwrap() {
-            return sizes.clone();
+        if let Some((frame, _, sizes)) = &*self.measure_cache.lock().unwrap() {
+            if *frame == super::frame_id() {
+                return sizes.clone();
+            }
         }
         self.measure(ctx)
     }

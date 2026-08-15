@@ -632,6 +632,18 @@ impl RenderTree {
         let mut cur = self.nodes[node].parent;
         while let Some(p) = cur {
             self.nodes[p].needs_paint = true;
+            // ALSO re-measure. A state change can change SIZE, and the
+            // framework cannot know whether it did without measuring — that
+            // depends on font metrics, text scale and the widget's internals.
+            //
+            // Without this, a parent keeps the child's old size and positions
+            // it at the old rect: a grandchild that grew silently stayed at
+            // its old height, clipped, with no error to notice. Re-measuring
+            // the spine is cheap; the saving that matters — siblings replaying
+            // their pictures instead of repainting — is untouched, because
+            // needs_paint is what governs that and only the marked node and
+            // its ancestors have it.
+            self.nodes[p].needs_layout = true;
             cur = self.nodes[p].parent;
         }
     }

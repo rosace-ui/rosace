@@ -247,3 +247,16 @@ mod tests {
     }
 }
 pub use external::Subscribers;
+
+#[cfg(test)]
+/// Serialises tests that flip the PROCESS-GLOBAL dirty flag.
+///
+/// `reset_to_global_dirty()` writes a `static AtomicBool`, so a test calling
+/// it lands in the middle of any other test's sequence — across MODULES, not
+/// just within one. `dirty_set` had a local lock; `atom` and `external` also
+/// call it and did not take it, so `mark_and_take` still failed intermittently
+/// under parallel runs. One lock for the whole crate is the fix.
+pub(crate) fn test_serial() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}

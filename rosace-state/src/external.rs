@@ -174,6 +174,7 @@ mod tests {
 
     #[test]
     fn notify_marks_every_watcher_dirty() {
+        let _serial = crate::test_serial();
         crate::dirty_set::reset_to_global_dirty();
         let _ = crate::dirty_set::take_dirty_components();
 
@@ -191,6 +192,7 @@ mod tests {
     /// a worker thread. The marks must land on the thread that subscribed.
     #[test]
     fn notify_from_another_thread_still_reaches_the_subscribing_thread() {
+        let _serial = crate::test_serial();
         crate::dirty_set::reset_to_global_dirty();
         let _ = crate::dirty_set::take_dirty_components();
 
