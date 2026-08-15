@@ -70,6 +70,7 @@ pub mod date_picker;
 pub mod time_picker;
 pub mod data_table;
 pub mod render_tree;
+pub mod stateful;
 pub mod repaint_boundary;
 pub mod semantics;
 pub mod row;
@@ -158,6 +159,7 @@ pub use shader_paint::ShaderPaint;
 pub use date_picker::{DatePicker, SimpleDate, SelectionMode, PageAxis};
 pub use time_picker::{TimePicker, SimpleTime, TimeUnit};
 pub use data_table::{DataTable, DataTableColumn, SortDirection};
+pub use stateful::{Stateful, StatefulExt, StatefulWidget};
 pub use render_tree::{HitHandler, InspectNode, NodeId, RenderTree, ScrollAxes, ScrollHandler, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use semantics::Semantics;
@@ -254,6 +256,161 @@ fn scoped_animation_request<R>(f: impl FnOnce() -> R) -> (R, bool) {
         ANIM_REQUEST.with(|a| a.set(true));
     }
     (out, mine)
+}
+
+thread_local! {
+    static DIRTY_NODES: RefCell<Vec<render_tree::NodeId>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Schedule ONE widget to re-layout, re-paint and (if it builds its children)
+/// re-build, without rebuilding anything else.
+///
+/// This is the public seam the plan calls for. `Atom` and
+/// `rosace_state::external::Subscribers` mark a whole COMPONENT dirty, which
+/// re-runs `build()` and makes the frame structural — every per-node cache is
+/// then ignored. This marks a single node, so the frame stays targeted.
+///
+/// It is public so third-party state libraries get the same precision the
+/// built-ins do. `Subscribers` is component-granularity by its own
+/// documentation; without this, "plugins are a core principle" would hold for
+/// rebuilds and not for the fine-grained path.
+pub fn mark_node_dirty(node: render_tree::NodeId) {
+    DIRTY_NODES.with(|d| d.borrow_mut().push(node));
+    REBUILD_REQUESTS.with(|r| { r.borrow_mut().insert(node); });
+    rosace_state::request_frame();
+}
+
+thread_local! {
+    static REBUILD_REQUESTS: RefCell<std::collections::HashSet<render_tree::NodeId>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// Whether `node` was asked to rebuild, consuming the request.
+///
+/// Kept separate from the node's `needs_layout`/`needs_paint` flags because
+/// `Stateful::layout` is the first thing that needs the answer, and
+/// `LayoutCtx` has no access to the tree — deliberately, since that absence is
+/// what makes skipping layout for a hover provably safe. A thread-local keeps
+/// that guarantee intact instead of widening `LayoutCtx` to get around it.
+pub fn take_rebuild_request(node: render_tree::NodeId) -> bool {
+    REBUILD_REQUESTS.with(|r| r.borrow_mut().remove(&node))
+}
+
+type LifecycleObserver = Arc<dyn stateful::StatefulWidget>;
+thread_local! {
+    static LIFECYCLE_OBSERVERS: RefCell<Vec<(render_tree::NodeId, LifecycleObserver)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Register a widget that overrode `on_lifecycle`. Only those are stored, so a
+/// phase change costs one call per interested widget rather than a tree walk.
+pub fn register_lifecycle_observer(node: render_tree::NodeId, w: LifecycleObserver) {
+    LIFECYCLE_OBSERVERS.with(|o| {
+        let mut o = o.borrow_mut();
+        if !o.iter().any(|(n, _)| *n == node) {
+            o.push((node, w));
+        }
+    });
+}
+
+/// Stop delivering lifecycle phases to `node` — called when it is disposed.
+pub fn unregister_lifecycle_observer(node: render_tree::NodeId) {
+    LIFECYCLE_OBSERVERS.with(|o| o.borrow_mut().retain(|(n, _)| *n != node));
+}
+
+/// Deliver an app lifecycle phase to every registered widget. The engine calls
+/// this when the phase actually changes.
+pub fn dispatch_lifecycle(phase: rosace_core::app_lifecycle::LifecycleState) {
+    let observers = LIFECYCLE_OBSERVERS.with(|o| o.borrow().clone());
+    for (node, w) in observers {
+        let _scope = enter_widget(node);
+        w.on_lifecycle(phase);
+    }
+}
+
+thread_local! {
+    static CURRENT_WIDGET: Cell<Option<render_tree::NodeId>> = const { Cell::new(None) };
+}
+
+/// Scope guard that makes `node` the ambient widget. Restores the previous
+/// one on drop, so nesting works.
+pub struct WidgetScope(Option<render_tree::NodeId>);
+
+impl Drop for WidgetScope {
+    fn drop(&mut self) {
+        CURRENT_WIDGET.with(|c| c.set(self.0));
+    }
+}
+
+/// Enter `node` as the ambient widget for the duration of the returned guard.
+///
+/// Set while a widget builds or paints, and again by the engine around a
+/// handler it dispatches to that node — so a callback written inside a widget
+/// still knows which widget it belongs to when it runs, long after paint
+/// returned.
+pub fn enter_widget(node: render_tree::NodeId) -> WidgetScope {
+    let prev = CURRENT_WIDGET.with(|c| c.replace(Some(node)));
+    WidgetScope(prev)
+}
+
+/// The widget currently building, painting, or handling an event.
+pub fn current_widget() -> Option<render_tree::NodeId> {
+    CURRENT_WIDGET.with(|c| c.get())
+}
+
+/// Schedule the widget in scope to rebuild.
+///
+/// Callable from anywhere without threading a handle through `build` — from a
+/// button's `on_press`, from a method on your own type, from a helper three
+/// calls deep. It resolves against the ambient widget set while a widget
+/// builds, paints, or handles an event.
+///
+/// # Where there is no ambient widget
+///
+/// A spawned task, a timer callback, or a network response arrives with no
+/// widget in scope. There is nothing to refresh and this is a no-op (with a
+/// debug warning, since it is almost always a mistake rather than an
+/// intention). Capture [`current_widget`] while you still have one and use
+/// [`refresh`] with it:
+///
+/// ```ignore
+/// let id = current_widget();                  // during build
+/// spawn(async move { fetch().await; if let Some(id) = id { refresh(id) } });
+/// ```
+pub fn refresh_state() {
+    match current_widget() {
+        Some(node) => mark_node_dirty(node),
+        None => {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[ROSACE] refresh_state() called with no widget in scope — nothing was \
+                 refreshed. This happens in a spawned task, timer or network callback, \
+                 where the ambient widget is gone. Capture current_widget() during build \
+                 and call refresh(id) instead."
+            );
+        }
+    }
+}
+
+/// Schedule a specific widget to rebuild.
+///
+/// The explicit form of [`refresh_state`], for when the ambient widget is not
+/// available — background work, a plugin store, another thread. `NodeId` is
+/// `Copy`, so it can be captured freely.
+pub fn refresh(node: render_tree::NodeId) {
+    mark_node_dirty(node);
+}
+
+/// Take the nodes marked since the last frame. The engine calls this and
+/// applies the flags; nothing else should.
+pub fn take_dirty_nodes() -> Vec<render_tree::NodeId> {
+    DIRTY_NODES.with(|d| std::mem::take(&mut *d.borrow_mut()))
+}
+
+/// Whether any widget has asked to update — lets the engine decide to paint a
+/// frame at all, since a node mark dirties no component.
+pub fn has_dirty_nodes() -> bool {
+    DIRTY_NODES.with(|d| !d.borrow().is_empty())
 }
 
 thread_local! {
@@ -529,6 +686,22 @@ impl<'a> PaintCtx<'a> {
         }
     }
 
+    /// This widget's node in the render tree.
+    pub fn node_id(&self) -> render_tree::NodeId { self.node }
+
+    /// Run `f` when this widget leaves the tree — cancel a subscription, stop
+    /// a timer, release a handle.
+    ///
+    /// Fires from both removal paths: the widget being dropped from its
+    /// parent's children, and its slot being taken over by a different widget
+    /// type. Children are disposed before parents.
+    ///
+    /// Register it once, guarded by first-run state, or every paint will queue
+    /// another copy.
+    pub fn on_dispose(&self, f: impl FnOnce() + Send + 'static) {
+        self.tree.borrow_mut().node_mut(self.node).dispose.push(Box::new(f));
+    }
+
     /// Paint `child` into its own node, giving that node TYPE IDENTITY.
     ///
     /// Prefer this over `child.paint(&mut ctx.child(rect))`. Both create a
@@ -668,7 +841,26 @@ impl<'a> PaintCtx<'a> {
         } else {
             self.rect
         };
-        self.tree.borrow_mut().node_mut(self.node).hits.push((hit_rect, callback));
+        // Bind the owning widget INTO the handler, so `refresh_state()` called
+        // inside an `on_press` resolves to the widget that registered it.
+        //
+        // Captured here rather than restored by the engine at dispatch time
+        // because here is where it is known for certain: `hit_test` returns a
+        // handler with no node attached, so the engine would have to be told,
+        // and any path that forgot would silently refresh the wrong widget or
+        // none at all. Binding at registration makes it correct by
+        // construction.
+        // Bind the enclosing STATEFUL widget, not this node. A `Button` has
+        // nothing to rebuild — `refresh_state()` written in its `on_press`
+        // means "update the widget whose `build` produced me". Falls back to
+        // this node when there is no stateful ancestor, where the mark is
+        // harmless and rebuilds nothing.
+        let node = current_widget().unwrap_or(self.node);
+        let bound: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _scope = enter_widget(node);
+            callback();
+        });
+        self.tree.borrow_mut().node_mut(self.node).hits.push((hit_rect, bound));
     }
 
     /// Declare that this widget's rect responds to left-click (D099).

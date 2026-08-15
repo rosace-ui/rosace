@@ -90,6 +90,11 @@ pub type ZoomRegion = (Rect, Arc<dyn Fn(f32) + Send + Sync>);
 /// (`begin`) and persists untouched otherwise.
 #[derive(Default)]
 pub struct TreeNode {
+    /// Who owns this node. Needed to propagate a repaint upward: a dirty
+    /// nested node is invisible unless its ancestors re-assemble, because a
+    /// clean parent replays a cached picture that still holds the child's OLD
+    /// commands.
+    pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     /// Child slot cursor for the current paint of this node.
     cursor: usize,
@@ -192,6 +197,13 @@ pub struct TreeNode {
     /// (widget config, constraints, font, theme) and nothing else, so only
     /// those can invalidate it.
     pub needs_layout: bool,
+    /// The subtree a `Stateful` widget last built, kept so `layout` and
+    /// `paint` share ONE build per frame rather than running the closure
+    /// twice — the mistake `9b4ba78` just removed from Row/Column.
+    pub built: Option<super::BoxedWidget>,
+    /// Callbacks to run when this node leaves the tree. See
+    /// [`RenderTree::dispose_subtree`].
+    pub dispose: Vec<Box<dyn FnOnce() + Send>>,
     /// This widget asked for another frame from inside its own `paint`
     /// (a spinner, a shimmer). Such a node must never replay its cached
     /// picture: replaying skips the request, and the animation stops.
@@ -332,9 +344,20 @@ impl RenderTree {
         if n.tag == tag {
             return false;
         }
+        // The previous occupant is leaving this slot. Its cleanup has to run
+        // here as well as in `finalize`: a branch whose child COUNT is
+        // unchanged (`if flag { Button } else { TextField }`) never reaches
+        // truncate, so this is the ONLY signal that a widget went away.
+        // Missing it would drop a subscription without cancelling it.
+        for f in std::mem::take(&mut n.dispose) {
+            f();
+        }
+        n.built = None;
+
         // A brand-new node has tag "" and is being claimed for the first time.
         // Clearing default-valued fields is a no-op, so this costs nothing and
         // keeps one code path instead of two.
+        let n = &mut self.nodes[node];
         n.tag = tag;
 
         // Caches — same set walk_element clears on a mismatch.
@@ -407,6 +430,7 @@ impl RenderTree {
         } else {
             let id = self.nodes.len();
             self.nodes.push(TreeNode::default());
+            self.nodes[id].parent = Some(parent);
             self.nodes[parent].children.push(id);
             id
         };
@@ -474,10 +498,141 @@ impl RenderTree {
     /// End of frame: drop unused child slots of every node repainted this
     /// frame, so removed widgets cannot leave ghost hit regions behind.
     pub fn finalize(&mut self) {
+        let mut removed: Vec<NodeId> = Vec::new();
         for i in 0..self.begun_this_frame.len() {
             let id = self.begun_this_frame[i];
             let cursor = self.nodes[id].cursor;
-            self.nodes[id].children.truncate(cursor);
+
+            // Children past the cursor were not slotted this frame. `truncate`
+            // used to drop these ids on the floor; they are the structural
+            // signal that a widget was removed, which nothing was listening to.
+            // Draining is exact — O(removed), not O(all nodes) like the set
+            // difference components have to use.
+            let dropped: Vec<NodeId> = if cursor < self.nodes[id].children.len() {
+                self.nodes[id].children.drain(cursor..).collect()
+            } else {
+                Vec::new()
+            };
+
+            // What actually survived: the children slotted this frame.
+            let live: std::collections::HashSet<NodeId> =
+                self.nodes[id].children.iter().copied().collect();
+
+            // A dropped id is NOT necessarily gone. `keyed_slot` writes its
+            // node OVER `children[cursor]` rather than appending, so a parent
+            // that painted two keyed children and then one leaves a stale
+            // DUPLICATE past the cursor: `[A, B]` becomes `[B, B]` when B
+            // survives and A does not. Disposing that duplicate destroys a
+            // live widget — a settling screen transition went blank.
+            removed.extend(dropped.into_iter().filter(|c| !live.contains(c)));
+
+            // KEYED children are deliberately NOT disposed when they are not
+            // painted. That is the entire purpose of `child_keyed`: a screen
+            // that has been navigated away from keeps its scroll position and
+            // animation state so the round trip restores it, rather than
+            // aliasing onto whoever next occupies the slot. Pruning them here
+            // reset Screen A's scroll to the top on the way back.
+            //
+            // They are released when their PARENT is disposed —
+            // `dispose_subtree` walks `keyed_children` for exactly that.
+        }
+        removed.sort_unstable();
+        removed.dedup();
+        for id in removed {
+            self.dispose_subtree(id);
+        }
+    }
+
+    /// Run every `on_dispose` in this subtree and release what it held.
+    ///
+    /// # Depth-first, children before parents
+    ///
+    /// A parent's cleanup must not run while its children still hold
+    /// references to what it is tearing down — the same ordering Flutter and
+    /// React use, and for the same reason.
+    ///
+    /// # The slot is emptied, not reused
+    ///
+    /// Node ids ESCAPE the frame: `node_rect`'s own documentation records that
+    /// an accessibility action names a node from the tree published last
+    /// frame. Recycling ids through a free list would let such a stale id
+    /// address a DIFFERENT widget — an a11y action activating the wrong
+    /// button, which is worse than the leak it would fix.
+    ///
+    /// So this frees the CONTENTS — state, caches, pictures, handlers, which
+    /// is essentially all the memory — and leaves an empty slot behind, so a
+    /// stale id resolves to something inert rather than to somebody else.
+    /// Reusing slots needs a generation counter on `NodeId`; that is a wider
+    /// change and deliberately not bundled here.
+    pub fn dispose_subtree(&mut self, node: NodeId) {
+        let children = std::mem::take(&mut self.nodes[node].children);
+        for c in children {
+            self.dispose_subtree(c);
+        }
+        // Keyed children survive frames they are not painted in, so they are
+        // not reachable through `children` — but when the PARENT goes, they go
+        // with it, or the retention that makes them useful becomes a leak.
+        let keyed: Vec<NodeId> = std::mem::take(&mut self.nodes[node].keyed_children)
+            .into_values()
+            .collect();
+        for c in keyed {
+            self.dispose_subtree(c);
+        }
+        self.dispose_node_contents(node);
+    }
+
+    /// Fire this ONE node's dispose callbacks and drop everything it owns.
+    /// Callers handle the recursion; see [`Self::dispose_subtree`].
+    fn dispose_node_contents(&mut self, node: NodeId) {
+        // Before the callbacks: a widget that observed the app lifecycle must
+        // stop receiving phases the moment it leaves the tree, or a backgrounded
+        // app would still be calling into widgets that are gone.
+        super::unregister_lifecycle_observer(node);
+        for f in std::mem::take(&mut self.nodes[node].dispose) {
+            f();
+        }
+        // Replacing with a default is how the memory is actually reclaimed:
+        // cached pictures and widget state dominate a node's footprint, and
+        // an empty TreeNode is small.
+        self.nodes[node] = TreeNode::default();
+    }
+
+    /// Like [`Self::node_mut`], but tolerates an id that no longer exists.
+    ///
+    /// A handle can outlive its widget: a callback fires, marks its node, and
+    /// the widget is removed from the tree before the next frame runs. The
+    /// mark is then meaningless rather than an error — same reasoning as
+    /// [`Self::node_rect`]'s bounds check.
+    pub fn node_mut_checked(&mut self, id: NodeId) -> Option<&mut TreeNode> {
+        self.nodes.get_mut(id)
+    }
+
+    /// Mark `node` for a full update, and every ancestor for re-assembly.
+    ///
+    /// Three things propagate three different distances, and conflating them
+    /// is what made an earlier draft of this claim "the parent is untouched":
+    ///
+    /// * LAYOUT stops at `node`. Whether anything above must re-measure is
+    ///   decided by comparing the new size against `cached_size`, not assumed.
+    /// * ASSEMBLY reaches the root, always. `Picture` is a flat
+    ///   `Vec<DrawCommand>` with no nested sub-pictures, so an ancestor that
+    ///   replays its own cache would replay the child's OLD commands and the
+    ///   change would never appear on screen.
+    /// * RASTERIZATION is damage-scoped, handled elsewhere.
+    ///
+    /// Ancestors therefore get `needs_paint` only. They re-run `paint`, which
+    /// is their own background plus `paint_child` calls — the siblings still
+    /// replay, which is the entire saving.
+    pub fn mark_dirty_with_ancestors(&mut self, node: NodeId) {
+        if self.nodes.get(node).is_none() {
+            return;
+        }
+        self.nodes[node].needs_layout = true;
+        self.nodes[node].needs_paint = true;
+        let mut cur = self.nodes[node].parent;
+        while let Some(p) = cur {
+            self.nodes[p].needs_paint = true;
+            cur = self.nodes[p].parent;
         }
     }
 
@@ -1755,6 +1910,76 @@ mod tests {
         assert!(t.set_pressed(Some(n)));
         assert!(t.node(n).needs_paint, "a press must re-record the picture");
         assert!(!t.node(n).needs_layout, "a press cannot change a widget's size");
+    }
+
+
+    /// A keyed child that SURVIVES must not be disposed just because a stale
+    /// duplicate of it sat past the cursor.
+    ///
+    /// `keyed_slot` writes its node over `children[cursor]` instead of
+    /// appending, so a parent that painted two keyed children and then one
+    /// leaves `[B, B]` behind. Truncating dropped the duplicate harmlessly;
+    /// draining and disposing it destroyed a live widget — a settling screen
+    /// transition went blank. Pinned because the failure is spectacular and
+    /// the cause is one line away from looking correct.
+    #[test]
+    fn a_surviving_keyed_child_is_not_disposed_by_its_own_stale_duplicate() {
+        let mut t = RenderTree::new();
+
+        // Frame 1: two keyed children, A then B.
+        t.start_frame();
+        let a = t.keyed_slot(RenderTree::ROOT, 1);
+        let b = t.keyed_slot(RenderTree::ROOT, 2);
+        t.node_mut(a).cached_size = Some(Size { width: 1.0, height: 1.0 });
+        t.node_mut(b).cached_size = Some(Size { width: 2.0, height: 2.0 });
+        t.finalize();
+        assert_ne!(a, b);
+
+        // Frame 2: the transition settled — only B is painted.
+        t.start_frame();
+        let b2 = t.keyed_slot(RenderTree::ROOT, 2);
+        assert_eq!(b2, b, "the keyed node must be reused, not recreated");
+        t.finalize();
+
+        assert_eq!(
+            t.node(b).cached_size, Some(Size { width: 2.0, height: 2.0 }),
+            "the surviving screen was disposed — its stale duplicate past the cursor \
+             was mistaken for a removal"
+        );
+        // A is NOT disposed: keyed children persist across frames they are not
+        // painted in, which is what lets a screen keep its scroll position
+        // while navigated away.
+        assert_eq!(t.node(a).cached_size, Some(Size { width: 1.0, height: 1.0 }),
+            "a keyed child must survive not being painted — that is what keys are for");
+    }
+
+    /// A keyed child that was not painted for a while must come back with its
+    /// state intact — a screen navigated away from and returned to.
+    #[test]
+    fn a_keyed_child_returns_with_its_state_after_being_unpainted() {
+        let mut t = RenderTree::new();
+        t.start_frame();
+        let a = t.keyed_slot(RenderTree::ROOT, 1);
+        let _b = t.keyed_slot(RenderTree::ROOT, 2);
+        t.node_mut(a).cached_size = Some(Size { width: 9.0, height: 9.0 });
+        t.finalize();
+
+        // Navigate away: only B paints, for several frames.
+        for _ in 0..3 {
+            t.start_frame();
+            let _b2 = t.keyed_slot(RenderTree::ROOT, 2);
+            t.finalize();
+        }
+
+        // Navigate back.
+        t.start_frame();
+        let a_again = t.keyed_slot(RenderTree::ROOT, 1);
+        t.finalize();
+
+        assert_eq!(a_again, a, "the key must resolve to the same node");
+        assert_eq!(t.node(a).cached_size, Some(Size { width: 9.0, height: 9.0 }),
+            "the returning screen lost its state — this is the scroll-position \
+             regression child_keyed exists to prevent");
     }
 
 }

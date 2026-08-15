@@ -9,7 +9,21 @@ use rosace::widgets::tree::{LayoutCtx, PaintCtx};
 use rosace::FrameEngine;
 use rosace_render::{FontCache, SkiaCanvas};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// `dirty_set`'s global-dirty flag is PROCESS-wide, so a test that forces a
+/// rebuild makes any concurrently-running test's frame structural — and a
+/// structural frame ignores the caches these tests exist to measure. Observed
+/// as `marking_one_..` reporting all ten widgets repainted, but only when the
+/// two ran in parallel.
+///
+/// Serialising them is the fix rather than weakening the assertions: the
+/// assertions are the point.
+static FRAME_STATE: Mutex<()> = Mutex::new(());
+
+fn exclusive() -> MutexGuard<'static, ()> {
+    FRAME_STATE.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 const N: usize = 10;
 
@@ -42,6 +56,7 @@ fn counts(c: &Arc<Vec<AtomicUsize>>) -> Vec<usize> {
 /// replay the other nine.
 #[test]
 fn marking_one_node_dirty_repaints_only_that_node() {
+    let _guard = exclusive();
     let c: Arc<Vec<AtomicUsize>> = Arc::new((0..N).map(|_| AtomicUsize::new(0)).collect());
     let mut e = FrameEngine::new(Box::new(App(c.clone())), FontCache::embedded());
     let (mut a, mut b) = (SkiaCanvas::new(300, 400), SkiaCanvas::new(300, 400));
@@ -74,6 +89,7 @@ fn marking_one_node_dirty_repaints_only_that_node() {
 /// structural frame must ignore the caches entirely.
 #[test]
 fn a_rebuild_repaints_everything_because_caches_cannot_be_trusted() {
+    let _guard = exclusive();
     let c: Arc<Vec<AtomicUsize>> = Arc::new((0..N).map(|_| AtomicUsize::new(0)).collect());
     let mut e = FrameEngine::new(Box::new(App(c.clone())), FontCache::embedded());
     let (mut a, mut b) = (SkiaCanvas::new(300, 400), SkiaCanvas::new(300, 400));

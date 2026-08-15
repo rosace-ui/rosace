@@ -47,8 +47,18 @@ fn tags_in_tree(engine: &FrameEngine) -> Vec<&'static str> {
     engine.inspect_tree().iter().map(|n| n.tag).collect()
 }
 
+
+/// `dirty_set`'s global-dirty flag is PROCESS-wide, so a test that forces a
+/// rebuild makes any concurrently-running test's frame structural. Serialise
+/// the tests in this binary that depend on frame classification.
+static FRAME_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+    FRAME_STATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[test]
 fn a_nested_widget_node_records_its_type() {
+    let _guard = exclusive();
     let flag = Arc::new(AtomicBool::new(true));
     let mut e = FrameEngine::new(Box::new(App(flag.clone())), FontCache::embedded());
     let (mut a, mut b) = (SkiaCanvas::new(200, 200), SkiaCanvas::new(200, 200));
@@ -65,6 +75,7 @@ fn a_nested_widget_node_records_its_type() {
 /// both branches, so nothing could tell that the occupant had changed.
 #[test]
 fn swapping_the_widget_type_in_a_slot_is_visible_to_the_tree() {
+    let _guard = exclusive();
     let flag = Arc::new(AtomicBool::new(true));
     let mut e = FrameEngine::new(Box::new(App(flag.clone())), FontCache::embedded());
     let (mut a, mut b) = (SkiaCanvas::new(200, 200), SkiaCanvas::new(200, 200));

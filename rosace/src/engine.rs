@@ -933,11 +933,31 @@ impl FrameEngine {
         // actually re-run paint for the hovered one to change appearance.
         let hover_frame = self.forced_repaint;
         self.forced_repaint = false;
+        // Widgets that changed their own state marked their nodes directly.
+        // Applied here, before the walk, so the flags are in place when the
+        // tree is visited. A node mark dirties no COMPONENT, so nothing
+        // rebuilds and the frame below stays targeted — which is the whole
+        // point: one widget updates instead of the screen.
+        let marked = rosace_widgets::tree::take_dirty_nodes();
+        let widget_state_frame = !marked.is_empty();
+        if widget_state_frame {
+            let mut tree = self.render_tree.borrow_mut();
+            for id in marked {
+                // Both flags on the node itself: the framework cannot know
+                // whether the state change affected size — that depends on font
+                // metrics, text scale and the widget's internals — so it
+                // re-measures this ONE widget and compares. Ancestors get
+                // needs_paint only, so they re-assemble without re-measuring.
+                tree.mark_dirty_with_ancestors(id);
+            }
+        }
+
         let needs_paint = global_dirty
             || !dirty_ids.is_empty()
             || !canvas.has_drawn()   // fresh canvas after resize/scale change
             || window_resized
-            || hover_frame;
+            || hover_frame
+            || widget_state_frame;
 
         // Classify the frame for the widget layer's picture caches.
         //
