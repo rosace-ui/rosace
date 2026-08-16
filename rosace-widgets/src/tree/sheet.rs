@@ -134,7 +134,7 @@ impl Widget for Sheet {
                     (width - self.padding.total_h()).max(0.0),
                     f32::INFINITY,
                 );
-                let child_size = self.child.layout(&ctx.with_constraints(inner_c));
+                let child_size = ctx.layout_child(inner_c, &*self.child);
                 child_size.height + self.padding.total_v() + self.handle_space()
             }
             SheetHeight::Fixed(h) => h,

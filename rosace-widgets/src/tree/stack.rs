@@ -40,8 +40,8 @@ impl Widget for Stack {
             StackFit::Loose => {
                 let mut max_w = 0.0_f32;
                 let mut max_h = 0.0_f32;
-                for child in &self.children {
-                    let s = child.layout(ctx);
+                for (i, child) in self.children.iter().enumerate() {
+                    let s = ctx.layout_child_at(i, ctx.constraints, &**child);
                     max_w = max_w.max(s.width);
                     max_h = max_h.max(s.height);
                 }

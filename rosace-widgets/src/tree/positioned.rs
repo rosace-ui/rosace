@@ -30,7 +30,7 @@ impl Widget for Positioned {
 
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         // Fills the stack; the Stack sizes itself from non-positioned children.
-        self.child.layout(ctx)
+        ctx.layout_child(ctx.constraints, &*self.child)
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

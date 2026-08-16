@@ -1805,6 +1805,19 @@ pub trait Widget: Send + Sync {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         match self.children() {
             Children::None => ctx.constraints.constrain(Size { width: 0.0, height: 0.0 }),
+            // DELIBERATELY uncached — do not convert to `layout_child`.
+            //
+            // It looks safe, because the default `paint` below walks
+            // `children()` in exactly this order. But a widget may override
+            // `paint` while inheriting THIS `layout`, and then its paint slots
+            // whatever it likes: `HeroTag`/`Pressable` made the layout walk
+            // claim a slot for `Container` that paint filled with
+            // `Pressable<Container>`. `children()` is not a reliable predictor
+            // of what paint will slot, so the child measured here has no node
+            // that can be trusted to be its own.
+            //
+            // Caching here needs the identity work in A7 (Stage 5), where the
+            // node tree — not `children()` — defines the structure.
             Children::One(c) => c.layout(ctx),
             Children::Many(cs) => {
                 let mut s = Size { width: 0.0, height: 0.0 };

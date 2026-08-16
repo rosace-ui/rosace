@@ -244,7 +244,7 @@ impl Widget for Dialog {
         let inner = self.build_inner();
         let pad = self.padding.unwrap_or(EdgeInsets::all(PADDING));
         let inner_c = Constraints::loose(self.width - pad.total_h(), f32::INFINITY);
-        let inner_size = inner.layout(&ctx.with_constraints(inner_c));
+        let inner_size = ctx.layout_child(inner_c, &*inner);
         ctx.constraints.constrain(Size {
             width: self.width,
             height: inner_size.height + pad.total_v(),

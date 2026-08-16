@@ -270,9 +270,7 @@ impl Widget for Table {
             for (col, w) in widths.iter().enumerate() {
                 if let Some(cell) = self.cell(row, col) {
                     let content_w = (w - pad * 2.0).max(0.0);
-                    let s = cell.layout(&ctx.layout_ctx(
-                        Constraints::loose(content_w, f32::INFINITY),
-                    ));
+                    let s = ctx.measure_child(Constraints::loose(content_w, f32::INFINITY), &*cell);
                     // Top-left alignment within the cell.
                     let rect = Rect {
                         origin: Point { x: x + pad, y: y + pad },
