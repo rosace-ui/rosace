@@ -184,7 +184,7 @@ pub use transform_layer::TransformLayer;
 
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rosace_core::types::{Point, Rect, Size};
 use rosace_core::{Element, NativeElement, WidgetPayload};
@@ -703,6 +703,57 @@ impl<'a> PaintCtx<'a> {
     /// This widget's node in the render tree.
     pub fn node_id(&self) -> render_tree::NodeId { self.node }
 
+    /// Widget-owned state that lives on this node — the framework's
+    /// `remember`.
+    ///
+    /// ```ignore
+    /// let open = ctx.widget_state(|| false);
+    /// open.set(true);            // mutates, and marks this node
+    /// ```
+    ///
+    /// `init` runs ONCE per node identity, not per paint. The declaration site
+    /// is the creation site, so there is no separate `createState` step — the
+    /// same shape as `@State var x = 0` and `remember { }`.
+    ///
+    /// # Why the node, and not the widget
+    ///
+    /// The widget object is thrown away and rebuilt on every structural frame,
+    /// so anything kept on it does not survive. The node does. This is the one
+    /// point Flutter, SwiftUI and Compose all agree on — state belongs to the
+    /// persistent structure (Element / attribute graph / slot table), never to
+    /// the description.
+    ///
+    /// # Identity, and the rule that comes with it
+    ///
+    /// Slots are positional within this node's paint, so **call it
+    /// unconditionally and in a stable order**. Calling it inside an `if`
+    /// shifts every later index and each handle starts addressing its
+    /// neighbour's value — React's conditional-hook footgun. A debug
+    /// assertion in `paint_child` catches a changed count.
+    ///
+    /// State is discarded when the slot changes widget type (`adopt_tag`) or
+    /// when the node leaves the tree (`dispose_subtree`) — the same rules that
+    /// already govern edit buffers and scroll positions.
+    pub fn widget_state<T: Send + 'static>(&self, init: impl FnOnce() -> T) -> StateHandle<T> {
+        let idx = self.tree.borrow_mut().next_state_slot(self.node);
+
+        let mut tree = self.tree.borrow_mut();
+        let n = tree.node_mut(self.node);
+        if idx == n.state.len() {
+            n.state.push(Box::new(Arc::new(Mutex::new(init()))));
+        }
+        let cell = n.state[idx]
+            .downcast_ref::<Arc<Mutex<T>>>()
+            .expect(
+                "widget_state slot holds a different type than requested — \
+                 widget_state was called conditionally, or in a different order \
+                 than the previous paint. Call it unconditionally, in a stable order.",
+            )
+            .clone();
+
+        StateHandle { cell, node: self.node }
+    }
+
     /// Run `f` when this widget leaves the tree — cancel a subscription, stop
     /// a timer, release a handle.
     ///
@@ -748,7 +799,13 @@ impl<'a> PaintCtx<'a> {
         // the caching, since that one peeks the slot paint will consume.
         #[cfg(debug_assertions)]
         {
-            let claimed = self.tree.borrow().node(node).layout_tag;
+            let (claimed, stamped) = {
+                let t = self.tree.borrow();
+                let n = t.node(node);
+                (n.layout_tag, n.layout_tag_frame)
+            };
+            // Only a tag written THIS frame describes this frame's layout.
+            let claimed = if stamped == frame_id() { claimed } else { "" };
             debug_assert!(
                 claimed.is_empty() || claimed == child.type_tag(),
                 "layout/paint slot misalignment: the layout walk put `{claimed}` in this \
@@ -809,6 +866,22 @@ impl<'a> PaintCtx<'a> {
             };
             child.paint(&mut cctx);
         });
+
+        // Close the child's state scope. A changed count means `widget_state`
+        // was called conditionally, which shifts every later index so each
+        // handle addresses its neighbour's value — silent, and hard to trace
+        // back from the symptom. Loud in dev; just recorded in release.
+        if let Some((prev, now)) = self.tree.borrow_mut().close_state_scope(node) {
+            debug_assert!(
+                false,
+                "`{}` called ctx.widget_state() {now} time(s) this paint but {prev} last \
+                 paint. Slots are positional, so a conditional call shifts every later \
+                 index and each handle starts reading its neighbour's state. Call \
+                 widget_state unconditionally, in a stable order.",
+                child.type_tag(),
+            );
+            let _ = (prev, now);
+        }
 
         let pic = sub.finish();
         for cmd in &pic.commands {
@@ -1559,7 +1632,14 @@ impl<'a> PaintCtx<'a> {
         self.tree.borrow_mut().adopt_tag(node, child.type_tag());
         // Recorded on both paths (cache hit and miss) so `paint_child` can
         // check alignment regardless of whether any measuring actually ran.
-        self.tree.borrow_mut().node_mut(node).layout_tag = child.type_tag();
+        // Stamped with the frame: a tag left by an earlier frame says nothing
+        // about this one (see `TreeNode::layout_tag_frame`).
+        {
+            let mut t = self.tree.borrow_mut();
+            let n = t.node_mut(node);
+            n.layout_tag = child.type_tag();
+            n.layout_tag_frame = frame_id();
+        }
 
         {
             let t = self.tree.borrow();
@@ -1597,6 +1677,62 @@ impl<'a> PaintCtx<'a> {
         n.cached_size      = Some(size);
         n.needs_layout     = false;
         size
+    }
+}
+
+// ── StateHandle ──────────────────────────────────────────────────────────────
+
+/// A handle to state owned by one render-tree node, from
+/// [`PaintCtx::widget_state`].
+///
+/// `Send + Sync` and cheap to clone, so it can be captured by the
+/// `Arc<dyn Fn() + Send + Sync>` handlers that [`PaintCtx::register_hit`]
+/// requires — which is the whole point: a button's `on_press` closes over the
+/// handle and mutates the state that produced it.
+///
+/// It holds the cell and a `NodeId`, never the tree: the tree is
+/// `Rc<RefCell<..>>` and not `Send`, so a handle that held it could not cross
+/// into a callback at all.
+pub struct StateHandle<T> {
+    cell: Arc<Mutex<T>>,
+    node: render_tree::NodeId,
+}
+
+impl<T> Clone for StateHandle<T> {
+    fn clone(&self) -> Self {
+        Self { cell: Arc::clone(&self.cell), node: self.node }
+    }
+}
+
+impl<T> StateHandle<T> {
+    /// The node this state belongs to — for [`refresh`] from a background task.
+    pub fn node_id(&self) -> render_tree::NodeId { self.node }
+
+    /// Read without cloning.
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        f(&self.cell.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Mutate, then mark this node for update.
+    ///
+    /// There is no separate `setState` to forget: mutating through the handle
+    /// IS the invalidation, and there is no way to mutate without it.
+    pub fn update(&self, f: impl FnOnce(&mut T)) {
+        f(&mut self.cell.lock().unwrap_or_else(|e| e.into_inner()));
+        mark_node_dirty(self.node);
+    }
+
+    /// Replace the value, then mark this node for update.
+    pub fn set(&self, v: T) {
+        *self.cell.lock().unwrap_or_else(|e| e.into_inner()) = v;
+        mark_node_dirty(self.node);
+    }
+}
+
+impl<T: Clone> StateHandle<T> {
+    /// A clone of the current value.
+    pub fn get(&self) -> T {
+        self.cell.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -1717,7 +1853,13 @@ impl<'a> LayoutCtx<'a> {
         tree.borrow_mut().adopt_tag(node, child.type_tag());
         // Recorded on both paths (cache hit and miss) so `paint_child` can
         // check alignment regardless of whether any measuring actually ran.
-        tree.borrow_mut().node_mut(node).layout_tag = child.type_tag();
+        // Stamped with the frame — see `TreeNode::layout_tag_frame`.
+        {
+            let mut t = tree.borrow_mut();
+            let n = t.node_mut(node);
+            n.layout_tag = child.type_tag();
+            n.layout_tag_frame = frame_id();
+        }
 
         {
             let t = tree.borrow();

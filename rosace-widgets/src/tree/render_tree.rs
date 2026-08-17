@@ -181,6 +181,26 @@ pub struct TreeNode {
     /// created lazily by [`super::PaintCtx::focus_node`], survives
     /// rebuilds like `scroll_ctrl` above.
     pub focus_node: Option<rosace_core::a11y::FocusNode>,
+    /// Arbitrary widget-owned state declared through
+    /// [`super::PaintCtx::widget_state`] — this framework's `remember`.
+    ///
+    /// Each entry is an `Arc<Mutex<T>>` boxed as `dyn Any`, so the handle
+    /// handed to the widget and the copy retained here are the SAME cell: a
+    /// handle captured into a click callback mutates what the next paint
+    /// reads. (An `Arc<Mutex<dyn Any>>` cannot be downcast back to
+    /// `Arc<Mutex<T>>`, which is why the `Arc` is inside the `Box`, not
+    /// outside it.)
+    ///
+    /// Indexed positionally within a node's paint, the same shape as React's
+    /// hooks and Compose's slot table — and with the same rule: call
+    /// `widget_state` unconditionally, in a stable order.
+    pub state: Vec<Box<dyn std::any::Any + Send>>,
+    /// Position of the next [`super::PaintCtx::widget_state`] call in
+    /// `state`. Reset by `begin`, so indices are per-paint.
+    state_cursor: usize,
+    /// How many `widget_state` calls the previous paint of this node made,
+    /// for the debug-only stability check. `usize::MAX` = never painted.
+    prev_state_count: usize,
     /// Persistent cursor/selection state for an editable node (D091/D112)
     /// — NOT cleared on repaint, so the caret survives a rebuild with the
     /// same displayed value.
@@ -203,6 +223,20 @@ pub struct TreeNode {
     /// written unconditionally (one pointer store) but only read by
     /// `debug_assert!`.
     pub layout_tag: &'static str,
+    /// The frame `layout_tag` was written in.
+    ///
+    /// The tag alone is not enough to assert on. It is cleared by
+    /// `paint_child`, so a child that LAYOUT measured but PAINT then chose not
+    /// to paint — a conditional or early-returning `paint` — leaves its tag
+    /// behind. On a later frame a different widget legitimately takes that
+    /// slot and the stale tag accuses it of a misalignment that never
+    /// happened. Found by running the showcase, which panicked on exactly
+    /// this.
+    ///
+    /// A tag from a previous frame says nothing about THIS frame's layout, so
+    /// the check applies only when the stamp is current. Same-frame
+    /// misalignment — the real bug — is still caught.
+    pub layout_tag_frame: u64,
     /// Constraints used for the last successful layout pass.
     pub last_constraints: Option<Constraints>,
     /// Size returned by the last layout pass.
@@ -404,6 +438,12 @@ impl RenderTree {
         // these: an edit buffer belonging to a TextField appearing inside a
         // Button is a data leak, not just a visual bug.
         n.text_edit = Default::default();
+        // Widget-owned state, same reasoning as the edit buffer directly
+        // above: a `Button` must never be handed the state a `TextField` left
+        // in this slot. `widget_state`'s downcast would reject the type
+        // anyway, but by then it is a panic rather than a fresh start.
+        n.state.clear();
+        n.prev_state_count = usize::MAX;
         n.scroll_ctrl = None;
         n.focus_node = None;
         n.anim = None;
@@ -427,6 +467,7 @@ impl RenderTree {
     fn begin(&mut self, node: NodeId) {
         let n = &mut self.nodes[node];
         n.cursor = 0;
+        n.state_cursor = 0;
         n.begun = true;
         // NOT reset here. `begin` runs during PAINT, which happens after the
         // whole layout walk; zeroing the layout cursor here would be harmless
@@ -540,6 +581,29 @@ impl RenderTree {
             self.nodes[parent].children.push(id);
         }
         self.nodes[parent].children[index]
+    }
+
+    /// Reserve `node`'s next positional `widget_state` slot.
+    pub fn next_state_slot(&mut self, node: NodeId) -> usize {
+        let n = &mut self.nodes[node];
+        let i = n.state_cursor;
+        n.state_cursor += 1;
+        i
+    }
+
+    /// Close a node's state scope at the end of its paint.
+    ///
+    /// Returns `Some((previous, now))` when the count CHANGED from the last
+    /// paint, which means `widget_state` was called conditionally — React's
+    /// hook-ordering footgun, where every later index silently shifts by one
+    /// and each state handle starts addressing its neighbour's value. Callers
+    /// turn that into a debug-only panic; in release the count is just
+    /// recorded.
+    pub fn close_state_scope(&mut self, node: NodeId) -> Option<(usize, usize)> {
+        let n = &mut self.nodes[node];
+        let now = n.state_cursor;
+        let prev = std::mem::replace(&mut n.prev_state_count, now);
+        if prev != usize::MAX && prev != now { Some((prev, now)) } else { None }
     }
 
     /// Reset `node`'s layout cursor so its children are addressed from 0.
@@ -2102,6 +2166,61 @@ mod tests {
         assert_eq!(t.node(a).cached_size, Some(Size { width: 9.0, height: 9.0 }),
             "the returning screen lost its state — this is the scroll-position \
              regression child_keyed exists to prevent");
+    }
+
+
+    /// The slot-misalignment assertion must still FIRE on a real, same-frame
+    /// disagreement between the layout walk and the paint walk.
+    ///
+    /// This exists because the assertion was weakened after it had done its
+    /// job: it originally compared a `layout_tag` that only `paint_child`
+    /// cleared, so a child measured-but-not-painted left a stale tag that
+    /// accused an innocent widget on a LATER frame (it crashed the showcase).
+    /// Scoping the check to the current frame fixed that — and removed every
+    /// case that was proving the check worked, since the widgets which used to
+    /// trip it were moved to the uncached path.
+    ///
+    /// A net that was loosened and never re-tested is a net that has quietly
+    /// stopped catching things. This is the re-test.
+    #[test]
+    #[should_panic(expected = "slot misalignment")]
+    fn a_same_frame_layout_paint_disagreement_still_panics() {
+        use crate::tree::{LayoutCtx, PaintCtx, Widget};
+        use rosace_core::types::{Point, Rect, Size};
+        use rosace_layout::Constraints;
+        use std::{cell::RefCell, rc::Rc};
+
+        struct Leaf(&'static str);
+        impl Widget for Leaf {
+            fn layout(&self, _c: &LayoutCtx) -> Size { Size { width: 10.0, height: 10.0 } }
+            fn paint(&self, _ctx: &mut PaintCtx) {}
+        }
+        // Two distinct concrete types, so `type_tag()` differs.
+        struct Other;
+        impl Widget for Other {
+            fn layout(&self, _c: &LayoutCtx) -> Size { Size { width: 10.0, height: 10.0 } }
+            fn paint(&self, _ctx: &mut PaintCtx) {}
+        }
+
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let tree = Rc::new(RefCell::new(RenderTree::new()));
+        let mut rec = rosace_render::PictureRecorder::new();
+
+        super::super::begin_frame();
+        let rect = Rect { origin: Point { x: 0.0, y: 0.0 },
+                          size: Size { width: 50.0, height: 50.0 } };
+        let mut ctx = PaintCtx::root(&mut rec, rect, &font, theme.clone(), Rc::clone(&tree));
+
+        // LAYOUT claims slot 0 for `Leaf`...
+        let lctx = LayoutCtx::with_tree(
+            Constraints::loose(50.0, 50.0), &font, &theme,
+            Rc::clone(&tree), RenderTree::ROOT,
+        );
+        let _ = lctx.layout_child(Constraints::loose(50.0, 50.0), &Leaf("a"));
+
+        // ...and PAINT puts `Other` there, in the same frame.
+        ctx.paint_child(rect, &Other);
     }
 
 }
