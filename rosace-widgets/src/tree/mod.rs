@@ -1004,9 +1004,28 @@ impl<'a> PaintCtx<'a> {
             return c.clone();
         }
         let c = crate::scroll::ScrollController::new();
-        c.offset.subscribe(self.owner);
-        c.content_size.subscribe(self.owner);
-        c.viewport_size.subscribe(self.owner);
+        // Mark THIS NODE on a write, rather than subscribing the owning
+        // component to the atoms.
+        //
+        // Subscribing was the only tool available when this was written — the
+        // controller's own comment says so: "nothing subscribes to them by
+        // default, so a scroll_to/wheel write would request a frame that
+        // repaints NOTHING". But `Atom` marks whatever is subscribed to it,
+        // and there is exactly one component, so every wheel notch dirtied the
+        // root, re-ran `build()`, and made the frame STRUCTURAL — which makes
+        // `paint_child` refuse every replay app-wide and re-lays-out the whole
+        // tree. Scrolling, the most continuous interaction there is, defeated
+        // every cache in the framework on every frame.
+        //
+        // `mark_node_dirty` (added with the per-node picture caches) is the
+        // precise version of the same intent, so the frame stays TARGETED and
+        // only the scrolling subtree repaints. Children still re-record rather
+        // than replaying, because their rects change as the content moves and
+        // `paint_child` compares `cached_rect`.
+        let n = self.node;
+        c.offset.set_on_change(move |_, _| mark_node_dirty(n));
+        c.content_size.set_on_change(move |_, _| mark_node_dirty(n));
+        c.viewport_size.set_on_change(move |_, _| mark_node_dirty(n));
         node.scroll_ctrl = Some(c.clone());
         c
     }
