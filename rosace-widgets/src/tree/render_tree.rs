@@ -265,7 +265,25 @@ pub struct TreeNode {
     /// The subtree a `Stateful` widget last built, kept so `layout` and
     /// `paint` share ONE build per frame rather than running the closure
     /// twice — the mistake `9b4ba78` just removed from Row/Column.
-    pub built: Option<super::BoxedWidget>,
+    /// `Arc`, not `Box`, because both `layout` and `paint` need this subtree
+    /// while the tree itself is behind a `RefCell`. A `Box` cannot be cloned
+    /// out, so using one would mean holding a borrow across a call that
+    /// re-borrows the tree mutably — a guaranteed panic. `Widget` already
+    /// requires `Send + Sync`, so an `Arc` clones cheaply and lets the borrow
+    /// drop immediately.
+    pub built: Option<Arc<dyn super::Widget>>,
+    /// Whether a `StatefulWidget` at this node has already been mounted.
+    ///
+    /// Tree membership, not object construction: the widget OBJECT is rebuilt
+    /// on every structural frame, so `on_mount` keyed to a fresh object fired
+    /// once per rebuild and `on_dispose` handlers stacked up one per rebuild.
+    /// Keyed to the node, both happen exactly once per stay in the tree.
+    ///
+    /// Cleared by `adopt_tag` (a different widget type took this slot) and by
+    /// `dispose_node_contents` replacing the node wholesale — so both removal
+    /// paths reset it for free, and a widget that leaves and returns is
+    /// correctly a new mount.
+    pub mounted: bool,
     /// Callbacks to run when this node leaves the tree. See
     /// [`RenderTree::dispose_subtree`].
     pub dispose: Vec<Box<dyn FnOnce() + Send>>,
@@ -418,6 +436,9 @@ impl RenderTree {
             f();
         }
         n.built = None;
+        // A different widget type in this slot is a different widget: whatever
+        // was here has left the tree, and whatever arrives has not mounted.
+        n.mounted = false;
 
         // A brand-new node has tag "" and is being claimed for the first time.
         // Clearing default-valued fields is a no-op, so this costs nothing and
@@ -581,6 +602,28 @@ impl RenderTree {
             self.nodes[parent].children.push(id);
         }
         self.nodes[parent].children[index]
+    }
+
+    /// Mark `node` mounted, returning true only the FIRST time.
+    ///
+    /// The one place `on_mount` and the `on_dispose` registration should be
+    /// gated on — see [`TreeNode::mounted`] for why the node rather than the
+    /// widget object is the right key.
+    pub fn mark_mounted(&mut self, node: NodeId) -> bool {
+        let n = &mut self.nodes[node];
+        let first = !n.mounted;
+        n.mounted = true;
+        first
+    }
+
+    /// The subtree a `StatefulWidget` at `node` last built, if any.
+    pub fn built(&self, node: NodeId) -> Option<Arc<dyn super::Widget>> {
+        self.nodes[node].built.clone()
+    }
+
+    /// Store the subtree a `StatefulWidget` at `node` just built.
+    pub fn set_built(&mut self, node: NodeId, w: Arc<dyn super::Widget>) {
+        self.nodes[node].built = Some(w);
     }
 
     /// Reserve `node`'s next positional `widget_state` slot.

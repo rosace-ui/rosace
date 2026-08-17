@@ -47,11 +47,10 @@
 //! moving to the background. Jetpack Compose draws the same line: `remember`
 //! is everyday and universal, `LocalLifecycleOwner` is a separate, rare opt-in.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use rosace_core::types::Size;
 
-use super::render_tree::NodeId;
 use super::{BoxedWidget, Children, LayoutCtx, PaintCtx, Widget};
 
 /// A widget that rebuilds its own subtree when refreshed.
@@ -93,75 +92,64 @@ pub trait StatefulWidget: Send + Sync + 'static {
 }
 
 /// Places a [`StatefulWidget`] into the tree.
+///
+/// Holds nothing but the widget itself. The built subtree and the mounted flag
+/// live on the NODE, because this object does not survive: a structural frame
+/// re-runs the enclosing `build()` and constructs a fresh `Stateful`. Keeping
+/// them here meant every rebuild looked like a first paint — `on_mount` fired
+/// again and another `on_dispose` closure was pushed onto the node, so N
+/// rebuilds produced N mounts and N disposals.
+///
+/// That is the same reason Flutter puts `State` on the Element rather than the
+/// Widget, and SwiftUI puts `@State`'s storage in the attribute graph rather
+/// than in the `View` struct. The description is disposable; the node is not.
 pub struct Stateful<T: StatefulWidget> {
     inner: Arc<T>,
-    /// The subtree built for the current frame, shared between `layout` and
-    /// `paint` so `build` runs ONCE per frame.
-    ///
-    /// `layout` cannot reach the node — `LayoutCtx` carries only constraints,
-    /// font and theme, deliberately, since that is what makes skipping layout
-    /// for a hover provably safe. So the cache lives on this instance, exactly
-    /// as `Row`/`Column`'s `measure_cache` does, rather than on the node.
-    built: Mutex<Option<BoxedWidget>>,
-    /// The node this instance last painted into, so `layout` can ask whether a
-    /// rebuild was requested without needing tree access.
-    node: Mutex<Option<NodeId>>,
 }
 
 impl<T: StatefulWidget> Stateful<T> {
     pub fn new(inner: T) -> Self {
-        Self {
-            inner: Arc::new(inner),
-            built: Mutex::new(None),
-            node: Mutex::new(None),
-        }
-    }
-
-    /// Rebuild if asked to, then hand out the current subtree.
-    fn ensure_built(&self) {
-        let requested = self
-            .node
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some_and(super::take_rebuild_request);
-
-        let mut built = self.built.lock().unwrap_or_else(|e| e.into_inner());
-        if built.is_none() || requested {
-            *built = Some(self.inner.build());
-        }
-    }
-
-    fn with_built<R>(&self, f: impl FnOnce(&dyn Widget) -> R) -> R {
-        self.ensure_built();
-        let built = self.built.lock().unwrap_or_else(|e| e.into_inner());
-        f(&**built.as_ref().expect("ensure_built just populated this"))
+        Self { inner: Arc::new(inner) }
     }
 }
 
 impl<T: StatefulWidget> Widget for Stateful<T> {
     fn children(&self) -> Children<'_> {
-        // The built subtree lives behind a Mutex, so it cannot be lent out
-        // with the lifetime `Children` requires. Reporting `None` keeps the
-        // protocol defaults away; `layout` and `paint` are both overridden
-        // below, which is everything the defaults would have driven.
+        // The built subtree lives on the node behind a `RefCell`, so it cannot
+        // be lent out with the lifetime `Children` requires. Reporting `None`
+        // keeps the protocol defaults away; `layout` and `paint` are both
+        // overridden below, which is everything the defaults would have driven.
         Children::None
     }
 
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        self.with_built(|w| w.layout(ctx))
+        let inner = Arc::clone(&self.inner);
+        let built = ctx.built_child(move || inner.build());
+        // Measured INLINE, deliberately — not through `ctx.layout_child`.
+        //
+        // A rebuild hands back a brand-new subtree, and a node cannot tell a
+        // fresh-but-identical widget from a changed one; its `last_constraints`
+        // still match and its `needs_layout` is still false, so `layout_child`
+        // returns the size the OLD subtree had. That is the same hazard
+        // `paint_child` avoids by refusing its cache on a structural frame,
+        // except a `refresh_state()` frame is TARGETED, so nothing switches the
+        // cache off.
+        //
+        // Caching here would need the rebuild to invalidate the slot the
+        // subtree occupies, which means reaching into `children[0]` on an
+        // assumption about how it was allocated. Not worth it: this is one
+        // child, and correctness is not negotiable. Caught by
+        // `size_propagation.rs` — a grandchild that grew stayed at its old
+        // height.
+        built.layout(ctx)
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        // First paint into this slot is this widget's mount. Registering
-        // dispose here rather than in `new` matters: `new` runs whenever the
-        // parent rebuilds, but the node is what actually persists.
-        let first = {
-            let mut slot = self.node.lock().unwrap_or_else(|e| e.into_inner());
-            let first = slot.is_none();
-            *slot = Some(ctx.node_id());
-            first
-        };
-        if first {
+        // Mount is keyed to the NODE, so it happens once per stay in the tree
+        // rather than once per rebuild. `adopt_tag` and `dispose_node_contents`
+        // both clear the flag, so leaving and returning is correctly a new
+        // mount and both removal paths reset it for free.
+        if ctx.mark_mounted() {
             self.inner.on_mount();
             let inner = Arc::clone(&self.inner);
             ctx.on_dispose(move || inner.on_dispose());
@@ -172,10 +160,10 @@ impl<T: StatefulWidget> Widget for Stateful<T> {
 
         // `refresh_state()` inside this subtree must resolve to THIS widget.
         let _scope = super::enter_widget(ctx.node_id());
-        self.ensure_built();
-        let built = self.built.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = Arc::clone(&self.inner);
+        let built = ctx.built_child(move || inner.build());
         let rect = ctx.rect;
-        ctx.paint_child(rect, &**built.as_ref().expect("ensure_built populated this"));
+        ctx.paint_child(rect, &*built);
     }
 }
 

@@ -703,6 +703,17 @@ impl<'a> PaintCtx<'a> {
     /// This widget's node in the render tree.
     pub fn node_id(&self) -> render_tree::NodeId { self.node }
 
+    /// See [`LayoutCtx::built_child`]. Paint's half of the same cache.
+    pub fn built_child(&self, build: impl FnOnce() -> BoxedWidget) -> Arc<dyn Widget> {
+        built_child_on(&self.tree, self.node, build)
+    }
+
+    /// Mark this node mounted, returning true only the first time — the gate
+    /// for `on_mount` and for registering `on_dispose`.
+    pub fn mark_mounted(&self) -> bool {
+        self.tree.borrow_mut().mark_mounted(self.node)
+    }
+
     /// Widget-owned state that lives on this node — the framework's
     /// `remember`.
     ///
@@ -1680,6 +1691,30 @@ impl<'a> PaintCtx<'a> {
     }
 }
 
+/// Shared by `LayoutCtx::built_child` and `PaintCtx::built_child`.
+///
+/// The rebuild request is CONSUMED here, so the first of the two passes to ask
+/// does the building and the second reuses it.
+fn built_child_on(
+    tree: &Rc<RefCell<RenderTree>>,
+    node: render_tree::NodeId,
+    build: impl FnOnce() -> BoxedWidget,
+) -> Arc<dyn Widget> {
+    let requested = take_rebuild_request(node);
+    if !requested {
+        if let Some(w) = tree.borrow().built(node) {
+            return w;
+        }
+    }
+    // `refresh_state()` written inside `build` must resolve to THIS widget.
+    let w: Arc<dyn Widget> = {
+        let _scope = enter_widget(node);
+        Arc::from(build())
+    };
+    tree.borrow_mut().set_built(node, Arc::clone(&w));
+    w
+}
+
 // ── StateHandle ──────────────────────────────────────────────────────────────
 
 /// A handle to state owned by one render-tree node, from
@@ -1800,6 +1835,24 @@ impl<'a> LayoutCtx<'a> {
             tree: self.tree.clone(),
             node: self.node,
         }
+    }
+
+    /// The subtree a [`Stateful`] widget at this node should use, building it
+    /// if the node has none or a rebuild was requested.
+    ///
+    /// Kept as a narrow accessor rather than exposing the tree, so `layout`
+    /// still cannot reach `hovered`/`pressed`/animation state — that absence is
+    /// what makes skipping layout for a hover provably safe, and a general
+    /// `tree()` getter would quietly hand it over.
+    ///
+    /// Both `layout` and `paint` call this. Whichever runs first consumes the
+    /// rebuild request and stores the result, so `build` runs ONCE per frame —
+    /// the mistake `9b4ba78` removed from `Row`/`Column`'s two-pass measure.
+    pub fn built_child(&self, build: impl FnOnce() -> BoxedWidget) -> Arc<dyn Widget> {
+        let Some(tree) = self.tree.as_ref() else {
+            return Arc::from(build());
+        };
+        built_child_on(tree, self.node, build)
     }
 
     /// Measure `child` in its own node, reusing the cached size when nothing
