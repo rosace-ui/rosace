@@ -69,7 +69,21 @@ impl Responsive {
 
 impl Widget for Responsive {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        (self.builder)(Self::space(ctx.constraints)).layout(ctx)
+        // Measured DETACHED — no node, no slot, no cache. Not a missed
+        // optimisation; the only correct option here.
+        //
+        // This widget builds its child twice from different inputs: here from
+        // the incoming constraints (with infinities mapped to 0 by `space`),
+        // and in `paint` from the rect actually allotted. Inside a `ScrollView`
+        // the height is unbounded, so this call takes the NARROW branch and
+        // `paint` takes the WIDE one — genuinely different widgets, not the
+        // same tree measured twice. Layout claimed a slot for a `Text` that
+        // paint filled with a `Container`, which crashed the showcase.
+        //
+        // Giving the child its own node cannot help: the mismatch is between
+        // the two trees, not between the two cursors. So the measurement must
+        // not claim a slot at all.
+        (self.builder)(Self::space(ctx.constraints)).layout(&ctx.detached())
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

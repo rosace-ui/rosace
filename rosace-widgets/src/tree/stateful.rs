@@ -125,23 +125,24 @@ impl<T: StatefulWidget> Widget for Stateful<T> {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let inner = Arc::clone(&self.inner);
         let built = ctx.built_child(move || inner.build());
-        // Measured INLINE, deliberately — not through `ctx.layout_child`.
+        // `layout_child_uncached` — both halves of it are load-bearing here,
+        // and each was learned from a failure.
         //
-        // A rebuild hands back a brand-new subtree, and a node cannot tell a
-        // fresh-but-identical widget from a changed one; its `last_constraints`
-        // still match and its `needs_layout` is still false, so `layout_child`
-        // returns the size the OLD subtree had. That is the same hazard
-        // `paint_child` avoids by refusing its cache on a structural frame,
-        // except a `refresh_state()` frame is TARGETED, so nothing switches the
-        // cache off.
+        // Its OWN NODE, because `paint` below uses `paint_child`. Measuring
+        // inline with our ctx would let the built subtree's own `layout_child`
+        // calls consume OUR slots, so layout would fill them with the
+        // subtree's children while paint puts the subtree itself at slot 0.
+        // `Responsive` had the same shape and crashed the showcase on it.
         //
-        // Caching here would need the rebuild to invalidate the slot the
-        // subtree occupies, which means reaching into `children[0]` on an
-        // assumption about how it was allocated. Not worth it: this is one
-        // child, and correctness is not negotiable. Caught by
-        // `size_propagation.rs` — a grandchild that grew stayed at its old
+        // UNCACHED, because a rebuild hands back a brand-new subtree and the
+        // node cannot tell a fresh-but-identical widget from a changed one —
+        // `last_constraints` still match and `needs_layout` is still false, so
+        // the cache would return the OLD subtree's size. `paint_child` escapes
+        // this via `is_structural_frame()`, but a `refresh_state()` frame is
+        // TARGETED by design, so nothing switches the cache off. Caught by
+        // `size_propagation.rs`: a grandchild that grew stayed at its old
         // height.
-        built.layout(ctx)
+        ctx.layout_child_uncached(ctx.constraints, &*built)
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

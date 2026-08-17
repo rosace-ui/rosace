@@ -1906,7 +1906,65 @@ impl<'a> LayoutCtx<'a> {
         self.measure_into(Some(index), constraints, child)
     }
 
+    /// A copy of this context with NO tree attached.
+    ///
+    /// Measuring through it touches no node: no slot is consumed, nothing is
+    /// cached, no `layout_tag` is recorded. For a widget that measures a tree
+    /// it may not go on to paint.
+    ///
+    /// `Responsive` is the case that requires it. It builds its child twice
+    /// from different inputs — `layout` from the incoming constraints (with
+    /// infinities mapped to 0), `paint` from the rect actually allotted — so
+    /// inside a `ScrollView`, where the height is unbounded, `layout` takes the
+    /// narrow branch and `paint` takes the wide one. The two trees are
+    /// genuinely different widgets, so no slot scheme can align them; the only
+    /// correct thing is for the measurement not to claim a slot at all.
+    ///
+    /// Costs the subtree its layout cache, which is the honest price of
+    /// measuring one tree and painting another.
+    pub fn detached(&self) -> LayoutCtx<'a> {
+        LayoutCtx {
+            constraints: self.constraints,
+            font: self.font,
+            theme: self.theme,
+            tree: None,
+            node: RenderTree::ROOT,
+        }
+    }
+
+    /// [`Self::layout_child`] with the cache READ skipped — always re-measures.
+    ///
+    /// For a wrapper whose `paint` calls `paint_child` on a child it BUILT,
+    /// rather than one it stores. Two things are needed at once there, and
+    /// neither alone is enough:
+    ///
+    /// * The child must get its own node, or its own `layout_child` calls
+    ///   consume the WRAPPER's slots — layout fills them with the child's
+    ///   grandchildren while paint puts the child itself at slot 0. Before
+    ///   per-node layout caching nothing consumed layout slots, so this was
+    ///   invisible; `Responsive` crashed the showcase on it.
+    /// * The cache must not be read, because a freshly built child is a new
+    ///   widget object and the node cannot tell it from the old one — matching
+    ///   `Constraints` prove nothing. That is what made a grandchild that grew
+    ///   keep its old height in `size_propagation.rs`.
+    ///
+    /// The result is still WRITTEN, so `cached_size` and `layout_tag` stay
+    /// current for `paint_child` and for anything measuring this node later.
+    pub fn layout_child_uncached(&self, constraints: Constraints, child: &dyn Widget) -> Size {
+        self.measure_into_inner(None, constraints, child, false)
+    }
+
     fn measure_into(&self, index: Option<usize>, constraints: Constraints, child: &dyn Widget) -> Size {
+        self.measure_into_inner(index, constraints, child, true)
+    }
+
+    fn measure_into_inner(
+        &self,
+        index: Option<usize>,
+        constraints: Constraints,
+        child: &dyn Widget,
+        use_cache: bool,
+    ) -> Size {
         let Some(tree) = self.tree.as_ref() else {
             // No arena (unit test): measure directly, cache nothing.
             return child.layout(&LayoutCtx {
@@ -1944,7 +2002,8 @@ impl<'a> LayoutCtx<'a> {
             // here made a rebuilt `Text` keep its old width — output that
             // looks plausible and is wrong, which is the exact failure mode
             // these caches must never produce.
-            if !is_structural_frame()
+            if use_cache
+                && !is_structural_frame()
                 && n.last_constraints == Some(constraints)
                 && !n.needs_layout
             {

@@ -25,7 +25,9 @@ impl<W: Widget + Send + Sync + 'static> Widget for Hero<W> {
     }
 
     fn layout(&self, ctx: &LayoutCtx) -> rosace_core::types::Size {
-        self.inner.layout(ctx)
+        // Own node, matching `paint`'s `paint_child` — see
+        // `LayoutCtx::layout_child_uncached`.
+        ctx.layout_child_uncached(ctx.constraints, &self.inner)
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
