@@ -169,7 +169,17 @@ impl Widget for Button {
         let font_size = self.resolved_font_size(&ctx.theme);
         let text_w = ctx.font.measure_text(&self.label, font_size);
         let line_h = ctx.font.line_height(font_size);
-        let ty = ((r.size.height - line_h) / 2.0).max(0.0);
+        // Centre the label in the PILL, expressed relative to the NODE rect.
+        //
+        // `r` is the visual pill, `centered_visual`'d inside `ctx.rect`, so it
+        // starts `(ctx.rect.h - r.h)/2` down — the transparent tap-target
+        // padding. `ctx.text` places its `dy` relative to `ctx.rect.origin`,
+        // not to `r`, so an offset computed purely inside `r` lands that much
+        // too high. Every button, chip and pill drew its label against the top
+        // of the pill from `adc2287` (when `layout` began returning
+        // `control_height` while `paint` kept drawing at `text_fit_height`).
+        let pill_dy = r.origin.y - ctx.rect.origin.y;
+        let ty = pill_dy + ((r.size.height - line_h) / 2.0).max(0.0);
 
         // `.icon()` was settable but never actually painted — the field
         // existed, `paint()` just never read it (found live: a showcase
@@ -269,6 +279,63 @@ mod tests {
         assert!(pill.size.height < laid_out.height, "the extra must be padding");
         // ...and the pill must be centred in it, not top-aligned.
         assert!((pill.origin.y - (laid_out.height - designed) / 2.0).abs() < 0.01);
+    }
+
+    /// The LABEL must sit in the middle of the pill, not ride against its top.
+    ///
+    /// The pill is `centered_visual`'d inside the node rect, so it starts part
+    /// way down; the label's `y` was computed as an offset INSIDE the pill and
+    /// then handed to `ctx.text`, which places it relative to the NODE rect
+    /// (`ctx.rect.origin + dy`). The two differ by exactly the transparent
+    /// tap-target padding, so every button, chip and pill drew its text high.
+    ///
+    /// Asserted against the emitted `DrawText` origin, because the layout size
+    /// is correct either way — only the draw command shows where the glyphs
+    /// actually land.
+    #[test]
+    fn the_label_is_vertically_centred_in_the_pill_not_pinned_to_its_top() {
+        use rosace_render::{DrawCommand, PictureRecorder};
+        use crate::tree::{PaintCtx, RenderTree};
+        use rosace_core::types::{Point, Rect, Size};
+        use std::{cell::RefCell, rc::Rc};
+
+        let font = rosace_render::FontCache::embedded();
+        let theme = rosace_theme::built_in::dark_theme();
+        let ctx_l = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
+        let b = Button::new("Save").width(90.0);
+        let laid_out = b.layout(&ctx_l);
+
+        let mut rec = PictureRecorder::new();
+        {
+            let mut ctx = PaintCtx::root(
+                &mut rec,
+                Rect { origin: Point { x: 0.0, y: 0.0 },
+                       size: Size { width: 90.0, height: laid_out.height } },
+                &font,
+                theme.clone(),
+                Rc::new(RefCell::new(RenderTree::new())),
+            );
+            b.paint(&mut ctx);
+        }
+        let cmds = rec.finish().commands;
+        let pill = cmds.iter().find_map(|c| match c {
+            DrawCommand::FillRRect { rect, .. } => Some(*rect),
+            _ => None,
+        }).expect("the pill is drawn");
+        let text_y = cmds.iter().find_map(|c| match c {
+            DrawCommand::DrawText { origin, .. } => Some(origin.y),
+            _ => None,
+        }).expect("the label is drawn");
+
+        let line_h = font.line_height(b.resolved_font_size(&theme));
+        let expected = pill.origin.y + (pill.size.height - line_h) / 2.0;
+        assert!(
+            (text_y - expected).abs() < 0.51,
+            "label drawn at y={text_y} but the centre of the pill is y={expected} \
+             (pill top {}, height {}, line height {line_h}) — the label is riding \
+             {} px high",
+            pill.origin.y, pill.size.height, expected - text_y,
+        );
     }
 
 }

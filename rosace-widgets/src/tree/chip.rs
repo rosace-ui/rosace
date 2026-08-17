@@ -116,7 +116,12 @@ impl Widget for Chip {
         let text_w = ctx.font.measure_text(&self.label, font_size);
         let tx = ((r.size.width - text_w) / 2.0).max(0.0);
         let line_h = ctx.font.line_height(font_size);
-        let ty = ((r.size.height - line_h) / 2.0).max(0.0);
+        // Relative to the NODE rect, not the pill — `ctx.text` offsets from
+        // `ctx.rect.origin`, while `r` sits `(ctx.rect.h - r.h)/2` lower
+        // because of the transparent tap-target padding. Same bug `Button`
+        // had; see its comment for the history.
+        let pill_dy = r.origin.y - ctx.rect.origin.y;
+        let ty = pill_dy + ((r.size.height - line_h) / 2.0).max(0.0);
         ctx.text(&self.label, tx, ty, with_alpha(fg, dim), font_size);
     }
 }
