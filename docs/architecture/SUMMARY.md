@@ -5,6 +5,7 @@
 - [Core: Component, Element, Context](core.md)
 - [State & Reactivity](state-and-reactivity.md)
 - [Render Pipeline](render-pipeline.md)
+- [Layout & Invalidation](layout-and-invalidation.md)
 - [Widget Protocol](widget-protocol.md)
 - [Platform & the App Loop](platform-and-app-loop.md)
 - [Platform Channel](platform-channel.md)

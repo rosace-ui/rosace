@@ -90,7 +90,18 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
         let vp_rect  = ctx.rect;
 
         // Measure child with unconstrained height to get its natural size.
-        let child_lctx = ctx.layout_ctx(Constraints::loose(vp_rect.size.width, f32::INFINITY));
+        // Claim the child's node BEFORE measuring, and measure through it —
+        // see `InteractiveViewer::paint` for what goes wrong otherwise. Same
+        // recipe, same hazard.
+        let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
+        ctx.tree.borrow_mut().begin_layout(sub_node);
+        let child_lctx = LayoutCtx::with_tree(
+            Constraints::loose(vp_rect.size.width, f32::INFINITY),
+            ctx.font,
+            &ctx.theme,
+            ctx.tree.clone(),
+            sub_node,
+        );
         let child_size = self.child.layout(&child_lctx);
 
         // Record child into a SEPARATE PictureRecorder (D087).
@@ -99,7 +110,6 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
         let child_origin = Point { x: 0.0, y: 0.0 };
         let child_rect = Rect { origin: child_origin, size: child_size };
 
-        let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
         let mut sub_ctx = PaintCtx {
             recorder: &mut sub_rec,
             rect: child_rect,

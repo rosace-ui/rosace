@@ -2078,24 +2078,35 @@ pub trait Widget: Send + Sync {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         match self.children() {
             Children::None => ctx.constraints.constrain(Size { width: 0.0, height: 0.0 }),
-            // DELIBERATELY uncached — do not convert to `layout_child`.
+            // Measured DETACHED — no node, no slot, no cache. This is the
+            // SAFE DEFAULT, and it is deliberate.
             //
-            // It looks safe, because the default `paint` below walks
-            // `children()` in exactly this order. But a widget may override
-            // `paint` while inheriting THIS `layout`, and then its paint slots
-            // whatever it likes: `HeroTag`/`Pressable` made the layout walk
-            // claim a slot for `Container` that paint filled with
-            // `Pressable<Container>`. `children()` is not a reliable predictor
-            // of what paint will slot, so the child measured here has no node
-            // that can be trusted to be its own.
+            // Delegating with `ctx` would let the child's own `layout_child`
+            // calls consume THIS node's slots, so layout would fill them with
+            // the child's grandchildren while paint puts the child itself at
+            // slot 0. Every widget inheriting this `layout` while overriding
+            // `paint` had that bug — `Semantics<W>`, `Pressable<W>`,
+            // `WithOverlay<W>` — and they cannot be fixed one at a time,
+            // because they have no `layout` of their own to change and cannot
+            // be found by grep. Fixing the DEFAULT fixes all of them at once,
+            // including any written in future.
             //
-            // Caching here needs the identity work in A7 (Stage 5), where the
-            // node tree — not `children()` — defines the structure.
-            Children::One(c) => c.layout(ctx),
+            // Using `layout_child` instead is not an option either:
+            // `children()` is not a reliable predictor of what `paint` slots,
+            // precisely for the widgets that override `paint`.
+            //
+            // The cost is real and worth stating: a subtree under a
+            // default-layout wrapper gets no layout caching, because `detached`
+            // propagates down. Caching reaches rows, columns, grids and lists —
+            // the expensive containers — but not content nested inside a
+            // wrapper. Recovering it needs entry-at-boundary layout (Stage 7),
+            // where the node tree rather than `children()` defines structure.
+            Children::One(c) => c.layout(&ctx.detached()),
             Children::Many(cs) => {
                 let mut s = Size { width: 0.0, height: 0.0 };
+                let dctx = ctx.detached();
                 for c in cs {
-                    let cz = c.layout(ctx);
+                    let cz = c.layout(&dctx);
                     s.width = s.width.max(cz.width);
                     s.height = s.height.max(cz.height);
                 }

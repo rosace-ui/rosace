@@ -683,6 +683,20 @@ impl RenderTree {
             None => {
                 let id = self.nodes.len();
                 self.nodes.push(TreeNode::default());
+                // The parent link is NOT optional, and its absence was a real
+                // bug: `mark_dirty_with_ancestors` walks `parent` upward, so a
+                // keyed child with `parent: None` stopped the walk dead at
+                // itself. Every SCREEN is a keyed child, so scrolling inside
+                // any screen marked the scroll node and nothing above it —
+                // `ScreenTransitionView`, `Scaffold` and the arena root stayed
+                // clean, the walk returned their caches without descending,
+                // and the scroll never reached the screen.
+                //
+                // It was invisible while scrolling dirtied the whole COMPONENT,
+                // because every frame was then structural and repainted
+                // everything regardless of parent links. Precise invalidation
+                // is what exposed it. `slot()` has always set this.
+                self.nodes[id].parent = Some(parent);
                 self.nodes[parent].keyed_children.insert(key, id);
                 id
             }

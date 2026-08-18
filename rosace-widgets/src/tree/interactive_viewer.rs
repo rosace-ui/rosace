@@ -67,12 +67,25 @@ impl<W: Widget + Send + Sync + 'static> Widget for InteractiveViewer<W> {
 
         // Measure + record the child ONCE at its natural (unconstrained) size —
         // same recipe as TransformLayer/ScrollView.
-        let child_lctx = ctx.layout_ctx(Constraints::loose(f32::INFINITY, f32::INFINITY));
+        // The child's node is claimed FIRST, and the measurement goes through
+        // it. Measuring through `ctx.layout_ctx(..)` instead — rooted at OUR
+        // node — made the child's own `layout_child` calls consume our slots,
+        // so layout treated `children[0]` as the child's FIRST CHILD while
+        // paint treats it as the child itself. Off by one level, and it
+        // crashed the showcase on this page.
+        let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
+        ctx.tree.borrow_mut().begin_layout(sub_node);
+        let child_lctx = LayoutCtx::with_tree(
+            Constraints::loose(f32::INFINITY, f32::INFINITY),
+            ctx.font,
+            &ctx.theme,
+            ctx.tree.clone(),
+            sub_node,
+        );
         let child_size = self.child.layout(&child_lctx);
 
         let mut sub_rec = PictureRecorder::new();
         let child_rect = Rect { origin: Point { x: 0.0, y: 0.0 }, size: child_size };
-        let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
         let mut sub_ctx = PaintCtx {
             recorder: &mut sub_rec,
             rect: child_rect,

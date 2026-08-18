@@ -101,7 +101,14 @@ impl Widget for Dismissible {
     }
 
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        let child_size = self.child.layout(ctx);
+        // Measured DETACHED — no node, no slot, no cache.
+        //
+        // `paint` slots a background BEFORE the child, but only while a swipe
+        // is in progress. So the child is paint slot 0 or slot 1 depending on
+        // drag state, which is decided at paint time and cannot be known here.
+        // No fixed slot is correct, so this must claim none.
+        // Found by `wrapper_nesting.rs`, not by anyone clicking.
+        let child_size = self.child.layout(&ctx.detached());
         Size { width: avail_w(ctx.constraints), height: child_size.height }
     }
 
