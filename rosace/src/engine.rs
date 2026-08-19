@@ -2949,7 +2949,7 @@ mod tests {
             ("ListView",         || Box::new(w::ListView::builder(3, 40.0, |_| Box::new(w::Spacer::new(8.0))))),
             ("Menu",             || Box::new(w::Menu::new().item("Copy", || {}))),
             ("Stepper",          || Box::new(w::Stepper::new(2))),
-            ("Dropdown",         || Box::new(w::Dropdown::new(vec!["A", "B"], 0, rosace_state::Atom::new(rosace_state::next_atom_id(), false)))),
+            ("Dropdown",         || Box::new(w::Dropdown::new(vec!["A", "B"], 0, false))),
             ("PullToRefresh",    || Box::new(w::PullToRefresh::new(w::Spacer::new(8.0)))),
             ("Dismissible",      || Box::new(w::Dismissible::new(w::Spacer::new(8.0)))),
             ("LongPressable",    || Box::new(w::LongPressable::new(w::Spacer::new(8.0), || {}))),

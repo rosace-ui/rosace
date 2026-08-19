@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
-use rosace_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx};
 use super::overlay::{OverlayEntry, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig, push_overlay};
 use super::menu::Menu;
@@ -11,7 +10,8 @@ use rosace_render::Color;
 pub struct Dropdown {
     options: Vec<String>,
     selected: usize,
-    open: Atom<bool>,
+    open: bool,
+    on_open_change: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     disabled: bool,
     width: f32,
     background: Option<Color>,
@@ -26,11 +26,12 @@ pub struct Dropdown {
 }
 
 impl Dropdown {
-    pub fn new(options: Vec<impl Into<String>>, selected: usize, open: Atom<bool>) -> Self {
+    pub fn new(options: Vec<impl Into<String>>, selected: usize, open: bool) -> Self {
         Self {
             options: options.into_iter().map(Into::into).collect(), selected, open, disabled: false, width: 200.0,
             background: None, color: None, border_color: None, border_width: 1.0, radius: 8.0,
             on_change: None,
+            on_open_change: None,
             label: None,
         }
     }
@@ -47,6 +48,10 @@ impl Dropdown {
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
     pub fn on_change(mut self, f: impl Fn(usize) + Send + Sync + 'static) -> Self {
         self.on_change = Some(Arc::new(f)); self
+    }
+    /// Called with the NEW open state when the menu opens or closes.
+    pub fn on_open_change(mut self, f: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        self.on_open_change = Some(Arc::new(f)); self
     }
 }
 
@@ -70,7 +75,7 @@ impl Widget for Dropdown {
         // size picker). `.label(..)` now supplies a real name when the app
         // gives one, and expanded/collapsed is exposed too — it drives a
         // whole overlay and was entirely silent.
-        let state = if self.open.get() { "expanded" } else { "collapsed" };
+        let state = if self.open { "expanded" } else { "collapsed" };
         let mut sem = super::SemanticsProps::new(rosace_core::Role::Button)
             .value(format!("{selected_label}, {state}"));
         if let Some(l) = &self.label { sem = sem.label(l); }
@@ -81,7 +86,7 @@ impl Widget for Dropdown {
              self.color.unwrap_or_else(|| ctx.tc(t.on_surface)),
              self.border_color.unwrap_or_else(|| ctx.tc(t.outline)))
         };
-        let is_open = self.open.get();
+        let is_open = self.open;
         let focused = !self.disabled && ctx.focus_node().is_focused();
         let hovered = !self.disabled && ctx.hovered();
         let pressed = !self.disabled && ctx.pressed();
@@ -116,35 +121,36 @@ impl Widget for Dropdown {
         }, &chev);
 
         if !self.disabled {
-            let open = self.open.clone();
+            let cb = self.on_open_change.clone();
+            let next = !is_open;
             // Toggle, not just open — the trigger doubles as its own
             // close button once the menu is showing (see the scrim's
             // `exclude_rect` below, which keeps outside-tap dismiss from
             // fighting this on the same click).
-            ctx.register_hit(Arc::new(move || open.set(!open.get())));
+            ctx.register_hit(Arc::new(move || { if let Some(f) = &cb { f(next); } }));
         } else {
             ctx.register_hit(Arc::new(|| {}));
         }
 
-        if self.open.get() {
+        if self.open {
             let pos = Point { x: r.origin.x, y: r.origin.y + r.size.height + 4.0 };
             let mut menu = Menu::new().min_width(self.width);
             for (i, opt) in self.options.iter().enumerate() {
-                let open = self.open.clone();
+                let close = self.on_open_change.clone();
                 let cb = self.on_change.clone();
                 menu = menu.item(opt.clone(), move || {
-                    open.set(false);
+                    if let Some(f) = &close { f(false); }
                     if let Some(cb) = &cb { cb(i); }
                 });
             }
-            let open2 = self.open.clone();
+            let close2 = self.on_open_change.clone();
             push_overlay(
                 OverlayEntry::new(LayerPosition::Absolute(pos), menu)
                     .input(InputBehavior::PassThrough)
                     .focus(FocusBehavior::PassThrough)
                     .scrim(ScrimConfig {
                         color: Color::TRANSPARENT,
-                        on_tap: Some(Arc::new(move || open2.set(false))),
+                        on_tap: Some(Arc::new(move || { if let Some(f) = &close2 { f(false); } })),
                         // Own trigger's rect — a click there is handled by
                         // this widget's `register_hit` toggle above, not
                         // by outside-tap dismiss.
@@ -165,8 +171,7 @@ mod tests {
         let font = rosace_render::FontCache::embedded();
         let theme = rosace_theme::built_in::dark_theme();
         let ctx = LayoutCtx::new(Constraints::loose(400.0, 400.0), &font, &theme);
-        let open = Atom::new(rosace_state::next_atom_id(), false);
-        let dd = Dropdown::new(vec!["A", "B"], 0, open)
+        let dd = Dropdown::new(vec!["A", "B"], 0, false)
             .background(Color::rgb(10, 10, 10))
             .color(Color::rgb(255, 255, 255))
             .border(Color::rgb(200, 0, 0), 2.0)

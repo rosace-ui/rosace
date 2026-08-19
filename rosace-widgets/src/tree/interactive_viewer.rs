@@ -3,7 +3,6 @@ use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::PictureRecorder;
 use crate::scroll::controller::{MAX_VELOCITY, COAST_STOP_THRESHOLD};
-use rosace_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx, TransformLayerEntry, avail_w, avail_h};
 use super::container::draw_rounded_rect_pub;
 
@@ -25,7 +24,6 @@ use super::container::draw_rounded_rect_pub;
 /// new platform-level gesture plumbing.
 pub struct InteractiveViewer<W: Widget + Send + Sync + 'static> {
     pub child: W,
-    zoom: Atom<f32>,
     min_scale: f32,
     max_scale: f32,
     /// When true (default), panning is clamped so content can't be dragged
@@ -39,7 +37,6 @@ impl<W: Widget + Send + Sync + 'static> InteractiveViewer<W> {
     pub fn new(child: W) -> Self {
         Self {
             child,
-            zoom: rosace_state::use_atom(1.0_f32),
             min_scale: 0.5,
             max_scale: 4.0,
             constrained: true,
@@ -62,7 +59,10 @@ impl<W: Widget + Send + Sync + 'static> Widget for InteractiveViewer<W> {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        let zoom = self.zoom.get().clamp(self.min_scale, self.max_scale);
+        // Called unconditionally and first: the slot is positional, and
+        // `paint_zoom_controls` is conditional.
+        let zoom_state = ctx.widget_state(|| 1.0_f32);
+        let zoom = zoom_state.get().clamp(self.min_scale, self.max_scale);
         let vp_rect = ctx.rect;
 
         // Measure + record the child ONCE at its natural (unconstrained) size —
@@ -189,7 +189,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for InteractiveViewer<W> {
         // multiplier (winit's own convention) — same `zoom *= 1.0 + delta`
         // used by the `+`/`-` controls' 1.25 step, just gesture-driven.
         {
-            let z = self.zoom.clone();
+            let z = zoom_state.clone();
             let (min_scale, max_scale) = (self.min_scale, self.max_scale);
             ctx.register_zoom_target(vp_rect, Arc::new(move |delta| {
                 z.set((z.get() * (1.0 + delta)).clamp(min_scale, max_scale));
@@ -200,7 +200,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for InteractiveViewer<W> {
             .label("Interactive viewer".to_string()));
 
         if self.zoom_controls {
-            self.paint_zoom_controls(ctx, vp_rect);
+            self.paint_zoom_controls(ctx, vp_rect, &zoom_state);
         }
     }
 }
@@ -228,7 +228,8 @@ impl<W: Widget + Send + Sync + 'static> InteractiveViewer<W> {
     /// otherwise the pan handler (checked at the SAME tier but registered
     /// first) would swallow every click before plain `hits` are ever
     /// reached.
-    fn paint_zoom_controls(&self, ctx: &mut PaintCtx, vp_rect: Rect) {
+    fn paint_zoom_controls(&self, ctx: &mut PaintCtx, vp_rect: Rect,
+                           zoom_state: &super::StateHandle<f32>) {
         let (bg, fg) = {
             let t = &ctx.theme.colors;
             (ctx.tc(t.surface), ctx.tc(t.on_surface))
@@ -260,12 +261,12 @@ impl<W: Widget + Send + Sync + 'static> InteractiveViewer<W> {
 
         let saved_rect = ctx.rect;
         {
-            let z = self.zoom.clone();
+            let z = zoom_state.clone();
             ctx.rect = plus_rect;
             ctx.on_press_at(move |_, _| z.set((z.get() * 1.25).clamp(min_scale, max_scale)));
         }
         {
-            let z = self.zoom.clone();
+            let z = zoom_state.clone();
             ctx.rect = minus_rect;
             ctx.on_press_at(move |_, _| z.set((z.get() / 1.25).clamp(min_scale, max_scale)));
         }
@@ -287,13 +288,13 @@ mod tests {
         assert_eq!((size.width, size.height), (400.0, 300.0));
     }
 
+    /// Zoom lives in node state, reachable only through a `PaintCtx`, so this
+    /// asserts the clamp rule `paint` applies rather than poking a field.
     #[test]
-    fn zoom_atom_clamps_to_min_max() {
+    fn zoom_clamps_to_min_max() {
         let iv = InteractiveViewer::new(Text::new("x")).min_scale(0.5).max_scale(2.0);
-        iv.zoom.set(10.0);
-        assert_eq!(iv.zoom.get().clamp(iv.min_scale, iv.max_scale), 2.0);
-        iv.zoom.set(0.01);
-        assert_eq!(iv.zoom.get().clamp(iv.min_scale, iv.max_scale), 0.5);
+        assert_eq!(10.0_f32.clamp(iv.min_scale, iv.max_scale), 2.0);
+        assert_eq!(0.01_f32.clamp(iv.min_scale, iv.max_scale), 0.5);
     }
 
     #[test]

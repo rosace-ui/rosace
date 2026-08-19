@@ -1,7 +1,6 @@
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
-use rosace_state::Atom;
 
 use super::container::draw_rounded_rect_pub;
 use super::{BoxedWidget, EdgeInsets, LayoutCtx, PaintCtx, Widget};
@@ -19,7 +18,8 @@ pub struct Accordion {
     /// `None` = `EdgeInsets::symmetric(PAD_H, 0.0)`.
     padding: Option<EdgeInsets>,
     title: String,
-    expanded: Atom<bool>,
+    expanded: bool,
+    on_change: Option<std::sync::Arc<dyn Fn(bool) + Send + Sync>>,
     body: BoxedWidget,
     background: Option<Color>,
     border: Option<(Color, f32)>,
@@ -30,11 +30,12 @@ pub struct Accordion {
 }
 
 impl Accordion {
-    pub fn new(title: impl Into<String>, expanded: Atom<bool>, body: impl Widget + 'static) -> Self {
+    pub fn new(title: impl Into<String>, expanded: bool, body: impl Widget + 'static) -> Self {
         Self {
             title: title.into(),
             padding: None,
             expanded,
+            on_change: None,
             body: Box::new(body),
             background: None,
             border: None,
@@ -50,6 +51,10 @@ impl Accordion {
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
     pub fn elevation(mut self, e: f32) -> Self { self.elevation = e; self }
     pub fn title_size(mut self, s: f32) -> Self { self.title_size = s; self }
+    /// Called with the NEW expanded value when the header is tapped.
+    pub fn on_change(mut self, f: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        self.on_change = Some(std::sync::Arc::new(f)); self
+    }
 }
 
 /// Designed header height — a MINIMUM. `header_height` grows it to fit
@@ -76,7 +81,7 @@ impl Widget for Accordion {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let w = super::avail_w(ctx.constraints);
         let mut h = self.header_height(ctx.font, self.title_size);
-        if self.expanded.get() {
+        if self.expanded {
             let bc = Constraints::loose(w - self.insets().total_h(), f32::INFINITY);
             h += self.body.layout(&ctx.with_constraints(bc)).height + 12.0;
         }
@@ -95,7 +100,7 @@ impl Widget for Accordion {
             )
         };
         let r = ctx.rect;
-        let open = self.expanded.get();
+        let open = self.expanded;
         // Theme-eased reveal factor (0 collapsed → 1 expanded); drives the
         // body fade and the chevron rotation together.
         let t = ctx.animate_to(if open { 1.0 } else { 0.0 }, 0.0);
@@ -151,14 +156,17 @@ impl Widget for Accordion {
                 .color(Color::rgba(fg.r, fg.g, fg.b, a)));
         }
 
-        let atom = self.expanded.clone();
+        let cb = self.on_change.clone();
+        let next = !open;
         let header_ctx = ctx.child(header);
         header_ctx.semantics(
             super::SemanticsProps::new(rosace_core::Role::Button)
                 .label(&self.title)
                 .value(if open { "expanded" } else { "collapsed" }),
         );
-        header_ctx.register_hit(std::sync::Arc::new(move || atom.set(!atom.get())));
+        header_ctx.register_hit(std::sync::Arc::new(move || {
+            if let Some(f) = &cb { f(next); }
+        }));
 
         if open {
             let pad = self.insets();
