@@ -57,7 +57,7 @@ impl ScreenTransitionView {
         valid_keys: Vec<u64>,
     ) -> Self {
         Self {
-            incoming: Box::new(incoming),
+            incoming: Arc::new(incoming),
             incoming_key,
             outgoing,
             outgoing_key,

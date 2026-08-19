@@ -239,7 +239,7 @@ mod tests {
             );
             ListView::builder(10_000, 50.0, move |_i| {
                 counter.fetch_add(1, Ordering::Relaxed);
-                Box::new(super::super::Spacer::new(1.0))
+                Arc::new(super::super::Spacer::new(1.0))
             })
             .paint(&mut ctx);
         }

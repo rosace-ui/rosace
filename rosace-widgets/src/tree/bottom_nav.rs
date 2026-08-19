@@ -34,7 +34,7 @@ impl BottomNavItem {
     }
     /// Icon shown above the label (any widget — usually [`super::Icon`]).
     pub fn icon(mut self, w: impl Widget + 'static) -> Self {
-        self.icon = Some(Box::new(w));
+        self.icon = Some(Arc::new(w));
         self
     }
     pub fn badge(mut self, n: u32) -> Self { self.badge = Some(n); self }

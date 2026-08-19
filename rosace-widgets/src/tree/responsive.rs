@@ -106,9 +106,9 @@ mod tests {
         let c = Constraints::loose(width, 400.0);
         let w = Responsive::new(|space| {
             if space.width >= breakpoint::COMPACT {
-                Box::new(super::super::Spacer::new(111.0))
+                Arc::new(super::super::Spacer::new(111.0))
             } else {
-                Box::new(super::super::Spacer::new(22.0))
+                Arc::new(super::super::Spacer::new(22.0))
             }
         });
         w.layout(&LayoutCtx::new(c, &font, &theme))
@@ -132,7 +132,7 @@ mod tests {
         let s = seen.clone();
         let w = Responsive::new(move |space| {
             *s.lock().unwrap() = space;
-            Box::new(super::super::Spacer::new(1.0))
+            Arc::new(super::super::Spacer::new(1.0))
         });
         let c = Constraints {
             min_width: 0.0,

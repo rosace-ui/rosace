@@ -41,7 +41,7 @@ pub struct PullToRefresh {
 
 impl PullToRefresh {
     pub fn new(child: impl Widget + 'static) -> Self {
-        Self { child: Box::new(child), on_refresh: None, refreshing: false, color: None }
+        Self { child: Arc::new(child), on_refresh: None, refreshing: false, color: None }
     }
 
     /// Fired once when the user releases past the trigger distance. Typical

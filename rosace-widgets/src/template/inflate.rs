@@ -1,7 +1,7 @@
 //! The widget registry + interpreter (D103 / D102 Tier 1 — rollout step 3).
 //!
 //! The "inflater, not a renderer" (see `.steering/HOT_RELOAD.md`): [`inflate`]
-//! walks a [`Template`] and reconstructs a `Box<dyn Widget>` tree by calling the
+//! walks a [`Template`] and reconstructs a `BoxedWidget` tree by calling the
 //! SAME widget constructors the release builder would — so the result is
 //! byte-for-byte the tree hand-written builder code produces, and the engine's
 //! normal `layout()`/`paint()` run on it unchanged. Nothing here paints; this
@@ -26,6 +26,7 @@
 //! themselves — that's the engine's job), inflate instrumentation attaches when
 //! this is wired into the frame loop / hot-swap, not in this pure function.
 
+use crate::tree::BoxedWidget;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -80,12 +81,12 @@ macro_rules! inflatable {
             }
             for kid in children { w = w.child(kid); }
             let _ = &mut w; // `mut` may go unused for a propless, childless widget.
-            ::core::result::Result::Ok(::std::boxed::Box::new(w) as ::std::boxed::Box<dyn $crate::tree::Widget>)
+            ::core::result::Result::Ok(::std::sync::Arc::new(w) as ::std::sync::Arc<dyn $crate::tree::Widget>)
         });
     };
     // Leaf form: props only, no children (given children → escalate).
     ($name:literal, $ctor:expr, leaf, { $($prop:literal => $setter:ident : $ty:ty),* $(,)? }) => {
-        $crate::template::register_widget($name, |_args: &[$crate::template::PropInput], props, children: ::std::vec::Vec<::std::boxed::Box<dyn $crate::tree::Widget>>| {
+        $crate::template::register_widget($name, |_args: &[$crate::template::PropInput], props, children: ::std::vec::Vec<::std::sync::Arc<dyn $crate::tree::Widget>>| {
             if !children.is_empty() {
                 return ::core::result::Result::Err(
                     $crate::template::InflateError::UnexpectedChildren { widget: $name.into() }
@@ -102,7 +103,7 @@ macro_rules! inflatable {
                 }
             }
             let _ = &mut w;
-            ::core::result::Result::Ok(::std::boxed::Box::new(w) as ::std::boxed::Box<dyn $crate::tree::Widget>)
+            ::core::result::Result::Ok(::std::sync::Arc::new(w) as ::std::sync::Arc<dyn $crate::tree::Widget>)
         });
     };
 }
@@ -144,7 +145,7 @@ impl std::error::Error for InflateError {}
 /// already-inflated children. Higher-ranked over the props' lifetime so a
 /// single boxed closure works for any call.
 pub type BuildFn = Box<
-    dyn for<'a> Fn(&'a [PropInput<'a>], &'a [(String, PropInput<'a>)], Vec<Box<dyn Widget>>) -> Result<Box<dyn Widget>, InflateError>
+    dyn for<'a> Fn(&'a [PropInput<'a>], &'a [(String, PropInput<'a>)], Vec<BoxedWidget>) -> Result<BoxedWidget, InflateError>
         + Send
         + Sync,
 >;
@@ -158,7 +159,7 @@ fn registry() -> &'static RwLock<HashMap<String, BuildFn>> {
 /// call this — same extensibility path as built-ins, no edit to rosace-* crates.
 pub fn register_widget<F>(name: impl Into<String>, build: F)
 where
-    F: for<'a> Fn(&'a [PropInput<'a>], &'a [(String, PropInput<'a>)], Vec<Box<dyn Widget>>) -> Result<Box<dyn Widget>, InflateError>
+    F: for<'a> Fn(&'a [PropInput<'a>], &'a [(String, PropInput<'a>)], Vec<BoxedWidget>) -> Result<BoxedWidget, InflateError>
         + Send
         + Sync
         + 'static,
@@ -172,7 +173,7 @@ pub fn is_registered(name: &str) -> bool {
 }
 
 /// Inflate a template into a live widget tree, binding hole slots by index.
-pub fn inflate(template: &Template, holes: &[Box<dyn Any>]) -> Result<Box<dyn Widget>, InflateError> {
+pub fn inflate(template: &Template, holes: &[Box<dyn Any>]) -> Result<BoxedWidget, InflateError> {
     inflate_node(&template.root, holes)
 }
 
@@ -188,7 +189,7 @@ fn resolve<'a>(value: &'a PropValue, holes: &'a [Box<dyn Any>]) -> Result<PropIn
     }
 }
 
-fn inflate_node(node: &TemplateNode, holes: &[Box<dyn Any>]) -> Result<Box<dyn Widget>, InflateError> {
+fn inflate_node(node: &TemplateNode, holes: &[Box<dyn Any>]) -> Result<BoxedWidget, InflateError> {
     // Positional constructor args, then named props — both resolved the same way.
     let mut args: Vec<PropInput<'_>> = Vec::with_capacity(node.args.len());
     for value in &node.args {
@@ -200,7 +201,7 @@ fn inflate_node(node: &TemplateNode, holes: &[Box<dyn Any>]) -> Result<Box<dyn W
     }
 
     // Children first (depth-first), so the build closure receives live widgets.
-    let mut children: Vec<Box<dyn Widget>> = Vec::with_capacity(node.children.len());
+    let mut children: Vec<BoxedWidget> = Vec::with_capacity(node.children.len());
     for child in &node.children {
         children.push(inflate_node(child, holes)?);
     }
@@ -311,7 +312,7 @@ fn builtin_widgets() -> HashMap<String, BuildFn> {
 
 // Button's label is a positional arg (`Button("Save")`); `on_press` is a
 // handler hole (a nullary closure the compiled binary wrapped as `Handler`).
-fn build_button(args: &[PropInput], props: &[(String, PropInput)], children: Vec<Box<dyn Widget>>) -> Result<Box<dyn Widget>, InflateError> {
+fn build_button(args: &[PropInput], props: &[(String, PropInput)], children: Vec<BoxedWidget>) -> Result<BoxedWidget, InflateError> {
     if !children.is_empty() {
         return Err(InflateError::UnexpectedChildren { widget: "Button".into() });
     }
@@ -329,12 +330,12 @@ fn build_button(args: &[PropInput], props: &[(String, PropInput)], children: Vec
             _ => return Err(InflateError::UnknownProp { widget: "Button".into(), prop: k.clone() }),
         }
     }
-    Ok(Box::new(button))
+    Ok(Arc::new(button))
 }
 
 // Column/Row take no positional args (`Column::new()`); `_args` is ignored (a
 // stray `Column(x)` would already fail the release builder's `Column::new(x)`).
-fn build_column(_args: &[PropInput], props: &[(String, PropInput)], children: Vec<Box<dyn Widget>>) -> Result<Box<dyn Widget>, InflateError> {
+fn build_column(_args: &[PropInput], props: &[(String, PropInput)], children: Vec<BoxedWidget>) -> Result<BoxedWidget, InflateError> {
     let mut col = Column::new();
     for (k, v) in props {
         match k.as_str() {
@@ -345,10 +346,10 @@ fn build_column(_args: &[PropInput], props: &[(String, PropInput)], children: Ve
     for kid in children {
         col = col.child(kid);
     }
-    Ok(Box::new(col))
+    Ok(Arc::new(col))
 }
 
-fn build_row(_args: &[PropInput], props: &[(String, PropInput)], children: Vec<Box<dyn Widget>>) -> Result<Box<dyn Widget>, InflateError> {
+fn build_row(_args: &[PropInput], props: &[(String, PropInput)], children: Vec<BoxedWidget>) -> Result<BoxedWidget, InflateError> {
     let mut row = Row::new();
     for (k, v) in props {
         match k.as_str() {
@@ -359,11 +360,11 @@ fn build_row(_args: &[PropInput], props: &[(String, PropInput)], children: Vec<B
     for kid in children {
         row = row.child(kid);
     }
-    Ok(Box::new(row))
+    Ok(Arc::new(row))
 }
 
 // Text's content is a POSITIONAL constructor arg: `Text("Hi")` → `Text::new("Hi")`.
-fn build_text(args: &[PropInput], props: &[(String, PropInput)], children: Vec<Box<dyn Widget>>) -> Result<Box<dyn Widget>, InflateError> {
+fn build_text(args: &[PropInput], props: &[(String, PropInput)], children: Vec<BoxedWidget>) -> Result<BoxedWidget, InflateError> {
     if !children.is_empty() {
         return Err(InflateError::UnexpectedChildren { widget: "Text".into() });
     }
@@ -376,7 +377,7 @@ fn build_text(args: &[PropInput], props: &[(String, PropInput)], children: Vec<B
     if let Some((k, _)) = props.first() {
         return Err(InflateError::UnknownProp { widget: "Text".into(), prop: k.clone() });
     }
-    Ok(Box::new(Text::new(content)))
+    Ok(Arc::new(Text::new(content)))
 }
 
 #[cfg(test)]
@@ -522,7 +523,7 @@ mod tests {
     #[test]
     fn third_party_widget_registers_and_inflates() {
         // Mirrors the D115 extensibility bar: a widget rosace never heard of.
-        register_widget("MyBadge", |_args, _props, _children| Ok(Box::new(Text::new("badge")) as Box<dyn Widget>));
+        register_widget("MyBadge", |_args, _props, _children| Ok(Arc::new(Text::new("badge")) as BoxedWidget));
         assert!(is_registered("MyBadge"));
         let t = tmpl(TemplateNode::new("MyBadge"));
         let w = inflate(&t, &[]).expect("custom widget inflates");

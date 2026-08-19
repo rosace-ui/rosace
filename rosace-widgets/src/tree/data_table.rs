@@ -131,7 +131,7 @@ impl DataTable {
         // Header row.
         let mut header: Vec<BoxedWidget> = Vec::new();
         if self.selectable {
-            header.push(Box::new(Text::new("")));
+            header.push(Arc::new(Text::new("")));
         }
         for (i, col) in self.columns.iter().enumerate() {
             let label = if self.sort_col == Some(i) {
@@ -148,9 +148,9 @@ impl DataTable {
                     } else {
                         SortDirection::Ascending
                     };
-                    Box::new(Pressable::new(Text::new(label).weight(rosace_render::FontWeight::Bold), move || f(i, next_dir)))
+                    Arc::new(Pressable::new(Text::new(label).weight(rosace_render::FontWeight::Bold), move || f(i, next_dir)))
                 }
-                None => Box::new(Text::new(label).weight(rosace_render::FontWeight::Bold)),
+                None => Arc::new(Text::new(label).weight(rosace_render::FontWeight::Bold)),
             };
             header.push(cell);
         }
@@ -165,14 +165,14 @@ impl DataTable {
                 let cb: BoxedWidget = match &self.on_select {
                     Some(f) => {
                         let f = f.clone();
-                        Box::new(cb.on_change(move |v| f(r, v)))
+                        Arc::new(cb.on_change(move |v| f(r, v)))
                     }
-                    None => Box::new(cb),
+                    None => Arc::new(cb),
                 };
                 row_widgets.push(cb);
             }
             for text in cells {
-                row_widgets.push(Box::new(Text::new(text.clone())));
+                row_widgets.push(Arc::new(Text::new(text.clone())));
             }
             table = table.row(row_widgets);
         }

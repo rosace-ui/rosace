@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use super::{Widget, Children, LayoutCtx, PaintCtx, BoxedWidget, avail_w};
@@ -14,7 +15,7 @@ impl Wrap {
     pub fn new() -> Self { Self { spacing: 8.0, run_spacing: 8.0, children: Vec::new() } }
     pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
     pub fn run_spacing(mut self, s: f32) -> Self { self.run_spacing = s; self }
-    pub fn child(mut self, w: impl Widget + 'static) -> Self { self.children.push(Box::new(w)); self }
+    pub fn child(mut self, w: impl Widget + 'static) -> Self { self.children.push(Arc::new(w)); self }
     pub fn children(mut self, ws: Vec<BoxedWidget>) -> Self { self.children.extend(ws); self }
 
     /// Returns (per-child rect origins relative to 0,0, total size).
@@ -76,7 +77,7 @@ mod tests {
 
     fn boxes(sizes: &[(f32, f32)]) -> Vec<BoxedWidget> {
         sizes.iter()
-            .map(|(w, h)| Box::new(Container::new().width(*w).height(*h)) as BoxedWidget)
+            .map(|(w, h)| Arc::new(Container::new().width(*w).height(*h)) as BoxedWidget)
             .collect()
     }
 

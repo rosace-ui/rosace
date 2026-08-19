@@ -124,7 +124,7 @@ impl OverlayEntry {
             id: LayerId::new(),
             key: None,
             position,
-            widget: Box::new(widget),
+            widget: Arc::new(widget),
             input: InputBehavior::PassThrough,
             focus: FocusBehavior::PassThrough,
             scrim: None,

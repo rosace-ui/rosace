@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
@@ -58,8 +59,8 @@ impl ListTile {
         }
     }
     pub fn subtitle(mut self, s: impl Into<String>) -> Self { self.subtitle = Some(s.into()); self }
-    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Box::new(w)); self }
-    pub fn trailing(mut self, w: impl Widget + 'static) -> Self { self.trailing = Some(Box::new(w)); self }
+    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Arc::new(w)); self }
+    pub fn trailing(mut self, w: impl Widget + 'static) -> Self { self.trailing = Some(Arc::new(w)); self }
     pub fn selected(mut self) -> Self { self.selected = true; self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
     /// Inset around the row's content. Was reachable only by assigning the

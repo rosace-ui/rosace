@@ -39,7 +39,7 @@ struct Panel(Counts);
 impl StatefulWidget for Panel {
     fn build(&self) -> BoxedWidget {
         self.0.builds.fetch_add(1, Ordering::SeqCst);
-        Box::new(Leaf)
+        Arc::new(Leaf)
     }
     fn on_mount(&self) { self.0.mounts.fetch_add(1, Ordering::SeqCst); }
     fn on_dispose(&self) { self.0.disposes.fetch_add(1, Ordering::SeqCst); }

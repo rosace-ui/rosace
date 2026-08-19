@@ -50,7 +50,7 @@ impl StatefulWidget for Panel {
         // Deliberately a MULTI-CHILD subtree. A childless leaf hides slot
         // leaking entirely — which is exactly why the original `Stateful`
         // tests passed while the bug was live.
-        Box::new(Row::new().child(Leaf).child(Leaf))
+        Arc::new(Row::new().child(Leaf).child(Leaf))
     }
 }
 
@@ -58,11 +58,11 @@ impl StatefulWidget for Panel {
 /// leaked slot has somewhere to leak to.
 fn contents() -> Vec<(&'static str, fn() -> BoxedWidget)> {
     vec![
-        ("Row",       || Box::new(Row::new().child(Leaf).child(Leaf)) as BoxedWidget),
-        ("Column",    || Box::new(Column::new().child(Leaf).child(Leaf)) as BoxedWidget),
-        ("Container", || Box::new(Container::new().child(Row::new().child(Leaf))) as BoxedWidget),
-        ("Stack",     || Box::new(Stack::new().child(Leaf).child(Leaf)) as BoxedWidget),
-        ("Card",      || Box::new(Card::new(Column::new().child(Leaf).child(Leaf))) as BoxedWidget),
+        ("Row",       || Arc::new(Row::new().child(Leaf).child(Leaf)) as BoxedWidget),
+        ("Column",    || Arc::new(Column::new().child(Leaf).child(Leaf)) as BoxedWidget),
+        ("Container", || Arc::new(Container::new().child(Row::new().child(Leaf))) as BoxedWidget),
+        ("Stack",     || Arc::new(Stack::new().child(Leaf).child(Leaf)) as BoxedWidget),
+        ("Card",      || Arc::new(Card::new(Column::new().child(Leaf).child(Leaf))) as BoxedWidget),
     ]
 }
 
@@ -70,19 +70,19 @@ fn contents() -> Vec<(&'static str, fn() -> BoxedWidget)> {
 fn wrappers() -> Vec<(&'static str, fn(BoxedWidget) -> BoxedWidget)> {
     vec![
         ("bare",              |c| c),
-        ("Semantics",         |c| Box::new(Semantics::new(c)) as BoxedWidget),
-        ("Pressable",         |c| Box::new(Pressable::new(c, || {})) as BoxedWidget),
-        ("ScrollView",        |c| Box::new(ScrollView::new(c)) as BoxedWidget),
-        ("Container",         |c| Box::new(Container::new().child(c)) as BoxedWidget),
-        ("Card",              |c| Box::new(Card::new(c)) as BoxedWidget),
-        ("Hero",              |c| Box::new(Hero::new("t", c)) as BoxedWidget),
-        ("Dismissible",       |c| Box::new(Dismissible::new(c)) as BoxedWidget),
-        ("PullToRefresh",     |c| Box::new(PullToRefresh::new(c)) as BoxedWidget),
-        ("InteractiveViewer", |c| Box::new(InteractiveViewer::new(c)) as BoxedWidget),
-        ("Responsive",        |_| Box::new(Responsive::new(|_| {
-            Box::new(Row::new().child(Leaf).child(Leaf)) as BoxedWidget
+        ("Semantics",         |c| Arc::new(Semantics::new(c)) as BoxedWidget),
+        ("Pressable",         |c| Arc::new(Pressable::new(c, || {})) as BoxedWidget),
+        ("ScrollView",        |c| Arc::new(ScrollView::new(c)) as BoxedWidget),
+        ("Container",         |c| Arc::new(Container::new().child(c)) as BoxedWidget),
+        ("Card",              |c| Arc::new(Card::new(c)) as BoxedWidget),
+        ("Hero",              |c| Arc::new(Hero::new("t", c)) as BoxedWidget),
+        ("Dismissible",       |c| Arc::new(Dismissible::new(c)) as BoxedWidget),
+        ("PullToRefresh",     |c| Arc::new(PullToRefresh::new(c)) as BoxedWidget),
+        ("InteractiveViewer", |c| Arc::new(InteractiveViewer::new(c)) as BoxedWidget),
+        ("Responsive",        |_| Arc::new(Responsive::new(|_| {
+            Arc::new(Row::new().child(Leaf).child(Leaf)) as BoxedWidget
         })) as BoxedWidget),
-        ("Stateful",          |_| Box::new(Panel.stateful()) as BoxedWidget),
+        ("Stateful",          |_| Arc::new(Panel.stateful()) as BoxedWidget),
     ]
 }
 

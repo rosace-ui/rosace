@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
-use super::{Widget, LayoutCtx, PaintCtx};
+use super::{BoxedWidget, Widget, LayoutCtx, PaintCtx};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum ButtonVariant {
@@ -24,7 +24,7 @@ pub struct Button {
     pub label: String,
     pub variant: ButtonVariant,
     pub disabled: bool,
-    pub icon: Option<Box<dyn Widget>>,
+    pub icon: Option<BoxedWidget>,
     pub width: Option<f32>,
     pub height: f32,
     /// `None` = read from the active theme's `typography.label_large`
@@ -76,7 +76,7 @@ impl Button {
     /// Overrides the variant's own label/icon color.
     pub fn color(mut self, c: Color) -> Self { self.color = Some(c); self }
     pub fn radius(mut self, r: f32) -> Self { self.radius = r; self }
-    pub fn icon(mut self, w: impl Widget + 'static) -> Self { self.icon = Some(Box::new(w)); self }
+    pub fn icon(mut self, w: impl Widget + 'static) -> Self { self.icon = Some(Arc::new(w)); self }
 
     /// Set the click handler. The closure is called on every left-click
     /// inside the button's bounds.

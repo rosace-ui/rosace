@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
@@ -23,7 +24,7 @@ impl Scaffold {
             background: Color::rgba(0, 0, 0, 0), // sentinel: use theme.background
             app_bar: None,
             nav_rail: None,
-            body: Box::new(body),
+            body: Arc::new(body),
             fab: None,
             bottom_bar: None,
             sidebar_right: None,
@@ -31,11 +32,11 @@ impl Scaffold {
     }
 
     pub fn background(mut self, c: Color) -> Self { self.background = c; self }
-    pub fn app_bar(mut self, w: impl Widget + 'static) -> Self { self.app_bar = Some(Box::new(w)); self }
-    pub fn nav_rail(mut self, w: impl Widget + 'static) -> Self { self.nav_rail = Some(Box::new(w)); self }
-    pub fn fab(mut self, w: impl Widget + 'static) -> Self { self.fab = Some(Box::new(w)); self }
-    pub fn bottom_bar(mut self, w: impl Widget + 'static) -> Self { self.bottom_bar = Some(Box::new(w)); self }
-    pub fn sidebar_right(mut self, w: impl Widget + 'static) -> Self { self.sidebar_right = Some(Box::new(w)); self }
+    pub fn app_bar(mut self, w: impl Widget + 'static) -> Self { self.app_bar = Some(Arc::new(w)); self }
+    pub fn nav_rail(mut self, w: impl Widget + 'static) -> Self { self.nav_rail = Some(Arc::new(w)); self }
+    pub fn fab(mut self, w: impl Widget + 'static) -> Self { self.fab = Some(Arc::new(w)); self }
+    pub fn bottom_bar(mut self, w: impl Widget + 'static) -> Self { self.bottom_bar = Some(Arc::new(w)); self }
+    pub fn sidebar_right(mut self, w: impl Widget + 'static) -> Self { self.sidebar_right = Some(Arc::new(w)); self }
 }
 
 impl Widget for Scaffold {

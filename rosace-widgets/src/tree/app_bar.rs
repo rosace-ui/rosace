@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::{Color, DrawCommand};
@@ -51,8 +52,8 @@ impl AppBar {
     pub fn foreground(mut self, c: Color) -> Self { self.foreground = c; self }
     /// Overrides the active theme's app-bar height for this instance.
     pub fn height(mut self, h: f32) -> Self { self.height = Some(h); self }
-    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Box::new(w)); self }
-    pub fn action(mut self, w: impl Widget + 'static) -> Self { self.actions.push(Box::new(w)); self }
+    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Arc::new(w)); self }
+    pub fn action(mut self, w: impl Widget + 'static) -> Self { self.actions.push(Arc::new(w)); self }
     /// Overrides the active theme's traffic-light setting for this instance.
     pub fn no_traffic_lights(mut self) -> Self { self.show_traffic_lights = Some(false); self }
     /// Draw faux macOS traffic-light dots (only for standalone mockup

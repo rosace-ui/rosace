@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::Size;
 use rosace_layout::Constraints;
 use rosace_render::Color;
@@ -31,7 +32,7 @@ impl Card {
             padding: EdgeInsets::all(12.0),
             width: None,
             material: None,
-            child: Box::new(child),
+            child: Arc::new(child),
         }
     }
 

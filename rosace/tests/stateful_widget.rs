@@ -26,7 +26,7 @@ struct Panel {
 impl StatefulWidget for Panel {
     fn build(&self) -> rosace::widgets::tree::BoxedWidget {
         self.builds.fetch_add(1, Ordering::SeqCst);
-        Box::new(Leaf(self.count.load(Ordering::SeqCst) as u32))
+        Arc::new(Leaf(self.count.load(Ordering::SeqCst) as u32))
     }
     fn on_dispose(&self) { self.disposed.fetch_add(1, Ordering::SeqCst); }
 }

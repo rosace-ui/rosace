@@ -92,7 +92,7 @@ impl Tabs {
     }
     pub fn tab(mut self, label: impl Into<String>, content: impl Widget + 'static) -> Self {
         self.labels.push(label.into());
-        self.contents.push(Box::new(content));
+        self.contents.push(Arc::new(content));
         self
     }
     pub fn bar_height(mut self, h: f32) -> Self { self.bar_height = h; self }
@@ -168,13 +168,13 @@ mod tests {
 
     #[test]
     fn tabview_declares_the_selected_child() {
-        let tv = TabView::new(vec![Box::new(Text::new("a")), Box::new(Text::new("b"))], 1);
+        let tv = TabView::new(vec![Arc::new(Text::new("a")), Arc::new(Text::new("b"))], 1);
         assert!(matches!(tv.children(), Children::One(_)));
     }
 
     #[test]
     fn tabview_out_of_range_is_empty() {
-        let tv = TabView::new(vec![Box::new(Text::new("a"))], 9);
+        let tv = TabView::new(vec![Arc::new(Text::new("a"))], 9);
         assert!(matches!(tv.children(), Children::None));
     }
 

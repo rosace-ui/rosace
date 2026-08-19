@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::Size;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h};
 
@@ -21,7 +22,7 @@ impl Stack {
     pub fn new() -> Self { Self { children: Vec::new(), fit: StackFit::Loose } }
     pub fn fit(mut self, f: StackFit) -> Self { self.fit = f; self }
     pub fn child(mut self, w: impl Widget + 'static) -> Self {
-        self.children.push(Box::new(w)); self
+        self.children.push(Arc::new(w)); self
     }
 }
 

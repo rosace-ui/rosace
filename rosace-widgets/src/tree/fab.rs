@@ -49,7 +49,7 @@ impl FloatingActionButton {
     }
     /// Icon widget centered in the button (usually [`super::Icon`]).
     pub fn icon(mut self, w: impl Widget + 'static) -> Self {
-        self.icon = Some(Box::new(w));
+        self.icon = Some(Arc::new(w));
         self
     }
     /// Text content instead of an icon (e.g. "+" or a short label).

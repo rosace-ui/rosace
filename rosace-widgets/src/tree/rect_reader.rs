@@ -19,7 +19,7 @@ pub struct RectReader {
 
 impl RectReader {
     pub fn new(child: impl Widget + 'static, on_rect: impl Fn(Rect) + Send + Sync + 'static) -> Self {
-        Self { on_rect: Arc::new(on_rect), child: Box::new(child) }
+        Self { on_rect: Arc::new(on_rect), child: Arc::new(child) }
     }
 }
 

@@ -29,7 +29,7 @@ impl Widget for C {
 /// The stateful wrapper around C.
 struct CHost(Arc<AtomicU32>);
 impl StatefulWidget for CHost {
-    fn build(&self) -> BoxedWidget { Box::new(C(self.0.clone())) }
+    fn build(&self) -> BoxedWidget { Arc::new(C(self.0.clone())) }
 }
 
 struct App(Arc<AtomicU32>);

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
@@ -51,7 +52,7 @@ pub struct Sheet {
 impl Sheet {
     pub fn new(child: impl Widget + 'static) -> Self {
         Self {
-            child: Box::new(child),
+            child: Arc::new(child),
             radius: 16.0,
             padding: EdgeInsets::all(20.0),
             show_handle: true,
@@ -109,8 +110,8 @@ impl Sheet {
     /// The explicit controller also keeps the scroll view on the base
     /// (CPU-painted) path, which is what overlay content requires.
     pub fn scrollable_with(mut self, controller: ScrollController) -> Self {
-        let child = std::mem::replace(&mut self.child, Box::new(Spacer::new(0.0)));
-        self.child = Box::new(ScrollView::new(child).controller(controller));
+        let child = std::mem::replace(&mut self.child, Arc::new(Spacer::new(0.0)));
+        self.child = Arc::new(ScrollView::new(child).controller(controller));
         self.scrollable = true;
         self
     }

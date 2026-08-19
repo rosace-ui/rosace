@@ -170,7 +170,7 @@ impl ScrollView {
     pub fn new(child: impl Widget + 'static) -> Self {
         Self {
             padding: None,
-            child: Box::new(child),
+            child: Arc::new(child),
             fixed_offset: None,
             controller: None,
             axis: ScrollAxis::Vertical,

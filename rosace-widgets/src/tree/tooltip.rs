@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Size};
 use rosace_render::Color;
 
@@ -77,7 +78,7 @@ pub struct Tooltip {
 
 impl Tooltip {
     pub fn new(label: impl Into<String>, child: impl Widget + 'static) -> Self {
-        Self { label: label.into(), style: None, child: Box::new(child) }
+        Self { label: label.into(), style: None, child: Arc::new(child) }
     }
     /// Per-tooltip style override (otherwise the theme's `TooltipStyle`).
     pub fn style(mut self, style: TooltipStyle) -> Self {

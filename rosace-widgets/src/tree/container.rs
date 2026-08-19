@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::{Color, DrawCommand};
@@ -99,7 +100,7 @@ impl Container {
     pub fn height(mut self, h: f32) -> Self { self.height = Some(h); self }
     pub fn size(mut self, w: f32, h: f32) -> Self { self.width = Some(w); self.height = Some(h); self }
     pub fn min_size(mut self, w: f32, h: f32) -> Self { self.min_width = w; self.min_height = h; self }
-    pub fn child(mut self, w: impl Widget + 'static) -> Self { self.child = Some(Box::new(w)); self }
+    pub fn child(mut self, w: impl Widget + 'static) -> Self { self.child = Some(Arc::new(w)); self }
     /// Per-instance shader material — replaces the background fill (gradient/
     /// solid) when resolved. Beats the theme's `ContainerMaterial` default.
     /// Corners are drawn square under the shader (no rounded-clip primitive

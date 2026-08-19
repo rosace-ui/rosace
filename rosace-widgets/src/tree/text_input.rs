@@ -81,10 +81,10 @@ impl TextInput {
     /// An adornment INSIDE the field, at the left (a search/prefix icon, `$`, …).
     /// Rendered inside the box; the text insets past it. This is what makes a
     /// `SearchBar` just a `TextInput` — `.leading(Icon::new(Search))`.
-    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Box::new(w)); self }
+    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Arc::new(w)); self }
     /// An adornment INSIDE the field, at the right (clear ×, password eye,
     /// validation status, unit suffix…). Make it tappable with `.on_trailing`.
-    pub fn trailing(mut self, w: impl Widget + 'static) -> Self { self.trailing = Some(Box::new(w)); self }
+    pub fn trailing(mut self, w: impl Widget + 'static) -> Self { self.trailing = Some(Arc::new(w)); self }
     /// Tap handler for the trailing adornment (e.g. clear the field, toggle
     /// password visibility). The trailing zone owns its own hit region.
     pub fn on_trailing(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {

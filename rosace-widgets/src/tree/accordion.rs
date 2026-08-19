@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
@@ -36,7 +37,7 @@ impl Accordion {
             padding: None,
             expanded,
             on_change: None,
-            body: Box::new(body),
+            body: Arc::new(body),
             background: None,
             border: None,
             radius: 10.0,

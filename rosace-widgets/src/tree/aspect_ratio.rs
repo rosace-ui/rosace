@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::Size;
 use rosace_layout::Constraints;
 use super::{Widget, Children, LayoutCtx, PaintCtx, BoxedWidget, avail_w, avail_h};
@@ -11,7 +12,7 @@ pub struct AspectRatio {
 
 impl AspectRatio {
     pub fn new(ratio: f32, child: impl Widget + 'static) -> Self {
-        Self { ratio: ratio.max(0.01), child: Box::new(child) }
+        Self { ratio: ratio.max(0.01), child: Arc::new(child) }
     }
 
     fn box_size(&self, c: &Constraints) -> Size {

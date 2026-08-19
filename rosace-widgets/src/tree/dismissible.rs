@@ -47,7 +47,7 @@ pub struct Dismissible {
 impl Dismissible {
     pub fn new(child: impl Widget + 'static) -> Self {
         Self {
-            child: Box::new(child),
+            child: Arc::new(child),
             background: None,
             direction: DismissDirection::Horizontal,
             threshold: DEFAULT_THRESHOLD,
@@ -59,7 +59,7 @@ impl Dismissible {
     /// Custom content shown behind, revealed as the item is dragged
     /// (defaults to a red panel with a trash icon on the revealed side).
     pub fn background(mut self, w: impl Widget + 'static) -> Self {
-        self.background = Some(Box::new(w));
+        self.background = Some(Arc::new(w));
         self
     }
     pub fn direction(mut self, d: DismissDirection) -> Self {

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use super::{Widget, Children, LayoutCtx, PaintCtx, BoxedWidget, avail_w};
@@ -66,7 +67,7 @@ impl Grid {
     pub fn run_spacing(mut self, s: f32) -> Self { self.run_spacing = s; self }
     /// Append a child (span `1×1` in bento mode).
     pub fn child(mut self, w: impl Widget + 'static) -> Self {
-        self.children.push(Box::new(w));
+        self.children.push(Arc::new(w));
         self.spans.push((1, 1));
         self
     }
@@ -107,7 +108,7 @@ impl Grid {
     /// never silently desynchronize an index-aligned spans vector.
     pub fn child_span(mut self, w: impl Widget + 'static, col_span: u16, row_span: u16) -> Self {
         self.mode = GridMode::Bento;
-        self.children.push(Box::new(w));
+        self.children.push(Arc::new(w));
         self.spans.push((col_span.max(1), row_span.max(1)));
         self
     }

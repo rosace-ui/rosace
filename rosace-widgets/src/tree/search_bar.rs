@@ -65,7 +65,7 @@ impl SearchBar {
                         .on_trailing(move || clear());
                 }
             }
-            Box::new(input)
+            Arc::new(input)
         })
     }
 }

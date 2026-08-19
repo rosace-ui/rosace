@@ -2622,9 +2622,9 @@ mod tests {
                     match s {
                         NavScreen::A => {
                             let nav = nav.clone();
-                            Box::new(Button::new("Screen A").on_press(move || { nav.push(NavScreen::B); }))
+                            Arc::new(Button::new("Screen A").on_press(move || { nav.push(NavScreen::B); }))
                         }
-                        NavScreen::B => Box::new(Button::new("Screen B")),
+                        NavScreen::B => Arc::new(Button::new("Screen B")),
                     }
                 }
             };
@@ -2673,7 +2673,7 @@ mod tests {
                     match s {
                         ScrollNavScreen::A => {
                             let nav = nav.clone();
-                            Box::new(Column::new()
+                            Arc::new(Column::new()
                                 .child(Button::new("Go to B").on_press(move || { nav.push(ScrollNavScreen::B); }))
                                 .child(rosace_widgets::tree::Expanded::new(
                                     rosace_widgets::tree::ScrollView::new(Container::new().height(2000.0)),
@@ -2681,7 +2681,7 @@ mod tests {
                         }
                         ScrollNavScreen::B => {
                             let nav = nav.clone();
-                            Box::new(Column::new()
+                            Arc::new(Column::new()
                                 .child(Button::new("Back to A").on_press(move || { nav.pop(); }))
                                 .child(rosace_widgets::tree::Expanded::new(
                                     rosace_widgets::tree::ScrollView::new(Container::new().height(2000.0)),
@@ -2921,19 +2921,19 @@ mod tests {
 
         // Must announce something: a control, or content a user needs.
         let must_speak: Vec<Speaks> = vec![
-            ("Button",           || Box::new(w::Button::new("Save").on_press(|| {}))),
-            ("Checkbox",         || Box::new(w::Checkbox::new(true))),
-            ("Switch",           || Box::new(w::Switch::new(true))),
-            ("Slider",           || Box::new(w::Slider::new(0.5))),
-            ("TextInput",        || Box::new(w::TextInput::new().placeholder("Email"))),
-            ("SearchBar",        || Box::new(w::SearchBar::new())),
-            ("Text",             || Box::new(w::Text::new("hello"))),
-            ("Pressable",        || Box::new(w::Pressable::new(w::Text::new("tap"), || {}))),
-            ("CircularProgress", || Box::new(w::CircularProgress::new(0.5))),
-            ("ProgressBar",      || Box::new(w::ProgressBar::new(0.5))),
-            ("Skeleton",         || Box::new(w::Skeleton::new())),
-            ("Tooltip",          || Box::new(w::Tooltip::new("Delete", w::Text::new("x")))),
-            ("Icon (labelled)",  || Box::new(w::Icon::new(w::IconKind::Search).semantic_label("Search"))),
+            ("Button",           || Arc::new(w::Button::new("Save").on_press(|| {}))),
+            ("Checkbox",         || Arc::new(w::Checkbox::new(true))),
+            ("Switch",           || Arc::new(w::Switch::new(true))),
+            ("Slider",           || Arc::new(w::Slider::new(0.5))),
+            ("TextInput",        || Arc::new(w::TextInput::new().placeholder("Email"))),
+            ("SearchBar",        || Arc::new(w::SearchBar::new())),
+            ("Text",             || Arc::new(w::Text::new("hello"))),
+            ("Pressable",        || Arc::new(w::Pressable::new(w::Text::new("tap"), || {}))),
+            ("CircularProgress", || Arc::new(w::CircularProgress::new(0.5))),
+            ("ProgressBar",      || Arc::new(w::ProgressBar::new(0.5))),
+            ("Skeleton",         || Arc::new(w::Skeleton::new())),
+            ("Tooltip",          || Arc::new(w::Tooltip::new("Delete", w::Text::new("x")))),
+            ("Icon (labelled)",  || Arc::new(w::Icon::new(w::IconKind::Search).semantic_label("Search"))),
             // Added 2026-08-13 by the widget-audit sweep. None of these were
             // listed here at all, so they were not merely silent — they were
             // UNGUARDED, and nothing would have caught them going silent
@@ -2946,28 +2946,28 @@ mod tests {
             // when the wrapper itself declares nothing — which is exactly how
             // these went unnoticed. Verified by deleting each widget's
             // `ctx.semantics(..)` and watching this test fail.
-            ("ListView",         || Box::new(w::ListView::builder(3, 40.0, |_| Box::new(w::Spacer::new(8.0))))),
-            ("Menu",             || Box::new(w::Menu::new().item("Copy", || {}))),
-            ("Stepper",          || Box::new(w::Stepper::new(2))),
-            ("Dropdown",         || Box::new(w::Dropdown::new(vec!["A", "B"], 0, false))),
-            ("PullToRefresh",    || Box::new(w::PullToRefresh::new(w::Spacer::new(8.0)))),
-            ("Dismissible",      || Box::new(w::Dismissible::new(w::Spacer::new(8.0)))),
-            ("LongPressable",    || Box::new(w::LongPressable::new(w::Spacer::new(8.0), || {}))),
+            ("ListView",         || Arc::new(w::ListView::builder(3, 40.0, |_| Arc::new(w::Spacer::new(8.0))))),
+            ("Menu",             || Arc::new(w::Menu::new().item("Copy", || {}))),
+            ("Stepper",          || Arc::new(w::Stepper::new(2))),
+            ("Dropdown",         || Arc::new(w::Dropdown::new(vec!["A", "B"], 0, false))),
+            ("PullToRefresh",    || Arc::new(w::PullToRefresh::new(w::Spacer::new(8.0)))),
+            ("Dismissible",      || Arc::new(w::Dismissible::new(w::Spacer::new(8.0)))),
+            ("LongPressable",    || Arc::new(w::LongPressable::new(w::Spacer::new(8.0), || {}))),
         ];
 
         // Correctly silent, each for a stated reason.
         let transparent: Vec<Silent> = vec![
             ("Icon (bare)", "decorative by default — usually sits beside text that already says it",
-             || Box::new(w::Icon::new(w::IconKind::Search))),
+             || Arc::new(w::Icon::new(w::IconKind::Search))),
             ("Card", "a styled box; its children carry the meaning",
-             || Box::new(w::Card::new(w::Spacer::new(8.0)))),
+             || Arc::new(w::Card::new(w::Spacer::new(8.0)))),
             ("Container", "pure layout/decoration",
-             || Box::new(w::Container::new())),
-            ("Column", "pure layout", || Box::new(w::Column::new())),
-            ("Row", "pure layout", || Box::new(w::Row::new())),
-            ("Spacer", "empty space", || Box::new(w::Spacer::new(8.0))),
+             || Arc::new(w::Container::new())),
+            ("Column", "pure layout", || Arc::new(w::Column::new())),
+            ("Row", "pure layout", || Arc::new(w::Row::new())),
+            ("Spacer", "empty space", || Arc::new(w::Spacer::new(8.0))),
             ("CustomPaint", "app-supplied pixels — annotate with the Semantics widget",
-             || Box::new(w::CustomPaint::new(|_, _| {}))),
+             || Arc::new(w::CustomPaint::new(|_, _| {}))),
         ];
 
         let mut failures = Vec::new();
@@ -3162,14 +3162,14 @@ mod tests {
         }
 
         assert_eq!(
-            role_of(|| Box::new(
+            role_of(|| Arc::new(
                 w::ListTile::new("Widgets").subtitle("one page each").on_press(|| {})
             )),
             rosace_core::Role::Button,
             "a row with a tap handler must be exposed as an activatable control"
         );
         assert_eq!(
-            role_of(|| Box::new(w::ListTile::new("Widgets").subtitle("one page each"))),
+            role_of(|| Arc::new(w::ListTile::new("Widgets").subtitle("one page each"))),
             rosace_core::Role::ListItem,
             "a row with no handler stays structural — claiming it is a button would be a lie"
         );
@@ -3280,7 +3280,7 @@ mod tests {
                 use rosace_widgets::tree::OverlayApi;
                 let o = self.0.clone();
                 w::Text::new("host")
-                    .sheet(o, || Box::new(w::Text::new("sheet body")))
+                    .sheet(o, || Arc::new(w::Text::new("sheet body")))
                     .into_element()
             }
         }
@@ -3321,7 +3321,7 @@ mod tests {
         struct Host(rosace_state::Atom<bool>);
         impl w::Widget for Host {
             fn paint(&self, ctx: &mut w::PaintCtx) {
-                w::Drawer::new(self.0.clone(), || Box::new(w::Text::new("drawer body"))).emit();
+                w::Drawer::new(self.0.clone(), || Arc::new(w::Text::new("drawer body"))).emit();
                 let _ = ctx;
             }
         }
@@ -3364,7 +3364,7 @@ mod tests {
             fn build(&self, _ctx: &mut Context) -> Element {
                 use rosace_widgets::tree::OverlayApi;
                 w::Text::new("host")
-                    .dialog(self.0.clone(), || Box::new(w::Text::new("must choose")))
+                    .dialog(self.0.clone(), || Arc::new(w::Text::new("must choose")))
                     .non_dismissible()
                     .into_element()
             }
@@ -3429,7 +3429,7 @@ mod tests {
                 use rosace_widgets::tree::OverlayApi;
                 let seen = Arc::clone(&self.1);
                 w::Text::new("host")
-                    .sheet(self.0.clone(), move || Box::new(Probe(Arc::clone(&seen))))
+                    .sheet(self.0.clone(), move || Arc::new(Probe(Arc::clone(&seen))))
                     .into_element()
             }
         }
@@ -3610,7 +3610,7 @@ mod tests {
                     match s {
                         HeroScreen::List => {
                             let nav = nav.clone();
-                            Box::new(Column::new().child(
+                            Arc::new(Column::new().child(
                                 Container::new()
                                     .width(20.0)
                                     .height(20.0)
@@ -3619,7 +3619,7 @@ mod tests {
                                     .hero_tag("cover"),
                             ))
                         }
-                        HeroScreen::Detail => Box::new(Column::new().child(
+                        HeroScreen::Detail => Arc::new(Column::new().child(
                             Container::new()
                                 .width(80.0)
                                 .height(80.0)
@@ -5398,7 +5398,7 @@ mod tests {
                 let o = open.clone();
                 rosace_widgets::tree::Button::new("Open")
                     .on_press(move || o.set(true))
-                    .dialog(open.clone(), || Box::new(
+                    .dialog(open.clone(), || Arc::new(
                         rosace_widgets::tree::Dialog::new("Hi").message("there"),
                     ))
                     .into_element()

@@ -223,7 +223,7 @@ impl Dialog {
             col = col.child(actions);
         }
 
-        Box::new(col)
+        Arc::new(col)
     }
 }
 

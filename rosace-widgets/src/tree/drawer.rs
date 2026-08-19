@@ -138,7 +138,7 @@ mod tests {
     fn instance_material_paints_a_shader_fill() {
         let open = rosace_state::use_atom(true);
         let m = ShaderMaterial::new(rosace_shader::PipelineId::user(0x4002), vec![0u8; 16]);
-        let drawer = Drawer::new(open, || Box::new(Spacer::new(0.0))).material(m);
+        let drawer = Drawer::new(open, || Arc::new(Spacer::new(0.0))).material(m);
         let entry = emit_one(&drawer);
 
         let font = rosace_render::FontCache::embedded();
@@ -159,14 +159,14 @@ mod tests {
     fn emit_pushes_nothing_while_closed() {
         clear_overlays();
         let open = rosace_state::use_atom(false);
-        Drawer::new(open, || Box::new(Spacer::new(0.0))).emit();
+        Drawer::new(open, || Arc::new(Spacer::new(0.0))).emit();
         assert!(drain_overlays().is_empty());
     }
 
     #[test]
     fn emit_maps_to_fill_block_trap_with_dismissable_scrim() {
         let open = rosace_state::use_atom(true);
-        let drawer = Drawer::new(open.clone(), || Box::new(Spacer::new(0.0)));
+        let drawer = Drawer::new(open.clone(), || Arc::new(Spacer::new(0.0)));
         let e = emit_one(&drawer);
         assert!(matches!(e.position, LayerPosition::Fill));
         assert_eq!(e.input, InputBehavior::Block);
@@ -184,11 +184,11 @@ mod tests {
         let ctx = LayoutCtx::new(Constraints::loose(800.0, 600.0), &font, &theme);
 
         let open = rosace_state::use_atom(true);
-        let side = emit_one(&Drawer::new(open.clone(), || Box::new(Spacer::new(0.0))));
+        let side = emit_one(&Drawer::new(open.clone(), || Arc::new(Spacer::new(0.0))));
         let size = side.widget.layout(&ctx);
         assert_eq!((size.width, size.height), (280.0, 600.0));
 
-        let full = emit_one(&Drawer::new(open, || Box::new(Spacer::new(0.0))).full_screen());
+        let full = emit_one(&Drawer::new(open, || Arc::new(Spacer::new(0.0))).full_screen());
         let size = full.widget.layout(&ctx);
         assert_eq!((size.width, size.height), (800.0, 600.0));
     }

@@ -77,7 +77,7 @@ impl Carousel {
     }
     /// Append one page.
     pub fn child(mut self, w: impl Widget + 'static) -> Self {
-        self.children.push(Box::new(w));
+        self.children.push(Arc::new(w));
         self
     }
     /// Append several pages.

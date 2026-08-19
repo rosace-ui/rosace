@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::Mutex;
 use rosace_core::types::Size;
 use rosace_layout::{Constraints, CrossAxisAlignment, MainAxisAlignment, layout_column};
@@ -36,7 +37,7 @@ impl Column {
     pub fn cross_axis_alignment(mut self, a: CrossAxisAlignment) -> Self { self.cross_axis_alignment = a; self }
 
     pub fn child(mut self, w: impl Widget + 'static) -> Self {
-        self.children.push(Box::new(w)); self
+        self.children.push(Arc::new(w)); self
     }
     pub fn children(mut self, ws: Vec<BoxedWidget>) -> Self {
         self.children.extend(ws); self

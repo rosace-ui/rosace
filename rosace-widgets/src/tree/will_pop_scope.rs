@@ -72,7 +72,7 @@ pub struct WillPopScope {
 
 impl WillPopScope {
     pub fn new(child: impl Widget + 'static) -> Self {
-        Self { child: Box::new(child), on_will_pop: None }
+        Self { child: Arc::new(child), on_will_pop: None }
     }
 
     /// Return `true` to allow the pop, `false` to block it.

@@ -39,7 +39,7 @@ impl NavItem {
     pub fn active(mut self) -> Self { self.active = true; self }
     pub fn active_if(mut self, c: bool) -> Self { self.active = c; self }
     pub fn badge(mut self, n: u32) -> Self { self.badge = Some(n); self }
-    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Box::new(w)); self }
+    pub fn leading(mut self, w: impl Widget + 'static) -> Self { self.leading = Some(Arc::new(w)); self }
     pub fn height(mut self, h: f32) -> Self { self.height = h; self }
 
     fn resolved_font_size(&self, theme: &rosace_theme::ThemeData) -> f32 {
@@ -162,7 +162,7 @@ enum NavRailEntry {
     Item(NavItem),
     Section(String),
     Separator,
-    Custom(Box<dyn Widget>),
+    Custom(BoxedWidget),
 }
 
 impl NavRail {
@@ -187,7 +187,7 @@ impl NavRail {
     }
     pub fn separator(mut self) -> Self { self.items.push(NavRailEntry::Separator); self }
     pub fn widget(mut self, w: impl Widget + 'static) -> Self {
-        self.items.push(NavRailEntry::Custom(Box::new(w))); self
+        self.items.push(NavRailEntry::Custom(Arc::new(w))); self
     }
 }
 

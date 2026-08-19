@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use super::{Widget, Children, LayoutCtx, PaintCtx, BoxedWidget};
@@ -15,7 +16,7 @@ pub struct Positioned {
 
 impl Positioned {
     pub fn new(child: impl Widget + 'static) -> Self {
-        Self { child: Box::new(child), top: None, left: None, right: None, bottom: None, width: None, height: None }
+        Self { child: Arc::new(child), top: None, left: None, right: None, bottom: None, width: None, height: None }
     }
     pub fn top(mut self, v: f32) -> Self { self.top = Some(v); self }
     pub fn left(mut self, v: f32) -> Self { self.left = Some(v); self }
