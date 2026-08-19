@@ -10,13 +10,14 @@
 //! [`SWIPE_THRESHOLD`]) or springs back. Page position eases via
 //! `ctx.animate_to`, the theme-global animation policy.
 //!
-//! Controlled or uncontrolled: pass `.page(Atom<usize>)` to own the current
-//! page in app state (swipes write it back); without it the controller's
+//! Controlled or uncontrolled: pass `.page(usize)` plus `.on_page_change(..)`
+//! to own the current page in app state; without it the controller's
 //! otherwise-unused `offset[1]` slot stores the page per render-tree node.
+
+use std::sync::Arc;
 
 use rosace_core::types::{Point, Rect, Size};
 use rosace_render::{Color, DrawCommand};
-use rosace_state::Atom;
 
 use super::{avail_w, BoxedWidget, Children, LayoutCtx, PaintCtx, Widget, intersect_rect};
 
@@ -52,7 +53,8 @@ fn snap_page(current: usize, drag_dx: f32, page_count: usize, threshold: f32) ->
 pub struct Carousel {
     children: Vec<BoxedWidget>,
     /// Controlled current page; `None` = per-node internal state.
-    page: Option<Atom<usize>>,
+    page: Option<usize>,
+    on_page_change: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     height: f32,
     indicator: bool,
     indicator_color: Option<Color>,
@@ -67,6 +69,7 @@ impl Carousel {
         Self {
             children: Vec::new(),
             page: None,
+            on_page_change: None,
             height: 200.0,
             indicator: true,
             indicator_color: None,
@@ -91,7 +94,11 @@ impl Carousel {
     }
     /// Control the current page from app state: swipes write the new index
     /// back to the atom; external writes ease the carousel to that page.
-    pub fn page(mut self, page: Atom<usize>) -> Self { self.page = Some(page); self }
+    pub fn page(mut self, page: usize) -> Self { self.page = Some(page); self }
+    /// Called with the NEW page index when a swipe or snap changes it.
+    pub fn on_page_change(mut self, f: impl Fn(usize) + Send + Sync + 'static) -> Self {
+        self.on_page_change = Some(Arc::new(f)); self
+    }
     /// Fixed height in logical px (default `200.0`); width fills the parent.
     pub fn height(mut self, h: f32) -> Self { self.height = h.max(0.0); self }
     /// Hide the indicator dots.
@@ -103,8 +110,8 @@ impl Carousel {
     /// Current page index (controlled atom, or the controller's spare
     /// `offset[1]` slot when uncontrolled), clamped to the page count.
     fn current_page(&self, ctrl: &crate::scroll::ScrollController, n: usize) -> usize {
-        let raw = match &self.page {
-            Some(a) => a.get(),
+        let raw = match self.page {
+            Some(p) => p,
             None => ctrl.offset.get()[1].max(0.0) as usize,
         };
         raw.min(n.saturating_sub(1))
@@ -112,8 +119,8 @@ impl Carousel {
 
     /// Write the page (atom or internal slot) and reset the drag distance.
     fn set_page(&self, ctrl: &crate::scroll::ScrollController, p: usize) {
-        if let Some(a) = &self.page {
-            if a.get() != p { a.set(p); }
+        if self.page != Some(p) {
+            if let Some(f) = &self.on_page_change { f(p); }
         }
         ctrl.offset.set([0.0, p as f32]);
     }
