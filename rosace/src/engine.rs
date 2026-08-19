@@ -1041,7 +1041,8 @@ impl FrameEngine {
             &mut damage,
             &dirty_ids,
             global_dirty,
-            root_is_dirty || hover_frame,  // subtree_dirty (+ hover forces repaint)
+            root_is_dirty || hover_frame,  // subtree_dirty — repaint
+            root_is_dirty,                 // subtree_relayout — only a rebuild resizes
             &mut self.element_cache,
             &mut new_mounted,
         );

@@ -327,6 +327,7 @@ fn walk_element(
     dirty_ids: &std::collections::HashSet<rosace_core::types::ComponentId>,
     global_dirty: bool,
     subtree_dirty: bool,
+    subtree_relayout: bool,
     element_cache: &mut std::collections::HashMap<u64, rosace_core::Element>,
     new_mounted: &mut std::collections::HashSet<u64>,
 ) -> rosace_core::types::Size {
@@ -388,6 +389,7 @@ fn walk_element(
                 dirty_ids,
                 global_dirty,
                 child_subtree_dirty,
+                child_subtree_dirty,
                 element_cache,
                 new_mounted,
             );
@@ -412,8 +414,15 @@ fn walk_element(
                     // compare against the old one, so both caches must go:
                     // the config may have changed size and appearance alike.
                     if subtree_dirty {
-                        node.needs_layout = true;
                         node.needs_paint = true;
+                    }
+                    // Only a REBUILD invalidates size. A hover or press cannot:
+                    // `LayoutCtx` exposes no way to read `hovered`/`pressed`, so
+                    // size provably does not depend on them. Forcing
+                    // `needs_layout` for them re-measured the entire tree on
+                    // every pointer move.
+                    if subtree_relayout {
+                        node.needs_layout = true;
                     }
                 }
 

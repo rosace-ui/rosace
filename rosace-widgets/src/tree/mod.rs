@@ -2023,7 +2023,14 @@ impl<'a> LayoutCtx<'a> {
         });
 
         let mut t = tree.borrow_mut();
+        // Did this child measure any children of its OWN? `layout_child` bumps
+        // `layout_cursor`, so a cursor still at 0 means it measured none — its
+        // size depends on (constraints, font, theme) alone, and nothing beneath
+        // it can change it. That makes it a relayout boundary, and
+        // `mark_dirty_with_ancestors` stops re-measuring there.
+        let measured_children = t.layout_cursor_of(node) > 0;
         let n = t.node_mut(node);
+        n.sized_by_parent  = !measured_children;
         n.last_constraints = Some(constraints);
         n.cached_size      = Some(size);
         n.needs_layout     = false;

@@ -98,6 +98,21 @@ pub struct TreeNode {
     pub children: Vec<NodeId>,
     /// Child slot cursor for the current paint of this node.
     cursor: usize,
+    /// This node's `layout` measured NO children, so its size is a function of
+    /// (constraints, font, theme) alone and nothing beneath it can change it —
+    /// a relayout boundary.
+    ///
+    /// Observed rather than declared: `layout_child` bumps `layout_cursor`, so
+    /// a cursor still at 0 when `layout` returns means no child was measured.
+    /// A declared flag could drift out of sync with the code it describes and
+    /// would fail silently as a stale layout; this cannot, because it records
+    /// what the widget actually did.
+    ///
+    /// `Scaffold`, `ScreenTransitionView`, `ListView` and `InteractiveViewer`
+    /// all qualify — they size to their constraints and measure children during
+    /// PAINT. `Column`/`Row` do not, and must not: their size is the sum of
+    /// their children's.
+    pub sized_by_parent: bool,
     /// Child slot cursor for the current LAYOUT of this node.
     ///
     /// Separate from `cursor` because layout and paint are two independent
@@ -649,6 +664,11 @@ impl RenderTree {
         if prev != usize::MAX && prev != now { Some((prev, now)) } else { None }
     }
 
+    /// How many children `node` measured during its own layout.
+    pub fn layout_cursor_of(&self, node: NodeId) -> usize {
+        self.nodes[node].layout_cursor
+    }
+
     /// Reset `node`'s layout cursor so its children are addressed from 0.
     ///
     /// Called before a widget's `layout` runs — by `LayoutCtx::layout_child`
@@ -874,6 +894,23 @@ impl RenderTree {
             // their pictures instead of repainting — is untouched, because
             // needs_paint is what governs that and only the marked node and
             // its ancestors have it.
+            // Stop re-measuring at the first ancestor whose size cannot be
+            // affected by anything below it. Everything above keeps
+            // `needs_paint` — display-list assembly still has to reach the root,
+            // because `Picture` is flat and a clean ancestor would replay the
+            // child's OLD commands — but nothing above needs to re-measure.
+            if self.nodes[p].sized_by_parent {
+                // `needs_paint` only. Its size is a function of its constraints
+                // alone, so it cannot have changed and re-measuring it would be
+                // pure waste — but paint must still descend through it to reach
+                // what did change.
+                let mut up = self.nodes[p].parent;
+                while let Some(a) = up {
+                    self.nodes[a].needs_paint = true;
+                    up = self.nodes[a].parent;
+                }
+                return;
+            }
             self.nodes[p].needs_layout = true;
             cur = self.nodes[p].parent;
         }
