@@ -808,42 +808,6 @@ impl RenderTree {
         }
     }
 
-    /// Move a node's whole subtree by `(dx, dy)`.
-    ///
-    /// Every declaration a widget makes during paint is WORLD-SPACE: hit
-    /// regions, scroll viewports, zoom regions, the editable rect, the
-    /// transform-layer viewport, `cached_rect`. Re-blitting a widget's recorded
-    /// commands moves its PIXELS; without this its tap target, scroll viewport
-    /// and caret box all stay behind, giving a widget that looks moved and
-    /// responds where it used to be.
-    ///
-    /// Recurses, because a subtree that replayed did not re-declare anything
-    /// either — the same reasoning applies at every depth.
-    ///
-    /// `FocusNode` is deliberately absent: it is an identity handle with no
-    /// geometry. `semantics` carries no rect of its own; the a11y tree reads
-    /// `cached_rect`, which IS translated here.
-    pub fn translate_subtree(&mut self, node: NodeId, dx: f32, dy: f32) {
-        let shift = |r: &mut Rect| { r.origin.x += dx; r.origin.y += dy; };
-        {
-            let n = &mut self.nodes[node];
-            for (r, _) in n.hits.iter_mut()          { shift(r); }
-            for (r, _) in n.hits_at.iter_mut()       { shift(r); }
-            for (r, _) in n.long_hits.iter_mut()     { shift(r); }
-            for (r, _) in n.nested_scrolls.iter_mut(){ shift(r); }
-            for (r, _, _) in n.scrolls.iter_mut()    { shift(r); }
-            for (r, _) in n.zooms.iter_mut()         { shift(r); }
-            for r in n.hover_regions.iter_mut()      { shift(r); }
-            for e in n.transforms.iter_mut()         { shift(&mut e.viewport_rect); }
-            if let Some(ed) = n.editable.as_mut()    { shift(&mut ed.rect); }
-            if let Some(r) = n.cached_rect.as_mut()  { shift(r); }
-        }
-        let children = self.nodes[node].children.clone();
-        for c in children {
-            self.translate_subtree(c, dx, dy);
-        }
-    }
-
     /// Run every `on_dispose` in this subtree and release what it held.
     ///
     /// # Depth-first, children before parents

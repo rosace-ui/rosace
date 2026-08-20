@@ -34,19 +34,6 @@ impl<W: Widget + Send + Sync + 'static> Widget for Hero<W> {
         let rect = ctx.rect;
         match hero::active_role() {
             Some(role) => {
-                // Never replay a hero mid-flight, in either form.
-                //
-                // This `paint` has a SIDE EFFECT — it suppresses its own
-                // drawing and registers a captured picture for
-                // `ScreenTransitionView` to fly — and its output depends on
-                // ambient state (`hero::active_role()`) rather than on this
-                // widget's own config. A cached picture is therefore the
-                // SUPPRESSED one, and replaying it after the transition settles
-                // draws nothing.
-                //
-                // `request_animation` is the existing "always re-run me" signal,
-                // and it is honest here: a hero in flight is animating.
-                ctx.request_animation();
                 // Suppressed here — captured instead. `ScreenTransitionView`
                 // paints the morphed floating copy on top once both sides
                 // of the transition have painted.
