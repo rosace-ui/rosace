@@ -272,6 +272,25 @@ be fixed individually — they have no `layout` to change. The candidate fix is
 to make the default `layout` measure detached, at the cost of losing caching
 for any subtree under such a wrapper. Not yet decided.
 
+**A widget whose `paint` has side effects, or whose output depends on ambient
+state, must never be replayed.** Both replay paths — the plain one and the
+re-blit-on-move one — skip `paint` entirely, so anything it *did* besides
+recording commands does not happen. `Hero` is the case that proves it: mid-flight
+it suppresses its own drawing and registers a captured picture for
+`ScreenTransitionView` to fly, so a replayed hero registers nothing and its
+cached picture is the empty, suppressed one. The signal is
+`ctx.request_animation()`, which sets `self_animating` and both paths honour.
+Same reason a spinner must not replay: it asks for the next frame from inside
+`paint`, and replaying stops it asking.
+
+**A moved widget's world-space declarations must move with its pixels.**
+Re-blitting translates the recorded commands, but hit regions, scroll viewports,
+zoom regions, the editable rect and `cached_rect` are all world-space and are
+only produced by *running* `paint` — which is what re-blitting skips.
+`RenderTree::translate_subtree` moves them, recursively, because a replayed
+subtree did not re-declare anything at any depth either. Without it you get a
+widget that looks moved and responds where it used to be.
+
 **Tests cannot see any of this.** A stale cache and a wrong size render
 plausibly. Every bug in this area has been found by running a real app, never
 by the suite — which is why the tests here count *which path ran*

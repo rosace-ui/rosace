@@ -858,6 +858,58 @@ impl<'a> PaintCtx<'a> {
             return;
         }
 
+        // Same content, different place: re-blit instead of re-recording.
+        //
+        // Anything below a widget that grew gets pushed along, and re-running
+        // `paint` for every one of them produces byte-identical commands at a
+        // new offset. Translating the recorded ones is the same output for a
+        // fraction of the work.
+        //
+        // The declarations must move WITH the pixels — they are world-space and
+        // are only produced by running `paint`, which is exactly what is being
+        // skipped. Miss that and the widget looks moved but is clickable where
+        // it used to be.
+        let moved = !retagged
+            && !is_structural_frame()
+            && {
+                let t = self.tree.borrow();
+                let n = t.node(node);
+                !n.needs_paint
+                    && n.cached_picture.is_some()
+                    && !n.self_animating
+                    && n.cached_rect.is_some_and(|c| {
+                        c.size.width == rect.size.width
+                            && c.size.height == rect.size.height
+                            && (c.origin.x != rect.origin.x || c.origin.y != rect.origin.y)
+                    })
+            };
+
+        if moved {
+            let (pic, dx, dy) = {
+                let t = self.tree.borrow();
+                let n = t.node(node);
+                let old = n.cached_rect.expect("checked above");
+                (
+                    n.cached_picture.clone().expect("checked above"),
+                    rect.origin.x - old.origin.x,
+                    rect.origin.y - old.origin.y,
+                )
+            };
+            let shifted: Vec<_> = pic.commands.iter().map(|c| c.offset(dx, dy)).collect();
+            for cmd in &shifted {
+                self.recorder.push(cmd.clone());
+            }
+            // Store the translated picture, so the next frame's cache is in the
+            // place the widget now actually is. `translate_subtree` moves
+            // `cached_rect` along with the declarations.
+            let mut t = self.tree.borrow_mut();
+            t.node_mut(node).cached_picture =
+                Some(Arc::new(rosace_render::Picture { commands: shifted }));
+            drop(t);
+            self.tree.borrow_mut().translate_subtree(node, dx, dy);
+            return;
+        }
+
         self.tree.borrow_mut().reset(node);
         self.tree.borrow_mut().node_mut(node).cached_rect = Some(rect);
 
