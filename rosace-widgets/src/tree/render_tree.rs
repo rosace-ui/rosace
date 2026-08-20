@@ -1195,6 +1195,29 @@ impl RenderTree {
     /// Set the hovered node, clearing the previous one. Marks both the old
     /// and new node dirty so the next walk repaints exactly them (localized
     /// damage). Returns true when the hover target changed.
+    /// Mark `node` and every ancestor as needing paint.
+    ///
+    /// Marking only the node is not enough, and this is the same rule
+    /// `mark_dirty_with_ancestors` documents: `Picture` is a flat
+    /// `Vec<DrawCommand>`, so an ancestor replaying its own cached picture
+    /// replays the child's OLD commands and the change never reaches the
+    /// screen. Display-list assembly always has to run to the root.
+    ///
+    /// It also covers `PaintCtx::hovered_within`: a widget whose own appearance
+    /// depends on a DESCENDANT's hover — a `Tooltip`, a `ListTile` — must
+    /// repaint when that descendant changes, and marking the spine gives that
+    /// for free.
+    ///
+    /// Only `needs_paint`. Interaction state provably cannot change a size:
+    /// `LayoutCtx` exposes no way to read `hovered` or `pressed`.
+    fn mark_paint_to_root(&mut self, node: NodeId) {
+        let mut cur = Some(node);
+        while let Some(n) = cur {
+            self.nodes[n].needs_paint = true;
+            cur = self.nodes[n].parent;
+        }
+    }
+
     pub fn set_hover(&mut self, target: Option<NodeId>) -> bool {
         let current = self.hovered;
         if current == target {
@@ -1203,11 +1226,11 @@ impl RenderTree {
         self.hovered = target;
         if let Some(old) = current {
             self.nodes[old].hovered = false;
-            self.nodes[old].needs_paint = true;
+            self.mark_paint_to_root(old);
         }
         if let Some(new) = target {
             self.nodes[new].hovered = true;
-            self.nodes[new].needs_paint = true;
+            self.mark_paint_to_root(new);
         }
         true
     }
@@ -1222,11 +1245,11 @@ impl RenderTree {
         }
         if let Some(old) = current {
             self.nodes[old].pressed = false;
-            self.nodes[old].needs_paint = true;
+            self.mark_paint_to_root(old);
         }
         if let Some(new) = target {
             self.nodes[new].pressed = true;
-            self.nodes[new].needs_paint = true;
+            self.mark_paint_to_root(new);
         }
         true
     }
