@@ -272,6 +272,32 @@ be fixed individually — they have no `layout` to change. The candidate fix is
 to make the default `layout` measure detached, at the cost of losing caching
 for any subtree under such a wrapper. Not yet decided.
 
+**Rects live in more than one coordinate space, and nothing marks which.**
+Most declared rects are screen-space, but the children of a GPU-composited
+transform host (`ScrollView`, `InteractiveViewer`) are declared in CONTENT
+space — `hit_test_node` remaps the pointer through `child_coords` when it
+descends past one. Nothing on the node or in the type system distinguishes the
+two; it can only be inferred from that remapping.
+
+This is why re-blitting a widget that only MOVED was tried and reverted
+(`fd5529d`, reverted in `bf6b1b9`). Translating a subtree's declared rects by
+the screen delta is right outside a transform host and wrong inside one. The
+result was clicks failing inside scrollable pages and after a navigation pop,
+and **neither reproduced in tests** — including one that explicitly asserted a
+moved widget is clickable at its new position. The optimisation is sound; it
+needs coordinate spaces made explicit first, which is what a layer tree gives.
+
+**A widget whose `paint` has side effects, or whose output depends on ambient
+state, must never be replayed.** Replay skips `paint` entirely, so anything it
+did besides recording commands does not happen. `Hero` is the case: mid-flight it
+suppresses its own drawing and registers a captured picture for
+`ScreenTransitionView` to fly, so a replayed hero registers nothing. Today its
+rect changes every frame of a flight, so it re-records anyway — but any future
+caching that ignores position must account for it. The signal is
+`ctx.request_animation()`, which sets `self_animating` and the replay path
+honours. Same reason a spinner must not replay: it asks for the next frame from
+inside `paint`.
+
 **Tests cannot see any of this.** A stale cache and a wrong size render
 plausibly. Every bug in this area has been found by running a real app, never
 by the suite — which is why the tests here count *which path ran*
