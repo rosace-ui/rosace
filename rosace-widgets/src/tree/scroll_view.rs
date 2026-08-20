@@ -774,7 +774,38 @@ impl ScrollView {
 impl Widget for ScrollView {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         let constraints = ctx.constraints;
-        Size { width: avail_w(constraints), height: avail_h(constraints) }
+        let (w, h) = (avail_w(constraints), avail_h(constraints));
+
+        // A scrollable fills what it is given — except on an axis nobody
+        // bounded, where "everything available" is infinity and there is no
+        // finite answer. That happens whenever one scrollable is nested inside
+        // another on the same axis, which is an ordinary thing to write.
+        //
+        // Infinity here is not merely wrong, it is silent and fatal: it becomes
+        // a parent's sum, then a `cached_size`, then a texture dimension. It
+        // OOM-killed a test process before this existed.
+        //
+        // So on an unbounded axis, shrink to the content instead — the same
+        // answer the unbounded-axis doctrine already gives for `Expanded`
+        // inside a scroll view ("DEFINED to size to content — never a panic"),
+        // and what Flutter's `shrinkWrap: true` does for exactly this case.
+        let h = if h.is_finite() {
+            h
+        } else {
+            ctx.layout_child_uncached(
+                Constraints::loose(w, f32::INFINITY),
+                &*self.child,
+            ).height
+        };
+        let w = if w.is_finite() {
+            w
+        } else {
+            ctx.layout_child_uncached(
+                Constraints::loose(f32::INFINITY, h),
+                &*self.child,
+            ).width
+        };
+        Size { width: w, height: h }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

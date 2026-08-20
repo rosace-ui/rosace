@@ -2022,6 +2022,26 @@ impl<'a> LayoutCtx<'a> {
             node,
         });
 
+        // A non-finite size is always a bug, and it is silent: it propagates up
+        // as a parent's sum, lands in `cached_size`, and finally reaches the
+        // compositor as a texture dimension. `ScrollView x Card` OOM-killed a
+        // test process this way.
+        //
+        // The usual cause is a widget filling an UNBOUNDED axis: `avail_h` is
+        // `max_height_f32()`, which is `f32::INFINITY` inside a vertical
+        // `ScrollView`, so "fill the available height" has no finite answer.
+        // Naming the widget here is the difference between a diagnosable bug and
+        // an out-of-memory kill with no backtrace.
+        debug_assert!(
+            size.width.is_finite() && size.height.is_finite(),
+            "`{}` returned a non-finite size {size:?}. It is almost certainly \
+             filling an axis its parent left unbounded — a vertical `ScrollView` \
+             offers infinite height, so a child that sizes to the space available \
+             has no finite answer. Give it an explicit extent, or size it to its \
+             content.",
+            child.type_tag(),
+        );
+
         let mut t = tree.borrow_mut();
         // Did this child measure any children of its OWN? `layout_child` bumps
         // `layout_cursor`, so a cursor still at 0 means it measured none — its
