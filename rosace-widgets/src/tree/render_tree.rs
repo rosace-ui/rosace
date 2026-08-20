@@ -335,6 +335,15 @@ pub struct RenderTree {
     nodes: Vec<TreeNode>,
     /// Nodes begun this frame — finalized (children truncated) at frame end.
     begun_this_frame: Vec<NodeId>,
+    /// Which node is hovered, and which is pressed.
+    ///
+    /// Remembered rather than searched for. Both used to be found with
+    /// `nodes.iter().position(|n| n.hovered)`, which runs BEFORE the
+    /// no-change early-out — so every pointer move scanned the whole arena to
+    /// discover there was nothing to do. Pointer moves are the highest-frequency
+    /// event there is.
+    hovered: Option<NodeId>,
+    pressed: Option<NodeId>,
 }
 
 /// The outcome of one pointer walk over a subtree.
@@ -392,6 +401,8 @@ impl RenderTree {
         Self {
             nodes: vec![TreeNode::default()],
             begun_this_frame: Vec::new(),
+            hovered: None,
+            pressed: None,
         }
     }
 
@@ -490,6 +501,9 @@ impl RenderTree {
         // stuck pressed.
         n.hovered = false;
         n.pressed = false;
+        // The cached pointers name a node whose occupant just left.
+        if self.hovered == Some(node) { self.hovered = None; }
+        if self.pressed == Some(node) { self.pressed = None; }
         true
     }
 
@@ -839,6 +853,8 @@ impl RenderTree {
         // stop receiving phases the moment it leaves the tree, or a backgrounded
         // app would still be calling into widgets that are gone.
         super::unregister_lifecycle_observer(node);
+        if self.hovered == Some(node) { self.hovered = None; }
+        if self.pressed == Some(node) { self.pressed = None; }
         for f in std::mem::take(&mut self.nodes[node].dispose) {
             f();
         }
@@ -1180,10 +1196,11 @@ impl RenderTree {
     /// and new node dirty so the next walk repaints exactly them (localized
     /// damage). Returns true when the hover target changed.
     pub fn set_hover(&mut self, target: Option<NodeId>) -> bool {
-        let current = self.nodes.iter().position(|n| n.hovered);
+        let current = self.hovered;
         if current == target {
             return false;
         }
+        self.hovered = target;
         if let Some(old) = current {
             self.nodes[old].hovered = false;
             self.nodes[old].needs_paint = true;
