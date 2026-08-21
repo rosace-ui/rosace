@@ -305,6 +305,55 @@ fn persist_db_path(app_title: &str) -> Result<std::path::PathBuf, String> {
     }
 }
 
+// ── Engine chrome ─────────────────────────────────────────────────────────────
+
+/// One piece of framework-drawn UI, promoted above the app.
+pub(crate) struct ChromeLayer {
+    pub position: rosace_widgets::tree::LayerPosition,
+    pub widget:   rosace_widgets::tree::BoxedWidget,
+    pub scrim:    Option<rosace_widgets::tree::ScrimConfig>,
+    pub input:    rosace_widgets::tree::InputBehavior,
+    pub focus:    rosace_widgets::tree::FocusBehavior,
+}
+
+/// The real root: the app's widget, plus whatever the FRAMEWORK draws over it.
+///
+/// "Chrome" here is UI no app widget declared — the text context menu and the
+/// DevTools FAB/panel. Both used to be injected by the engine around the paint
+/// walk, into a parallel overlay pass. A promoted node is declared DURING the
+/// walk, so they had nowhere to live in the tree; wrapping the root is what
+/// gives them one, and after this the engine has no overlay concept of its own.
+pub(crate) struct RootChrome {
+    pub app:    rosace_widgets::tree::BoxedWidget,
+    pub chrome: Vec<ChromeLayer>,
+}
+
+impl rosace_widgets::tree::Widget for RootChrome {
+    fn layout(&self, ctx: &rosace_widgets::tree::LayoutCtx) -> rosace_core::types::Size {
+        ctx.layout_child(ctx.constraints, &*self.app)
+    }
+
+    fn paint(&self, ctx: &mut rosace_widgets::tree::PaintCtx) {
+        let rect = ctx.rect;
+        ctx.paint_child(rect, &*self.app);
+        for (i, c) in self.chrome.iter().enumerate() {
+            // Keyed, not positional: chrome appears and disappears
+            // independently (a context menu opens while DevTools is closed),
+            // and positional slots would hand one piece another's node.
+            ctx.promote_keyed(
+                i as u64,
+                c.position.clone(),
+                &*c.widget,
+                rosace_widgets::tree::PromoteOpts {
+                    scrim: c.scrim.clone(),
+                    input: c.input,
+                    focus: c.focus,
+                },
+            );
+        }
+    }
+}
+
 // ── Root paint ────────────────────────────────────────────────────────────────
 
 /// Lay out and paint the root widget, tracking damage.

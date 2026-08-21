@@ -164,17 +164,26 @@ fn a_nested_transform_host_is_parented_by_the_layer_that_encloses_it() {
     h.frame();
 
     let layers = h.e.inspect_layers();
+    // TRANSFORM layers only. Engine chrome (the DevTools panel in a dev build)
+    // is promoted, and a promoted layer is a layer root by definition — it is
+    // not part of the transform-host nesting this test is about.
+    let hosts: Vec<_> = layers.iter()
+        .enumerate()
+        .filter(|(_, l)| matches!(l.kind, rosace::widgets::tree::LayerKind::Transform(_)))
+        .collect();
     assert_eq!(
-        layers.len(),
+        hosts.len(),
         2,
         "expected the page ScrollView and the nested InteractiveViewer, got {layers:?}"
     );
 
     // Paint order is a pre-order walk, so the enclosing page comes first.
-    assert!(layers[0].parent.is_none(), "the page's own scroll layer has nothing above it");
+    let (page_index, page) = hosts[0];
+    let (_, nested) = hosts[1];
+    assert!(page.parent.is_none(), "the page's own scroll layer has nothing above it");
     assert_eq!(
-        layers[1].parent,
-        Some(0),
+        nested.parent,
+        Some(page_index),
         "the nested viewer must record the page's layer as its parent — without that link \
          the clip cannot be inherited, which is the whole defect"
     );
@@ -194,7 +203,9 @@ fn a_nested_layer_scrolled_completely_out_of_view_is_culled() {
     }
 
     let layers = h.e.inspect_layers();
-    let nested = layers.iter().find(|l| l.parent.is_some())
+    let nested = layers.iter()
+        .find(|l| l.parent.is_some()
+            && matches!(l.kind, rosace::widgets::tree::LayerKind::Transform(_)))
         .expect("the nested layer keeps its slot even when fully clipped");
     assert!(
         nested.culled,

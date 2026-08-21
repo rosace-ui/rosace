@@ -15,8 +15,8 @@ use rosace_widgets::Component;
 use rosace_core::types::Rect;
 use rosace_render::SkiaCanvas;
 use rosace_widgets::tree::{
-    clear_overlays, drain_overlays, push_overlay, text_edit, FocusBehavior, InputBehavior,
-    LayerPosition, Menu, NodeId, OverlayEntry, ScrimConfig,
+    clear_overlays, drain_overlays, text_edit, FocusBehavior, InputBehavior,
+    LayerPosition, Menu, NodeId, ScrimConfig,
 };
 use rosace_widgets::clipboard::ClipboardProvider as _;
 
@@ -1046,6 +1046,72 @@ impl FrameEngine {
             clip_rect: None,
         };
 
+        // ── Engine chrome ───────────────────────────────────────────────
+        // The framework's own UI: the text context menu, and the DevTools
+        // FAB/panel below. Built here and promoted by `RootChrome` during
+        // the paint walk, rather than injected into a parallel overlay pass
+        // afterwards — a promoted node has to be declared DURING the walk.
+        let mut chrome: Vec<crate::ChromeLayer> = Vec::new();
+
+        // ── Context menu (D116 Step 7) — re-declared while open,
+        // same "engine-driven instead of atom-driven" shape `Dropdown`
+        // uses per-frame for its own overlay. Cut/Copy only appear when
+        // there's an actual selection (real desktop convention — hidden,
+        // not just grayed out, since `Menu` has no disabled-item concept).
+        if let Some((node_id, (mx, my))) = self.context_menu {
+            if let Some((value, state)) = self.editable_at(node_id) {
+                let has_selection = text_edit::selected_text(&value, &state).is_some();
+                let actions = self.context_menu_actions.clone();
+                let mut menu = Menu::new();
+                if has_selection {
+                    let a = actions.clone();
+                    menu = menu.item("Cut", move || a.lock().unwrap().push(ContextMenuAction::Cut));
+                    let a = actions.clone();
+                    menu = menu.item("Copy", move || a.lock().unwrap().push(ContextMenuAction::Copy));
+                }
+                let a = actions.clone();
+                menu = menu.item("Paste", move || a.lock().unwrap().push(ContextMenuAction::Paste));
+                let a = actions.clone();
+                menu = menu.item("Select All", move || a.lock().unwrap().push(ContextMenuAction::SelectAll));
+                let dismiss_actions = actions.clone();
+                chrome.push(crate::ChromeLayer {
+                    position: LayerPosition::Absolute(rosace_core::types::Point { x: mx, y: my }),
+                    widget: std::sync::Arc::new(menu),
+                    input: InputBehavior::Block,
+                    focus: FocusBehavior::PassThrough,
+                    scrim: Some(ScrimConfig {
+                            color: rosace_render::Color::TRANSPARENT,
+                            on_tap: Some(Arc::new(move || {
+                                dismiss_actions.lock().unwrap().push(ContextMenuAction::Dismiss);
+                            })),
+                        exclude_rect: None,
+                    }),
+                });
+            } else {
+                self.context_menu = None;
+            }
+        }
+
+
+        // DevTools (dev builds): a real widget tree (FAB + tabbed panel), so it
+        // is laid out, painted, hit-tested and damage-tracked exactly like any
+        // dialog — no hand-drawn chrome. Content comes from the always-on
+        // flight recorder. `devtools_overlay` still returns an `OverlayEntry`;
+        // it is unpacked here rather than changing a DevTools API that the
+        // `OverlayEntry` removal in 8.5 will revisit anyway.
+        if devtools_fab_enabled() {
+            let events = rosace_trace::flight_recorder().map(|r| r.snapshot()).unwrap_or_default();
+            let rows = self.trace_panel.rows_for(&events, rosace_devtools::DEVTOOLS_TAB.get(), 200);
+            let e = rosace_devtools::devtools_overlay(rows);
+            chrome.push(crate::ChromeLayer {
+                position: e.position,
+                widget:   e.widget,
+                scrim:    e.scrim,
+                input:    e.input,
+                focus:    e.focus,
+            });
+        }
+
         // Positioned promotions resolve against the window; publish it before
         // anything paints.
         rosace_widgets::tree::set_window_size(win_w, win_h);
@@ -1054,8 +1120,13 @@ impl FrameEngine {
 
         // ── Paint the root widget — widgets record DrawCommands ────────
         let mut damage: Option<Rect> = None;
+        let root_widget: rosace_widgets::tree::BoxedWidget =
+            std::sync::Arc::new(crate::RootChrome {
+                app: std::sync::Arc::clone(&widget),
+                chrome: std::mem::take(&mut chrome),
+            });
         paint_root(
-            &widget,
+            &root_widget,
             constraints,
             &mut paint_ctx,
             &mut damage,
@@ -1113,44 +1184,6 @@ impl FrameEngine {
         }
         } // needs_paint
 
-        // ── Context menu (D116 Step 7) — re-pushed every frame while open,
-        // same "engine-driven instead of atom-driven" shape `Dropdown`
-        // uses per-frame for its own overlay. Cut/Copy only appear when
-        // there's an actual selection (real desktop convention — hidden,
-        // not just grayed out, since `Menu` has no disabled-item concept).
-        if let Some((node_id, (mx, my))) = self.context_menu {
-            if let Some((value, state)) = self.editable_at(node_id) {
-                let has_selection = text_edit::selected_text(&value, &state).is_some();
-                let actions = self.context_menu_actions.clone();
-                let mut menu = Menu::new();
-                if has_selection {
-                    let a = actions.clone();
-                    menu = menu.item("Cut", move || a.lock().unwrap().push(ContextMenuAction::Cut));
-                    let a = actions.clone();
-                    menu = menu.item("Copy", move || a.lock().unwrap().push(ContextMenuAction::Copy));
-                }
-                let a = actions.clone();
-                menu = menu.item("Paste", move || a.lock().unwrap().push(ContextMenuAction::Paste));
-                let a = actions.clone();
-                menu = menu.item("Select All", move || a.lock().unwrap().push(ContextMenuAction::SelectAll));
-                let dismiss_actions = actions.clone();
-                push_overlay(
-                    OverlayEntry::new(LayerPosition::Absolute(rosace_core::types::Point { x: mx, y: my }), menu)
-                        .input(InputBehavior::Block)
-                        .focus(FocusBehavior::PassThrough)
-                        .scrim(ScrimConfig {
-                            color: rosace_render::Color::TRANSPARENT,
-                            on_tap: Some(Arc::new(move || {
-                                dismiss_actions.lock().unwrap().push(ContextMenuAction::Dismiss);
-                            })),
-                            exclude_rect: None,
-                        }),
-                );
-            } else {
-                self.context_menu = None;
-            }
-        }
-
         // ── Overlay pass — second recorder into overlay_canvas (D076) ───
         // Entries come from the render tree (D091 — they persist on
         // clean frames and clear when their owner repaints), plus the
@@ -1161,17 +1194,6 @@ impl FrameEngine {
         let legacy_overlays = drain_overlays();
         let bottom_inset = rosace_widgets::tree::take_bottom_overlay_inset();
         let build_overlays = &self.build_overlays;
-        // DevTools overlay (dev builds): a real widget tree (FAB + tabbed panel)
-        // injected as a normal overlay, so it's laid out, painted, hit-tested,
-        // and damage-tracked exactly like any dialog/dropdown — no hand-drawn
-        // chrome. Content comes from the always-on flight recorder.
-        let devtools_entry = if devtools_fab_enabled() {
-            let events = rosace_trace::flight_recorder().map(|r| r.snapshot()).unwrap_or_default();
-            let rows = self.trace_panel.rows_for(&events, rosace_devtools::DEVTOOLS_TAB.get(), 200);
-            Some(rosace_devtools::devtools_overlay(rows))
-        } else {
-            None
-        };
         let mut overlay_routes: Vec<OverlayRoute> = Vec::new();
         // Keys of the overlays actually emitted this frame; anything retained
         // but absent below is a closed overlay whose tree must be released.
@@ -1229,7 +1251,7 @@ impl FrameEngine {
                     .map(|&(n, i)| (Some(n), &tree_ref.node(n).overlays[i]))
                     .chain(build_overlays.iter().map(|e| (None, e)))
                     .chain(legacy_overlays.iter().map(|e| (None, e)))
-                    .chain(devtools_entry.iter().map(|e| (None, e)));
+                    .chain(std::iter::empty());
 
                 for (owner_node, entry) in entries {
                     if let Some(scrim) = &entry.scrim {

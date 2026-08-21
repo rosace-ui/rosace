@@ -134,9 +134,27 @@ impl H {
             rosace_platform::InputEvent::MouseUp   { x, y, button: rosace_platform::MouseButton::Left },
         ]);
     }
+    /// THE PANEL's promoted layer — found by walking up from the panel's own
+    /// node, not by taking the first promoted layer in the list.
+    ///
+    /// A dev build promotes engine chrome (the DevTools FAB/panel) too, and a
+    /// real app promotes several things at once, so "the promoted layer" was
+    /// never a well-defined thing to assert on.
     fn promoted_layer(&self) -> Option<rosace::widgets::tree::Layer> {
-        self.e.inspect_layers().into_iter()
-            .find(|l| l.kind == rosace::widgets::tree::LayerKind::Promoted)
+        let nodes = self.e.inspect_tree();
+        let panel = nodes.iter().find(|n| n.tag.ends_with("::Panel"))?;
+        let layers = self.e.inspect_layers();
+
+        let mut cur = Some(panel.id);
+        while let Some(id) = cur {
+            if let Some(l) = layers.iter().find(|l| {
+                l.node == id && l.kind == rosace::widgets::tree::LayerKind::Promoted
+            }) {
+                return Some(l.clone());
+            }
+            cur = nodes.iter().find(|n| n.id == id).and_then(|n| n.parent);
+        }
+        None
     }
 }
 
