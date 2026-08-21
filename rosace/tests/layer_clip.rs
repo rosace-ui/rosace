@@ -154,3 +154,51 @@ fn a_nested_layer_scrolled_under_the_app_bar_is_cropped_by_it() {
          the content shifted down instead of being clipped at the top"
     );
 }
+
+/// The layer TREE, not a layer list: a nested host records its enclosing
+/// layer, which is what makes "clipped by my ancestor" expressible at all.
+#[test]
+fn a_nested_transform_host_is_parented_by_the_layer_that_encloses_it() {
+    let _guard = exclusive();
+    let mut h = H::new();
+    h.frame();
+
+    let layers = h.e.inspect_layers();
+    assert_eq!(
+        layers.len(),
+        2,
+        "expected the page ScrollView and the nested InteractiveViewer, got {layers:?}"
+    );
+
+    // Paint order is a pre-order walk, so the enclosing page comes first.
+    assert!(layers[0].parent.is_none(), "the page's own scroll layer has nothing above it");
+    assert_eq!(
+        layers[1].parent,
+        Some(0),
+        "the nested viewer must record the page's layer as its parent — without that link \
+         the clip cannot be inherited, which is the whole defect"
+    );
+}
+
+/// Scrolled far enough, a nested layer leaves its parent's viewport entirely.
+/// It must be culled rather than published somewhere off-viewport.
+#[test]
+fn a_nested_layer_scrolled_completely_out_of_view_is_culled() {
+    let _guard = exclusive();
+    let mut h = H::new();
+    h.frame();
+
+    for _ in 0..12 {
+        h.scroll(-50.0);
+        h.frame();
+    }
+
+    let layers = h.e.inspect_layers();
+    let nested = layers.iter().find(|l| l.parent.is_some())
+        .expect("the nested layer keeps its slot even when fully clipped");
+    assert!(
+        nested.culled,
+        "the nested layer scrolled clear of its page but was not culled: {nested:?}"
+    );
+    assert_eq!(nested.dest.size.height, 0.0, "a culled layer draws nothing");
+}

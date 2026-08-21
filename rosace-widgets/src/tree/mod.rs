@@ -160,7 +160,7 @@ pub use date_picker::{DatePicker, SimpleDate, SelectionMode, PageAxis};
 pub use time_picker::{TimePicker, SimpleTime, TimeUnit};
 pub use data_table::{DataTable, DataTableColumn, SortDirection};
 pub use stateful::{Stateful, StatefulExt, StatefulWidget};
-pub use render_tree::{HitHandler, InspectNode, NodeId, RenderTree, ScrollAxes, ScrollHandler, TreeNode};
+pub use render_tree::{HitHandler, InspectNode, Layer, LayerTree, NodeId, RenderTree, ScrollAxes, ScrollHandler, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use semantics::Semantics;
 pub use row::Row;

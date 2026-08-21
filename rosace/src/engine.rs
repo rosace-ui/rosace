@@ -20,7 +20,7 @@ use rosace_widgets::tree::{
 };
 use rosace_widgets::clipboard::ClipboardProvider as _;
 
-use crate::{inflate_rect, paint_root, rect_contains, rect_intersect, theme_color, OverlayRoute};
+use crate::{inflate_rect, paint_root, rect_contains, theme_color, OverlayRoute};
 
 /// Translate a physical key + modifiers into a [`text_edit::Command`]
 /// (D116 layer 4 — the abstract vocabulary a keymap produces). `word_mod`
@@ -513,6 +513,15 @@ impl FrameEngine {
     /// testable only by instrumenting the walker by hand.
     pub fn inspect_tree(&self) -> Vec<rosace_widgets::tree::InspectNode> {
         self.render_tree.borrow().inspect()
+    }
+
+    /// The compositing layers derived from the current tree, in paint order.
+    ///
+    /// Each carries its enclosing layer, its screen placement and its
+    /// inherited clip — the structure the flat `Vec<ScrollLayer>` handed to
+    /// the platform cannot express.
+    pub fn inspect_layers(&self) -> Vec<rosace_widgets::tree::Layer> {
+        self.render_tree.borrow().layer_tree().layers
     }
 
     // ── Text editing dispatch (D112/Phase 28 Step 1) ────────────────────
@@ -1375,66 +1384,19 @@ impl FrameEngine {
             let scale = canvas.scale();
             let mut scroll_layers: Vec<rosace_platform::ScrollLayer> = Vec::new();
             let tree_ref = self.render_tree.borrow();
-            for (n, i) in tree_ref.transform_ids() {
-                let entry = &tree_ref.node(n).transforms[i];
-                let mut vp = entry.viewport_rect;
-                // `viewport_rect` is in the transform's PARENT's coordinate
-                // space — for a top-level transform (e.g. the page's own
-                // ScrollView, parented directly under root) that space IS
-                // screen space, but for a NESTED transform (e.g.
-                // InteractiveViewer placed inside a scrolling page) it is
-                // the outer scroll view's CONTENT-LOCAL space, which can be
-                // arbitrarily far from the real on-screen position (bug
-                // found live: InteractiveViewer nested in widget_gallery's
-                // page ScrollView rendered its content and hit-tested its
-                // scroll target at the wrong screen location — content
-                // invisible, buttons apparently clipped, wheel/drag events
-                // captured by the outer page scroll instead). Resolve
-                // through the SAME ancestor-composing walk `content_to_screen`
-                // already provides for overlay positioning (D092's original
-                // tooltip-position fix) — one shared piece of math for both
-                // problems, not a second bespoke one.
-                vp.origin = tree_ref.content_to_screen(n, vp.origin);
-
-                // Crop to whatever this host's ancestors clip it to, and bias
-                // the sample origin by what came off the top-left.
+            for layer in tree_ref.layer_tree().layers {
+                // Placement and clip are already resolved: `layer_tree` walks
+                // the node tree once and hands back each layer's screen rect
+                // (mapped through every transform host above it) narrowed by
+                // every clip above it, plus the sample bias that turns the
+                // crop into a clip rather than a shift.
                 //
-                // A transform layer is composited independently of the picture
-                // its ancestors painted into, so their `PushClip`/`PopClip`
-                // commands cannot constrain it — they are commands in a
-                // picture this layer is not part of. Without this, a nested
-                // `InteractiveViewer` or `PullToRefresh` scrolled off the top
-                // of its page painted straight over the AppBar. `dest` is the
-                // only scissor a placed layer has, so the structural clip is
-                // resolved here and applied to the placement.
-                let (vp, clip_bias) = match tree_ref.effective_clip(n) {
-                    Some(clip) => match rect_intersect(vp, clip) {
-                        Some(cropped) => {
-                            let bias = (
-                                cropped.origin.x - vp.origin.x,
-                                cropped.origin.y - vp.origin.y,
-                            );
-                            (cropped, bias)
-                        }
-                        // Entirely outside its clip — nothing of it is on
-                        // screen. Publishing a zero-area dest keeps the layer
-                        // slot alive (so its texture is not re-uploaded when
-                        // it scrolls back into view) while drawing nothing.
-                        None => (
-                            Rect { origin: vp.origin, size: rosace_core::types::Size { width: 0.0, height: 0.0 } },
-                            (0.0, 0.0),
-                        ),
-                    },
-                    None => (vp, (0.0, 0.0)),
-                };
+                // Both were previously re-derived here per entry, which is
+                // what a flat `Vec<ScrollLayer>` forces: it has no parent and
+                // no clip, so "clipped by my ancestor" is not in the format.
+                let (n, entry) = (layer.node, &tree_ref.node(layer.node).transforms[layer.entry]);
+                let vp = layer.dest;
 
-                // Content texture = child natural size at physical
-                // resolution, capped. Pixmap starts transparent, so
-                // areas the content does not cover reveal the base.
-                // `entry.zoom` (InteractiveViewer, Phase 32) rasterizes the
-                // SAME logical picture at a higher physical resolution —
-                // real GPU-crisp magnification, reusing the exact mechanism
-                // that already gives HiDPI displays sharp text/shapes.
                 let content_scale = scale * entry.zoom;
                 let cw = ((entry.child_size.width  * content_scale).ceil() as u32).clamp(1, MAX_TL_DIM);
                 let ch = ((entry.child_size.height * content_scale).ceil() as u32).clamp(1, MAX_TL_DIM);
@@ -1462,8 +1424,8 @@ impl FrameEngine {
                     ),
                     zoom: entry.zoom,
                     src_bias: (
-                        clip_bias.0 * scale * entry.zoom,
-                        clip_bias.1 * scale * entry.zoom,
+                        layer.src_bias.0 * scale * entry.zoom,
+                        layer.src_bias.1 * scale * entry.zoom,
                     ),
                     items,
                 });

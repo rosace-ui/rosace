@@ -1610,61 +1610,89 @@ impl RenderTree {
         out
     }
 
-    /// The clip in force for `target`, in SCREEN space — the intersection of
-    /// every clip its ancestors impose, and its own.
+    /// Derive the compositing layer tree from the node tree.
     ///
-    /// `None` means unclipped. A zero-sized rect means fully clipped away.
+    /// One pre-order walk resolves, for every layer at once, what the flat
+    /// list forced each consumer to re-derive per entry: its screen
+    /// placement through every transform host above it, and the clip it
+    /// inherits from its ancestors. Layers come back in paint order, and each
+    /// carries the index of its enclosing layer — so "clipped by my ancestor"
+    /// is expressible, which is exactly what `Vec<ScrollLayer>` could not say.
     ///
-    /// This is what makes a compositing layer inherit its ancestors' clips.
-    /// A layer is presented independently of the picture its ancestors'
-    /// `PushClip` commands live in, so those commands cannot constrain it;
-    /// the clip has to be resolved structurally and applied to the layer's
-    /// own placement instead. `CompositorLayer::placed` draws into exactly
-    /// its `dest` rect, so `dest = layer_rect ∩ effective_clip` IS the clip.
-    pub fn effective_clip(&self, target: NodeId) -> Option<Rect> {
-        let mut path = Vec::new();
-        if !self.path_to(Self::ROOT, target, &mut path) {
-            return None;
-        }
-        let mut to_screen = ContentToScreen::IDENTITY;
-        let mut clip: Option<Rect> = None;
-        let mut narrow = |clip: &mut Option<Rect>, c: Rect| {
-            *clip = Some(match *clip {
-                None => c,
-                Some(prev) => super::intersect_rect(prev, c).unwrap_or(Rect {
-                    origin: c.origin,
-                    size: Size { width: 0.0, height: 0.0 },
-                }),
-            });
+    /// Note on zoom: a layer's `dest` maps its ORIGIN through the ancestor
+    /// transforms but keeps its own size, matching what the engine published
+    /// before this existed. A layer nested inside a ZOOMED `InteractiveViewer`
+    /// therefore gets an unscaled `dest`. That is a pre-existing gap, left
+    /// alone here so this stays a derivation of current behaviour rather than
+    /// a silent change to it.
+    pub fn layer_tree(&self) -> LayerTree {
+        let mut tree = LayerTree::default();
+        self.layers_node(Self::ROOT, ContentToScreen::IDENTITY, None, None, &mut tree);
+        tree
+    }
+
+    fn layers_node(
+        &self,
+        id: NodeId,
+        to_screen: ContentToScreen,
+        clip: Option<Rect>,
+        parent: Option<usize>,
+        out: &mut LayerTree,
+    ) {
+        let n = &self.nodes[id];
+
+        // A clip this node imposes applies to itself and everything beneath.
+        let clip = match n.clip {
+            Some(c) => Some(narrow_rect(clip, to_screen.apply(c))),
+            None => clip,
         };
-        for &id in &path {
-            // A node's clip is declared in the same space as its own rect —
-            // its parent's — so it maps through the transform accumulated
-            // ABOVE it, before its own is pushed. This one applies to the
-            // target itself: it is a clip its PARENT imposed on it.
-            if let Some(c) = self.nodes[id].clip {
-                let c = to_screen.apply(c);
-                narrow(&mut clip, c);
-            }
-            if id == target {
-                // A node is not clipped by its own viewport — it IS the
-                // viewport. Only its descendants are.
-                break;
-            }
-            if let Some(entry) = self.nodes[id].transforms.first() {
-                // A transform host clips its subtree by CONSTRUCTION: its
-                // content is a texture presented into `viewport_rect` and
-                // nothing outside that rect is ever sampled. It sets no
-                // `clip_rect` on the composited path — it does not need one
-                // for its own content — but a nested layer beneath it is
-                // presented separately and would escape, which is the whole
-                // defect. This is Flutter's ClipRectLayer wrapping a
-                // TransformLayer, derived rather than declared.
-                narrow(&mut clip, to_screen.apply(entry.viewport_rect));
-                to_screen = to_screen.push(entry, rosace_state::scroll_offset(id as u64));
+
+        let mut child_to_screen = to_screen;
+        let mut child_clip = clip;
+        let mut child_parent = parent;
+
+        for (i, entry) in n.transforms.iter().enumerate() {
+            let origin = to_screen.apply_point(entry.viewport_rect.origin);
+            let vp = Rect { origin, size: entry.viewport_rect.size };
+            let (dest, src_bias, culled) = match clip {
+                Some(c) => match super::intersect_rect(vp, c) {
+                    Some(cropped) => (
+                        cropped,
+                        (cropped.origin.x - vp.origin.x, cropped.origin.y - vp.origin.y),
+                        false,
+                    ),
+                    // Entirely outside its clip. A zero-area dest keeps the
+                    // layer's slot alive — so its texture is not re-uploaded
+                    // when it scrolls back into view — while drawing nothing.
+                    None => (
+                        Rect { origin: vp.origin, size: Size { width: 0.0, height: 0.0 } },
+                        (0.0, 0.0),
+                        true,
+                    ),
+                },
+                None => (vp, (0.0, 0.0), false),
+            };
+
+            let index = out.layers.len();
+            out.layers.push(Layer { node: id, entry: i, parent, dest, src_bias, culled });
+
+            // Descend under the FIRST entry only, matching `content_to_screen`.
+            // A node attaching several transform entries would be a widget
+            // compositing more than one layer from one node, which nothing
+            // does — the loop exists so such an entry is still published, not
+            // so it can nest.
+            if i == 0 {
+                child_to_screen = to_screen.push(entry, rosace_state::scroll_offset(id as u64));
+                // A host clips its subtree by construction: nothing outside
+                // its viewport is ever sampled.
+                child_clip = Some(narrow_rect(clip, vp));
+                child_parent = Some(index);
             }
         }
-        clip
+
+        for &child in &n.children {
+            self.layers_node(child, child_to_screen, child_clip, child_parent, out);
+        }
     }
 
     fn path_to(&self, cur: NodeId, target: NodeId, path: &mut Vec<NodeId>) -> bool {
@@ -1835,6 +1863,54 @@ pub fn select_scroll_handler(
         .map(|(_, cb)| cb.clone())
 }
 
+/// Intersect a running clip with another rect. A disjoint pair collapses to a
+/// zero-sized rect rather than `None`: "clipped away entirely" and "not
+/// clipped at all" must not be the same value.
+fn narrow_rect(clip: Option<Rect>, c: Rect) -> Rect {
+    match clip {
+        None => c,
+        Some(prev) => super::intersect_rect(prev, c).unwrap_or(Rect {
+            origin: c.origin,
+            size: Size { width: 0.0, height: 0.0 },
+        }),
+    }
+}
+
+/// One compositing layer: content presented to the GPU independently of the
+/// picture its ancestors painted into.
+///
+/// Derived from the node tree rather than declared — a widget says "I am a
+/// transform host" by attaching a [`TransformLayerEntry`], and the structure
+/// above it decides where the layer sits and what clips it. That derivation is
+/// the point: a flat list cannot express "clipped by my ancestor", so anything
+/// reading a flat list has to re-derive the ancestry per entry, which is where
+/// the nested-clip defect lived.
+#[derive(Clone, Debug)]
+pub struct Layer {
+    /// The node that attached this layer's transform entry.
+    pub node:     NodeId,
+    /// Which of that node's `transforms` entries this layer is.
+    pub entry:    usize,
+    /// Index into [`LayerTree::layers`] of the nearest enclosing layer.
+    /// `None` for a layer composited directly against the window.
+    pub parent:   Option<usize>,
+    /// Screen-space placement, already narrowed by every clip above it.
+    pub dest:     Rect,
+    /// Logical-pixel bias for the texture sample origin, from whatever the
+    /// clip trimmed off the top-left. Without it a cropped layer shows the
+    /// same content in a smaller box — a shift, not a clip.
+    pub src_bias: (f32, f32),
+    /// The clip removed this layer entirely; `dest` is zero-sized.
+    pub culled:   bool,
+}
+
+/// Every compositing layer in the tree, in paint order (pre-order DFS), each
+/// carrying its parent, its screen placement and its inherited clip.
+#[derive(Clone, Debug, Default)]
+pub struct LayerTree {
+    pub layers: Vec<Layer>,
+}
+
 /// Accumulated content-space → screen-space transform for one downward walk.
 ///
 /// `screen = content * scale + translate`, per axis. Composing on the way down
@@ -1864,6 +1940,13 @@ impl ContentToScreen {
             out.scale[a] = entry.zoom * self.scale[a];
         }
         out
+    }
+
+    fn apply_point(self, p: rosace_core::types::Point) -> rosace_core::types::Point {
+        rosace_core::types::Point {
+            x: p.x * self.scale[0] + self.translate[0],
+            y: p.y * self.scale[1] + self.translate[1],
+        }
     }
 
     fn apply(self, r: Rect) -> Rect {
