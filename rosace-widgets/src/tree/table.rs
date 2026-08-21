@@ -10,7 +10,6 @@
 //! Cells align top-left within their resolved column width; row height is
 //! the tallest cell of that row.
 
-use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Color;
@@ -314,7 +313,7 @@ mod tests {
         fn paint(&self, _ctx: &mut PaintCtx) {}
     }
 
-    fn boxed(w: f32, h: f32) -> BoxedWidget { Arc::new(FixedCell(w, h)) }
+    fn boxed(w: f32, h: f32) -> BoxedWidget { std::sync::Arc::new(FixedCell(w, h)) }
 
     fn test_env() -> (rosace_render::FontCache, rosace_theme::ThemeData) {
         (rosace_render::FontCache::embedded(), rosace_theme::built_in::dark_theme())

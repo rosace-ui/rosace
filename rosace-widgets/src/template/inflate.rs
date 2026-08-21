@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use super::{StaticValue, PropValue, Template, TemplateNode};
-use crate::tree::{Button, Column, Row, Text, Widget};
+use crate::tree::{Button, Column, Row, Text};
 
 /// A nullary event handler (e.g. `Button::on_press`). Handlers travel through a
 /// hole wrapped as this type — concrete (so it round-trips through `Box<dyn

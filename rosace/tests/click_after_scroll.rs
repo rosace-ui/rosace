@@ -8,7 +8,6 @@ use rosace::prelude::*;
 use rosace::widgets::tree::{LayoutCtx, PaintCtx};
 use rosace::FrameEngine;
 use rosace_render::{FontCache, SkiaCanvas};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 static FRAME_STATE: Mutex<()> = Mutex::new(());

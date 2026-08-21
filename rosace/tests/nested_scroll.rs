@@ -14,7 +14,7 @@ use rosace::prelude::*;
 use rosace::widgets::tree::{LayoutCtx, PaintCtx};
 use rosace::FrameEngine;
 use rosace_render::{FontCache, SkiaCanvas};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 
 static FRAME_STATE: Mutex<()> = Mutex::new(());
 fn exclusive() -> MutexGuard<'static, ()> {
