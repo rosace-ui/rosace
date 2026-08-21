@@ -107,7 +107,6 @@ struct H {
     a: SkiaCanvas,
     b: SkiaCanvas,
     clicks: Arc<AtomicUsize>,
-    show: Arc<AtomicBool>,
     mounted: Arc<AtomicBool>,
 }
 
@@ -123,7 +122,8 @@ fn harness() -> H {
         }),
         FontCache::embedded(),
     );
-    H { e, a: SkiaCanvas::new(WIN_W, WIN_H), b: SkiaCanvas::new(WIN_W, WIN_H), clicks, show, mounted }
+    let _ = show;
+    H { e, a: SkiaCanvas::new(WIN_W, WIN_H), b: SkiaCanvas::new(WIN_W, WIN_H), clicks, mounted }
 }
 
 impl H {

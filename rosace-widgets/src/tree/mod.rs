@@ -213,6 +213,19 @@ thread_local! {
 pub fn request_animation() { ANIM_REQUEST.with(|a| a.set(true)); }
 
 thread_local! {
+    static WINDOW_SIZE: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
+}
+/// The window's logical size, published by the engine each frame.
+///
+/// A positioned promotion resolves against the WINDOW — `Centered`,
+/// `BottomAnchored` and the on-screen clamp are all window-relative, and a
+/// widget deep in the tree has no other way to know it. Same channel shape as
+/// the bottom inset next to it: engine writes, widgets read.
+pub fn set_window_size(w: f32, h: f32) { WINDOW_SIZE.with(|s| s.set((w, h))); }
+/// The window's logical size as of this frame.
+pub fn window_size() -> (f32, f32) { WINDOW_SIZE.with(|s| s.get()) }
+
+thread_local! {
     static CURRENT_POINTER: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
 }
 /// The latest pointer position (window-space logical px) — set by the engine on
@@ -235,6 +248,12 @@ pub fn set_bottom_overlay_inset(px: f32) { BOTTOM_OVERLAY_INSET.with(|v| v.set(p
 
 /// Engine-side read+reset (once per frame, in the overlay pass).
 pub fn take_bottom_overlay_inset() -> f32 { BOTTOM_OVERLAY_INSET.with(|v| v.replace(0.0)) }
+
+/// Read without resetting — a positioned promotion needs it DURING paint,
+/// while `Scaffold` may not have declared it yet this frame. Reads last
+/// frame's value in that case, which is what the overlay pass effectively did
+/// too: bottom chrome does not change height between frames in practice.
+pub fn bottom_overlay_inset() -> f32 { BOTTOM_OVERLAY_INSET.with(|v| v.get()) }
 
 /// Frame loop: did any widget request continuous animation this frame?
 pub fn take_animation_request() -> bool { ANIM_REQUEST.with(|a| a.replace(false)) }
@@ -767,6 +786,135 @@ impl<'a> PaintCtx<'a> {
             Some(render_tree::PromotedLayer { picture, rect: screen_rect });
     }
 
+    /// Promote a widget to the root layer at a resolved [`LayerPosition`],
+    /// optionally behind a scrim.
+    ///
+    /// This is the overlay-shaped entry point: it lays the widget out against
+    /// the WINDOW, resolves the position, clamps it on-screen, and paints the
+    /// scrim beneath it. [`PaintCtx::promote`] is the primitive underneath —
+    /// use that when the caller already knows the rect.
+    pub fn promote_at(
+        &mut self,
+        position: LayerPosition,
+        widget: &dyn Widget,
+        opts: PromoteOpts,
+    ) {
+        let (win_w, win_h) = window_size();
+        let window = Rect {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size { width: win_w, height: win_h },
+        };
+
+        // A `Fill` overlay lays out TIGHT to the window. Loose constraints let
+        // a Stack shrink to its child, which put a bottom-right `Positioned`
+        // FAB's hit region at the top-left over app content and stole clicks.
+        let constraints = if matches!(position, LayerPosition::Fill) {
+            Constraints::tight(win_w, win_h)
+        } else {
+            Constraints::loose(win_w, win_h)
+        };
+
+        let node = self.tree.borrow_mut().slot(self.node, true);
+        let size = widget.layout(&LayoutCtx::with_tree(
+            constraints,
+            self.font,
+            &self.theme,
+            Rc::clone(&self.tree),
+            node,
+        ));
+
+        let bottom_inset = bottom_overlay_inset();
+        let origin = match &position {
+            LayerPosition::Absolute(p) => self.tree.borrow().content_to_screen(node, *p),
+            LayerPosition::AboveCentered(anchor) => {
+                // The anchor is in the ATTACHING widget's space.
+                let top_left = self.tree.borrow().content_to_screen(node, anchor.origin);
+                Point {
+                    x: top_left.x + (anchor.size.width - size.width) / 2.0,
+                    y: top_left.y - size.height - 8.0,
+                }
+            }
+            LayerPosition::Centered => Point {
+                x: ((win_w - size.width) / 2.0).max(0.0),
+                y: ((win_h - size.height) / 2.0).max(0.0),
+            },
+            // Docked above the Scaffold's bottom bar when there is one
+            // (Android snackbar convention).
+            LayerPosition::BottomAnchored => Point {
+                x: 0.0,
+                y: (win_h - size.height - bottom_inset).max(0.0),
+            },
+            LayerPosition::BottomCenter => Point {
+                x: ((win_w - size.width) / 2.0).max(0.0),
+                y: (win_h - size.height - 16.0 - bottom_inset).max(0.0),
+            },
+            LayerPosition::Fill => Point { x: 0.0, y: 0.0 },
+        };
+        // Window-aware: anchored menus never render off-screen.
+        let origin = Point {
+            x: origin.x.min((win_w - size.width - 8.0).max(0.0)).max(0.0),
+            y: origin.y.min((win_h - size.height - 8.0).max(0.0)).max(0.0),
+        };
+        let content = Rect { origin, size };
+
+        // The layer spans the window when it paints a scrim or blocks input
+        // behind it; otherwise it is just the content.
+        let spans_window = opts.scrim.is_some() || opts.input == InputBehavior::Block;
+        let layer_rect = if spans_window { window } else { content };
+
+        self.tree.borrow_mut().node_mut(node).cached_rect = Some(layer_rect);
+        let mut sub = PictureRecorder::new();
+        {
+            let mut cctx = PaintCtx {
+                recorder: &mut sub,
+                rect: layer_rect,
+                font: self.font,
+                theme: self.theme.clone(),
+                tree: Rc::clone(&self.tree),
+                node,
+                owner: self.owner,
+                clip_rect: None,
+            };
+
+            if let Some(scrim) = &opts.scrim {
+                cctx.fill_rect(window, scrim.color);
+            }
+            // Input barrier and scrim dismissal are the same declaration: a
+            // hit region covering everything the content does not.
+            if spans_window {
+                let dismiss = opts.scrim.as_ref().and_then(|s| s.on_tap.clone());
+                for r in surround(window, opts.scrim.as_ref()
+                    .and_then(|s| s.exclude_rect)
+                    .map(|e| union(content, e))
+                    .unwrap_or(content))
+                {
+                    match &dismiss {
+                        Some(cb) => { let cb = Arc::clone(cb); cctx.register_hit_rect(r, Arc::new(move || cb())); }
+                        // Block with no scrim still absorbs — a modal must not
+                        // leak clicks to the page under it.
+                        None => cctx.register_hit_rect(r, Arc::new(|| {})),
+                    }
+                }
+            }
+
+            cctx.paint_child(content, widget);
+        }
+        if let Some((prev, now)) = self.tree.borrow_mut().close_state_scope(node) {
+            debug_assert!(false,
+                "`{}` called ctx.widget_state() {now} time(s) this paint but {prev} last paint.",
+                widget.type_tag());
+            let _ = (prev, now);
+        }
+
+        let picture = sub.finish();
+        {
+            let mut t = self.tree.borrow_mut();
+            let n = t.node_mut(node);
+            n.promoted = Some(render_tree::PromotedLayer { picture, rect: layer_rect });
+            n.focus_behavior = opts.focus;
+        }
+    }
+
     /// Impose a clip on this node and everything beneath it.
     ///
     /// Records it on the node as well as on the context, which is what lets
@@ -1063,6 +1211,17 @@ impl<'a> PaintCtx<'a> {
             callback();
         });
         self.tree.borrow_mut().node_mut(self.node).hits.push((hit_rect, bound));
+    }
+
+    /// [`PaintCtx::register_hit`] for an explicit rect rather than
+    /// `self.rect` — a scrim's dismissal region is not its own bounds.
+    pub fn register_hit_rect(&self, rect: Rect, callback: Arc<dyn Fn() + Send + Sync>) {
+        let node = current_widget().unwrap_or(self.node);
+        let bound: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _scope = enter_widget(node);
+            callback();
+        });
+        self.tree.borrow_mut().node_mut(self.node).hits.push((rect, bound));
     }
 
     /// Declare that this widget's rect responds to left-click (D099).
@@ -2285,6 +2444,64 @@ impl Widget for Arc<dyn Widget> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Everything a positioned promotion needs beyond the widget itself.
+///
+/// Mirrors the fields `OverlayEntry` carries, because those are the ones a
+/// dialog/sheet/dropdown actually needs and each of them is a bug someone
+/// already hit.
+#[derive(Default)]
+pub struct PromoteOpts {
+    /// Translucent backdrop painted beneath the content, optionally
+    /// dismissing on a tap outside it.
+    pub scrim: Option<ScrimConfig>,
+    /// Whether pointer events that miss the content fall through.
+    pub input: InputBehavior,
+    /// How Tab traversal treats this layer.
+    pub focus: FocusBehavior,
+}
+
+/// The smallest rect containing both.
+fn union(a: Rect, b: Rect) -> Rect {
+    let x0 = a.origin.x.min(b.origin.x);
+    let y0 = a.origin.y.min(b.origin.y);
+    let x1 = (a.origin.x + a.size.width).max(b.origin.x + b.size.width);
+    let y1 = (a.origin.y + a.size.height).max(b.origin.y + b.size.height);
+    Rect { origin: Point { x: x0, y: y0 }, size: Size { width: x1 - x0, height: y1 - y0 } }
+}
+
+/// The four rects of `outer` that lie outside `hole` — top strip, bottom
+/// strip, and the two side strips between them.
+///
+/// A scrim's dismiss region is "everything except the content, and except the
+/// trigger that opened me". That is a rect with a rectangular hole, and a hit
+/// region is a plain rect — so it is expressed as the four rects around the
+/// hole rather than by inventing a subtractive region type. Without the
+/// exclusion, clicking a dropdown's own trigger fired dismiss AND fell through
+/// to the trigger's handler, reopening it, so the menu could never be closed
+/// by the control that opened it.
+fn surround(outer: Rect, hole: Rect) -> Vec<Rect> {
+    let (ox, oy) = (outer.origin.x, outer.origin.y);
+    let (ow, oh) = (outer.size.width, outer.size.height);
+    let hx0 = hole.origin.x.max(ox);
+    let hy0 = hole.origin.y.max(oy);
+    let hx1 = (hole.origin.x + hole.size.width).min(ox + ow);
+    let hy1 = (hole.origin.y + hole.size.height).min(oy + oh);
+    if hx1 <= hx0 || hy1 <= hy0 {
+        return vec![outer]; // no overlap — nothing to punch out
+    }
+    let mut out = Vec::with_capacity(4);
+    let mut push = |x: f32, y: f32, w: f32, h: f32| {
+        if w > 0.0 && h > 0.0 {
+            out.push(Rect { origin: Point { x, y }, size: Size { width: w, height: h } });
+        }
+    };
+    push(ox, oy, ow, hy0 - oy);                       // above
+    push(ox, hy1, ow, oy + oh - hy1);                 // below
+    push(ox, hy0, hx0 - ox, hy1 - hy0);               // left
+    push(hx1, hy0, ox + ow - hx1, hy1 - hy0);         // right
+    out
+}
 
 /// Extract the max available width from constraints (f32::INFINITY if unbounded).
 pub(crate) fn avail_w(c: Constraints) -> f32 { c.max_width_f32() }

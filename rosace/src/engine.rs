@@ -1046,6 +1046,10 @@ impl FrameEngine {
             clip_rect: None,
         };
 
+        // Positioned promotions resolve against the window; publish it before
+        // anything paints.
+        rosace_widgets::tree::set_window_size(win_w, win_h);
+
         let constraints = rosace_layout::Constraints::tight(win_w, win_h);
 
         // ── Paint the root widget — widgets record DrawCommands ────────

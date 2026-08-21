@@ -188,6 +188,14 @@ pub struct TreeNode {
     ///
     /// Declared per paint, like `transforms`.
     pub promoted:   Option<PromotedLayer>,
+    /// How Tab traversal treats this node's subtree when it is promoted.
+    ///
+    /// Set by `promote_at`. Every overlay widget has been setting a
+    /// `FocusBehavior` since overlays existed and NOTHING has ever read it —
+    /// `focus_manager` is fed `collect_focus()` over the main tree only, so
+    /// overlay content was never in the Tab cycle to be trapped in the first
+    /// place. Recording it on the node is what finally makes it consultable.
+    pub focus_behavior: super::FocusBehavior,
     pub semantics:  Vec<super::SemanticsProps>,
     /// Drops this node AND its whole subtree from the accessibility tree
     /// (`Semantics::exclude()`). Declared per paint like `semantics` above.
@@ -570,6 +578,7 @@ impl RenderTree {
         n.transforms.clear();
         n.clip = None;
         n.promoted = None;
+        n.focus_behavior = super::FocusBehavior::PassThrough;
         n.semantics.clear();
         n.semantics_excluded = false;
         n.semantics_merges_descendants = false;

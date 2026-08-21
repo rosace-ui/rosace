@@ -42,18 +42,20 @@ pub enum LayerPosition {
 
 /// Controls whether pointer events that miss the overlay widget's rect
 /// fall through to entries below / the main tree, or are absorbed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum InputBehavior {
     /// Misses fall through to the next entry or main tree.
+    #[default]
     PassThrough,
     /// Misses are absorbed (or trigger scrim dismiss if configured).
     Block,
 }
 
 /// Controls Tab focus traversal relative to this overlay entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FocusBehavior {
     /// Tab continues to entries below after this one is exhausted.
+    #[default]
     PassThrough,
     /// Tab cycles only within this entry — cannot escape.
     Trap,
