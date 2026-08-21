@@ -63,7 +63,7 @@ mod tests {
             theme,
             Rc::new(RefCell::new(RenderTree::new())),
         );
-        ctx.clip_rect = None;
+        ctx.set_clip(None);
         ctx
     }
 

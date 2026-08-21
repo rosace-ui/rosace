@@ -472,7 +472,7 @@ impl ScrollView {
             .and_then(|parent| intersect_rect(parent, vp))
             .unwrap_or(vp);
         let mut child_ctx = ctx.child(child_rect);
-        child_ctx.clip_rect = Some(effective_clip);
+        child_ctx.set_clip(Some(effective_clip));
         self.child.paint(&mut child_ctx);
         ctx.record(DrawCommand::PopClip);
 

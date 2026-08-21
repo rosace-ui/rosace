@@ -484,7 +484,10 @@ fn web_native_frame(s: &mut WebState) {
     for sl in &s.scroll_layers {
         let off = rosace_state::scroll_offset(sl.id);
         let dest = rosace_compositor::LayerRect { x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3 };
-        let src = (off[0] * s.scale * sl.zoom, off[1] * s.scale * sl.zoom);
+        let src = (
+            off[0] * s.scale * sl.zoom + sl.src_bias.0,
+            off[1] * s.scale * sl.zoom + sl.src_bias.1,
+        );
         if !sl.items.is_empty() {
             if scroll_dirty {
                 let sub: Vec<rosace_compositor::FrameItem<'_>> =
@@ -948,7 +951,10 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                             dest: rosace_compositor::LayerRect {
                                 x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
                             },
-                            src_offset: (off[0] * scale * sl.zoom, off[1] * scale * sl.zoom),
+                            src_offset: (
+                                off[0] * scale * sl.zoom + sl.src_bias.0,
+                                off[1] * scale * sl.zoom + sl.src_bias.1,
+                            ),
                             dirty: layer_dirty,
                         },
                     ));
@@ -959,7 +965,10 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                             rosace_compositor::LayerRect {
                                 x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
                             },
-                            (off[0] * scale * sl.zoom, off[1] * scale * sl.zoom),
+                            (
+                                off[0] * scale * sl.zoom + sl.src_bias.0,
+                                off[1] * scale * sl.zoom + sl.src_bias.1,
+                            ),
                             scroll_dirty,
                         ),
                     ));

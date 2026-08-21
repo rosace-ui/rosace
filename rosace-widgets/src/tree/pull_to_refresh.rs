@@ -145,7 +145,7 @@ impl Widget for PullToRefresh {
         ctx.record(DrawCommand::PushClip { rect: r });
         let effective_clip = ctx.clip_rect.and_then(|p| intersect_rect(p, r)).unwrap_or(r);
         let mut child_ctx = ctx.child(child_rect);
-        child_ctx.clip_rect = Some(effective_clip);
+        child_ctx.set_clip(Some(effective_clip));
         self.child.paint(&mut child_ctx);
         ctx.record(DrawCommand::PopClip);
 

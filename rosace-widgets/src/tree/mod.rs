@@ -647,6 +647,13 @@ pub struct PaintCtx<'a> {
     /// Current clip viewport in world-space logical pixels. `None` means no clip.
     /// Set by `ScrollView` so that `register_hit` ignores targets outside the
     /// visible area, preventing phantom clicks in other panels below the fold.
+    ///
+    /// READ this freely; to IMPOSE a clip call [`PaintCtx::set_clip`], which
+    /// also records it on the node. A bare assignment clips the pixels and the
+    /// hit regions but leaves the render tree unable to say what this subtree
+    /// is clipped to — and a compositing layer beneath it would then escape
+    /// the clip entirely, since its ancestors' `PushClip` commands live in a
+    /// picture it is not part of.
     pub clip_rect: Option<Rect>,
 }
 
@@ -697,6 +704,18 @@ impl<'a> PaintCtx<'a> {
             owner: self.owner,
             clip_rect: self.clip_rect,
         }
+    }
+
+    /// Impose a clip on this node and everything beneath it.
+    ///
+    /// Records it on the node as well as on the context, which is what lets
+    /// `RenderTree::effective_clip` answer "what is this subtree clipped to"
+    /// for a compositing layer. Callers intersect with `self.clip_rect`
+    /// themselves — a widget's clip is its own viewport narrowed by whatever
+    /// its ancestors already imposed.
+    pub fn set_clip(&mut self, clip: Option<Rect>) {
+        self.clip_rect = clip;
+        self.tree.borrow_mut().node_mut(self.node).clip = clip;
     }
 
     /// This widget's node in the render tree.

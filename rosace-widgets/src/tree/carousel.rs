@@ -245,7 +245,7 @@ impl Widget for Carousel {
             }
             let page_rect = Rect { origin: Point { x, y: r.origin.y }, size: r.size };
             let mut child_ctx = ctx.child(page_rect);
-            child_ctx.clip_rect = Some(effective_clip);
+            child_ctx.set_clip(Some(effective_clip));
             child.paint(&mut child_ctx);
         }
         ctx.record(DrawCommand::PopClip);

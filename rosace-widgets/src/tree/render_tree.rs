@@ -161,6 +161,22 @@ pub struct TreeNode {
     pub focus:      Vec<rosace_core::a11y::FocusNode>,
     pub overlays:   Vec<OverlayEntry>,
     pub transforms: Vec<TransformLayerEntry>,
+    /// The clip this node IMPOSES on itself and everything beneath it, in the
+    /// coordinate space its own rect is declared in.
+    ///
+    /// `PaintCtx::clip_rect` is threaded down the paint walk so a widget can
+    /// intersect its own clip with its parent's, but it was never recorded
+    /// anywhere — so nothing outside the paint call that set it could answer
+    /// "what is this node clipped to". That is the question a compositing
+    /// layer has to answer, because a layer is composited independently of
+    /// the picture its ancestors' clip commands live in: a nested
+    /// `InteractiveViewer` scrolled off the top of its page painted straight
+    /// over the AppBar, because `PushClip`/`PopClip` are commands in a
+    /// picture that its layer is not part of.
+    ///
+    /// Declared per paint, like `hits` and `transforms` — set through
+    /// [`super::PaintCtx::set_clip`], never by assigning the field.
+    pub clip:       Option<Rect>,
     pub semantics:  Vec<super::SemanticsProps>,
     /// Drops this node AND its whole subtree from the accessibility tree
     /// (`Semantics::exclude()`). Declared per paint like `semantics` above.
@@ -541,6 +557,7 @@ impl RenderTree {
         n.focus.clear();
         n.overlays.clear();
         n.transforms.clear();
+        n.clip = None;
         n.semantics.clear();
         n.semantics_excluded = false;
         n.semantics_merges_descendants = false;
@@ -1591,6 +1608,63 @@ impl RenderTree {
             }
         }
         out
+    }
+
+    /// The clip in force for `target`, in SCREEN space — the intersection of
+    /// every clip its ancestors impose, and its own.
+    ///
+    /// `None` means unclipped. A zero-sized rect means fully clipped away.
+    ///
+    /// This is what makes a compositing layer inherit its ancestors' clips.
+    /// A layer is presented independently of the picture its ancestors'
+    /// `PushClip` commands live in, so those commands cannot constrain it;
+    /// the clip has to be resolved structurally and applied to the layer's
+    /// own placement instead. `CompositorLayer::placed` draws into exactly
+    /// its `dest` rect, so `dest = layer_rect ∩ effective_clip` IS the clip.
+    pub fn effective_clip(&self, target: NodeId) -> Option<Rect> {
+        let mut path = Vec::new();
+        if !self.path_to(Self::ROOT, target, &mut path) {
+            return None;
+        }
+        let mut to_screen = ContentToScreen::IDENTITY;
+        let mut clip: Option<Rect> = None;
+        let mut narrow = |clip: &mut Option<Rect>, c: Rect| {
+            *clip = Some(match *clip {
+                None => c,
+                Some(prev) => super::intersect_rect(prev, c).unwrap_or(Rect {
+                    origin: c.origin,
+                    size: Size { width: 0.0, height: 0.0 },
+                }),
+            });
+        };
+        for &id in &path {
+            // A node's clip is declared in the same space as its own rect —
+            // its parent's — so it maps through the transform accumulated
+            // ABOVE it, before its own is pushed. This one applies to the
+            // target itself: it is a clip its PARENT imposed on it.
+            if let Some(c) = self.nodes[id].clip {
+                let c = to_screen.apply(c);
+                narrow(&mut clip, c);
+            }
+            if id == target {
+                // A node is not clipped by its own viewport — it IS the
+                // viewport. Only its descendants are.
+                break;
+            }
+            if let Some(entry) = self.nodes[id].transforms.first() {
+                // A transform host clips its subtree by CONSTRUCTION: its
+                // content is a texture presented into `viewport_rect` and
+                // nothing outside that rect is ever sampled. It sets no
+                // `clip_rect` on the composited path — it does not need one
+                // for its own content — but a nested layer beneath it is
+                // presented separately and would escape, which is the whole
+                // defect. This is Flutter's ClipRectLayer wrapping a
+                // TransformLayer, derived rather than declared.
+                narrow(&mut clip, to_screen.apply(entry.viewport_rect));
+                to_screen = to_screen.push(entry, rosace_state::scroll_offset(id as u64));
+            }
+        }
+        clip
     }
 
     fn path_to(&self, cur: NodeId, target: NodeId, path: &mut Vec<NodeId>) -> bool {

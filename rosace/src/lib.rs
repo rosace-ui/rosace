@@ -512,6 +512,24 @@ fn inflate_rect(r: rosace_core::types::Rect, m: f32) -> rosace_core::types::Rect
     }
 }
 
+/// Overlap of two rects, or `None` when they are disjoint.
+fn rect_intersect(a: rosace_core::types::Rect, b: rosace_core::types::Rect)
+    -> Option<rosace_core::types::Rect>
+{
+    use rosace_core::types::{Point, Rect, Size};
+    let x0 = a.origin.x.max(b.origin.x);
+    let y0 = a.origin.y.max(b.origin.y);
+    let x1 = (a.origin.x + a.size.width).min(b.origin.x + b.size.width);
+    let y1 = (a.origin.y + a.size.height).min(b.origin.y + b.size.height);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(Rect {
+        origin: Point { x: x0, y: y0 },
+        size: Size { width: x1 - x0, height: y1 - y0 },
+    })
+}
+
 /// Union of two optional rects (damage accumulation).
 fn union_rect(a: Option<rosace_core::types::Rect>, b: Option<rosace_core::types::Rect>) -> Option<rosace_core::types::Rect> {
     use rosace_core::types::{Point, Rect, Size};

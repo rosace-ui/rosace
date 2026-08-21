@@ -108,14 +108,14 @@ impl Widget for ScreenTransitionView {
                     Some(key) => ctx.child_keyed(rect, key),
                     None => ctx.child(rect),
                 };
-                child_ctx.clip_rect = Some(effective_clip);
+                child_ctx.set_clip(Some(effective_clip));
                 outgoing.paint(&mut child_ctx);
             }
 
             hero::set_active_role(Some(HeroRole::Incoming));
             let rect = Rect { origin: Point { x: vp.origin.x + ex, y: vp.origin.y + ey }, size: vp.size };
             let mut child_ctx = ctx.child_keyed(rect, self.incoming_key);
-            child_ctx.clip_rect = Some(effective_clip);
+            child_ctx.set_clip(Some(effective_clip));
             self.incoming.paint(&mut child_ctx);
             hero::set_active_role(None);
 

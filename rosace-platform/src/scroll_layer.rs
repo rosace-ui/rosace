@@ -35,6 +35,15 @@ pub struct ScrollLayer {
     /// factor to land in texture-pixel space before the compositor's UV
     /// math runs.
     pub zoom:   f32,
+    /// Texture-space bias added to the live scroll offset, physical px.
+    ///
+    /// Non-zero when `dest` was cropped by an ancestor's clip. A placed layer
+    /// draws into exactly `dest` and samples from `src_offset`, so shrinking
+    /// `dest` alone would keep showing the same content in a smaller box —
+    /// the content would SHIFT instead of being cropped. Biasing the sample
+    /// origin by whatever was trimmed off the top-left is what turns the
+    /// smaller `dest` into a real clip.
+    pub src_bias: (f32, f32),
     /// GPU-shapes mode (D109 C2): the content as ordered frame items
     /// (shape quads + CPU segments) instead of a pre-rasterized pixel
     /// buffer — the compositor renders them into an offscreen texture on

@@ -286,7 +286,7 @@ impl DatePicker {
     /// line, with accent endpoint discs and a today ring on top.
     fn paint_month(&self, ctx: &mut PaintCtx, area: Rect, month: SimpleDate, clip: Rect, pal: &Pal) {
         let mut mc = ctx.child(area);
-        mc.clip_rect = Some(clip);
+        mc.set_clip(Some(clip));
         let cw = area.size.width / 7.0;
         let dot_r = (cw.min(CELL_H) * 0.36).min(16.0);
         let (r_start, r_end) = match self.range { Some((s, e)) => (Some(s), e), None => (None, None) };

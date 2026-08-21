@@ -20,7 +20,7 @@ use rosace_widgets::tree::{
 };
 use rosace_widgets::clipboard::ClipboardProvider as _;
 
-use crate::{inflate_rect, paint_root, rect_contains, theme_color, OverlayRoute};
+use crate::{inflate_rect, paint_root, rect_contains, rect_intersect, theme_color, OverlayRoute};
 
 /// Translate a physical key + modifiers into a [`text_edit::Command`]
 /// (D116 layer 4 — the abstract vocabulary a keymap produces). `word_mod`
@@ -1396,6 +1396,38 @@ impl FrameEngine {
                 // problems, not a second bespoke one.
                 vp.origin = tree_ref.content_to_screen(n, vp.origin);
 
+                // Crop to whatever this host's ancestors clip it to, and bias
+                // the sample origin by what came off the top-left.
+                //
+                // A transform layer is composited independently of the picture
+                // its ancestors painted into, so their `PushClip`/`PopClip`
+                // commands cannot constrain it — they are commands in a
+                // picture this layer is not part of. Without this, a nested
+                // `InteractiveViewer` or `PullToRefresh` scrolled off the top
+                // of its page painted straight over the AppBar. `dest` is the
+                // only scissor a placed layer has, so the structural clip is
+                // resolved here and applied to the placement.
+                let (vp, clip_bias) = match tree_ref.effective_clip(n) {
+                    Some(clip) => match rect_intersect(vp, clip) {
+                        Some(cropped) => {
+                            let bias = (
+                                cropped.origin.x - vp.origin.x,
+                                cropped.origin.y - vp.origin.y,
+                            );
+                            (cropped, bias)
+                        }
+                        // Entirely outside its clip — nothing of it is on
+                        // screen. Publishing a zero-area dest keeps the layer
+                        // slot alive (so its texture is not re-uploaded when
+                        // it scrolls back into view) while drawing nothing.
+                        None => (
+                            Rect { origin: vp.origin, size: rosace_core::types::Size { width: 0.0, height: 0.0 } },
+                            (0.0, 0.0),
+                        ),
+                    },
+                    None => (vp, (0.0, 0.0)),
+                };
+
                 // Content texture = child natural size at physical
                 // resolution, capped. Pixmap starts transparent, so
                 // areas the content does not cover reveal the base.
@@ -1429,6 +1461,10 @@ impl FrameEngine {
                         vp.size.width * scale, vp.size.height * scale,
                     ),
                     zoom: entry.zoom,
+                    src_bias: (
+                        clip_bias.0 * scale * entry.zoom,
+                        clip_bias.1 * scale * entry.zoom,
+                    ),
                     items,
                 });
             }

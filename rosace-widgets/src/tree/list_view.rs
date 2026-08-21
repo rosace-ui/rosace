@@ -142,7 +142,7 @@ impl Widget for ListView {
             let lctx = ctx.layout_ctx(Constraints::tight((vp.size.width - pad.total_h()).max(0.0), self.item_extent));
             let _ = row.layout(&lctx);
             let mut row_ctx = ctx.child(row_rect);
-            row_ctx.clip_rect = Some(effective_clip);
+            row_ctx.set_clip(Some(effective_clip));
             row.paint(&mut row_ctx);
         }
 
