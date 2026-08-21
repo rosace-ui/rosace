@@ -1,7 +1,5 @@
 //! [`Wrap`] — a wrapping layout that flows children into multiple rows.
 
-use rosace_core::child_container::ChildContainer;
-use rosace_core::element::{Element, NativeElement};
 #[cfg(debug_assertions)]
 use rosace_core::render_object::AxisBound;
 use rosace_core::types::{Point, Size};
@@ -21,7 +19,6 @@ use crate::layout_result::LayoutResult;
 /// - [`run_spacing`](Self::run_spacing) controls vertical space between rows.
 #[derive(Debug, Clone)]
 pub struct Wrap {
-    children: Vec<Element>,
     spacing: f32,
     run_spacing: f32,
 }
@@ -30,7 +27,6 @@ impl Wrap {
     /// Create a new `Wrap` with zero spacing and run-spacing.
     pub fn new() -> Self {
         Self {
-            children: Vec::new(),
             spacing: 0.0,
             run_spacing: 0.0,
         }
@@ -147,31 +143,3 @@ impl Default for Wrap {
     }
 }
 
-impl ChildContainer for Wrap {
-    fn child(mut self, element: impl Into<Element>) -> Self {
-        self.children.push(element.into());
-        self
-    }
-
-    fn children<E: Into<Element>>(mut self, elements: Vec<E>) -> Self {
-        self.children
-            .extend(elements.into_iter().map(Into::into));
-        self
-    }
-
-    fn prepend(mut self, element: impl Into<Element>) -> Self {
-        self.children.insert(0, element.into());
-        self
-    }
-}
-
-impl From<Wrap> for Element {
-    fn from(w: Wrap) -> Self {
-        Element::Native(NativeElement {
-            tag: "Wrap",
-            payload: None,
-            children: w.children,
-            key: None,
-        })
-    }
-}

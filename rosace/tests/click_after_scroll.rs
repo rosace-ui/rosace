@@ -28,12 +28,12 @@ impl Widget for Tap {
 
 struct App(Arc<Mutex<Vec<usize>>>);
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let mut col = Column::new();
         for i in 0..12 {
             col = col.child(Tap(i, self.0.clone()));
         }
-        ScrollView::new(col).into_element()
+        ScrollView::new(col).boxed()
     }
 }
 

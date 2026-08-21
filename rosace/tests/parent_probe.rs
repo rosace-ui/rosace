@@ -58,16 +58,16 @@ const CASES: [(&str, usize); 7] = [
 struct App(Arc<Counts>, usize);
 
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let p = || Probe(self.0.clone());
         match self.1 {
-            0 => p().into_element(),
-            1 => Container::new().child(p()).into_element(),
-            2 => Column::new().child(p()).into_element(),
-            3 => Row::new().child(p()).into_element(),
-            4 => Stack::new().child(p()).into_element(),
-            5 => ScrollView::new(p()).into_element(),
-            _ => Column::new().child(Container::new().child(p())).into_element(),
+            0 => p().boxed(),
+            1 => Container::new().child(p()).boxed(),
+            2 => Column::new().child(p()).boxed(),
+            3 => Row::new().child(p()).boxed(),
+            4 => Stack::new().child(p()).boxed(),
+            5 => ScrollView::new(p()).boxed(),
+            _ => Column::new().child(Container::new().child(p())).boxed(),
         }
     }
 }

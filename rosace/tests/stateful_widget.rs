@@ -39,9 +39,9 @@ struct App {
 }
 
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         if !self.show.load(Ordering::SeqCst) {
-            return Column::new().into_element();
+            return Column::new().boxed();
         }
         Column::new()
             .child(Panel {
@@ -49,7 +49,7 @@ impl Component for App {
                 builds: self.builds.clone(),
                 disposed: self.disposed.clone(),
             }.stateful())
-            .into_element()
+            .boxed()
     }
 }
 

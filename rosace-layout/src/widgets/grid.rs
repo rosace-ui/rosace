@@ -1,7 +1,5 @@
 //! [`Grid`] — a fixed-column grid layout.
 
-use rosace_core::child_container::ChildContainer;
-use rosace_core::element::{Element, NativeElement};
 #[cfg(debug_assertions)]
 use rosace_core::render_object::AxisBound;
 use rosace_core::types::{Point, Size};
@@ -21,7 +19,6 @@ use crate::layout_result::LayoutResult;
 /// a uniform gap between cells on both axes.
 #[derive(Debug, Clone)]
 pub struct Grid {
-    children: Vec<Element>,
     columns: usize,
     spacing: f32,
 }
@@ -30,7 +27,6 @@ impl Grid {
     /// Create a new `Grid` with the given number of `columns` and zero spacing.
     pub fn new(columns: usize) -> Self {
         Self {
-            children: Vec::new(),
             columns: columns.max(1),
             spacing: 0.0,
         }
@@ -44,8 +40,7 @@ impl Grid {
 
     /// Perform the Measure + Place passes and return a [`LayoutResult`].
     ///
-    /// `child_sizes` must be in the same order as children appended via
-    /// [`ChildContainer::child`] / [`ChildContainer::children`].
+    /// `child_sizes` must be in child order.
     ///
     /// Emits [`RosaceTrace::LayoutStart`] and [`RosaceTrace::LayoutEnd`] events.
     pub fn layout(&self, constraints: Constraints, child_sizes: &[Size]) -> LayoutResult {
@@ -143,31 +138,3 @@ impl Grid {
     }
 }
 
-impl ChildContainer for Grid {
-    fn child(mut self, element: impl Into<Element>) -> Self {
-        self.children.push(element.into());
-        self
-    }
-
-    fn children<E: Into<Element>>(mut self, elements: Vec<E>) -> Self {
-        self.children
-            .extend(elements.into_iter().map(Into::into));
-        self
-    }
-
-    fn prepend(mut self, element: impl Into<Element>) -> Self {
-        self.children.insert(0, element.into());
-        self
-    }
-}
-
-impl From<Grid> for Element {
-    fn from(g: Grid) -> Self {
-        Element::Native(NativeElement {
-            tag: "Grid",
-            payload: None,
-            children: g.children,
-            key: None,
-        })
-    }
-}

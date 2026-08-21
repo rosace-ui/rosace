@@ -20,7 +20,7 @@ type Range = Option<(SimpleDate, Option<SimpleDate>)>;
 struct Demo;
 
 impl Component for Demo {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         // ── State (the app owns everything; pickers are controlled) ─────────
         let time = ctx.state(SimpleTime::new(9, 30));
         let unit = ctx.state(TimeUnit::Hour);
@@ -121,7 +121,7 @@ impl Component for Demo {
                 .child(caption(&opt_date_label(bounded_sel.get())))
                 .child(bounded),
         ))
-        .into_element()
+        .boxed()
     }
 }
 

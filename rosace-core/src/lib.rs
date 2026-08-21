@@ -3,13 +3,9 @@ pub mod a11y;
 /// Localization: message bundles, locale, `t()` lookup (former `rosace-i18n`, D131).
 pub mod i18n;
 
-pub mod app;
 pub mod app_lifecycle;
 pub mod asset;
-pub mod child_container;
-pub mod component;
 pub mod context;
-pub mod element;
 pub mod error;
 pub mod ime_hint;
 pub mod lifecycle;
@@ -23,12 +19,8 @@ pub mod semantic_node;
 pub mod shader;
 pub mod types;
 
-pub use app::App;
 pub use app_lifecycle::{app_lifecycle, set_app_lifecycle, use_app_lifecycle, LifecycleState};
-pub use child_container::ChildContainer;
-pub use component::Component;
 pub use context::Context;
-pub use element::{Element, NativeElement, ComponentElement, TextElement, WidgetPayload};
 pub use error::{RosaceError, RosaceResult};
 pub use ime_hint::{ime_cursor_area, keyboard_type, set_ime_cursor_area, set_keyboard_type, KeyboardType};
 pub use media_query::{use_media_query, set_media_query, MediaQuery};
@@ -44,21 +36,6 @@ mod tests {
     use super::*;
     use crate::lifecycle::on_mount;
 
-    struct Greeting;
-    impl Component for Greeting {
-        fn build(&self, _ctx: &mut Context) -> Element {
-            Element::text("Hello, ROSACE!")
-        }
-    }
-
-    #[test]
-    fn component_builds_element() {
-        let greeting = Greeting;
-        let mut ctx = Context::new(ComponentId(1));
-        let element = greeting.build(&mut ctx);
-        assert!(!matches!(element, Element::Empty));
-    }
-
     #[test]
     fn lifecycle_on_cleanup_registered() {
         let id = ComponentId(2);
@@ -66,38 +43,6 @@ mod tests {
         on_mount(&mut ctx, || || {});
         // Cleanup is stored in cleanup_store, not on Context directly.
         assert!(rosace_state::cleanup_store::has_callbacks(id));
-    }
-
-    struct SimpleContainer { elements: Vec<Element> }
-    impl SimpleContainer {
-        fn new() -> Self { SimpleContainer { elements: Vec::new() } }
-    }
-    impl ChildContainer for SimpleContainer {
-        fn child(mut self, element: impl Into<Element>) -> Self {
-            self.elements.push(element.into());
-            self
-        }
-        fn children<E: Into<Element>>(mut self, elements: Vec<E>) -> Self {
-            self.elements.extend(elements.into_iter().map(|e| e.into()));
-            self
-        }
-        fn prepend(mut self, element: impl Into<Element>) -> Self {
-            self.elements.insert(0, element.into());
-            self
-        }
-    }
-
-    #[test]
-    fn child_container_order_preserved() {
-        let container = SimpleContainer::new()
-            .child(Element::text("first"))
-            .child(Element::text("second"))
-            .child(Element::text("third"));
-        assert_eq!(container.elements.len(), 3);
-        let texts: Vec<&str> = container.elements.iter().filter_map(|e| {
-            if let Element::Text(t) = e { Some(t.content.as_str()) } else { None }
-        }).collect();
-        assert_eq!(texts, ["first", "second", "third"]);
     }
 
     #[test]

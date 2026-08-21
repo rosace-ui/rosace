@@ -39,12 +39,12 @@ impl Widget for Probe {
 
 struct App(Arc<Vec<AtomicUsize>>);
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let mut col = Column::new();
         for i in 0..N {
             col = col.child(Probe(self.0.clone(), i));
         }
-        col.into_element()
+        col.boxed()
     }
 }
 

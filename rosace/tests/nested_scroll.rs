@@ -40,11 +40,11 @@ impl Widget for Filler {
 
 struct App;
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         ScrollView::new(
             Column::new()
                 .child(ScrollView::new(Column::new().child(Filler)))
-        ).into_element()
+        ).boxed()
     }
 }
 

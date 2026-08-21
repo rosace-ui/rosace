@@ -1,4 +1,17 @@
-//! TEMPORARY review probe — delete after use.
+//! A widget under a default-`layout` wrapper must still be able to RESIZE.
+//!
+//! `Pressable`, `Tooltip`, `RepaintBoundary`, `WithFocus`, `Semantics` and a
+//! dozen others inherit the `Widget` trait's default `layout`, which measures
+//! its one child through a DETACHED context. A detached measure consumes no
+//! layout slot, so the wrapper's `layout_cursor` stays at 0 — and the
+//! relayout-boundary rule reads a zero cursor as "measured no children, so
+//! nothing below can change my size".
+//!
+//! That inference is exactly inverted here: the wrapper did measure a child.
+//! With the boundary standing, `mark_dirty_with_ancestors` stopped at the
+//! wrapper, its parent hit the layout cache and returned the STALE size, and
+//! the child repainted its new content at its old height. Plausible pixels,
+//! silently wrong.
 
 use rosace::prelude::*;
 use rosace::widgets::tree::{refresh_state, Children, LayoutCtx, PaintCtx};
@@ -39,7 +52,7 @@ struct App {
 }
 
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let grower = Grower(self.height.clone());
         let child: Arc<dyn Widget> = if self.wrapped {
             Arc::new(DefaultLayoutWrapper { child: Arc::new(grower) })
@@ -49,7 +62,7 @@ impl Component for App {
         Column::new()
             .child(child)
             .child(Container::new().width(10.0).height(10.0))
-            .into_element()
+            .boxed()
     }
 }
 
@@ -93,16 +106,22 @@ fn run(wrapped: bool) -> (f32, f32) {
     (h0, h1)
 }
 
+/// Baseline — no wrapper, so no boundary is inferred either way.
 #[test]
-fn probe_bare() {
+fn a_bare_widget_resizes_on_refresh() {
     let (h0, h1) = run(false);
-    println!("BARE:    h0={h0} h1={h1}");
-    assert_eq!(h1, 120.0, "bare grower");
+    assert_eq!(h0, 20.0);
+    assert_eq!(h1, 120.0, "a bare widget kept its old height after refresh_state()");
 }
 
+/// The regression.
 #[test]
-fn probe_wrapped() {
+fn a_widget_under_a_default_layout_wrapper_resizes_on_refresh() {
     let (h0, h1) = run(true);
-    println!("WRAPPED: h0={h0} h1={h1}");
-    assert_eq!(h1, 120.0, "wrapped grower");
+    assert_eq!(h0, 20.0);
+    assert_eq!(
+        h1, 120.0,
+        "the wrapped widget grew to 120 but painted at {h1} — its wrapper was \
+         treated as a relayout boundary, so the size change never propagated"
+    );
 }

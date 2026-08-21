@@ -631,7 +631,7 @@ use rosace::prelude::*;
 struct Counter;
 
 impl Component for Counter {{
-    fn build(&self, ctx: &mut Context) -> Element {{
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {{
         // ctx.state gives a reactive Atom; reading it subscribes THIS
         // component, so set()/update() repaint exactly this widget.
         let count = ctx.state(0i32);
@@ -644,7 +644,7 @@ impl Component for Counter {{
                     move || count.update(|n| n + 1)
                 }})),
         )
-        .into_element()
+        .boxed()
     }}
 }}
 ```
@@ -895,7 +895,7 @@ impl Screen {{
 pub struct AppRoot;
 
 impl Component for AppRoot {{
-    fn build(&self, ctx: &mut Context) -> Element {{
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {{
         // Hooks — declared unconditionally, in a stable order.
         let nav = ScreenNav::new(ctx, Screen::Home);
         let count = ctx.state(0i32);
@@ -935,7 +935,7 @@ impl Component for AppRoot {{
             set_theme(if next {{ crate::theme::dark() }} else {{ crate::theme::light() }});
         }}));
 
-        Scaffold::new(view).app_bar(bar).into_element()
+        Scaffold::new(view).app_bar(bar).boxed()
     }}
 }}
 "#

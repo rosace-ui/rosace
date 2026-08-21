@@ -59,7 +59,7 @@ struct App {
 }
 
 impl Component for App {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let t: Atom<i32> = ctx.state(0);
         let _ = self.tick.set(t);
         // Probes nested inside a Column — the shape Stage 2 targets, where
@@ -69,7 +69,7 @@ impl Component for App {
         for _ in 0..PROBES {
             col = col.child(Probe(self.counts.clone()));
         }
-        col.into_element()
+        col.boxed()
     }
 }
 

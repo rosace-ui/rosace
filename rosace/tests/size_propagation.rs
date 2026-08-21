@@ -34,11 +34,11 @@ impl StatefulWidget for CHost {
 
 struct App(Arc<AtomicU32>);
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         // A (outer Column) > B (inner Column) > C
         Column::new()
             .child(Column::new().child(CHost(self.0.clone()).stateful()))
-            .into_element()
+            .boxed()
     }
 }
 

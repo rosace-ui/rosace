@@ -187,7 +187,6 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use rosace_core::types::{Point, Rect, Size};
-use rosace_core::{Element, NativeElement, WidgetPayload};
 use rosace_layout::{AxisBound, Constraints};
 
 /// Shrink a bounded axis by `by` logical pixels (padding); unbounded and
@@ -1702,7 +1701,15 @@ impl<'a> PaintCtx<'a> {
         ));
 
         let mut t = self.tree.borrow_mut();
+        // Observed the same way `layout_child` observes it. Writing it on BOTH
+        // measure paths is what keeps it from going stale in the unsafe
+        // direction: a node measured once through `layout_child` on a frame it
+        // happened to measure nothing would otherwise keep `sized_by_parent`
+        // forever, and `mark_dirty_with_ancestors` would stop re-measuring it.
+        let measured_children =
+            t.layout_cursor_of(node) > 0 || t.measured_detached(node);
         let n = t.node_mut(node);
+        n.sized_by_parent  = !measured_children;
         n.last_constraints = Some(constraints);
         n.cached_size      = Some(size);
         n.needs_layout     = false;
@@ -1923,6 +1930,11 @@ impl<'a> LayoutCtx<'a> {
     /// Costs the subtree its layout cache, which is the honest price of
     /// measuring one tree and painting another.
     pub fn detached(&self) -> LayoutCtx<'a> {
+        // The measurement claims no slot, but it IS a measurement: this node's
+        // size depends on a child, so it is not a relayout boundary.
+        if let Some(tree) = self.tree.as_ref() {
+            tree.borrow_mut().note_detached_measure(self.node);
+        }
         LayoutCtx {
             constraints: self.constraints,
             font: self.font,
@@ -2048,7 +2060,7 @@ impl<'a> LayoutCtx<'a> {
         // size depends on (constraints, font, theme) alone, and nothing beneath
         // it can change it. That makes it a relayout boundary, and
         // `mark_dirty_with_ancestors` stops re-measuring there.
-        let measured_children = t.layout_cursor_of(node) > 0;
+        let measured_children = t.layout_cursor_of(node) > 0 || t.measured_detached(node);
         let n = t.node_mut(node);
         n.sized_by_parent  = !measured_children;
         n.last_constraints = Some(constraints);
@@ -2171,26 +2183,13 @@ pub trait Widget: Send + Sync {
         }
     }
 
-    /// Wrap this widget in an [`Element`] so it can be returned from
-    /// `Component::build()`.
-    fn into_element(self) -> Element
-    where
-        Self: Sized + 'static,
-    {
-        Element::Native(NativeElement {
-            tag: std::any::type_name::<Self>(),
-            payload: Some(Arc::new(WidgetBox(Box::new(self)))),
-            children: vec![],
-            key: None,
-        })
-    }
 }
 
 /// Heap-allocated, type-erased widget.
 pub type BoxedWidget = Arc<dyn Widget>;
 
-/// `Box<dyn Widget>` is itself a Widget (D093) — builders accepting
-/// `impl Widget` take boxed children without adapter structs. Fully
+/// A shared widget is itself a Widget (D093) — builders accepting
+/// `impl Widget` take type-erased children without adapter structs. Fully
 /// transparent delegation: no extra tree node, no behavior change.
 impl Widget for Arc<dyn Widget> {
     fn children(&self) -> Children<'_>        { (**self).children() }
@@ -2203,18 +2202,6 @@ impl Widget for Arc<dyn Widget> {
     /// without this the forwarding impl would swallow the identity of the
     /// majority of widgets in any real tree.
     fn type_tag(&self) -> &'static str        { (**self).type_tag() }
-}
-
-// ── WidgetBox — bridges Widget into the Element tree ─────────────────────────
-
-/// Concrete wrapper that stores a `Box<dyn Widget>` inside a `NativeElement`.
-///
-/// The element walker in the umbrella crate downcasts `NativeElement.payload`
-/// to this type to retrieve the widget for layout + paint.
-pub struct WidgetBox(pub Box<dyn Widget>);
-
-impl WidgetPayload for WidgetBox {
-    fn as_any(&self) -> &dyn std::any::Any { self }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

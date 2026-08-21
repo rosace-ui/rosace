@@ -32,11 +32,11 @@ impl Widget for Probe {
 
 struct App(Arc<AtomicBool>);
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         Column::new()
             .child(Probe(self.0.clone()))
             .child(Spacer::new(200.0))
-            .into_element()
+            .boxed()
     }
 }
 
@@ -46,12 +46,12 @@ impl Component for App {
 /// plain harness above does not build.
 struct ScrollApp(Arc<AtomicBool>);
 impl Component for ScrollApp {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let mut col = Column::new().child(Probe(self.0.clone()));
         for _ in 0..12 {
             col = col.child(Spacer::new(40.0));
         }
-        ScrollView::new(col).into_element()
+        ScrollView::new(col).boxed()
     }
 }
 
@@ -103,8 +103,8 @@ impl Widget for Fading {
 
 struct FadeApp(Arc<Mutex<f32>>);
 impl Component for FadeApp {
-    fn build(&self, _ctx: &mut Context) -> Element {
-        Column::new().child(Fading(self.0.clone())).child(Spacer::new(200.0)).into_element()
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
+        Column::new().child(Fading(self.0.clone())).child(Spacer::new(200.0)).boxed()
     }
 }
 

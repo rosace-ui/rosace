@@ -3,8 +3,6 @@
 //! [`Column`]: crate::widgets::column::Column
 //! [`Row`]: crate::widgets::row::Row
 
-use rosace_core::child_container::ChildContainer;
-use rosace_core::element::{Element, NativeElement};
 #[cfg(debug_assertions)]
 use rosace_core::render_object::AxisBound;
 use rosace_core::types::{Point, Size};
@@ -38,8 +36,6 @@ pub enum FlexDirection {
 pub struct Flex {
     /// The primary layout direction.
     pub direction: FlexDirection,
-    /// Child elements in declaration order.
-    pub children: Vec<Element>,
     /// How children are distributed along the main axis.
     pub main_axis_alignment: MainAxisAlignment,
     /// How children are aligned on the cross axis.
@@ -53,7 +49,6 @@ impl Flex {
     pub fn new(direction: FlexDirection) -> Self {
         Self {
             direction,
-            children: Vec::new(),
             main_axis_alignment: MainAxisAlignment::default(),
             cross_axis_alignment: CrossAxisAlignment::default(),
             spacing: 0.0,
@@ -319,31 +314,3 @@ pub(crate) fn cross_offset(alignment: CrossAxisAlignment, container: f32, child:
     }
 }
 
-impl ChildContainer for Flex {
-    fn child(mut self, element: impl Into<Element>) -> Self {
-        self.children.push(element.into());
-        self
-    }
-
-    fn children<E: Into<Element>>(mut self, elements: Vec<E>) -> Self {
-        self.children
-            .extend(elements.into_iter().map(Into::into));
-        self
-    }
-
-    fn prepend(mut self, element: impl Into<Element>) -> Self {
-        self.children.insert(0, element.into());
-        self
-    }
-}
-
-impl From<Flex> for Element {
-    fn from(f: Flex) -> Self {
-        Element::Native(NativeElement {
-            tag: "Flex",
-            payload: None,
-            children: f.children,
-            key: None,
-        })
-    }
-}

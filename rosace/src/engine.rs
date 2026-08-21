@@ -8,11 +8,10 @@
 //! at all — without duplicating ~450 lines of reconciler/paint/input code.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use rosace_core::Component;
+use rosace_widgets::Component;
 use rosace_core::types::Rect;
 use rosace_render::SkiaCanvas;
 use rosace_widgets::tree::{
@@ -21,7 +20,7 @@ use rosace_widgets::tree::{
 };
 use rosace_widgets::clipboard::ClipboardProvider as _;
 
-use crate::{inflate_rect, rect_contains, theme_color, walk_element, OverlayRoute};
+use crate::{inflate_rect, paint_root, rect_contains, theme_color, OverlayRoute};
 
 /// Translate a physical key + modifiers into a [`text_edit::Command`]
 /// (D116 layer 4 — the abstract vocabulary a keymap produces). `word_mod`
@@ -215,8 +214,11 @@ pub struct FrameEngine {
     font: rosace_render::FontCache,
 
     // ── Reconciler state — persists across frames ──────────────────────
-    prev_mounted: HashSet<u64>,
-    element_cache: HashMap<u64, rosace_core::Element>,
+    /// Last `build()` output. There is exactly one component, so this is one
+    /// widget rather than a map: a clean frame reuses it instead of rebuilding.
+    built: Option<rosace_widgets::tree::BoxedWidget>,
+    /// Whether `on_mount` has fired for the root component.
+    root_mounted: bool,
     /// This engine's root component id.
     ///
     /// Every engine used to hardcode `ComponentId(0)`, which is fine with one
@@ -386,8 +388,8 @@ impl FrameEngine {
         Self {
             root,
             font,
-            prev_mounted: HashSet::new(),
-            element_cache: HashMap::new(),
+            built: None,
+            root_mounted: false,
             root_component_id,
             last_back_handled: false,
             build_overlays: Vec::new(),
@@ -450,12 +452,21 @@ impl FrameEngine {
     /// shared runtime dylib keyed by `ComponentId`, so a same-shaped tree keeps
     /// its state across the swap.
     pub fn set_root(&mut self, root: Box<dyn Component>) {
+        // The outgoing root leaves the tree, so its unmount hooks run here —
+        // while its module is still loaded and its closures are still valid.
+        if self.root_mounted {
+            self.root.on_unmount();
+            rosace_state::cleanup_store::fire_and_clear(self.root_component_id);
+            rosace_state::clear_component(self.root_component_id);
+        }
+
         // Replace the root first — the old `Box<dyn Component>`'s drop glue also
         // lives in the outgoing module, and the old lib is still loaded now.
         self.root = root;
 
         // Drop everything that can retain a module closure.
-        self.element_cache.clear();
+        self.built = None;
+        self.root_mounted = false;
         self.build_overlays.clear();
         self.overlay_routes.clear();
         *self.render_tree.borrow_mut() = rosace_widgets::tree::RenderTree::new();
@@ -869,8 +880,7 @@ impl FrameEngine {
         // pushers (Dropdown, Menu, Drawer) still drain per-frame below.
         clear_overlays();
 
-        let cache_key = root_component_id.0;
-        let element = if root_is_dirty || !self.element_cache.contains_key(&cache_key) {
+        let widget = if root_is_dirty || self.built.is_none() {
             // Attribute atom writes that happen DURING this build to this
             // component; writes from event handlers land outside it and
             // report UNKNOWN_COMPONENT rather than borrowing an id.
@@ -883,7 +893,7 @@ impl FrameEngine {
             // question a reactive framework exists to answer ("what made
             // this rebuild, and what did it cost?") had no data behind it.
             let build_start = std::time::Instant::now();
-            let el = root.build(&mut ctx);
+            let widget = root.build(&mut ctx);
             #[cfg(debug_assertions)]
             {
                 use rosace_trace::{event::{RebuildCause, RosaceTrace}, trace};
@@ -903,11 +913,11 @@ impl FrameEngine {
                     duration: build_start.elapsed(),
                 });
             }
-            self.element_cache.insert(cache_key, el.clone());
+            self.built = Some(std::sync::Arc::clone(&widget));
             self.build_overlays = drain_overlays();
-            el
+            widget
         } else {
-            self.element_cache.get(&cache_key).unwrap().clone()
+            std::sync::Arc::clone(self.built.as_ref().unwrap())
         };
 
         // ── Read active theme each frame so set_theme() takes effect ────
@@ -1029,22 +1039,15 @@ impl FrameEngine {
 
         let constraints = rosace_layout::Constraints::tight(win_w, win_h);
 
-        // ── Walk element tree — widgets record DrawCommands ─────────────
-        let mut position: u64 = 0;
+        // ── Paint the root widget — widgets record DrawCommands ────────
         let mut damage: Option<Rect> = None;
-        let mut new_mounted: HashSet<u64> = HashSet::new();
-        walk_element(
-            &element,
+        paint_root(
+            &widget,
             constraints,
             &mut paint_ctx,
-            &mut position,
             &mut damage,
-            &dirty_ids,
-            global_dirty,
             root_is_dirty || hover_frame,  // subtree_dirty — repaint
             root_is_dirty,                 // subtree_relayout — only a rebuild resizes
-            &mut self.element_cache,
-            &mut new_mounted,
         );
         self.render_tree.borrow_mut().finalize();
 
@@ -1081,36 +1084,20 @@ impl FrameEngine {
         // this block, leaving frame_dirty false so no upload happens.
         canvas.mark_frame_dirty();
 
-        // ── Reconcile: fire lifecycle for mounted/unmounted components ──
-        for &id in new_mounted.difference(&self.prev_mounted) {
-            let cid = rosace_core::types::ComponentId(id);
+        // ── Reconcile: the root component mounts once, on its first paint ──
+        if !self.root_mounted {
+            self.root_mounted = true;
             root.on_mount();
             #[cfg(debug_assertions)]
             {
                 use rosace_trace::{event::RosaceTrace, location, trace};
                 trace!(RosaceTrace::ComponentMount {
-                    id: cid,
+                    id: root_component_id,
                     name: root.type_name(),
                     location: location!(),
                 });
             }
-            let _ = cid;
         }
-        for &id in self.prev_mounted.difference(&new_mounted) {
-            let cid = rosace_core::types::ComponentId(id);
-            rosace_state::cleanup_store::fire_and_clear(cid);
-            rosace_state::clear_component(cid);
-            root.on_unmount();
-            #[cfg(debug_assertions)]
-            {
-                use rosace_trace::{event::RosaceTrace, trace};
-                trace!(RosaceTrace::ComponentUnmount {
-                    id: cid,
-                    name: root.type_name(),
-                });
-            }
-        }
-        self.prev_mounted = new_mounted;
         } // needs_paint
 
         // ── Context menu (D116 Step 7) — re-pushed every frame while open,
@@ -2308,7 +2295,9 @@ impl FrameEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rosace_core::{Component, Context, Element};
+    use rosace_core::Context;
+    use rosace_widgets::tree::BoxedWidget;
+    use rosace_widgets::IntoBoxedWidget as _;
     use rosace_render::Color;
     use rosace_widgets::tree::{Button, ButtonVariant, Column, Container, HeroApi, PressApi, Widget};
 
@@ -2329,8 +2318,8 @@ mod tests {
     /// -> `PaintCtx::pressed()` -> `Button::paint`'s `animate_to`).
     struct OneButton;
     impl Component for OneButton {
-        fn build(&self, _ctx: &mut Context) -> Element {
-            Button::new("Press me").variant(ButtonVariant::Primary).on_press(|| {}).into_element()
+        fn build(&self, _ctx: &mut Context) -> BoxedWidget {
+            Button::new("Press me").variant(ButtonVariant::Primary).on_press(|| {}).boxed()
         }
     }
 
@@ -2414,7 +2403,7 @@ mod tests {
     /// MouseDown/MouseMove/MouseUp dispatch, not a controller-level unit test.
     struct TallScroll;
     impl Component for TallScroll {
-        fn build(&self, _ctx: &mut Context) -> Element {
+        fn build(&self, _ctx: &mut Context) -> BoxedWidget {
             // Content taller than `MAX_TL_DIM` (4096) keeps plain
             // `ScrollView::new` on the base (CPU) path automatically
             // (`should_auto_gpu` requires `extent <= MAX_TL_DIM`) — the
@@ -2422,7 +2411,7 @@ mod tests {
             // drag/momentum (see `.steering/PHASE_26.md`), so this avoids
             // silently exercising the wrong path.
             rosace_widgets::tree::ScrollView::new(rosace_widgets::tree::Spacer::gap(200.0, 5000.0))
-                .into_element()
+                .boxed()
         }
     }
 
@@ -2615,7 +2604,7 @@ mod tests {
     /// "is this screen's content actually painted this frame."
     struct NavRoot;
     impl Component for NavRoot {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let nav = rosace_nav::ScreenNav::new(ctx, NavScreen::A);
             let build_screen = {
                 let nav = nav.clone();
@@ -2635,7 +2624,7 @@ mod tests {
             rosace_widgets::tree::ScreenTransitionView::new(
                 body, nav.current_key(), outgoing, nav.previous_key(),
                 nav.transition_handle(), nav.stack_keys(),
-            ).into_element()
+            ).boxed()
         }
     }
 
@@ -2657,7 +2646,7 @@ mod tests {
 
     struct ScrollNavRoot;
     impl Component for ScrollNavRoot {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let nav = rosace_nav::ScreenNav::new(ctx, ScrollNavScreen::A);
             // The nav button sits OUTSIDE the ScrollView (a fixed-position
             // sibling, like a real app's persistent AppBar/nav button) so
@@ -2697,7 +2686,7 @@ mod tests {
             rosace_widgets::tree::ScreenTransitionView::new(
                 body, nav.current_key(), outgoing, nav.previous_key(),
                 nav.transition_handle(), nav.stack_keys(),
-            ).into_element()
+            ).boxed()
         }
     }
 
@@ -2840,7 +2829,7 @@ mod tests {
 
         struct Annotated;
         impl Component for Annotated {
-            fn build(&self, _ctx: &mut Context) -> Element {
+            fn build(&self, _ctx: &mut Context) -> BoxedWidget {
                 rosace_widgets::tree::Column::new()
                     // A chart the framework can't read, given meaning by the app.
                     .child(rosace_widgets::tree::Semantics::new(
@@ -2854,7 +2843,7 @@ mod tests {
                         rosace_widgets::tree::Text::new("decorative sparkle"),
                     )
                     .exclude())
-                    .into_element()
+                    .boxed()
             }
         }
 
@@ -2899,8 +2888,8 @@ mod tests {
         fn semantic_count(build: fn() -> w::BoxedWidget) -> usize {
             struct R(fn() -> w::BoxedWidget);
             impl Component for R {
-                fn build(&self, _c: &mut Context) -> Element {
-                    (self.0)().into_element()
+                fn build(&self, _c: &mut Context) -> BoxedWidget {
+                    (self.0)().boxed()
                 }
             }
             let mut e = FrameEngine::new(Box::new(R(build)), rosace_render::FontCache::embedded());
@@ -3002,8 +2991,8 @@ mod tests {
 
         struct Tip;
         impl Component for Tip {
-            fn build(&self, _c: &mut Context) -> Element {
-                w::Tooltip::new("Delete this item", w::Text::new("target")).into_element()
+            fn build(&self, _c: &mut Context) -> BoxedWidget {
+                w::Tooltip::new("Delete this item", w::Text::new("target")).boxed()
             }
         }
         let mut e = FrameEngine::new(Box::new(Tip), rosace_render::FontCache::embedded());
@@ -3037,9 +3026,9 @@ mod tests {
 
         struct Tip;
         impl Component for Tip {
-            fn build(&self, _c: &mut Context) -> Element {
+            fn build(&self, _c: &mut Context) -> BoxedWidget {
                 w::Tooltip::new("A helpful tip", w::Button::new("Hover me").on_press(|| {}))
-                    .into_element()
+                    .boxed()
             }
         }
         let mut e = FrameEngine::new(Box::new(Tip), rosace_render::FontCache::embedded());
@@ -3149,7 +3138,7 @@ mod tests {
         fn role_of(build: fn() -> w::BoxedWidget) -> rosace_core::Role {
             struct R(fn() -> w::BoxedWidget);
             impl Component for R {
-                fn build(&self, _c: &mut Context) -> Element { (self.0)().into_element() }
+                fn build(&self, _c: &mut Context) -> BoxedWidget { (self.0)().boxed() }
             }
             let mut e = FrameEngine::new(Box::new(R(build)), rosace_render::FontCache::embedded());
             e.paint(&mut SkiaCanvas::new(300, 120), &mut SkiaCanvas::new(300, 120), &[]);
@@ -3277,12 +3266,12 @@ mod tests {
         let open = rosace_state::Atom::new(rosace_state::next_atom_id(), true);
         struct S(rosace_state::Atom<bool>);
         impl Component for S {
-            fn build(&self, _ctx: &mut Context) -> Element {
+            fn build(&self, _ctx: &mut Context) -> BoxedWidget {
                 use rosace_widgets::tree::OverlayApi;
                 let o = self.0.clone();
                 w::Text::new("host")
                     .sheet(o, || Arc::new(w::Text::new("sheet body")))
-                    .into_element()
+                    .boxed()
             }
         }
         let mut e = FrameEngine::new(Box::new(S(open.clone())), rosace_render::FontCache::embedded());
@@ -3328,8 +3317,8 @@ mod tests {
         }
         struct D(rosace_state::Atom<bool>);
         impl Component for D {
-            fn build(&self, _ctx: &mut Context) -> Element {
-                Host(self.0.clone()).into_element()
+            fn build(&self, _ctx: &mut Context) -> BoxedWidget {
+                Host(self.0.clone()).boxed()
             }
         }
         let mut e = FrameEngine::new(Box::new(D(open.clone())), rosace_render::FontCache::embedded());
@@ -3362,12 +3351,12 @@ mod tests {
         let open = rosace_state::Atom::new(rosace_state::next_atom_id(), true);
         struct S(rosace_state::Atom<bool>);
         impl Component for S {
-            fn build(&self, _ctx: &mut Context) -> Element {
+            fn build(&self, _ctx: &mut Context) -> BoxedWidget {
                 use rosace_widgets::tree::OverlayApi;
                 w::Text::new("host")
                     .dialog(self.0.clone(), || Arc::new(w::Text::new("must choose")))
                     .non_dismissible()
-                    .into_element()
+                    .boxed()
             }
         }
         let mut e = FrameEngine::new(Box::new(S(open.clone())), rosace_render::FontCache::embedded());
@@ -3426,12 +3415,12 @@ mod tests {
         let open = rosace_state::Atom::new(rosace_state::next_atom_id(), true);
         struct S(rosace_state::Atom<bool>, Arc<Mutex<Vec<f32>>>);
         impl Component for S {
-            fn build(&self, _ctx: &mut Context) -> Element {
+            fn build(&self, _ctx: &mut Context) -> BoxedWidget {
                 use rosace_widgets::tree::OverlayApi;
                 let seen = Arc::clone(&self.1);
                 w::Text::new("host")
                     .sheet(self.0.clone(), move || Arc::new(Probe(Arc::clone(&seen))))
-                    .into_element()
+                    .boxed()
             }
         }
 
@@ -3545,11 +3534,11 @@ mod tests {
 
     struct OneImage;
     impl Component for OneImage {
-        fn build(&self, _ctx: &mut Context) -> Element {
+        fn build(&self, _ctx: &mut Context) -> BoxedWidget {
             rosace_widgets::tree::Image::bytes(TINY_PNG.to_vec())
                 .width(50.0)
                 .height(50.0)
-                .into_element()
+                .boxed()
         }
     }
 
@@ -3603,7 +3592,7 @@ mod tests {
     /// give no size-morph signal to observe.
     struct HeroRoot;
     impl Component for HeroRoot {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let nav = rosace_nav::ScreenNav::new(ctx, HeroScreen::List);
             let build_screen = {
                 let nav = nav.clone();
@@ -3636,7 +3625,7 @@ mod tests {
             rosace_widgets::tree::ScreenTransitionView::new(
                 body, nav.current_key(), outgoing, nav.previous_key(),
                 nav.transition_handle(), nav.stack_keys(),
-            ).into_element()
+            ).boxed()
         }
     }
 
@@ -3736,7 +3725,7 @@ mod tests {
         captured: Arc<OnceLock<rosace_state::Atom<String>>>,
     }
     impl Component for OneTextInput {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let name: rosace_state::Atom<String> = ctx.state(String::new());
             let _ = self.captured.set(name.clone());
             TextInput::new()
@@ -3745,7 +3734,7 @@ mod tests {
                     let name = name.clone();
                     move |v| name.set(v)
                 })
-                .into_element()
+                .boxed()
         }
     }
 
@@ -3755,7 +3744,7 @@ mod tests {
         captured: Arc<OnceLock<rosace_state::Atom<String>>>,
     }
     impl Component for ScrolledTextInput {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let name: rosace_state::Atom<String> = ctx.state(String::new());
             let _ = self.captured.set(name.clone());
             let input = TextInput::new()
@@ -3770,7 +3759,7 @@ mod tests {
                     .child(input)
                     .child(rosace_widgets::tree::Spacer::gap(170.0, 800.0)),
             )
-            .into_element()
+            .boxed()
         }
     }
 
@@ -4127,7 +4116,7 @@ mod tests {
         second: Arc<OnceLock<rosace_state::Atom<String>>>,
     }
     impl Component for TwoTextInputs {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let a: rosace_state::Atom<String> = ctx.state(String::new());
             let b: rosace_state::Atom<String> = ctx.state(String::new());
             let _ = self.first.set(a.clone());
@@ -4139,7 +4128,7 @@ mod tests {
                 .child(TextInput::new().height(30.0).value(b.get()).on_change({
                     let b = b.clone(); move |v| b.set(v)
                 }))
-                .into_element()
+                .boxed()
         }
     }
 
@@ -4295,7 +4284,7 @@ mod tests {
         second_ctrl: text_edit::EditController,
     }
     impl Component for TwoControlledTextInputs {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let a: rosace_state::Atom<String> = ctx.state(String::new());
             let b: rosace_state::Atom<String> = ctx.state(String::new());
             let _ = self.first.set(a.clone());
@@ -4307,7 +4296,7 @@ mod tests {
                 .child(TextInput::new().height(30.0).value(b.get()).controller(self.second_ctrl.clone()).on_change({
                     let b = b.clone(); move |v| b.set(v)
                 }))
-                .into_element()
+                .boxed()
         }
     }
 
@@ -4347,14 +4336,14 @@ mod tests {
         controller: text_edit::EditController,
     }
     impl Component for OneControlledTextInput {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let name: rosace_state::Atom<String> = ctx.state(String::new());
             let _ = self.captured.set(name.clone());
             TextInput::new()
                 .value(name.get())
                 .controller(self.controller.clone())
                 .on_change({ let name = name.clone(); move |v| name.set(v) })
-                .into_element()
+                .boxed()
         }
     }
 
@@ -4412,7 +4401,7 @@ mod tests {
         height: f32,
     }
     impl Component for OneTextArea {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let name: rosace_state::Atom<String> = ctx.state(String::new());
             let _ = self.captured.set(name.clone());
             TextArea::new()
@@ -4420,7 +4409,7 @@ mod tests {
                 .width(400.0)
                 .height(self.height)
                 .on_change({ let name = name.clone(); move |v| name.set(v) })
-                .into_element()
+                .boxed()
         }
     }
 
@@ -4651,13 +4640,13 @@ mod tests {
         captured: Arc<OnceLock<rosace_state::Atom<bool>>>,
     }
     impl Component for BuildEmitsSnackbar {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let open = ctx.state(false);
             let _ = self.captured.set(open.clone());
             if open.get() {
                 rosace_widgets::tree::Snackbar::new("saved").emit();
             }
-            Element::text("body")
+            rosace_widgets::tree::Text::new("body").boxed()
         }
     }
 
@@ -4701,10 +4690,10 @@ mod tests {
         log: Arc<std::sync::Mutex<Vec<rosace_core::LifecycleState>>>,
     }
     impl Component for LifecycleReader {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let state = rosace_core::use_app_lifecycle(ctx);
             self.log.lock().unwrap().push(state);
-            Element::Empty
+            rosace_widgets::tree::Container::new().boxed()
         }
     }
 
@@ -4756,7 +4745,7 @@ mod tests {
         log: ChangedRangeLog,
     }
     impl Component for OneSpannedTextInput {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let name: rosace_state::Atom<String> = ctx.state(String::new());
             let _ = self.captured.set(name.clone());
             let log = self.log.clone();
@@ -4768,7 +4757,7 @@ mod tests {
                     log.lock().unwrap().push(changed_range);
                     Vec::new()
                 })
-                .into_element()
+                .boxed()
         }
     }
 
@@ -4815,7 +4804,7 @@ mod tests {
         let captured: Arc<OnceLock<rosace_state::Atom<String>>> = Arc::new(OnceLock::new());
         struct BoldRedSpanInput { captured: Arc<OnceLock<rosace_state::Atom<String>>> }
         impl Component for BoldRedSpanInput {
-            fn build(&self, ctx: &mut Context) -> Element {
+            fn build(&self, ctx: &mut Context) -> BoxedWidget {
                 let name: rosace_state::Atom<String> = ctx.state(String::from("hi"));
                 let _ = self.captured.set(name.clone());
                 TextInput::new()
@@ -4825,7 +4814,7 @@ mod tests {
                     .spans(|s, _changed| {
                         vec![text_edit::Span::new((0, s.chars().count())).color(rosace_render::Color::rgb(255, 0, 0))]
                     })
-                    .into_element()
+                    .boxed()
             }
         }
         let root = BoldRedSpanInput { captured: captured.clone() };
@@ -4846,7 +4835,7 @@ mod tests {
     fn cursor_style_color_override_paints_the_caret_in_that_color() {
         struct ColoredCursorInput;
         impl Component for ColoredCursorInput {
-            fn build(&self, ctx: &mut Context) -> Element {
+            fn build(&self, ctx: &mut Context) -> BoxedWidget {
                 let name: rosace_state::Atom<String> = ctx.state(String::from("hi"));
                 TextInput::new()
                     .value(name.get())
@@ -4856,7 +4845,7 @@ mod tests {
                         color: rosace_render::Color::rgb(0, 255, 0),
                         ..Default::default()
                     })
-                    .into_element()
+                    .boxed()
             }
         }
         let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -4950,13 +4939,13 @@ mod tests {
         let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         struct OneUnderlineInput;
         impl Component for OneUnderlineInput {
-            fn build(&self, ctx: &mut Context) -> Element {
+            fn build(&self, ctx: &mut Context) -> BoxedWidget {
                 let name: rosace_state::Atom<String> = ctx.state(String::new());
                 TextInput::new()
                     .value(name.get())
                     .width(200.0)
                     .on_change(move |v| name.set(v))
-                    .into_element()
+                    .boxed()
             }
         }
         let mut engine = FrameEngine::new(Box::new(OneUnderlineInput), rosace_render::FontCache::embedded());
@@ -5150,7 +5139,7 @@ mod tests {
         filters: Vec<text_edit::InputFilter>,
     }
     impl Component for OneFilteredTextInput {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let name: rosace_state::Atom<String> = ctx.state(String::new());
             let _ = self.captured.set(name.clone());
             TextInput::new()
@@ -5158,7 +5147,7 @@ mod tests {
                 .width(300.0)
                 .filters(self.filters.clone())
                 .on_change({ let name = name.clone(); move |v| name.set(v) })
-                .into_element()
+                .boxed()
         }
     }
 
@@ -5214,7 +5203,7 @@ mod tests {
         submitted: Arc<std::sync::atomic::AtomicBool>,
     }
     impl Component for OneFormTextInput {
-        fn build(&self, ctx: &mut Context) -> Element {
+        fn build(&self, ctx: &mut Context) -> BoxedWidget {
             let field = rosace_widgets::forms::FormField::for_ctx(ctx, "name").rule(rosace_widgets::forms::Required);
             let _ = self.captured_field.set(field.clone());
             // `.rule()` on a fresh `FormField::for_ctx` result each build
@@ -5235,7 +5224,7 @@ mod tests {
                     let submitted = submitted.clone();
                     form.submit(move || { submitted.store(true, std::sync::atomic::Ordering::Relaxed); });
                 }))
-                .into_element()
+                .boxed()
         }
     }
 
@@ -5302,11 +5291,11 @@ mod tests {
         let pressed = Arc::new(AtomicBool::new(false));
         struct OneButton(Arc<AtomicBool>);
         impl Component for OneButton {
-            fn build(&self, _c: &mut Context) -> Element {
+            fn build(&self, _c: &mut Context) -> BoxedWidget {
                 let hit = self.0.clone();
                 rosace_widgets::tree::Button::new("Save")
                     .on_press(move || hit.store(true, Ordering::SeqCst))
-                    .into_element()
+                    .boxed()
             }
         }
 
@@ -5340,8 +5329,8 @@ mod tests {
 
         struct Empty;
         impl Component for Empty {
-            fn build(&self, _c: &mut Context) -> Element {
-                rosace_widgets::tree::Spacer::new(8.0).into_element()
+            fn build(&self, _c: &mut Context) -> BoxedWidget {
+                rosace_widgets::tree::Spacer::new(8.0).boxed()
             }
         }
         let mut e = FrameEngine::new(Box::new(Empty), rosace_render::FontCache::embedded());
@@ -5379,7 +5368,7 @@ mod tests {
             open_atom: Arc<OnceLock<rosace_state::Atom<bool>>>,
         }
         impl Component for App {
-            fn build(&self, ctx: &mut Context) -> Element {
+            fn build(&self, ctx: &mut Context) -> BoxedWidget {
                 let nav = ScreenNav::new(ctx, R::Home);
                 // Push a second screen ONCE, so there is somewhere to pop
                 // back to. Guarded by its own state: an unguarded
@@ -5402,7 +5391,7 @@ mod tests {
                     .dialog(open.clone(), || Arc::new(
                         rosace_widgets::tree::Dialog::new("Hi").message("there"),
                     ))
-                    .into_element()
+                    .boxed()
             }
         }
 
@@ -5452,9 +5441,9 @@ mod tests {
 
         struct RootOnly;
         impl Component for RootOnly {
-            fn build(&self, ctx: &mut Context) -> Element {
+            fn build(&self, ctx: &mut Context) -> BoxedWidget {
                 let _nav = ScreenNav::new(ctx, 0u8);
-                rosace_widgets::tree::Text::new("root").into_element()
+                rosace_widgets::tree::Text::new("root").boxed()
             }
         }
         let mut e = FrameEngine::new(Box::new(RootOnly), rosace_render::FontCache::embedded());
@@ -5487,7 +5476,7 @@ mod tests {
             nav_out: Arc<OnceLock<ScreenNav<u8>>>,
         }
         impl Component for App {
-            fn build(&self, ctx: &mut Context) -> Element {
+            fn build(&self, ctx: &mut Context) -> BoxedWidget {
                 let nav = ScreenNav::new(ctx, 0u8);
                 let seeded = ctx.state(false);
                 if !seeded.get() { seeded.set(true); nav.push(1u8); }
@@ -5503,7 +5492,7 @@ mod tests {
                     // Real shape: allow only once the work is saved.
                     !dirty.load(Ordering::SeqCst)
                 })
-                .into_element()
+                .boxed()
             }
         }
 
@@ -5574,10 +5563,10 @@ mod tests {
 
         struct Counter(Arc<OnceLock<rosace_state::Atom<i32>>>);
         impl Component for Counter {
-            fn build(&self, ctx: &mut Context) -> Element {
+            fn build(&self, ctx: &mut Context) -> BoxedWidget {
                 let n = ctx.state(0i32);
                 let _ = self.0.set(n.clone());
-                rosace_widgets::tree::Text::new(n.get().to_string()).into_element()
+                rosace_widgets::tree::Text::new(n.get().to_string()).boxed()
             }
         }
 
@@ -5628,13 +5617,13 @@ mod tests {
 
         struct OneButton;
         impl Component for OneButton {
-            fn build(&self, _c: &mut Context) -> Element {
+            fn build(&self, _c: &mut Context) -> BoxedWidget {
                 // Inside a Column so the button does NOT fill the canvas —
                 // otherwise every coordinate is a hit and the miss case
                 // cannot be expressed.
                 rosace_widgets::tree::Column::new()
                     .child(rosace_widgets::tree::Button::new("Tap me").on_press(|| {}))
-                    .into_element()
+                    .boxed()
             }
         }
         let mut e = FrameEngine::new(Box::new(OneButton), rosace_render::FontCache::embedded());

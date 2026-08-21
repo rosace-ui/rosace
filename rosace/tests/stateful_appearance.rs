@@ -55,10 +55,10 @@ struct App {
     drawn: Arc<Mutex<Vec<u8>>>,
 }
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         Column::new()
             .child(Panel { shade: self.shade.clone(), drawn: self.drawn.clone() }.stateful())
-            .into_element()
+            .boxed()
     }
 }
 

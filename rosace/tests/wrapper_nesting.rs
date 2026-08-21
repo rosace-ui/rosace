@@ -91,7 +91,7 @@ fn wrappers() -> Vec<(&'static str, fn(BoxedWidget) -> BoxedWidget)> {
 /// constructible repeatedly.
 struct One(Arc<dyn Fn() -> BoxedWidget + Send + Sync>);
 impl Component for One {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let w = (self.0)();
         // Bounded by a fixed-size Container. An outer ScrollView hands down an
         // unbounded height, which used to make a nested scrollable run away
@@ -101,7 +101,7 @@ impl Component for One {
         // shape.
         Container::new().size(300.0, 220.0).child(
             Column::new().children(vec![w])
-        ).into_element()
+        ).boxed()
     }
 }
 
@@ -116,7 +116,7 @@ impl Component for One {
 /// conditions the shallow host never creates.
 struct Deep(Arc<dyn Fn() -> BoxedWidget + Send + Sync>);
 impl Component for Deep {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let w = (self.0)();
         let mut col = Column::new().children(vec![w]);
         // Enough rows to overflow the viewport, so the ScrollView actually
@@ -128,7 +128,7 @@ impl Component for Deep {
             Container::new().child(
                 Column::new().child(ScrollView::new(col))
             )
-        ).into_element()
+        ).boxed()
     }
 }
 

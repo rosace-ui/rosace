@@ -102,17 +102,27 @@ pub struct TreeNode {
     /// (constraints, font, theme) alone and nothing beneath it can change it —
     /// a relayout boundary.
     ///
-    /// Observed rather than declared: `layout_child` bumps `layout_cursor`, so
-    /// a cursor still at 0 when `layout` returns means no child was measured.
-    /// A declared flag could drift out of sync with the code it describes and
-    /// would fail silently as a stale layout; this cannot, because it records
-    /// what the widget actually did.
+    /// Observed rather than declared: `layout_child` bumps `layout_cursor` and
+    /// `LayoutCtx::detached` sets `measured_detached`, so neither being set
+    /// when `layout` returns means no child was measured at all. A declared
+    /// flag could drift out of sync with the code it describes and would fail
+    /// silently as a stale layout; this cannot, because it records what the
+    /// widget actually did.
     ///
     /// `Scaffold`, `ScreenTransitionView`, `ListView` and `InteractiveViewer`
     /// all qualify — they size to their constraints and measure children during
     /// PAINT. `Column`/`Row` do not, and must not: their size is the sum of
     /// their children's.
     pub sized_by_parent: bool,
+    /// This node's `layout` measured a child through [`LayoutCtx::detached`].
+    ///
+    /// A detached measure consumes no slot, so `layout_cursor` stays at 0 and
+    /// the node would otherwise read as a relayout boundary — which is exactly
+    /// backwards: it DID measure a child, so a child that grows must still
+    /// resize it. Every default-`layout` wrapper (`Pressable`, `Tooltip`,
+    /// `RepaintBoundary`, `WithFocus`, …) measures this way, and without this
+    /// flag none of them could ever change size on a `refresh_state()` frame.
+    measured_detached: bool,
     /// Child slot cursor for the current LAYOUT of this node.
     ///
     /// Separate from `cursor` because layout and paint are two independent
@@ -690,6 +700,18 @@ impl RenderTree {
     /// which is where the layout walk enters the tree.
     pub fn begin_layout(&mut self, node: NodeId) {
         self.nodes[node].layout_cursor = 0;
+        self.nodes[node].measured_detached = false;
+    }
+
+    /// Record that this node measured a child WITHOUT consuming a slot — see
+    /// [`TreeNode::measured_detached`].
+    pub fn note_detached_measure(&mut self, node: NodeId) {
+        self.nodes[node].measured_detached = true;
+    }
+
+    /// Did this node measure a child through a detached context this layout?
+    pub fn measured_detached(&self, node: NodeId) -> bool {
+        self.nodes[node].measured_detached
     }
 
     /// Like [`Self::slot`], but the returned `NodeId` is resolved by an
@@ -756,8 +778,31 @@ impl RenderTree {
     /// arena slot itself isn't reclaimed (this arena never frees — same
     /// tradeoff `slot()`'s positional children already have for any widget
     /// that stops being painted), only the reference to it.
+    ///
+    /// This is the ONLY disposal path a popped screen has, and it must run
+    /// it. `finalize` cannot: `keyed_slot` writes its node OVER
+    /// `children[cursor]`, so once the outgoing screen stops painting it
+    /// vanishes from `children` without ever appearing in `dropped`. Dropping
+    /// the key alone left the node unreachable from both maps and never
+    /// disposed — so every `on_dispose` closure registered anywhere on that
+    /// screen never fired (timers, subscriptions and platform handles leaked
+    /// for the process lifetime), and `dispatch_lifecycle` kept calling
+    /// `on_lifecycle` into every screen the user had ever visited.
     pub fn prune_keyed_children(&mut self, parent: NodeId, valid_keys: &[u64]) {
+        let pruned: Vec<NodeId> = self.nodes[parent]
+            .keyed_children
+            .iter()
+            .filter(|(k, _)| !valid_keys.contains(k))
+            .map(|(_, &id)| id)
+            .collect();
         self.nodes[parent].keyed_children.retain(|k, _| valid_keys.contains(k));
+        for id in pruned {
+            // A pruned key can still be sitting in `children` from the frame
+            // it last painted; leaving it there would keep a disposed node in
+            // the paint walk.
+            self.nodes[parent].children.retain(|&c| c != id);
+            self.dispose_subtree(id);
+        }
     }
 
     /// End of frame: drop unused child slots of every node repainted this
@@ -944,7 +989,31 @@ impl RenderTree {
     /// would panic on a list that got shorter between the announcement and
     /// the user acting on it.
     pub fn node_rect(&self, id: NodeId) -> Option<Rect> {
-        self.nodes.get(id).and_then(|n| n.cached_rect)
+        self.screen_rect(id)
+    }
+
+    /// A node's painted rect in SCREEN space.
+    ///
+    /// `cached_rect` is written by whichever context painted the node, and
+    /// inside a GPU transform host (`ScrollView`'s composited path,
+    /// `InteractiveViewer`, `TransformLayer`) that context is CONTENT space —
+    /// the host paints its child at `(0, 0)` into an independent texture and
+    /// the pointer walks remap on the way down. Anything that reads a rect
+    /// without remapping is comparing two different coordinate systems: an
+    /// a11y focus ring lands in the wrong place, a synthesized tap lands on
+    /// the wrong widget, and inside a scrolled page a content coordinate can
+    /// `contains`-match a completely unrelated widget elsewhere on screen.
+    pub fn screen_rect(&self, id: NodeId) -> Option<Rect> {
+        let r = self.nodes.get(id)?.cached_rect?;
+        let o = self.content_to_screen(id, r.origin);
+        let far = self.content_to_screen(id, rosace_core::types::Point {
+            x: r.origin.x + r.size.width,
+            y: r.origin.y + r.size.height,
+        });
+        Some(Rect {
+            origin: o,
+            size: Size { width: far.x - o.x, height: far.y - o.y },
+        })
     }
 
     pub fn node(&self, id: NodeId) -> &TreeNode {
@@ -1239,10 +1308,11 @@ impl RenderTree {
     /// [`Self::set_hover`], driven by MouseDown/MouseUp instead of
     /// MouseMove. Returns true when the pressed target changed.
     pub fn set_pressed(&mut self, target: Option<NodeId>) -> bool {
-        let current = self.nodes.iter().position(|n| n.pressed);
+        let current = self.pressed;
         if current == target {
             return false;
         }
+        self.pressed = target;
         if let Some(old) = current {
             self.nodes[old].pressed = false;
             self.mark_paint_to_root(old);
@@ -1430,11 +1500,16 @@ impl RenderTree {
     /// content anywhere below them are pruned.
     pub fn collect_semantics(&self) -> rosace_core::SemanticNode {
         let mut root = rosace_core::SemanticNode::new();
-        self.collect_semantics_node(Self::ROOT, &mut root);
+        self.collect_semantics_node(Self::ROOT, &mut root, ContentToScreen::IDENTITY);
         root
     }
 
-    fn collect_semantics_node(&self, id: NodeId, parent: &mut rosace_core::SemanticNode) {
+    fn collect_semantics_node(
+        &self,
+        id: NodeId,
+        parent: &mut rosace_core::SemanticNode,
+        to_screen: ContentToScreen,
+    ) {
         let n = &self.nodes[id];
         // `Semantics::exclude()` — prune here and the whole subtree goes with
         // it, since we simply never recurse.
@@ -1450,7 +1525,9 @@ impl RenderTree {
             // mixes in the entry index to stay unique within the tree —
             // the render-tree NodeId alone would collide.
             sn = sn.id(((id as u64) << 8) | (i as u64 & 0xff));
-            if let Some(r) = n.cached_rect { sn = sn.bounds(r); }
+            // Platform a11y wants a SCREEN rect. Accumulated on the way down
+            // rather than resolved per node, so this stays one walk.
+            if let Some(r) = n.cached_rect { sn = sn.bounds(to_screen.apply(r)); }
             if let Some(l) = &s.label { sn = sn.label(l.clone()); }
             // `value`/`heading_level`/`href` were silently dropped here before
             // D107/Phase 25 — a real gap for a `TextInput`'s current text, a
@@ -1477,8 +1554,13 @@ impl RenderTree {
             let last = parent.children.len() - 1;
             &mut parent.children[last]
         };
+        // A host remaps its CHILDREN, not itself.
+        let child_transform = match n.transforms.first() {
+            Some(entry) => to_screen.push(entry, rosace_state::scroll_offset(id as u64)),
+            None => to_screen,
+        };
         for &child in &n.children {
-            self.collect_semantics_node(child, target);
+            self.collect_semantics_node(child, target, child_transform);
         }
     }
 
@@ -1621,7 +1703,9 @@ impl RenderTree {
 
         let mut best: Option<(NodeId, u32)> = None;
         for n in &snapshot {
-            let Some(r) = n.rect else { continue; };
+            // SCREEN space: `(x, y)` is a pointer position, and a node inside
+            // a composited scroll view records its rect in content space.
+            let Some(r) = self.screen_rect(n.id) else { continue; };
             if !contains(&r, x, y) { continue; }
             let d = depth(&by_id, n.id);
             match best {
@@ -1675,6 +1759,51 @@ pub fn select_scroll_handler(
     candidates.iter().find(|(a, _)| handles_dominant(a))
         .or_else(|| candidates.iter().find(|(a, _)| handles_other(a)))
         .map(|(_, cb)| cb.clone())
+}
+
+/// Accumulated content-space → screen-space transform for one downward walk.
+///
+/// `screen = content * scale + translate`, per axis. Composing on the way down
+/// keeps a whole-tree pass one walk instead of resolving each node's ancestry
+/// separately — the same mapping [`RenderTree::content_to_screen`] performs
+/// point by point.
+#[derive(Clone, Copy)]
+struct ContentToScreen {
+    scale: [f32; 2],
+    translate: [f32; 2],
+}
+
+impl ContentToScreen {
+    const IDENTITY: Self = Self { scale: [1.0, 1.0], translate: [0.0, 0.0] };
+
+    /// Compose with one transform host's remap, given its current scroll
+    /// offset. Inverse of `child_coords`' `(screen - vp.origin)/zoom + offset`.
+    fn push(self, entry: &TransformLayerEntry, off: [f32; 2]) -> Self {
+        let mut out = self;
+        for a in 0..2 {
+            let vp = if a == 0 {
+                entry.viewport_rect.origin.x
+            } else {
+                entry.viewport_rect.origin.y
+            };
+            out.translate[a] = (vp - off[a] * entry.zoom) * self.scale[a] + self.translate[a];
+            out.scale[a] = entry.zoom * self.scale[a];
+        }
+        out
+    }
+
+    fn apply(self, r: Rect) -> Rect {
+        Rect {
+            origin: rosace_core::types::Point {
+                x: r.origin.x * self.scale[0] + self.translate[0],
+                y: r.origin.y * self.scale[1] + self.translate[1],
+            },
+            size: Size {
+                width: r.size.width * self.scale[0],
+                height: r.size.height * self.scale[1],
+            },
+        }
+    }
 }
 
 #[inline]

@@ -51,12 +51,12 @@ struct App {
 }
 
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let col = Column::new();
         if self.show.load(Ordering::SeqCst) {
-            col.child(Panel(self.counts.clone()).stateful()).into_element()
+            col.child(Panel(self.counts.clone()).stateful()).boxed()
         } else {
-            col.into_element()
+            col.boxed()
         }
     }
 }

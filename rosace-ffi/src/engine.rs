@@ -13,7 +13,7 @@
 //! of per-app glue calls into.
 
 use rosace_compositor::{CompositorLayer, GpuPresenter, LayerRect};
-use rosace_core::Component;
+use rosace::widgets::Component;
 use rosace_render::SkiaCanvas;
 use rosace_theme::ThemeData;
 

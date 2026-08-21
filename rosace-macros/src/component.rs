@@ -8,12 +8,12 @@ use syn::{parse2, FnArg, ItemFn, Pat, PatType, ReturnType, Type};
 ///
 /// ```rust,ignore
 /// #[component]
-/// pub fn Greeting(name: String, size: f32) -> Element { … }
+/// pub fn Greeting(name: String, size: f32) -> BoxedWidget { … }
 /// ```
 ///
 /// Expands to a struct `Greeting` with fields `name` and `size`, builder
 /// setters for each field, a `new()` constructor (using `Default::default()`
-/// for every field), and a `build(self) -> Element` method that runs the
+/// for every field), and a `build(self) -> BoxedWidget` method that runs the
 /// original function body with all params in scope via `let` bindings.
 pub fn expand(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = match parse2::<ItemFn>(item) {

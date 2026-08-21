@@ -47,13 +47,13 @@ struct App {
 }
 
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         self.builds.fetch_add(1, Ordering::SeqCst);
         let mut col = Column::new();
         for i in 0..N {
             col = col.child(Row(self.paints.clone(), i));
         }
-        ScrollView::new(col).into_element()
+        ScrollView::new(col).boxed()
     }
 }
 

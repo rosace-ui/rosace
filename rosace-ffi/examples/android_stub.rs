@@ -14,7 +14,9 @@
 //! Verify exported symbols with `nm -D` (or the NDK's `llvm-nm`) against a
 //! `Java_dev_rosace_stub_MainActivity_native*` name.
 
-use rosace_core::{Component, Context, Element};
+use rosace::widgets::tree::{BoxedWidget, Container};
+use rosace::widgets::{Component, IntoBoxedWidget};
+use rosace_core::Context;
 use rosace_ffi::{Engine, RscInputEventFfi};
 
 #[cfg(target_os = "android")]
@@ -33,8 +35,8 @@ use rosace_ffi::AndroidSurfaceHandle;
 struct StubRoot;
 
 impl Component for StubRoot {
-    fn build(&self, _ctx: &mut Context) -> Element {
-        Element::Empty
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
+        Container::new().boxed()
     }
 }
 

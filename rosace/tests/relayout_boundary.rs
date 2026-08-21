@@ -69,7 +69,7 @@ struct App {
 }
 
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         // Column(above) → Chrome(boundary) → Column(below) → Grower
         //
         // The boundary sits BETWEEN the containers and the changing leaf, which
@@ -85,7 +85,7 @@ impl Component for App {
         Column::new()
             .child(Counted(self.chrome_layouts.clone()))
             .child(boundary)
-            .into_element()
+            .boxed()
     }
 }
 

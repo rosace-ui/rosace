@@ -8,6 +8,7 @@ pub mod scroll;
 pub mod clipboard;
 
 /// Composable widget tree system — the primary API for building ROSACE apps.
+pub mod component;
 pub mod tree;
 
 pub mod image;
@@ -19,6 +20,7 @@ pub mod template;
 pub use template::{PropValue, StaticValue, Template, TemplateKey, TemplateNode};
 
 // ── Tree widget re-exports (canonical top-level names) ─────────────────────
+pub use component::{Component, IntoBoxedWidget};
 pub use tree::{Alignment, Children, Semantics, SemanticsProps, Widget};
 pub use tree::PaintCtx;
 pub use tree::{HitTarget, ScrollTarget};

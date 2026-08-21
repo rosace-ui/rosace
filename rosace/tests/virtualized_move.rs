@@ -36,10 +36,10 @@ impl Widget for Probe {
 
 struct App(Seen);
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let seen = self.0.clone();
         ListView::builder(200, 40.0, move |i| Arc::new(Probe(i, seen.clone())) as _)
-            .into_element()
+            .boxed()
     }
 }
 

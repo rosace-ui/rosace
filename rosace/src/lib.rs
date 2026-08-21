@@ -8,13 +8,13 @@
 //! struct Counter;
 //!
 //! impl Component for Counter {
-//!     fn build(&self, ctx: &mut Context) -> Element {
+//!     fn build(&self, ctx: &mut Context) -> BoxedWidget {
 //!         let count = ctx.state(0i32);
 //!         Column::new()
 //!             .child(Text::display(&count.get().to_string()))
 //!             .child(Button::new("Increment")
 //!                 .on_press(move || count.set(count.get() + 1)))
-//!             .into_element()
+//!             .boxed()
 //!     }
 //! }
 //!
@@ -28,7 +28,6 @@ use std::sync::Arc;
 
 use rosace_theme::built_in;
 use rosace_platform::PlatformWindow;
-use rosace_widgets::tree::WidgetBox;
 
 mod engine;
 /// Tier-2 dylib hot-reload host (D102) — dev-only, native-only.
@@ -108,12 +107,12 @@ impl App {
     /// The framework calls `component.build(ctx)` every frame, walks the
     /// returned [`Element`] tree, lays out + paints every widget, and routes
     /// click events to the correct `on_press` callbacks.
-    pub fn run<C: rosace_core::Component>(root: C) {
+    pub fn run<C: rosace_widgets::Component>(root: C) {
         App::new().launch(root);
     }
 
     /// Builder variant — use when you need to configure title/size/theme first.
-    pub fn launch<C: rosace_core::Component>(self, root: C) {
+    pub fn launch<C: rosace_widgets::Component>(self, root: C) {
         // ── Observability foundation (D123/O1) ─────────────────────────
         //
         // The always-on flight recorder: a bounded ring buffer capturing
@@ -306,233 +305,158 @@ fn persist_db_path(app_title: &str) -> Result<std::path::PathBuf, String> {
     }
 }
 
-// ── Element walker ────────────────────────────────────────────────────────────
+// ── Root paint ────────────────────────────────────────────────────────────────
 
-/// Walk the element tree, assigning stable position-based [`ComponentId`]s,
-/// collecting mounted component IDs for the reconciler, and painting widgets.
+/// Lay out and paint the root widget, tracking damage.
 ///
-/// `position` — DFS counter for Component nodes (determines ComponentId).
+/// The root occupies one node under `ctx.node`, cached like every other node:
+/// an unchanged frame replays its picture and runs no widget code at all.
+///
 /// `damage` — union of world rects whose pixels change this frame.
-/// `dirty_ids` — component IDs whose atoms changed this frame.
-/// `global_dirty` — when true, skip cache and rebuild everything.
-/// `subtree_dirty` — an ancestor component rebuilt this frame; force re-paint.
-/// `element_cache` — cached build() output per ComponentId.
-#[allow(clippy::too_many_arguments)]
-fn walk_element(
-    element: &rosace_core::Element,
+/// `subtree_dirty` — the root rebuilt (or a hover changed); force re-paint.
+/// `subtree_relayout` — the root rebuilt; its size may have changed.
+fn paint_root(
+    widget: &rosace_widgets::tree::BoxedWidget,
     constraints: rosace_layout::Constraints,
     ctx: &mut rosace_widgets::tree::PaintCtx,
-    position: &mut u64,
     damage: &mut Option<Rect>,
-    dirty_ids: &std::collections::HashSet<rosace_core::types::ComponentId>,
-    global_dirty: bool,
     subtree_dirty: bool,
     subtree_relayout: bool,
-    element_cache: &mut std::collections::HashMap<u64, rosace_core::Element>,
-    new_mounted: &mut std::collections::HashSet<u64>,
 ) -> rosace_core::types::Size {
-    use rosace_core::Element;
-    use rosace_core::types::{ComponentId, Rect, Size};
+    use rosace_core::types::Rect;
 
-    match element {
-        Element::Component(c) => {
-            // Assign a stable position-based ID (D001).
-            let id = ComponentId(*position);
-            *position += 1;
-            new_mounted.insert(id.0);
+    // Consume this position's slot WITHOUT reset — the cache state on the
+    // node decides whether we repaint (Phase 20: the arena IS the render
+    // tree; the flat list is gone).
+    let node_id = ctx.tree.borrow_mut().slot(ctx.node, false);
 
-            let is_dirty = global_dirty || subtree_dirty || dirty_ids.contains(&id);
-            let prev_owner = ctx.owner;
-            ctx.owner = id;
-
-            let (child_element, child_subtree_dirty) = if is_dirty {
-                // Build fresh and update cache.
-                let mut child_ctx = rosace_core::Context::new(id);
-                let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    c.component.build(&mut child_ctx)
-                }));
-                let elem = match build_result {
-                    Ok(e) => e,
-                    Err(_) => {
-                        #[cfg(debug_assertions)]
-                        {
-                            use rosace_trace::{event::RosaceTrace, trace};
-                            trace!(RosaceTrace::ComponentUnmount {
-                                id,
-                                name: "ErrorBoundary::fallback",
-                            });
-                        }
-                        rosace_core::Element::text("⚠ component error")
-                    }
-                };
-                element_cache.insert(id.0, elem.clone());
-                (elem, true)
-            } else if let Some(cached) = element_cache.get(&id.0) {
-                // Not dirty — reuse last frame's element tree, no subtree repaint.
-                (cached.clone(), false)
-            } else {
-                // No cache yet (first frame or tree shape change).
-                let mut child_ctx = rosace_core::Context::new(id);
-                let elem = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    c.component.build(&mut child_ctx)
-                })).unwrap_or_else(|_| rosace_core::Element::text("⚠ component error"));
-                element_cache.insert(id.0, elem.clone());
-                (elem, true)
-            };
-
-            let size = walk_element(
-                &child_element,
-                constraints,
-                ctx,
-                position,
-                damage,
-                dirty_ids,
-                global_dirty,
-                child_subtree_dirty,
-                child_subtree_dirty,
-                element_cache,
-                new_mounted,
-            );
-            ctx.owner = prev_owner;
-            size
+    {
+        let mut tree = ctx.tree.borrow_mut();
+        tree.adopt_tag(node_id, widget.type_tag());
+        let node = tree.node_mut(node_id);
+        // A rebuild hands this node a NEW widget object it cannot compare
+        // against the old one, so both caches must go: the config may have
+        // changed size and appearance alike.
+        if subtree_dirty {
+            node.needs_paint = true;
         }
-
-        Element::Native(n) => {
-            if let Some(wb) = n.payload.as_ref()
-                .and_then(|p| p.as_any().downcast_ref::<WidgetBox>())
-            {
-                // Consume this position's slot WITHOUT reset — the cache
-                // state on the node decides whether we repaint (Phase 20:
-                // the arena IS the render tree; the flat list is gone).
-                let node_id = ctx.tree.borrow_mut().slot(ctx.node, false);
-
-                {
-                    let mut tree = ctx.tree.borrow_mut();
-                    tree.adopt_tag(node_id, n.tag);
-                    let node = tree.node_mut(node_id);
-                    // A rebuild hands this node a NEW widget object it cannot
-                    // compare against the old one, so both caches must go:
-                    // the config may have changed size and appearance alike.
-                    if subtree_dirty {
-                        node.needs_paint = true;
-                    }
-                    // Only a REBUILD invalidates size. A hover or press cannot:
-                    // `LayoutCtx` exposes no way to read `hovered`/`pressed`, so
-                    // size provably does not depend on them. Forcing
-                    // `needs_layout` for them re-measured the entire tree on
-                    // every pointer move.
-                    if subtree_relayout {
-                        node.needs_layout = true;
-                    }
-                }
-
-                // ── Layout (skip if constraints unchanged and not dirty) ──
-                let cached = {
-                    let tree = ctx.tree.borrow();
-                    let node = tree.node(node_id);
-                    if node.last_constraints == Some(constraints)
-                        && !node.needs_layout
-                        && node.cached_size.is_some()
-                    {
-                        node.cached_size
-                    } else {
-                        None
-                    }
-                };
-                let size = match cached {
-                    Some(s) => s,
-                    None => {
-                        // Rooted at THIS element's node, not `ctx.node` (its
-                        // parent): the widget's own `layout_child` calls must
-                        // address its children's slots, or every nested
-                        // measurement would cache against the wrong node.
-                        ctx.tree.borrow_mut().begin_layout(node_id);
-                        let lctx = rosace_widgets::tree::LayoutCtx::with_tree(
-                            constraints,
-                            ctx.font,
-                            &ctx.theme,
-                            Rc::clone(&ctx.tree),
-                            node_id,
-                        );
-                        let s = wb.0.layout(&lctx);
-                        let mut tree = ctx.tree.borrow_mut();
-                        let node = tree.node_mut(node_id);
-                        node.last_constraints = Some(constraints);
-                        node.cached_size = Some(s);
-                        node.needs_layout = false;
-                        node.needs_paint = true;
-                        s
-                    }
-                };
-
-                let child_rect = Rect { origin: ctx.rect.origin, size };
-
-                // ── Paint (replay cache or fresh, tracking damage) ─────────
-                let (replay, old_rect) = {
-                    let tree = ctx.tree.borrow();
-                    let node = tree.node(node_id);
-                    (
-                        !node.needs_paint
-                            && node.cached_picture.is_some()
-                            && node.cached_rect == Some(child_rect),
-                        node.cached_rect,
-                    )
-                };
-
-                if replay {
-                    // Zero widget work; slot untouched so the subtree's
-                    // declared regions persist (D091).
-                    let pic = ctx.tree.borrow().node(node_id).cached_picture.clone().unwrap();
-                    for cmd in &pic.commands {
-                        ctx.recorder.push(cmd.clone());
-                    }
-                } else {
-                    // Damage = where it was ∪ where it is.
-                    *damage = union_rect(*damage, old_rect);
-                    *damage = union_rect(*damage, Some(child_rect));
-
-                    // Reset declarations; the widget re-declares during paint.
-                    ctx.tree.borrow_mut().reset(node_id);
-                    let mut sub_recorder = rosace_render::PictureRecorder::new();
-                    {
-                        let mut child_ctx = rosace_widgets::tree::PaintCtx {
-                            recorder: &mut sub_recorder,
-                            rect: child_rect,
-                            font: ctx.font,
-                            theme: ctx.theme.clone(),
-                            tree: Rc::clone(&ctx.tree),
-                            node: node_id,
-                            owner: ctx.owner,
-                            clip_rect: ctx.clip_rect,
-                        };
-                        wb.0.paint(&mut child_ctx);
-                    }
-                    let picture = sub_recorder.finish();
-                    for cmd in &picture.commands {
-                        ctx.recorder.push(cmd.clone());
-                    }
-                    let mut tree = ctx.tree.borrow_mut();
-                    let node = tree.node_mut(node_id);
-                    node.cached_picture = Some(Arc::new(picture));
-                    node.cached_rect    = Some(child_rect);
-                    node.needs_paint    = false;
-                }
-
-                size
-            } else {
-                Size { width: 0.0, height: 0.0 }
-            }
+        // Only a REBUILD invalidates size. A hover or press cannot:
+        // `LayoutCtx` exposes no way to read `hovered`/`pressed`, so size
+        // provably does not depend on them. Forcing `needs_layout` for them
+        // re-measured the entire tree on every pointer move.
+        if subtree_relayout {
+            node.needs_layout = true;
         }
-
-        Element::Text(t) => {
-            let line_h = ctx.font.line_height(16.0);
-            let color = ctx.tc(ctx.theme.colors.on_surface);
-            ctx.text(&t.content, 0.0, 0.0, color, 16.0);
-            Size { width: constraints.max_width_f32(), height: line_h }
-        }
-
-        Element::Empty => Size { width: 0.0, height: 0.0 },
     }
+
+    // ── Layout (skip if constraints unchanged and not dirty) ──
+    let cached = {
+        let tree = ctx.tree.borrow();
+        let node = tree.node(node_id);
+        if node.last_constraints == Some(constraints)
+            && !node.needs_layout
+            && node.cached_size.is_some()
+        {
+            node.cached_size
+        } else {
+            None
+        }
+    };
+    let size = match cached {
+        Some(s) => s,
+        None => {
+            // Rooted at THIS widget's node, not `ctx.node` (its parent): the
+            // widget's own `layout_child` calls must address its children's
+            // slots, or every nested measurement would cache against the
+            // wrong node.
+            ctx.tree.borrow_mut().begin_layout(node_id);
+            let lctx = rosace_widgets::tree::LayoutCtx::with_tree(
+                constraints,
+                ctx.font,
+                &ctx.theme,
+                Rc::clone(&ctx.tree),
+                node_id,
+            );
+            let s = widget.layout(&lctx);
+            let mut tree = ctx.tree.borrow_mut();
+            let node = tree.node_mut(node_id);
+            node.last_constraints = Some(constraints);
+            node.cached_size = Some(s);
+            node.needs_layout = false;
+            node.needs_paint = true;
+            s
+        }
+    };
+
+    let child_rect = Rect { origin: ctx.rect.origin, size };
+
+    // ── Paint (replay cache or fresh, tracking damage) ─────────
+    let (replay, old_rect) = {
+        let tree = ctx.tree.borrow();
+        let node = tree.node(node_id);
+        (
+            !node.needs_paint
+                && !node.self_animating
+                && !rosace_widgets::tree::is_structural_frame()
+                && node.cached_picture.is_some()
+                && node.cached_rect == Some(child_rect),
+            node.cached_rect,
+        )
+    };
+
+    if replay {
+        // Zero widget work; slot untouched so the subtree's declared regions
+        // persist (D091).
+        let pic = ctx.tree.borrow().node(node_id).cached_picture.clone().unwrap();
+        for cmd in &pic.commands {
+            ctx.recorder.push(cmd.clone());
+        }
+    } else {
+        // Damage = where it was ∪ where it is.
+        *damage = union_rect(*damage, old_rect);
+        *damage = union_rect(*damage, Some(child_rect));
+
+        // Reset declarations; the widget re-declares during paint.
+        ctx.tree.borrow_mut().reset(node_id);
+        let mut sub_recorder = rosace_render::PictureRecorder::new();
+        {
+            let mut child_ctx = rosace_widgets::tree::PaintCtx {
+                recorder: &mut sub_recorder,
+                rect: child_rect,
+                font: ctx.font,
+                theme: ctx.theme.clone(),
+                tree: Rc::clone(&ctx.tree),
+                node: node_id,
+                owner: ctx.owner,
+                clip_rect: ctx.clip_rect,
+            };
+            widget.paint(&mut child_ctx);
+        }
+        // Positional state must be declared unconditionally, exactly as a
+        // child painted through `paint_child` is checked: a conditional call
+        // shifts every later index, so each handle starts reading its
+        // neighbour's state.
+        if let Some((prev, now)) = ctx.tree.borrow_mut().close_state_scope(node_id) {
+            debug_assert!(
+                false,
+                "`{}` called ctx.widget_state() {now} time(s) this paint but {prev} last \
+                 paint. Call widget_state unconditionally, in a stable order.",
+                widget.type_tag(),
+            );
+            let _ = (prev, now);
+        }
+        let picture = sub_recorder.finish();
+        for cmd in &picture.commands {
+            ctx.recorder.push(cmd.clone());
+        }
+        let mut tree = ctx.tree.borrow_mut();
+        let node = tree.node_mut(node_id);
+        node.cached_picture = Some(Arc::new(picture));
+        node.cached_rect    = Some(child_rect);
+        node.needs_paint    = false;
+    }
+
+    size
 }
 
 // ── Navigation sugar (D097) ──────────────────────────────────────────────────
@@ -623,7 +547,8 @@ fn theme_color(c: &rosace_theme::Color) -> Color {
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 // Core
-pub use rosace_core::{Component, Context, Element};
+pub use rosace_core::Context;
+    pub use rosace_widgets::{Component, IntoBoxedWidget};
 /// The plugin seam for foreign reactive sources (BLoC, signals, stores).
 pub use rosace_state::Subscribers;
 pub use rosace_render::canvas::Color;
@@ -747,7 +672,8 @@ pub mod prelude {
     /// Logging macros → the trace bus → colored console + DevTools + any sink.
     pub use rosace_trace::{debug, error, info, log, log_trace, warn};
     pub use rosace_trace::{set_max_level, LogLevel};
-    pub use rosace_core::{Component, Context, Element};
+    pub use rosace_core::Context;
+    pub use rosace_widgets::{Component, IntoBoxedWidget};
     pub use rosace_platform::{InputEvent, MouseButton, Key};
     pub use rosace_widgets::prelude::*;
     pub use rosace_widgets::{

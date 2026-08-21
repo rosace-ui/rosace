@@ -33,12 +33,12 @@ impl Widget for Beta {
 /// `finalize`'s truncate never fires.
 struct App(Arc<AtomicBool>);
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let col = Column::new();
         if self.0.load(Ordering::SeqCst) {
-            col.child(Alpha).into_element()
+            col.child(Alpha).boxed()
         } else {
-            col.child(Beta).into_element()
+            col.child(Beta).boxed()
         }
     }
 }

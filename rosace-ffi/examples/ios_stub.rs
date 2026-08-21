@@ -16,7 +16,9 @@ use std::os::raw::c_void;
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use std::ptr::NonNull;
 
-use rosace_core::{Component, Context, Element};
+use rosace::widgets::tree::{BoxedWidget, Container};
+use rosace::widgets::{Component, IntoBoxedWidget};
+use rosace_core::Context;
 use rosace_ffi::{Engine, RscInputEventFfi};
 #[cfg(any(target_os = "ios", target_os = "android"))]
 use rosace_ffi::RawSurface;
@@ -30,8 +32,8 @@ use rosace_ffi::RawSurface;
 struct StubRoot;
 
 impl Component for StubRoot {
-    fn build(&self, _ctx: &mut Context) -> Element {
-        Element::Empty
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
+        Container::new().boxed()
     }
 }
 

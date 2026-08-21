@@ -15,7 +15,7 @@ use proc_macro::TokenStream;
 /// # Example
 /// ```rust,ignore
 /// #[component]
-/// pub fn Greeting(name: String, size: f32) -> Element {
+/// pub fn Greeting(name: String, size: f32) -> BoxedWidget {
 ///     Text::new().content(name).size(size).build()
 /// }
 ///

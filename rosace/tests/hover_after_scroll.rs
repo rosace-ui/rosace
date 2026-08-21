@@ -33,12 +33,12 @@ impl Widget for Row {
 
 struct App;
 impl Component for App {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let mut col = Column::new();
         for i in 0..20 {
             col = col.child(Row(i));
         }
-        ScrollView::new(col).into_element()
+        ScrollView::new(col).boxed()
     }
 }
 

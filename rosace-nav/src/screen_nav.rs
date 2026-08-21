@@ -69,7 +69,7 @@ impl NavTransitionStyle {
 /// # Example
 /// ```rust,ignore
 /// impl Component for AppShell {
-///     fn build(&self, ctx: &mut Context) -> Element {
+///     fn build(&self, ctx: &mut Context) -> BoxedWidget {
 ///         let nav = ScreenNav::new(ctx, Screen::Home);
 ///         match nav.current() {
 ///             Screen::Home  => HomeView::render(nav.clone()),
