@@ -1703,6 +1703,17 @@ impl RenderTree {
         walk(Self::ROOT, x, y).hit()
     }
 
+    /// The topmost promoted layer that can dismiss itself, if any.
+    ///
+    /// Drives Back and Escape: one press closes the dialog rather than the
+    /// screen underneath it.
+    pub fn topmost_dismisser(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.promoted_nodes()
+            .into_iter()
+            .rev()
+            .find_map(|n| self.nodes[n].promoted.as_ref().and_then(|p| p.on_dismiss.clone()))
+    }
+
     /// Every promoted node, in declaration (paint) order — so the LAST is
     /// topmost, exactly like the overlay stack it replaces.
     pub fn promoted_nodes(&self) -> Vec<NodeId> {
@@ -2010,6 +2021,14 @@ pub struct PromotedLayer {
     /// the promoted content lives natively in screen space rather than being
     /// translated out of its ancestors' content space afterwards.
     pub rect:    Rect,
+    /// How this layer dismisses itself, if it can.
+    ///
+    /// A scrim's tap-to-dismiss is declared as ordinary hit regions, which is
+    /// enough for the pointer — but Back and Escape have to dismiss the
+    /// TOPMOST dismissible layer without a coordinate, and a hit region cannot
+    /// be looked up that way. Recorded here for those two, exactly as the
+    /// engine's old flattened `OverlayRoute::on_tap` was.
+    pub on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl std::fmt::Debug for PromotedLayer {

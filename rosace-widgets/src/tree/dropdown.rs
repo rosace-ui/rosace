@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use rosace_core::types::{Point, Rect, Size};
 use super::{Widget, LayoutCtx, PaintCtx};
-use super::overlay::{OverlayEntry, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig, push_overlay};
+use super::overlay::{LayerPosition, InputBehavior, FocusBehavior, ScrimConfig};
 use super::menu::Menu;
 use rosace_render::Color;
 
@@ -144,11 +144,11 @@ impl Widget for Dropdown {
                 });
             }
             let close2 = self.on_open_change.clone();
-            push_overlay(
-                OverlayEntry::new(LayerPosition::Absolute(pos), menu)
-                    .input(InputBehavior::PassThrough)
-                    .focus(FocusBehavior::PassThrough)
-                    .scrim(ScrimConfig {
+            ctx.promote_at(
+                LayerPosition::Absolute(pos),
+                &menu,
+                super::PromoteOpts {
+                    scrim: Some(ScrimConfig {
                         color: Color::TRANSPARENT,
                         on_tap: Some(Arc::new(move || { if let Some(f) = &close2 { f(false); } })),
                         // Own trigger's rect — a click there is handled by
@@ -156,6 +156,9 @@ impl Widget for Dropdown {
                         // by outside-tap dismiss.
                         exclude_rect: Some(r),
                     }),
+                    input: InputBehavior::PassThrough,
+                    focus: FocusBehavior::PassThrough,
+                },
             );
         }
     }

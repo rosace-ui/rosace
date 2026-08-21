@@ -3,8 +3,9 @@ use rosace_core::types::{Point, Rect};
 use rosace_render::Color;
 use rosace_state::Atom;
 use super::{Widget, PaintCtx, BoxedWidget};
+use super::PromoteOpts;
 use super::overlay::{
-    FocusBehavior, InputBehavior, LayerPosition, OverlayEntry, ScrimConfig,
+    FocusBehavior, InputBehavior, LayerPosition, ScrimConfig,
 };
 
 // ── OverlayKind ───────────────────────────────────────────────────────────────
@@ -122,97 +123,103 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
         self.inner.paint(ctx);
         let anchor: Rect = ctx.rect;
 
-        for cfg in &self.overlays {
+        for (i, cfg) in self.overlays.iter().enumerate() {
             if !cfg.open.get() { continue; }
 
             let content = (cfg.content)();
             let open_atom = cfg.open.clone();
-            // `None` here means "no scrim tap-to-dismiss" — the engine's
-            // overlay routing already treats a missing `on_tap` that way, so
-            // non-dismissible needs no new dispatch path.
+            // `None` here means "no scrim tap-to-dismiss" — a missing `on_tap`
+            // already means exactly that, so non-dismissible needs no new path.
             let dismissible = cfg.dismissible;
-            // Cross-frame identity so the engine retains this overlay's
-            // render tree — without it, per-node state (animation, scroll,
-            // drag) is wiped every frame. The `open` atom's id is stable for
-            // the life of the overlay and unique per instance.
-            let overlay_key = cfg.open.id().0;
+            let dismiss = Arc::new(move || open_atom.set(false));
+            let on_tap = dismissible.then_some(dismiss as Arc<dyn Fn() + Send + Sync>);
 
-            let entry = match cfg.kind {
-                OverlayKind::Dropdown => {
-                    let pos = Point {
+            let (position, opts) = match cfg.kind {
+                OverlayKind::Dropdown => (
+                    LayerPosition::Absolute(Point {
                         x: anchor.origin.x,
                         y: anchor.origin.y + anchor.size.height,
-                    };
-                    // Invisible scrim: a tap anywhere outside the menu closes
-                    // it (and is consumed) — standard menu behavior.
-                    let dismiss = Arc::new(move || open_atom.set(false));
-                    OverlayEntry::new(LayerPosition::Absolute(pos), content)
-                        .key(overlay_key)
-                        .input(InputBehavior::PassThrough)
-                        .focus(FocusBehavior::PassThrough)
-                        .scrim(ScrimConfig {
+                    }),
+                    PromoteOpts {
+                        // Invisible scrim: a tap anywhere outside the menu
+                        // closes it (and is consumed) — standard menu
+                        // behaviour.
+                        scrim: Some(ScrimConfig {
                             color: Color::TRANSPARENT,
-                            on_tap: dismissible.then_some(dismiss as Arc<dyn Fn() + Send + Sync>),
-                        exclude_rect: None,
-                        })
-                }
+                            on_tap,
+                            // NOT the anchor, deliberately: this entry point
+                            // has always passed `None`, and promoted-first
+                            // dispatch already consumes the tap rather than
+                            // letting it reach the trigger underneath. Whether
+                            // it SHOULD exempt its trigger is a behaviour
+                            // question, not a migration one.
+                            exclude_rect: None,
+                        }),
+                        input: InputBehavior::PassThrough,
+                        focus: FocusBehavior::PassThrough,
+                    },
+                ),
 
-                OverlayKind::Sheet => {
-                    let dismiss = Arc::new(move || open_atom.set(false));
-                    // A sheet is a MODAL SURFACE, like a Dialog: it owns the
-                    // clicks and scrolls that land on it, and only a tap on
-                    // the scrim OUTSIDE it dismisses. It was `PassThrough`,
-                    // so an inside tap skipped the absorb step in the engine's
-                    // overlay routing and fell straight through to the scrim's
-                    // on_tap — tapping any content inside the sheet closed it
-                    // (user-reported 2026-08-12). `Dialog` right below always
-                    // had this correct.
-                    OverlayEntry::new(LayerPosition::BottomAnchored, content)
-                        .key(overlay_key)
-                        .input(InputBehavior::Block)
-                        .focus(FocusBehavior::Trap)
-                        .scrim(ScrimConfig {
+                // A sheet is a MODAL SURFACE, like a Dialog: it owns the
+                // clicks and scrolls that land on it, and only a tap on the
+                // scrim OUTSIDE it dismisses. It was `PassThrough` once, so an
+                // inside tap skipped the absorb step and fell straight through
+                // to the scrim's on_tap — tapping any content inside the sheet
+                // closed it (user-reported 2026-08-12).
+                OverlayKind::Sheet => (
+                    LayerPosition::BottomAnchored,
+                    PromoteOpts {
+                        scrim: Some(ScrimConfig {
                             color: Color::rgba(0, 0, 0, 100),
-                            on_tap: dismissible.then_some(dismiss as Arc<dyn Fn() + Send + Sync>),
-                        exclude_rect: None,
-                        })
-                }
+                            on_tap,
+                            exclude_rect: None,
+                        }),
+                        input: InputBehavior::Block,
+                        focus: FocusBehavior::Trap,
+                    },
+                ),
 
-                OverlayKind::Dialog => {
-                    let dismiss = Arc::new(move || open_atom.set(false));
-                    OverlayEntry::new(LayerPosition::Centered, content)
-                        .key(overlay_key)
-                        .input(InputBehavior::Block)
-                        .focus(FocusBehavior::Trap)
-                        .scrim(ScrimConfig {
+                OverlayKind::Dialog => (
+                    LayerPosition::Centered,
+                    PromoteOpts {
+                        scrim: Some(ScrimConfig {
                             color: Color::rgba(0, 0, 0, 160),
-                            on_tap: dismissible.then_some(dismiss as Arc<dyn Fn() + Send + Sync>),
-                        exclude_rect: None,
-                        })
-                }
+                            on_tap,
+                            exclude_rect: None,
+                        }),
+                        input: InputBehavior::Block,
+                        focus: FocusBehavior::Trap,
+                    },
+                ),
 
-                OverlayKind::Tooltip => {
-                    // Centered just above the hovered widget (user-reported:
-                    // the old right-edge Absolute position drifted far from
-                    // the anchor).
-                    OverlayEntry::new(LayerPosition::AboveCentered(anchor), content)
-                        .key(overlay_key)
-                        .input(InputBehavior::PassThrough)
-                        .focus(FocusBehavior::Inert)
-                }
+                // Centered just above the hovered widget (user-reported: the
+                // old right-edge Absolute position drifted far from the
+                // anchor).
+                OverlayKind::Tooltip => (
+                    LayerPosition::AboveCentered(anchor),
+                    PromoteOpts {
+                        scrim: None,
+                        input: InputBehavior::PassThrough,
+                        focus: FocusBehavior::Inert,
+                    },
+                ),
 
-                OverlayKind::Toast => {
-                    OverlayEntry::new(LayerPosition::BottomCenter, content)
-                        .key(overlay_key)
-                        .input(InputBehavior::PassThrough)
-                        .focus(FocusBehavior::Inert)
-                }
+                OverlayKind::Toast => (
+                    LayerPosition::BottomCenter,
+                    PromoteOpts {
+                        scrim: None,
+                        input: InputBehavior::PassThrough,
+                        focus: FocusBehavior::Inert,
+                    },
+                ),
             };
 
-            // Attach to the render-tree node (D091): the entry persists across
-            // cache-hit frames and is cleared when this node repaints — an
-            // open dialog can no longer vanish on the MouseUp frame.
-            ctx.attach_overlay(entry);
+            // Keyed by DECLARATION INDEX, not by the `open` atom's id. Slots
+            // are positional and this loop skips closed overlays, so a host
+            // declaring several would otherwise hand the second one the
+            // first's node — and with it its animation and scroll state — the
+            // moment the first closed.
+            ctx.promote_keyed(i as u64, position, &*content, opts);
         }
     }
     // layout, flex_factor: protocol defaults delegate to the child.

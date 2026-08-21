@@ -2,7 +2,7 @@ use std::sync::Arc;
 use rosace_core::types::{Point, Size};
 use rosace_render::Color;
 
-use super::overlay::{FocusBehavior, InputBehavior, LayerPosition, OverlayEntry};
+use super::overlay::{FocusBehavior, InputBehavior, LayerPosition};
 use super::{BoxedWidget, Children, LayoutCtx, PaintCtx, Widget};
 
 /// Theme-driven tooltip appearance (D115/Phase 32). Set once on the theme
@@ -132,13 +132,14 @@ impl Widget for Tooltip {
             // widget inside a GPU scroll layer is remapped to window space
             // and centred over its anchor (the legacy Absolute push path
             // skipped that remap and dropped the label off-screen).
-            ctx.attach_overlay(
-                OverlayEntry::new(
-                    LayerPosition::AboveCentered(r),
-                    TooltipLabel { label, w, h, style },
-                )
-                .input(InputBehavior::PassThrough)
-                .focus(FocusBehavior::Inert),
+            ctx.promote_at(
+                LayerPosition::AboveCentered(r),
+                &TooltipLabel { label, w, h, style },
+                super::PromoteOpts {
+                    scrim: None,
+                    input: InputBehavior::PassThrough,
+                    focus: FocusBehavior::Inert,
+                },
             );
         }
     }

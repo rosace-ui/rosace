@@ -2036,6 +2036,9 @@ impl FrameEngine {
                     // underneath it.
                     let dismissed = overlay_routes.iter().rev()
                         .find_map(|r| r.on_tap.clone())
+                        // Promoted overlays declare their dismisser on the
+                        // node; they are not in the flattened route list.
+                        .or_else(|| self.render_tree.borrow().topmost_dismisser())
                         .map(|on_tap| { on_tap(); true })
                         .unwrap_or(false);
                     let handled = dismissed || rosace_core::nav_back::dispatch_back();
@@ -2048,6 +2051,7 @@ impl FrameEngine {
                     // dismisser (dialog, sheet, dropdown).
                     if let Some(on_tap) = overlay_routes.iter().rev()
                         .find_map(|r| r.on_tap.clone())
+                        .or_else(|| self.render_tree.borrow().topmost_dismisser())
                     {
                         on_tap();
                     }
@@ -3422,15 +3426,19 @@ mod tests {
                 ctx.constraints.constrain(rosace_core::types::Size { width: 100.0, height: 100.0 })
             }
             fn paint(&self, ctx: &mut w::PaintCtx) {
-                // First paint establishes 0.0 (animate_to snaps when it has
-                // no prior value); afterwards ease toward 1.0. With a
-                // retained tree we observe intermediate values; with a tree
-                // wiped each frame every paint looks like "first paint" and
-                // snaps straight to the target.
-                let mut seen = self.0.lock().unwrap();
-                let target = if seen.is_empty() { 0.0 } else { 1.0 };
-                let v = ctx.animate_to(target, 300.0);
-                seen.push(v);
+                // Seed once, then ease toward 1.0 on every paint. `animate_to`
+                // is UNSETTLED while easing, so it requests the next frame
+                // itself — which is what keeps an overlay animating now that
+                // overlays are painted only when something changed, rather
+                // than unconditionally every frame.
+                //
+                // With a RETAINED node the eased value climbs across frames.
+                // With one wiped each frame, `seed_anim_if_unset` re-seeds
+                // 0.0 every time and every paint produces the SAME first
+                // step — no progression, however many frames run.
+                ctx.seed_anim_if_unset(0.0);
+                let v = ctx.animate_to(1.0, 300.0);
+                self.0.lock().unwrap().push(v);
             }
         }
 
@@ -3457,14 +3465,18 @@ mod tests {
 
         let vals = seen.lock().unwrap().clone();
         assert!(vals.len() >= 3, "the overlay must have painted several frames, got {vals:?}");
-        assert_eq!(vals[0], 0.0, "first paint establishes the starting value");
-        // The discriminator: at least one value strictly BETWEEN 0 and 1.
-        // A wiped tree makes every frame behave like a first paint, snapping
-        // straight to 1.0 with nothing in between.
         assert!(
-            vals.iter().any(|v| *v > 1e-6 && *v < 1.0 - 1e-6),
-            "animation must EASE inside an overlay, not snap — retained state \
-             is what makes that possible: {vals:?}"
+            vals.iter().all(|v| *v > 1e-6 && *v < 1.0 - 1e-6),
+            "the eased value should still be in flight across these frames: {vals:?}"
+        );
+        // The discriminator, and it is strictly stronger than "some value lies
+        // between 0 and 1": the value must PROGRESS. A node wiped between
+        // frames re-seeds and produces the same first step forever, which
+        // would pass an any() check and fail this one.
+        assert!(
+            vals.windows(2).all(|w| w[1] > w[0]),
+            "the eased value did not advance across frames — per-node animation \
+             state is not surviving inside the overlay: {vals:?}"
         );
     }
 

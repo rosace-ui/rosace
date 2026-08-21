@@ -782,8 +782,12 @@ impl<'a> PaintCtx<'a> {
         // NOT spliced into this recorder — that is the whole point. The engine
         // replays promoted pictures after the main walk, above everything.
         let picture = sub.finish();
-        self.tree.borrow_mut().node_mut(node).promoted =
-            Some(render_tree::PromotedLayer { picture, rect: screen_rect });
+        self.tree.borrow_mut().node_mut(node).promoted = Some(render_tree::PromotedLayer {
+            picture,
+            rect: screen_rect,
+            // The bare primitive has no scrim, so nothing to dismiss.
+            on_dismiss: None,
+        });
     }
 
     /// Promote a widget to the root layer at a resolved [`LayerPosition`],
@@ -795,6 +799,40 @@ impl<'a> PaintCtx<'a> {
     /// use that when the caller already knows the rect.
     pub fn promote_at(
         &mut self,
+        position: LayerPosition,
+        widget: &dyn Widget,
+        opts: PromoteOpts,
+    ) {
+        let node = self.tree.borrow_mut().slot(self.node, true);
+        self.promote_into(node, position, widget, opts);
+    }
+
+    /// [`PaintCtx::promote_at`] with an explicit cross-frame identity.
+    ///
+    /// Required whenever promotion is CONDITIONAL. Slots are positional, so a
+    /// host that declares three overlays and emits only the open ones shifts
+    /// every later slot the moment one closes — the second overlay would
+    /// inherit the first's node, and with it its animation and scroll state.
+    /// A stable key (the declaration's index, typically) pins each one to its
+    /// own node regardless of which siblings are open.
+    ///
+    /// This is what the old `OverlayEntry::key` was for. The difference is
+    /// that the key now selects a node in the real tree rather than a
+    /// side-table of retained render trees.
+    pub fn promote_keyed(
+        &mut self,
+        key: u64,
+        position: LayerPosition,
+        widget: &dyn Widget,
+        opts: PromoteOpts,
+    ) {
+        let node = self.tree.borrow_mut().keyed_slot(self.node, key);
+        self.promote_into(node, position, widget, opts);
+    }
+
+    fn promote_into(
+        &mut self,
+        node: render_tree::NodeId,
         position: LayerPosition,
         widget: &dyn Widget,
         opts: PromoteOpts,
@@ -814,14 +852,31 @@ impl<'a> PaintCtx<'a> {
             Constraints::loose(win_w, win_h)
         };
 
-        let node = self.tree.borrow_mut().slot(self.node, true);
-        let size = widget.layout(&LayoutCtx::with_tree(
-            constraints,
-            self.font,
-            &self.theme,
-            Rc::clone(&self.tree),
+        // Measured through a context rooted at THIS node, peeking the slot
+        // `paint_child` will consume below.
+        //
+        // Laying the widget out rooted at `node` itself would misalign the two
+        // walks: layout would fill node's slots with the widget's CHILDREN
+        // while paint puts the widget itself in slot 0, so every child would
+        // inherit a sibling's cached size. `paint_child`'s assertion caught it
+        // immediately (`layout put Column, paint is putting Dialog`), which is
+        // exactly the failure that assertion exists for.
+        let mut sub = PictureRecorder::new();
+        let mut cctx = PaintCtx {
+            recorder: &mut sub,
+            rect: window,
+            font: self.font,
+            theme: self.theme.clone(),
+            tree: Rc::clone(&self.tree),
             node,
-        ));
+            owner: self.owner,
+            // Escapes its ancestors' clips — including for hit regions.
+            // `register_hit` narrows what it declares to `clip_rect`, so
+            // inheriting one here would produce a widget that is visible and
+            // unclickable.
+            clip_rect: None,
+        };
+        let size = cctx.measure_child(constraints, widget);
 
         let bottom_inset = bottom_overlay_inset();
         let origin = match &position {
@@ -863,18 +918,8 @@ impl<'a> PaintCtx<'a> {
         let layer_rect = if spans_window { window } else { content };
 
         self.tree.borrow_mut().node_mut(node).cached_rect = Some(layer_rect);
-        let mut sub = PictureRecorder::new();
         {
-            let mut cctx = PaintCtx {
-                recorder: &mut sub,
-                rect: layer_rect,
-                font: self.font,
-                theme: self.theme.clone(),
-                tree: Rc::clone(&self.tree),
-                node,
-                owner: self.owner,
-                clip_rect: None,
-            };
+            cctx.rect = layer_rect;
 
             if let Some(scrim) = &opts.scrim {
                 cctx.fill_rect(window, scrim.color);
@@ -899,6 +944,7 @@ impl<'a> PaintCtx<'a> {
 
             cctx.paint_child(content, widget);
         }
+        drop(cctx);
         if let Some((prev, now)) = self.tree.borrow_mut().close_state_scope(node) {
             debug_assert!(false,
                 "`{}` called ctx.widget_state() {now} time(s) this paint but {prev} last paint.",
@@ -910,7 +956,11 @@ impl<'a> PaintCtx<'a> {
         {
             let mut t = self.tree.borrow_mut();
             let n = t.node_mut(node);
-            n.promoted = Some(render_tree::PromotedLayer { picture, rect: layer_rect });
+            n.promoted = Some(render_tree::PromotedLayer {
+                picture,
+                rect: layer_rect,
+                on_dismiss: opts.scrim.as_ref().and_then(|s| s.on_tap.clone()),
+            });
             n.focus_behavior = opts.focus;
         }
     }

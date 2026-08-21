@@ -15,7 +15,7 @@ use rosace_core::types::{Point, Size};
 use rosace_render::Color;
 
 use super::menu::Menu;
-use super::overlay::{push_overlay, FocusBehavior, InputBehavior, LayerPosition, OverlayEntry, ScrimConfig};
+use super::overlay::{FocusBehavior, InputBehavior, LayerPosition, ScrimConfig};
 use super::{Children, LayoutCtx, PaintCtx, Widget};
 
 /// A text field with a live-filtered suggestion dropdown below it.
@@ -135,11 +135,11 @@ impl Widget for Autocomplete {
                 });
             }
             let close2 = self.on_open_change.clone();
-            push_overlay(
-                OverlayEntry::new(LayerPosition::Absolute(pos), menu)
-                    .input(InputBehavior::PassThrough)
-                    .focus(FocusBehavior::PassThrough)
-                    .scrim(ScrimConfig {
+            ctx.promote_at(
+                LayerPosition::Absolute(pos),
+                &menu,
+                super::PromoteOpts {
+                    scrim: Some(ScrimConfig {
                         color: Color::TRANSPARENT,
                         on_tap: Some(Arc::new(move || { if let Some(f) = &close2 { f(false); } })),
                         // Own field's rect — typing/clicking there is
@@ -147,6 +147,9 @@ impl Widget for Autocomplete {
                         // dismiss (same reasoning as `Dropdown`'s trigger).
                         exclude_rect: Some(r),
                     }),
+                    input: InputBehavior::PassThrough,
+                    focus: FocusBehavior::PassThrough,
+                },
             );
         }
     }
