@@ -11,7 +11,6 @@ pub mod component;
 pub mod context;
 pub mod element;
 pub mod error;
-pub mod error_boundary;
 pub mod ime_hint;
 pub mod lifecycle;
 pub mod media_query;
@@ -31,7 +30,6 @@ pub use component::Component;
 pub use context::Context;
 pub use element::{Element, NativeElement, ComponentElement, TextElement, WidgetPayload};
 pub use error::{RosaceError, RosaceResult};
-pub use error_boundary::ErrorBoundary;
 pub use ime_hint::{ime_cursor_area, keyboard_type, set_ime_cursor_area, set_keyboard_type, KeyboardType};
 pub use media_query::{use_media_query, set_media_query, MediaQuery};
 pub use persist::{persist_backend, set_persist_backend, PersistBackend, PersistValue};
@@ -68,15 +66,6 @@ mod tests {
         on_mount(&mut ctx, || || {});
         // Cleanup is stored in cleanup_store, not on Context directly.
         assert!(rosace_state::cleanup_store::has_callbacks(id));
-    }
-
-    #[test]
-    fn error_boundary_has_fallback() {
-        let boundary = ErrorBoundary::new()
-            .fallback(|_e| Element::text("something went wrong"))
-            .child(Element::text("normal content"));
-        let result = boundary.render();
-        assert!(!matches!(result, Element::Empty));
     }
 
     struct SimpleContainer { elements: Vec<Element> }

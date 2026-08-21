@@ -21,7 +21,6 @@ pub use layout_result::LayoutResult;
 pub use sizing::{Height, Width};
 pub use widgets::flex::{layout_column, layout_row};
 pub use widgets::{
-    aspect_ratio::AspectRatio,
     flex::{Flex, FlexDirection},
     grid::Grid,
     wrap::Wrap,
