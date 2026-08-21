@@ -160,7 +160,7 @@ pub use date_picker::{DatePicker, SimpleDate, SelectionMode, PageAxis};
 pub use time_picker::{TimePicker, SimpleTime, TimeUnit};
 pub use data_table::{DataTable, DataTableColumn, SortDirection};
 pub use stateful::{Stateful, StatefulExt, StatefulWidget};
-pub use render_tree::{HitHandler, InspectNode, Layer, LayerTree, NodeId, RenderTree, ScrollAxes, ScrollHandler, TreeNode};
+pub use render_tree::{HitHandler, InspectNode, Layer, LayerKind, LayerTree, NodeId, PromotedLayer, RenderTree, ScrollAxes, ScrollHandler, TreeNode};
 pub use repaint_boundary::RepaintBoundary;
 pub use semantics::Semantics;
 pub use row::Row;
@@ -704,6 +704,67 @@ impl<'a> PaintCtx<'a> {
             owner: self.owner,
             clip_rect: self.clip_rect,
         }
+    }
+
+    /// Paint `widget` into the ROOT layer — a portal.
+    ///
+    /// `rect` is given in THIS widget's coordinate space, like any other
+    /// `paint_child` rect. Visually the content escapes every ancestor clip
+    /// and composites above everything below it; logically it stays a child of
+    /// this node, so reading order, focus order, inherited theme, its own
+    /// `widget_state` and its disposal all follow the declaration site rather
+    /// than where the pixels land.
+    ///
+    /// The promoted subtree is painted in SCREEN space: `rect` is resolved
+    /// once here, and everything beneath declares against that. The
+    /// alternative — record in this widget's content space and translate on
+    /// the way out — has to translate `hits`, `hits_at`, `scrolls`,
+    /// `nested_scrolls` and `cached_rect` in lockstep, and any miss is a
+    /// widget you can see and cannot click. That is the failure that sank
+    /// replay-on-move; the coordinate space is reset at the boundary instead,
+    /// once, in both the paint walk and the pointer walks.
+    pub fn promote(&mut self, rect: Rect, widget: &dyn Widget) {
+        let node = self.tree.borrow_mut().slot(self.node, true);
+        let screen_rect = {
+            let t = self.tree.borrow();
+            Rect { origin: t.content_to_screen(node, rect.origin), size: rect.size }
+        };
+        self.tree.borrow_mut().adopt_tag(node, widget.type_tag());
+        self.tree.borrow_mut().node_mut(node).cached_rect = Some(screen_rect);
+
+        let mut sub = PictureRecorder::new();
+        {
+            let mut cctx = PaintCtx {
+                recorder: &mut sub,
+                rect: screen_rect,
+                font: self.font,
+                theme: self.theme.clone(),
+                tree: Rc::clone(&self.tree),
+                node,
+                owner: self.owner,
+                // Escapes its ancestors' clips — including for hit regions.
+                // `register_hit` narrows what it declares to `clip_rect`, so
+                // inheriting one here would produce a widget that is visible
+                // and unclickable.
+                clip_rect: None,
+            };
+            widget.paint(&mut cctx);
+        }
+        if let Some((prev, now)) = self.tree.borrow_mut().close_state_scope(node) {
+            debug_assert!(
+                false,
+                "`{}` called ctx.widget_state() {now} time(s) this paint but {prev} last \
+                 paint. Call widget_state unconditionally, in a stable order.",
+                widget.type_tag(),
+            );
+            let _ = (prev, now);
+        }
+
+        // NOT spliced into this recorder — that is the whole point. The engine
+        // replays promoted pictures after the main walk, above everything.
+        let picture = sub.finish();
+        self.tree.borrow_mut().node_mut(node).promoted =
+            Some(render_tree::PromotedLayer { picture, rect: screen_rect });
     }
 
     /// Impose a clip on this node and everything beneath it.

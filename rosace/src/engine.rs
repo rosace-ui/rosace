@@ -1178,8 +1178,10 @@ impl FrameEngine {
 
             let tree_ref = self.render_tree.borrow();
             let overlay_ids = tree_ref.overlay_ids();
+            let promoted = tree_ref.promoted_nodes();
 
             if !overlay_ids.is_empty() || !legacy_overlays.is_empty() || !build_overlays.is_empty()
+                || !promoted.is_empty()
                 || self.dev.enabled
                 || self.trace_panel.enabled
                 || devtools_fab_enabled()
@@ -1200,6 +1202,20 @@ impl FrameEngine {
                 // Caught by a unit test before this ever ran live.
                 overlay_canvas.mark_frame_dirty();
                 let mut ov_recorder = rosace_render::PictureRecorder::new();
+
+                // ── Promoted layers (portals) ────────────────────────
+                // Painted during the main walk into their own pictures and
+                // deliberately NOT spliced into their parents' streams;
+                // replayed here, above the base canvas, in declaration order.
+                // Their commands are already in screen space — the promotion
+                // boundary resolved that once, so nothing is translated here.
+                for node in &promoted {
+                    let p = tree_ref.node(*node).promoted.as_ref()
+                        .expect("promoted_nodes only returns nodes that have one");
+                    for cmd in &p.picture.commands {
+                        ov_recorder.push(cmd.clone());
+                    }
+                }
 
                 // Tree-attached entries carry their owning node so
                 // content-space Absolute anchors can be remapped to
@@ -1394,7 +1410,11 @@ impl FrameEngine {
                 // Both were previously re-derived here per entry, which is
                 // what a flat `Vec<ScrollLayer>` forces: it has no parent and
                 // no clip, so "clipped by my ancestor" is not in the format.
-                let (n, entry) = (layer.node, &tree_ref.node(layer.node).transforms[layer.entry]);
+                // Promoted layers are pictures replayed above the base canvas
+                // by the overlay pass, not content textures — nothing to
+                // rasterize or hand to the compositor here.
+                let rosace_widgets::tree::LayerKind::Transform(i) = layer.kind else { continue };
+                let (n, entry) = (layer.node, &tree_ref.node(layer.node).transforms[i]);
                 let vp = layer.dest;
 
                 let content_scale = scale * entry.zoom;

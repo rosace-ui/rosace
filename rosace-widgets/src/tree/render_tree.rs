@@ -177,6 +177,17 @@ pub struct TreeNode {
     /// Declared per paint, like `hits` and `transforms` — set through
     /// [`super::PaintCtx::set_clip`], never by assigning the field.
     pub clip:       Option<Rect>,
+    /// This node's content composites at the ROOT layer instead of into its
+    /// parent's picture — a React-style portal.
+    ///
+    /// Visually it escapes every ancestor clip and every z-order below it.
+    /// LOGICALLY it stays exactly where it was declared, which is the half a
+    /// naive "move it to the root" loses and the half that carries
+    /// accessibility reading order, focus order, inherited theme, per-node
+    /// state, and dismissal when its declaring parent leaves the tree.
+    ///
+    /// Declared per paint, like `transforms`.
+    pub promoted:   Option<PromotedLayer>,
     pub semantics:  Vec<super::SemanticsProps>,
     /// Drops this node AND its whole subtree from the accessibility tree
     /// (`Semantics::exclude()`). Declared per paint like `semantics` above.
@@ -558,6 +569,7 @@ impl RenderTree {
         n.overlays.clear();
         n.transforms.clear();
         n.clip = None;
+        n.promoted = None;
         n.semantics.clear();
         n.semantics_excluded = false;
         n.semantics_merges_descendants = false;
@@ -1078,6 +1090,16 @@ impl RenderTree {
     /// a usable chain even though the first value is `None`.
     pub fn hit_test(&self, x: f32, y: f32) -> (Option<(HitHandler, bool)>, Vec<ScrollHandler>) {
         let mut chain = Vec::new();
+        // Promoted layers first, topmost first — they composite above
+        // everything, so they take the pointer first too. This is the
+        // dispatch order the overlay stack already had; promotion just makes
+        // it a property of the one tree instead of a parallel route list.
+        for node in self.promoted_nodes().into_iter().rev() {
+            let mut sub = Vec::new();
+            if let Some(leaf) = self.hit_test_node(node, x, y, &mut sub) {
+                return (Some(leaf), sub);
+            }
+        }
         let leaf = self.hit_test_node(Self::ROOT, x, y, &mut chain);
         (leaf, chain)
     }
@@ -1153,6 +1175,13 @@ impl RenderTree {
         let mut leaf = None;
         if !clipped {
             for &child in n.children.iter().rev() {
+                // A promoted child composites at the root in SCREEN space and
+                // is dispatched by its own pass, ahead of this walk. Descending
+                // into it here would test screen-space rects against
+                // content-space coordinates.
+                if self.nodes[child].promoted.is_some() {
+                    continue;
+                }
                 if let Some((cb, positional)) = self.hit_test_node(child, cx, cy, chain) {
                     // Wrap so LATER invocations are remapped too, not just this
                     // one. `child_coords` only converts the coordinates used to
@@ -1227,7 +1256,7 @@ impl RenderTree {
     /// Topmost node under the cursor that owns any interactive or hover
     /// region — drives hover state (buttons, tiles, tooltips).
     pub fn hover_test(&self, x: f32, y: f32) -> Option<NodeId> {
-        self.hover_test_node(Self::ROOT, x, y).hit()
+        self.promoted_first(x, y, |n, x, y| self.hover_test_node(n, x, y))
     }
 
     fn hover_test_node(&self, id: NodeId, x: f32, y: f32) -> Walk<NodeId> {
@@ -1238,6 +1267,13 @@ impl RenderTree {
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
+                // A promoted child composites at the root in SCREEN space and
+                // is dispatched by its own pass, ahead of this walk. Descending
+                // into it here would test screen-space rects against
+                // content-space coordinates.
+                if self.nodes[child].promoted.is_some() {
+                    continue;
+                }
                 if let Some(stop) = self.hover_test_node(child, cx, cy).settled() {
                     return stop;
                 }
@@ -1254,7 +1290,7 @@ impl RenderTree {
 
     /// Topmost long-press callback under the cursor.
     pub fn long_press_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        self.long_press_node(Self::ROOT, x, y).hit()
+        self.promoted_first(x, y, |n, x, y| self.long_press_node(n, x, y))
     }
 
     fn long_press_node(&self, id: NodeId, x: f32, y: f32) -> Walk<Arc<dyn Fn() + Send + Sync>> {
@@ -1265,6 +1301,13 @@ impl RenderTree {
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
+                // A promoted child composites at the root in SCREEN space and
+                // is dispatched by its own pass, ahead of this walk. Descending
+                // into it here would test screen-space rects against
+                // content-space coordinates.
+                if self.nodes[child].promoted.is_some() {
+                    continue;
+                }
                 if let Some(stop) = self.long_press_node(child, cx, cy).settled() {
                     return stop;
                 }
@@ -1349,6 +1392,9 @@ impl RenderTree {
         -> Option<HitHandler>
     {
         let mut candidates: Vec<(ScrollAxes, HitHandler)> = Vec::new();
+        for node in self.promoted_nodes().into_iter().rev() {
+            self.scroll_candidates(node, x, y, &mut candidates);
+        }
         self.scroll_candidates(Self::ROOT, x, y, &mut candidates);
         // `scroll_candidates` stops collecting at a barrier, so `candidates`
         // already excludes anything behind it.
@@ -1379,6 +1425,13 @@ impl RenderTree {
         if !clipped {
             // Children first (topmost/innermost priority), later siblings first.
             for &child in n.children.iter().rev() {
+                // A promoted child composites at the root in SCREEN space and
+                // is dispatched by its own pass, ahead of this walk. Descending
+                // into it here would test screen-space rects against
+                // content-space coordinates.
+                if self.nodes[child].promoted.is_some() {
+                    continue;
+                }
                 // A barrier below us also hides US from the scroll: it is
                 // painted on top, so the wheel belongs to it, not to the
                 // viewport it covers.
@@ -1400,7 +1453,7 @@ impl RenderTree {
     /// priority as `scroll_test`, but with no axis-selection step (a pinch
     /// gesture has no "axis", just one delta).
     pub fn zoom_test(&self, x: f32, y: f32) -> Option<Arc<dyn Fn(f32) + Send + Sync>> {
-        self.zoom_candidate(Self::ROOT, x, y).hit()
+        self.promoted_first(x, y, |n, x, y| self.zoom_candidate(n, x, y))
     }
 
     fn zoom_candidate(&self, id: NodeId, x: f32, y: f32) -> Walk<Arc<dyn Fn(f32) + Send + Sync>> {
@@ -1413,6 +1466,13 @@ impl RenderTree {
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
+                // A promoted child composites at the root in SCREEN space and
+                // is dispatched by its own pass, ahead of this walk. Descending
+                // into it here would test screen-space rects against
+                // content-space coordinates.
+                if self.nodes[child].promoted.is_some() {
+                    continue;
+                }
                 if let Some(stop) = self.zoom_candidate(child, cx, cy).settled() {
                     return stop;
                 }
@@ -1488,7 +1548,7 @@ impl RenderTree {
     /// traversal as [`Self::hover_test`]; editable rects live in
     /// `TreeNode::editable`, declared by [`super::PaintCtx::register_editable`].
     pub fn editable_test(&self, x: f32, y: f32) -> Option<NodeId> {
-        self.editable_test_node(Self::ROOT, x, y).hit()
+        self.promoted_first(x, y, |n, x, y| self.editable_test_node(n, x, y))
     }
 
     fn editable_test_node(&self, id: NodeId, x: f32, y: f32) -> Walk<NodeId> {
@@ -1499,6 +1559,13 @@ impl RenderTree {
         let (cx, cy, clipped) = self.child_coords(n, id, x, y);
         if !clipped {
             for &child in n.children.iter().rev() {
+                // A promoted child composites at the root in SCREEN space and
+                // is dispatched by its own pass, ahead of this walk. Descending
+                // into it here would test screen-space rects against
+                // content-space coordinates.
+                if self.nodes[child].promoted.is_some() {
+                    continue;
+                }
                 if let Some(stop) = self.editable_test_node(child, cx, cy).settled() {
                     return stop;
                 }
@@ -1610,6 +1677,40 @@ impl RenderTree {
         out
     }
 
+    /// Run a pointer walk over the promoted layers first (topmost first),
+    /// falling back to the main tree. Promoted content composites above
+    /// everything, so it answers the pointer first.
+    fn promoted_first<T>(
+        &self,
+        x: f32,
+        y: f32,
+        walk: impl Fn(NodeId, f32, f32) -> Walk<T>,
+    ) -> Option<T> {
+        for node in self.promoted_nodes().into_iter().rev() {
+            if let Some(hit) = walk(node, x, y).hit() {
+                return Some(hit);
+            }
+        }
+        walk(Self::ROOT, x, y).hit()
+    }
+
+    /// Every promoted node, in declaration (paint) order — so the LAST is
+    /// topmost, exactly like the overlay stack it replaces.
+    pub fn promoted_nodes(&self) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        self.promoted_nodes_at(Self::ROOT, &mut out);
+        out
+    }
+
+    fn promoted_nodes_at(&self, id: NodeId, out: &mut Vec<NodeId>) {
+        if self.nodes[id].promoted.is_some() {
+            out.push(id);
+        }
+        for &child in &self.nodes[id].children {
+            self.promoted_nodes_at(child, out);
+        }
+    }
+
     /// Derive the compositing layer tree from the node tree.
     ///
     /// One pre-order walk resolves, for every layer at once, what the flat
@@ -1647,6 +1748,25 @@ impl RenderTree {
             None => clip,
         };
 
+        // A promoted node is a layer ROOT: composited against the window,
+        // outside every clip and transform above it. Its subtree was painted
+        // in screen space, so its descendants start from identity too.
+        if let Some(p) = &n.promoted {
+            out.layers.push(Layer {
+                node: id,
+                kind: LayerKind::Promoted,
+                parent: None,
+                dest: p.rect,
+                src_bias: (0.0, 0.0),
+                culled: false,
+            });
+            let index = out.layers.len() - 1;
+            for &child in &n.children {
+                self.layers_node(child, ContentToScreen::IDENTITY, None, Some(index), out);
+            }
+            return;
+        }
+
         let mut child_to_screen = to_screen;
         let mut child_clip = clip;
         let mut child_parent = parent;
@@ -1674,7 +1794,14 @@ impl RenderTree {
             };
 
             let index = out.layers.len();
-            out.layers.push(Layer { node: id, entry: i, parent, dest, src_bias, culled });
+            out.layers.push(Layer {
+                node: id,
+                kind: LayerKind::Transform(i),
+                parent,
+                dest,
+                src_bias,
+                culled,
+            });
 
             // Descend under the FIRST entry only, matching `content_to_screen`.
             // A node attaching several transform entries would be a widget
@@ -1863,6 +1990,25 @@ pub fn select_scroll_handler(
         .map(|(_, cb)| cb.clone())
 }
 
+/// Content promoted to the root layer — see [`TreeNode::promoted`].
+#[derive(Clone)]
+pub struct PromotedLayer {
+    /// The subtree's draw commands, recorded independently of its parent's
+    /// picture so nothing above it can clip or overdraw them.
+    pub picture: rosace_render::Picture,
+    /// Placement in SCREEN space, resolved once when the promotion is
+    /// declared. Everything inside the subtree is declared against this, so
+    /// the promoted content lives natively in screen space rather than being
+    /// translated out of its ancestors' content space afterwards.
+    pub rect:    Rect,
+}
+
+impl std::fmt::Debug for PromotedLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromotedLayer").field("rect", &self.rect).finish()
+    }
+}
+
 /// Intersect a running clip with another rect. A disjoint pair collapses to a
 /// zero-sized rect rather than `None`: "clipped away entirely" and "not
 /// clipped at all" must not be the same value.
@@ -1874,6 +2020,18 @@ fn narrow_rect(clip: Option<Rect>, c: Rect) -> Rect {
             size: Size { width: 0.0, height: 0.0 },
         }),
     }
+}
+
+/// What makes a node a compositing layer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LayerKind {
+    /// Hosts a [`TransformLayerEntry`] — a scrollable or zoomable region whose
+    /// content is rasterized once into its own texture and moved by shifting
+    /// the sample origin. The payload indexes the node's `transforms`.
+    Transform(usize),
+    /// Promoted to the root — a portal. Its content is a recorded picture on
+    /// the node, not a texture.
+    Promoted,
 }
 
 /// One compositing layer: content presented to the GPU independently of the
@@ -1889,8 +2047,8 @@ fn narrow_rect(clip: Option<Rect>, c: Rect) -> Rect {
 pub struct Layer {
     /// The node that attached this layer's transform entry.
     pub node:     NodeId,
-    /// Which of that node's `transforms` entries this layer is.
-    pub entry:    usize,
+    /// Why this node is a layer, and what its content is.
+    pub kind:     LayerKind,
     /// Index into [`LayerTree::layers`] of the nearest enclosing layer.
     /// `None` for a layer composited directly against the window.
     pub parent:   Option<usize>,
