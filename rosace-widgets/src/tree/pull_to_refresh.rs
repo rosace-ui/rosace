@@ -72,7 +72,19 @@ impl Widget for PullToRefresh {
     }
 
     fn layout(&self, ctx: &LayoutCtx) -> Size {
-        Size { width: avail_w(ctx.constraints), height: avail_h(ctx.constraints) }
+        let (w, h) = (avail_w(ctx.constraints), avail_h(ctx.constraints));
+        // On an axis nobody bounded, "fill everything available" is infinity and
+        // has no finite answer — the same case `ScrollView::layout` handles.
+        // Size to the content instead.
+        let h = if h.is_finite() {
+            h
+        } else {
+            ctx.layout_child_uncached(
+                rosace_layout::Constraints::loose(w, f32::INFINITY),
+                &*self.child,
+            ).height
+        };
+        Size { width: w, height: h }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

@@ -55,7 +55,21 @@ impl<W: Widget + Send + Sync + 'static> Widget for InteractiveViewer<W> {
     fn layout(&self, ctx: &LayoutCtx) -> Size {
         // Fills whatever space the parent gives it, like Container/Expanded —
         // a canvas viewer has no natural size of its own.
-        Size { width: avail_w(ctx.constraints), height: avail_h(ctx.constraints) }
+        let (w, h) = (avail_w(ctx.constraints), avail_h(ctx.constraints));
+        // A canvas viewer has no natural size, so it fills what it is given —
+        // except on an axis nobody bounded, where that is infinity. There it
+        // takes the content's own extent, the same answer `ScrollView` gives.
+        let h = if h.is_finite() {
+            h
+        } else {
+            ctx.layout_child_uncached(Constraints::loose(w, f32::INFINITY), &self.child).height
+        };
+        let w = if w.is_finite() {
+            w
+        } else {
+            ctx.layout_child_uncached(Constraints::loose(f32::INFINITY, h), &self.child).width
+        };
+        Size { width: w, height: h }
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {

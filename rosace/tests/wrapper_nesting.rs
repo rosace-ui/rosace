@@ -93,23 +93,56 @@ struct One(Arc<dyn Fn() -> BoxedWidget + Send + Sync>);
 impl Component for One {
     fn build(&self, _ctx: &mut Context) -> Element {
         let w = (self.0)();
-        // Bounded by a fixed-size Container, NOT an outer ScrollView.
-        //
-        // An outer ScrollView hands down an unbounded height, and a nested
-        // scrollable inside that runs away — `ScrollView x Card` OOM-killed
-        // the test process (SIGKILL). That is a real bug worth its own
-        // investigation, but it is a DIFFERENT bug from slot misalignment and
-        // it stops this matrix from covering anything past it. Bounded here so
-        // this test measures the thing it is for.
+        // Bounded by a fixed-size Container. An outer ScrollView hands down an
+        // unbounded height, which used to make a nested scrollable run away
+        // (`ScrollView x Card` OOM-killed the process). That is fixed —
+        // `ScrollView` shrink-wraps on an unbounded axis now — but this shallow
+        // host is kept as the fast baseline. `deep_host` below covers the real
+        // shape.
         Container::new().size(300.0, 220.0).child(
             Column::new().children(vec![w])
         ).into_element()
     }
 }
 
+/// The shape a real app actually builds: several levels deep, inside a
+/// composited scrollable, under app chrome.
+///
+/// **This is the gap that let two regressions through.** The matrix above builds
+/// shallow, non-composited trees; the showcase builds deep composited ones, and
+/// both a click failure and a stuck-hover lived precisely in the difference. A
+/// widget inside a GPU-composited `ScrollView` has its rects in CONTENT space,
+/// and a widget several levels down is behind ancestors that may replay — two
+/// conditions the shallow host never creates.
+struct Deep(Arc<dyn Fn() -> BoxedWidget + Send + Sync>);
+impl Component for Deep {
+    fn build(&self, _ctx: &mut Context) -> Element {
+        let w = (self.0)();
+        let mut col = Column::new().children(vec![w]);
+        // Enough rows to overflow the viewport, so the ScrollView actually
+        // composites rather than falling back to the base path.
+        for _ in 0..10 {
+            col = col.child(Container::new().size(200.0, 40.0));
+        }
+        Scaffold::new(
+            Container::new().child(
+                Column::new().child(ScrollView::new(col))
+            )
+        ).into_element()
+    }
+}
+
 /// Paint one wrapper/content pair through the real engine for a few frames.
 fn exercise(build: impl Fn() -> BoxedWidget + Send + Sync + 'static) {
-    let mut e = FrameEngine::new(Box::new(One(Arc::new(build))), FontCache::embedded());
+    run(FrameEngine::new(Box::new(One(Arc::new(build))), FontCache::embedded()));
+}
+
+/// The same passes, but through the deep composited host.
+fn exercise_deep(build: impl Fn() -> BoxedWidget + Send + Sync + 'static) {
+    run(FrameEngine::new(Box::new(Deep(Arc::new(build))), FontCache::embedded()));
+}
+
+fn run(mut e: FrameEngine) {
     let (mut a, mut b) = (SkiaCanvas::new(320, 240), SkiaCanvas::new(320, 240));
 
     // First frame builds everything; the second exercises the CACHED paths,
@@ -123,6 +156,12 @@ fn exercise(build: impl Fn() -> BoxedWidget + Send + Sync + 'static) {
 
     // A rebuild makes the frame structural — caches ignored, everything new.
     rosace_state::dirty_set::reset_to_global_dirty();
+    e.paint(&mut a, &mut b, &[]);
+
+    // And a scroll, which moves content under everything below.
+    e.paint(&mut a, &mut b, &[rosace_platform::InputEvent::Scroll {
+        x: 100.0, y: 100.0, delta_x: 0.0, delta_y: -60.0,
+    }]);
     e.paint(&mut a, &mut b, &[]);
 }
 
@@ -138,6 +177,25 @@ fn every_wrapper_around_every_content_shape_paints_without_slot_misalignment() {
             // Printed so a panic's preceding line names the pair — the panic
             // itself reports `paint_child`, not the widget at fault.
             eprintln!("ok: {wname} × {cname}");
+        }
+    }
+
+    assert!(checked >= 50, "expected the full product to run, got {checked}");
+}
+
+/// Every wrapper again, this time deep inside a composited scrollable under app
+/// chrome — the shape the showcase actually builds, and the one the shallow
+/// matrix misses.
+#[test]
+fn every_wrapper_survives_a_deep_composited_host() {
+    let _guard = exclusive();
+    let mut checked = 0usize;
+
+    for (wname, wrap) in wrappers() {
+        for (cname, content) in contents() {
+            exercise_deep(move || wrap(content()));
+            checked += 1;
+            eprintln!("deep ok: {wname} × {cname}");
         }
     }
 
