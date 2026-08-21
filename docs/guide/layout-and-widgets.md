@@ -1,10 +1,10 @@
 # Layout & Widgets
 
-`Component::build` returns an `Element` tree, but you almost never build `Element`s by hand — you compose **widgets**, and call `.into_element()` at the root. This chapter covers the widget set you'll reach for on every screen: how flex layout works, how boxes/padding/alignment work, and which widget to pick for a given shape of UI.
+`Component::build` returns a widget tree: you compose **widgets** and call `.boxed()` at the root. This chapter covers the widget set you'll reach for on every screen: how flex layout works, how boxes/padding/alignment work, and which widget to pick for a given shape of UI.
 
-## Widgets vs. the Element tree
+## What a widget is
 
-A **widget** is any type implementing the `Widget` trait — it knows how to measure itself (`layout`) and how to draw itself (`paint`). Widgets compose by holding other widgets as children (`Column`, `Container`, etc. all just hold `Box<dyn Widget>`). `Element` — the tree `Component::build` actually returns — is the thin wrapper the framework needs to mount a widget subtree under a component; `Widget::into_element()` produces it. You'll see `Element` in signatures, but you build with widgets. (More on why the split exists: [Core: Component, Element, Context](../architecture/core.md).)
+A **widget** is any type implementing the `Widget` trait — it knows how to measure itself (`layout`) and how to draw itself (`paint`). Widgets compose by holding other widgets as children (`Column`, `Container`, etc. all just hold `BoxedWidget`, which is `Arc<dyn Widget>`). `Component::build` returns a widget directly; `.boxed()` at the end is what type-erases it. (What the framework does with that tree: [Core: Component, Widget, Context](../architecture/core.md).)
 
 ## Column and Row: flex layout
 
@@ -127,7 +127,7 @@ The second argument is a fixed per-row height (`item_extent`) — scroll math is
 Scaffold::new(body)
     .app_bar(AppBar::new("Home"))
     .fab(FloatingActionButton::new().icon(Icon::new(IconKind::Add)).on_press(|| { }))
-    .into_element()
+    .boxed()
 ```
 
 It fills the available space, paints the theme background behind everything (including under a phone's notch/status bar), and insets the *interactive* content — app bar, body, bottom bar, FAB — by the platform's safe area automatically.

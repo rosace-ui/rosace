@@ -29,7 +29,7 @@ graph TD
     W --> SVC["services (L5) — nav, scroll, forms, theme-ext, animate…"]
     SVC --> RND["rosace-render (L4) + rosace-theme"]
     RND --> LAY["rosace-layout (L3)"]
-    LAY --> CORE["rosace-core (L2) — Component, Element, Context"]
+    LAY --> CORE["rosace-core (L2) — Context, types, platform services"]
     CORE --> ST["rosace-state (L1) — Atom, dirty set, refresh engine"]
     ST --> TR["rosace-trace (L0)"]
     FFI["rosace-ffi (L8) — native mobile host"] --> R
@@ -44,7 +44,7 @@ Everything the framework *does* at runtime is one loop. A state change (or an in
 ```mermaid
 graph LR
     E["input / atom.set() / hot-swap"] --> D["mark dirty + request_frame"]
-    D --> B["build() dirty components → Element tree"]
+    D --> B["build() when dirty → widget tree"]
     B --> L["layout() → sizes & positions"]
     L --> P["paint() → draw commands"]
     P --> C["compositor → GPU present"]
@@ -68,7 +68,7 @@ Each subsystem doc follows one shape (see [`_template.md`](_template.md)):
 
 Start with the **core** and expand outward — see [SUMMARY.md](SUMMARY.md).
 
-1. [Core: Component, Element, Context](core.md) ← start here
+1. [Core: Component, Widget, Context](core.md) ← start here
 2. [State & reactivity](state-and-reactivity.md)
 3. [Render pipeline](render-pipeline.md)
 4. [Widget Protocol](widget-protocol.md)

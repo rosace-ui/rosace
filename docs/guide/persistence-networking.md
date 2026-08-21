@@ -10,7 +10,7 @@ You already know `ctx.state` from [Components & State](components-and-state.md).
 struct Settings;
 
 impl Component for Settings {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let dark_mode = ctx.state_permanent("dark_mode", false);
 
         Scaffold::new(
@@ -21,7 +21,7 @@ impl Component for Settings {
                     move |v| dark_mode.set(v)
                 })),
         )
-        .into_element()
+        .boxed()
     }
 }
 ```
@@ -65,7 +65,7 @@ use rosace::net::{use_query, QueryState};
 struct Profile;
 
 impl Component for Profile {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let state = use_query(ctx, "https://api.example.com/me");
 
         let body = match state {
@@ -75,7 +75,7 @@ impl Component for Profile {
             QueryState::Failed(e) => Text::new(format!("Network error: {e}")),
         };
 
-        Scaffold::new(Column::new().child(body)).into_element()
+        Scaffold::new(Column::new().child(body)).boxed()
     }
 }
 ```

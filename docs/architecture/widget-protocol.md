@@ -8,7 +8,7 @@ A `Widget` is a small object that knows how to measure itself, draw itself, and 
 
 ## Mental model
 
-If [core.md](core.md) is "what you write" ([`Component::build()`](../GLOSSARY.md#component) returning an [`Element`](../GLOSSARY.md#element)), `Widget` is "what actually gets measured and painted." A `Component` is a recipe; a `Widget` (`Column`, `Text`, `Button`, …) is the dish. Every `Widget` occupies exactly one slot in the `RenderTree`, keyed by its **position** in paint order — not by identity or a [key](../GLOSSARY.md#key) — so the tree looks and behaves like a flat, positionally-addressed array of "boxes that remember things between frames":
+If [core.md](core.md) is "what you write" ([`Component::build()`](../GLOSSARY.md#component) returning a widget), `Widget` is "what actually gets measured and painted." A `Component` is a recipe; a `Widget` (`Column`, `Text`, `Button`, …) is the dish. Every `Widget` occupies exactly one slot in the `RenderTree`, keyed by its **position** in paint order — not by identity or a [key](../GLOSSARY.md#key) — so the tree looks and behaves like a flat, positionally-addressed array of "boxes that remember things between frames":
 
 ```mermaid
 graph TD
@@ -48,7 +48,7 @@ A wrapper widget therefore only has to implement the one method it changes — d
 
 **6. The frame walker derives everything else from the tree after paint.** [`RenderTree::hit_test`](../../rosace-widgets/src/tree/render_tree.rs) walks children-before-own-regions, later-siblings-first, so the topmost widget in paint order (= z-order) wins a click — no separate z-index bookkeeping. Scroll routing, the overlay stack, and the accessibility tree (`collect_semantics`, D099) are all similarly *derived* from what got declared onto nodes this frame, not pushed through side channels.
 
-**7. `Element::Native` is the bridge from `rosace-core`'s tree to a `Widget`.** [`Widget::into_element()`](../../rosace-widgets/src/tree/mod.rs) wraps `self` in a `WidgetBox` and stores it as the payload of a `NativeElement`. The umbrella crate's element walker ([`walk_element`](../../rosace/src/lib.rs)) downcasts that payload back to a [`WidgetBox`](../../rosace-widgets/src/tree/mod.rs), calls `RenderTree::slot()` to get (or create) that position's node, and — only if the node's cache says it's dirty — calls `layout()`/`paint()` on the widget. A slot consumed with `reset == false` (a picture-cache hit) skips repainting entirely but still consumes the position, keeping siblings aligned and the skipped subtree's state fully intact.
+**7. The root widget enters the tree through [`paint_root`](../../rosace/src/lib.rs).** It calls `RenderTree::slot()` to get (or create) the root's node and — only if the node's cache says it's dirty — calls `layout()`/`paint()` on the widget; everything below descends through `layout_child`/`paint_child`. A slot consumed with `reset == false` (a picture-cache hit) skips repainting entirely but still consumes the position, keeping siblings aligned and the skipped subtree's state fully intact.
 
 **8. `PaintCtx` and `LayoutCtx` are the per-call handles a `Widget` gets.** [`LayoutCtx`](../../rosace-widgets/src/tree/mod.rs) carries `constraints` + font/theme access so widgets measure text accurately instead of guessing. [`PaintCtx`](../../rosace-widgets/src/tree/mod.rs) carries the paint rect, the shared `Rc<RefCell<RenderTree>>`, and the `NodeId` this call owns — it's how a widget's `paint()` reaches its own persistent node (`ctx.animate_to`, `ctx.focus_node()`, declaring a `hit`, etc.).
 
@@ -61,7 +61,6 @@ A wrapper widget therefore only has to implement the one method it changes — d
 - [`BoxedWidget`](../../rosace-widgets/src/tree/mod.rs) — `Box<dyn Widget>`, itself a `Widget` (D093).
 - [`RenderTree` / `TreeNode` / `NodeId`](../../rosace-widgets/src/tree/render_tree.rs) — the position-keyed arena; the single owner of all per-node retained state (D091).
 - [`PaintCtx` / `LayoutCtx`](../../rosace-widgets/src/tree/mod.rs) — the per-call contexts a widget's `layout`/`paint` receive.
-- [`WidgetBox`](../../rosace-widgets/src/tree/mod.rs) — bridges a `Box<dyn Widget>` into `rosace-core`'s `Element` tree as a `NativeElement` payload.
 - [`WidgetApp`](../../rosace-widgets/src/tree/app.rs) — headless widget-tree renderer for golden tests.
 - [`Template` / `TemplateNode`](../../rosace-widgets/src/template/descriptor.rs) — the *data* form of a widget subtree, used for hot reload (see [hot-reload.md](hot-reload.md)); a separate, parallel path from the `Widget` trait itself.
 

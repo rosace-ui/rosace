@@ -10,7 +10,7 @@ Like every other interactive widget in ROSACE, `TextInput` is **controlled** —
 use rosace::prelude::*;
 
 impl Component for LoginForm {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let email = ctx.state(String::new());
 
         Column::new()
@@ -25,7 +25,7 @@ impl Component for LoginForm {
                         move |v| email.set(v)
                     }),
             )
-            .into_element()
+            .boxed()
     }
 }
 ```
@@ -70,7 +70,7 @@ use rosace::prelude::*;
 use rosace_forms::{Form, FormField, Required, Email, MinLength};
 
 impl Component for SignupForm {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let email = FormField::for_ctx(ctx, "email").rule(Required).rule(Email);
         let name  = FormField::for_ctx(ctx, "name").rule(Required).rule(MinLength(2));
         let form  = Form::new().field(email.clone()).field(name.clone());
@@ -84,7 +84,7 @@ impl Component for SignupForm {
                 let form = form.clone();
                 move || { form.submit(|| { /* send it */ }); }
             }))
-            .into_element()
+            .boxed()
     }
 }
 ```

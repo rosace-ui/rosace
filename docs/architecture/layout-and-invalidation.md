@@ -226,15 +226,20 @@ and re-painted. This is deliberate: the safe direction.
 
 ## Why it's like this
 
-The arena **is** the persistent tree. Our `Element` tree is produced fresh by
+The arena **is** the persistent tree. The widget tree is produced fresh by
 `build()` and thrown away each frame — it is the description, not the identity.
 ROSACE collapses Flutter's Element and RenderObject into `TreeNode`:
 
 | Flutter | ROSACE |
 |---|---|
-| Widget — immutable config, discarded | `Element` + the `Widget` objects |
+| Widget — immutable config, discarded | the `Widget` objects `build()` returns |
 | **Element** — persistent, reconciles | **the `TreeNode` arena** |
 | RenderObject — layout/paint | `Widget::layout`/`paint` + the node's caches |
+
+There is no third tree. `Component::build` returns the widget directly; the
+`Element` description that used to sit between the two was removed in A7,
+because everything it was reached for — identity, caches, state, disposal —
+lives on the node.
 
 Identity is positional with a type check: `slot()` hands out the child at the
 parent's cursor, and [`adopt_tag`](../../rosace-widgets/src/tree/render_tree.rs)
@@ -264,13 +269,24 @@ constraints, `paint` from the allotted rect — so inside a `ScrollView` it
 measures the narrow branch and paints the wide one. No slot scheme can align
 two genuinely different trees.
 
-**⚠ Open defect.** A wrapper that inherits the trait's **default** `layout`
-while overriding `paint` leaks its child's slots into its own node: the default
-delegates with its own ctx, so the child's `layout_child` calls consume the
-wrapper's slots. `Semantics<W>` and `Pressable<W>` are examples. These cannot
-be fixed individually — they have no `layout` to change. The candidate fix is
-to make the default `layout` measure detached, at the cost of losing caching
-for any subtree under such a wrapper. Not yet decided.
+**A default-`layout` wrapper measures detached, and that is why it is not a
+relayout boundary.** A wrapper that inherits the trait's default `layout` while
+overriding `paint` (`Semantics<W>`, `Pressable<W>`, `Tooltip`, `WithFocus`,
+`RepaintBoundary`, …) used to leak its child's slots into its own node: the
+default delegated with its own ctx, so the child's `layout_child` calls consumed
+the wrapper's slots. The default now measures through `detached()`, which costs
+that subtree its layout cache and fixes the leak.
+
+That created a second, worse defect, and the fix for it is load-bearing: a
+detached measure consumes no slot, so `layout_cursor` stays 0 — and the
+relayout-boundary rule below reads a zero cursor as "measured no children, so
+nothing beneath me can change my size". Exactly inverted. Every one of those
+wrappers became a boundary, and a child under any of them could never RESIZE on
+a `refresh_state()` frame: it repainted its new content at its old size, which
+renders plausibly and is wrong. `detached()` therefore sets
+`TreeNode::measured_detached`, and the boundary test is
+`layout_cursor == 0 && !measured_detached`. See
+`rosace/tests/wrapper_resize.rs`.
 
 **Rects live in more than one coordinate space, and nothing marks which.**
 Most declared rects are screen-space, but the children of a GPU-composited

@@ -100,9 +100,9 @@ providing `.child()`, `.children()`, `.builder()`, `.child_if()`,
 
 ### Component
 The core trait every UI type implements
-([`component.rs`](../rosace-core/src/component.rs)): `trait Component:
+([`component.rs`](../rosace-widgets/src/component.rs)): `trait Component:
 Send + Sync + 'static { fn build(&self, ctx: &mut `[`Context`](#context)`)
--> `[`Element`](#element)` }`. (Older docs called this `RosaceComponent`
+-> BoxedWidget }`. (Older docs called this `RosaceComponent`
 — that name does not exist; the real trait is `Component`.) See
 [core.md](architecture/core.md).
 
@@ -160,9 +160,11 @@ tree index, giving O(1) ancestor lookup when pruning [dirty](#dirty) subtrees.
 ## E
 
 ### Element
-A lightweight, immutable description of what a [component](#component)
-wants to render, produced by `build()`. Cheap to create — the virtual
-representation before layout and paint. See [core.md](architecture/core.md).
+*Removed.* `Component::build` used to return an `Element` description that
+wrapped the widget tree; it now returns the widget itself (`BoxedWidget`,
+i.e. `Arc<dyn `[`Widget`](#widget)`>`). The persistent structure Flutter
+calls an Element tree is the [`TreeNode`](#treenode) arena. See
+[core.md](architecture/core.md).
 
 ### ErrorBoundary
 *No matching symbol in the source — treat as aspirational.* Intended: a
@@ -325,11 +327,12 @@ from roots only — each component rebuilds at most once per frame. See
 [state-and-reactivity.md](architecture/state-and-reactivity.md).
 
 ### RenderObject
-The layer below [Element](#element): handles layout (sizing), painting
-(by emitting [`DrawCommand`](../rosace-render/src/draw_command.rs)s —
-never touching pixels directly, see
-[rasterization](GLOSSARY.md#rasterization)), and hit testing. Created from
-`Element` during reconciliation.
+Layout (sizing), painting (by emitting
+[`DrawCommand`](../rosace-render/src/draw_command.rs)s — never touching
+pixels directly, see [rasterization](GLOSSARY.md#rasterization)), and hit
+testing. ROSACE has no separate render-object tree: a
+[`Widget`](#widget) does the measuring and painting, and the persistent
+per-node state it needs lives on its [`TreeNode`](#treenode).
 
 ### RingBufferSubscriber
 A [TraceSubscriber](#tracesubscriber) that keeps the last N
@@ -369,6 +372,17 @@ CPU/web fallback. See [render-pipeline.md](architecture/render-pipeline.md).
 ---
 
 ## T
+
+### TreeNode
+One node of the [`RenderTree`](../rosace-widgets/src/tree/render_tree.rs)
+arena — the persistent structure behind the widget tree, and ROSACE's
+equivalent of Flutter's Element *and* RenderObject collapsed into one. It
+holds a widget's identity (type tag, position, optional key), its layout
+cache (`last_constraints`/`cached_size`), its paint cache
+(`cached_picture`/`cached_rect`), its dirty flags, its interaction state
+(hover/press/focus) and its per-node state (`ctx.widget_state`). Widgets
+are rebuilt and thrown away; the node persists. See
+[layout-and-invalidation.md](architecture/layout-and-invalidation.md).
 
 ### App
 The root builder for a ROSACE application

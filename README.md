@@ -75,7 +75,7 @@ use rosace::prelude::*;
 struct Counter;
 
 impl Component for Counter {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         // `ctx.state` gives you a reactive Atom; reading it subscribes this
         // component, so `set`/`update` repaint exactly this widget — nothing else.
         let count = ctx.state(0i32);
@@ -90,7 +90,7 @@ impl Component for Counter {
                     move || count.update(|n| n + 1)
                 })),
         )
-        .into_element()
+        .boxed()
     }
 }
 

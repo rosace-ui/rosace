@@ -18,7 +18,7 @@ use rosace::prelude::*;
 use rosace_animate::use_animation;
 
 impl Component for GrowingBox {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let (progress, ctrl) = use_animation(ctx, Duration::from_millis(400));
 
         Column::new()
@@ -32,7 +32,7 @@ impl Component for GrowingBox {
                     .height(40.0)
                     .background(Color::rgb(102, 102, 230)),
             )
-            .into_element()
+            .boxed()
     }
 }
 ```
@@ -59,7 +59,7 @@ use rosace::prelude::*;
 use rosace_animate::use_spring;
 
 impl Component for ExpandingPanel {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let expanded = ctx.state(false);
         let (height, ctrl) = use_spring(ctx, 60.0);
 
@@ -72,7 +72,7 @@ impl Component for ExpandingPanel {
                 move || expanded.update(|e| !e)
             }))
             .child(Container::new().height(height.get()))
-            .into_element()
+            .boxed()
     }
 }
 ```
@@ -106,6 +106,6 @@ Each stop is a normalized time `t ∈ [0, 1]`, a value, and the easing applied t
 
 ---
 
-**Under the hood:** how a hook's persistent atom write schedules exactly one more frame (and why that's safe to call every `build`) is the same mechanism covered for `ctx.state` in [Core: Component, Element, Context](../architecture/core.md).
+**Under the hood:** how a hook's persistent atom write schedules exactly one more frame (and why that's safe to call every `build`) is the same mechanism covered for `ctx.state` in [Core: Component, Widget, Context](../architecture/core.md).
 
 Next: [Persistence & Networking](persistence-networking.md).

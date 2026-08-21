@@ -12,7 +12,7 @@ use rosace::prelude::*;
 struct SlugPreview;
 
 impl Component for SlugPreview {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let title = ctx.state(String::new());
         // `slug::slugify` is a plain, fast, pure function — call it straight.
         let slug = slug::slugify(title.get());
@@ -25,7 +25,7 @@ impl Component for SlugPreview {
                 }))
                 .child(Text::new(format!("URL: /posts/{slug}"))),
         )
-        .into_element()
+        .boxed()
     }
 }
 ```
@@ -120,13 +120,13 @@ Using it looks exactly like `use_query`:
 
 ```rust
 impl Component for PhotoCard {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         match use_thumbnail(ctx, "/path/to/photo.jpg", 200) {
-            ThumbnailState::Idle | ThumbnailState::Loading => Text::new("Loading…").into_element(),
+            ThumbnailState::Idle | ThumbnailState::Loading => Text::new("Loading…").boxed(),
             ThumbnailState::Ready { rgba, width, height } => {
-                RawImage::from_rgba(rgba, width, height).into_element()
+                RawImage::from_rgba(rgba, width, height).boxed()
             }
-            ThumbnailState::Failed(e) => Text::new(format!("Couldn't load: {e}")).into_element(),
+            ThumbnailState::Failed(e) => Text::new(format!("Couldn't load: {e}")).boxed(),
         }
     }
 }

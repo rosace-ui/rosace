@@ -43,7 +43,7 @@ use rosace::prelude::*;
 struct AppRoot;
 
 impl Component for AppRoot {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         // ...
         # unimplemented!()
     }

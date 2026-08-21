@@ -49,14 +49,14 @@ Call `use_theme()` anywhere you need the current tokens — typically inside `bu
 use rosace::prelude::*;
 
 impl Component for Card {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let theme = rosace::theme::use_theme();
 
         Container::new()
             .padding(EdgeInsets::all(theme.spacing.md))
             .radius(theme.radius.lg)
             .child(Text::new("Themed card"))
-            .into_element()
+            .boxed()
     }
 }
 ```
@@ -160,7 +160,7 @@ Today the platform-adaptive surface is `AppBarStyle` — `title_align` (`Leading
 
 ---
 
-**Under the hood:** why theme reads auto-subscribe, and how the reactive atom under `use_theme`/`set_theme` triggers rebuilds, is covered in [Core: Component, Element, Context](../architecture/core.md).
+**Under the hood:** why theme reads auto-subscribe, and how the reactive atom under `use_theme`/`set_theme` triggers rebuilds, is covered in [Core: Component, Widget, Context](../architecture/core.md).
 
 For following the OS's dark-mode setting automatically (and the other OS accessibility signals — text scale, bold text, reduce motion), see [System Environment](environment.md).
 

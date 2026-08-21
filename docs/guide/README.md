@@ -32,13 +32,13 @@ use rosace::prelude::*;
 struct Hello;
 
 impl Component for Hello {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         Scaffold::new(
             Column::new()
                 .padding(EdgeInsets::all(24.0))
                 .child(Text::new("Hello, ROSACE")),
         )
-        .into_element()
+        .boxed()
     }
 }
 

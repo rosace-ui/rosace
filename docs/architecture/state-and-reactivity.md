@@ -19,7 +19,7 @@ graph TD
     M --> R["frame_scheduler::request_frame()"]
     R --> WK["platform wakeup fn — nudges the event loop"]
     WK -.->|next frame| F["FrameEngine::paint drains the dirty set"]
-    F -->|per Element::Component node| D{"my ComponentId in dirty_ids?"}
+    F --> D{"root ComponentId in dirty_ids?"}
     D -->|yes| RB["rebuild — walk_element in rosace/src/lib.rs"]
     D -->|no| CACHE["reuse element_cache entry"]
 ```
@@ -38,7 +38,7 @@ graph TD
 
 **6. `request_frame()` is how state reaches the platform.** [`frame_scheduler.rs`](../../rosace-state/src/frame_scheduler.rs) is a static `AtomicBool` plus a `OnceLock<Box<dyn Fn()>>` wakeup closure that `rosace-platform` installs once at startup via `register_wakeup`. Calling `request_frame()` sets the flag and invokes the wakeup closure, which sends a user event into the winit loop to break it out of `ControlFlow::Wait`. Multiple calls before the platform polls collapse into one redraw (`take_frame_requested` swaps the flag to `false` and returns whether it was set) — this is the mechanism [`FrameEngine::paint`](../../rosace/src/engine.rs) rides on to actually get invoked.
 
-**7. Fine-grained rebuild happens in the element walker, not in `rosace-state`.** This is worth being precise about: `rosace-state` only tracks dirty **component IDs**; it has no idea about tree structure. The actual per-node rebuild-vs-reuse decision is [`walk_element`](../../rosace/src/lib.rs) in `rosace` (Layer 7): each `Element::Component` node gets a stable, position-based `ComponentId` (DFS order — see D001) and checks `global_dirty || subtree_dirty || dirty_ids.contains(&id)`. `subtree_dirty` is what makes an ancestor's rebuild cascade to its children without them being in the dirty set themselves — a plain boolean threaded down the recursive walk, not a graph query.
+**7. Rebuild-vs-reuse is decided in the engine, not in `rosace-state`.** `rosace-state` only tracks dirty **component IDs**; it has no idea about tree structure. [`FrameEngine::paint`](../../rosace/src/engine.rs) checks `global_dirty || dirty_ids.contains(&root_component_id)` and reuses the last built widget otherwise. Below that point invalidation is per NODE, not per component: `refresh_state()` and `StateHandle::set` mark one `TreeNode`, and only that node's spine re-lays-out and repaints — see [layout-and-invalidation.md](layout-and-invalidation.md).
 
 **8. `RefreshEngine` exists but is not wired into the frame loop.** [`RefreshEngine`](../../rosace-state/src/refresh_engine.rs) implements exactly what D011 describes — DFS entry/exit timestamps per component for O(1) ancestor queries, and `find_rebuild_roots()` to prune a dirty set down to the minimal set of roots whose rebuild already covers every other dirty descendant. It's fully implemented and unit-tested, but nothing outside `rosace-state`'s own tests and its re-export in `lib.rs` calls it — the production pruning behavior described in point 7 is achieved a different way (the `subtree_dirty` flag falling out of `walk_element`'s recursion), which gets the same *outcome* without needing the tree index. Don't assume `RefreshEngine` is on the hot path; grep before relying on it.
 

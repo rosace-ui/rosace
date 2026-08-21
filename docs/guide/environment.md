@@ -8,11 +8,11 @@ Beyond your app's own state, the OS itself carries signals your UI should react 
 use rosace::prelude::*;
 
 impl Component for Banner {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         let mq = rosace::media_query::use_media_query();
 
         Text::new(if mq.is_dark { "Night mode" } else { "Day mode" })
-            .into_element()
+            .boxed()
     }
 }
 ```

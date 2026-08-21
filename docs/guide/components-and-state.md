@@ -8,13 +8,13 @@ A component is a struct that implements one method:
 
 ```rust
 impl Component for MyScreen {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         // describe the UI here
     }
 }
 ```
 
-`build` returns an [`Element`](../GLOSSARY.md#element) — a description of your UI as a tree of widgets. The framework calls `build` for you; you never call it yourself. Think of it as: *"given the current state, here's what the screen should look like."*
+`build` returns a `BoxedWidget` — your UI as a tree of widgets. The framework calls `build` for you; you never call it yourself. Think of it as: *"given the current state, here's what the screen should look like."*
 
 Components compose: a component's `build` can include child components and widgets freely.
 
@@ -46,7 +46,7 @@ use rosace::prelude::*;
 struct Counter;
 
 impl Component for Counter {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let count = ctx.state(0i32);
 
         Scaffold::new(
@@ -59,7 +59,7 @@ impl Component for Counter {
                     move || count.update(|n| n + 1)
                 })),
         )
-        .into_element()
+        .boxed()
     }
 }
 
@@ -94,6 +94,6 @@ It behaves like a normal atom, but its value is stored on disk (keyed by the str
 
 ---
 
-**Under the hood:** how "changing an atom rebuilds only its subscribers" actually works is in the architecture book — [Core: Component, Element, Context](../architecture/core.md).
+**Under the hood:** how "changing an atom rebuilds only its subscribers" actually works is in the architecture book — [Core: Component, Widget, Context](../architecture/core.md).
 
 Next: [Layout & Widgets](layout-and-widgets.md).

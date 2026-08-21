@@ -2,7 +2,7 @@
 
 [Architecture Overview](README.md)
 
-- [Core: Component, Element, Context](core.md)
+- [Core: Component, Widget, Context](core.md)
 - [State & Reactivity](state-and-reactivity.md)
 - [Render Pipeline](render-pipeline.md)
 - [Layout & Invalidation](layout-and-invalidation.md)

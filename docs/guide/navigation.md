@@ -25,7 +25,7 @@ There's no separate route trait to implement by hand for `ScreenNav` — any `Cl
 use rosace::prelude::*;
 
 impl Component for AppRoot {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let nav = ScreenNav::new(ctx, Screen::Home);
 
         let screen = match nav.current().unwrap_or(Screen::Home) {
@@ -34,7 +34,7 @@ impl Component for AppRoot {
             Screen::Detail { id } => detail_screen(id),
         };
 
-        Scaffold::new(screen).into_element()
+        Scaffold::new(screen).boxed()
     }
 }
 ```
@@ -67,7 +67,7 @@ pub fn home_screen(nav: &ScreenNav<Screen>) -> impl Widget {
 
 ```rust
 let bar = AppBar::new(screen.title()).back_button(&nav);
-Scaffold::new(screen).app_bar(bar).into_element()
+Scaffold::new(screen).app_bar(bar).boxed()
 ```
 
 This replaces the manual `if nav.can_pop() { bar.leading(Button::new("← Back").on_press(...)) }` boilerplate every app used to write by hand.
@@ -99,7 +99,7 @@ let body = build_screen(screen);
 let outgoing = nav.previous().map(build_screen);
 let view = ScreenTransitionView::new(body, outgoing, nav.transition_handle());
 
-Scaffold::new(view).app_bar(bar).into_element()
+Scaffold::new(view).app_bar(bar).boxed()
 ```
 
 `ScreenTransitionView` paints the outgoing screen (if mid-transition) and the incoming screen, each offset by the shared spring-eased transition state, and cleans itself up once the spring settles. `rsc new`'s generated `app.rs` uses exactly this shape — it's the reference pattern for wiring navigation into your root component.

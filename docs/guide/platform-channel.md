@@ -16,7 +16,7 @@ use serde_json::Value;
 struct BatteryDemo;
 
 impl Component for BatteryDemo {
-    fn build(&self, ctx: &mut Context) -> Element {
+    fn build(&self, ctx: &mut Context) -> BoxedWidget {
         let call: Atom<Option<Atom<ChannelCallState>>> = ctx.state(None);
 
         let status = match call.get().as_ref().map(|a| a.get()) {
@@ -42,7 +42,7 @@ impl Component for BatteryDemo {
                 }))
                 .child(status),
         )
-        .into_element()
+        .boxed()
     }
 }
 ```

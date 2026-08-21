@@ -48,13 +48,13 @@ use rosace::prelude::*;
 struct App0;
 
 impl Component for App0 {
-    fn build(&self, _ctx: &mut Context) -> Element {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
         Scaffold::new(
             Column::new()
                 .padding(EdgeInsets::all(24.0))
                 .child(Text::new("It works!")),
         )
-        .into_element()
+        .boxed()
     }
 }
 
@@ -63,9 +63,9 @@ fn main() {
 }
 ```
 
-- `impl Component` with a `build` method is the whole contract — you return the UI as an `Element` tree.
+- `impl Component` with a `build` method is the whole contract — you return the UI as a widget tree.
 - `Scaffold` gives you the standard screen frame (optional app bar, body, etc.).
-- `Column` stacks children vertically; `Text` renders text; `.into_element()` turns a widget into the `Element` the framework expects.
+- `Column` stacks children vertically; `Text` renders text; `.boxed()` type-erases the widget into the `BoxedWidget` the framework expects.
 - `App::new()...launch(...)` opens the window and starts the frame loop.
 
 ## Scaffolding a real app
