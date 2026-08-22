@@ -434,8 +434,8 @@ impl DatePicker {
                     let f = f.clone();
                     yc.register_hit(Arc::new(move || {
                         f(SimpleDate::new(year, month, day));
-                        let o = ctrl.offset.get();
-                        ctrl.offset.set([0.0, o[1]]); // back to Days mode
+                        let o = ctrl.offset();
+                        ctrl.scroll_to_raw([0.0, o[1]]); // back to Days mode
                     }));
                 }
                 None => yc.register_hit(Arc::new(|| {})),
@@ -474,9 +474,9 @@ impl Widget for DatePicker {
         // (offset[0] = 0 Days / 1 Years, offset[1] = year-grid base) — the
         // Carousel-style "spare slot" pattern, no app-owned atom required.
         let ctrl = ctx.scroll_controller();
-        let years_mode = ctrl.offset.get()[0] > 0.5;
+        let years_mode = ctrl.offset()[0] > 0.5;
         let year_base = {
-            let stored = ctrl.offset.get()[1] as i32;
+            let stored = ctrl.offset()[1] as i32;
             if stored == 0 { self.viewed_month.year - self.viewed_month.year.rem_euclid(12) } else { stored }
         };
 
@@ -504,8 +504,8 @@ impl Widget for DatePicker {
             }, pal.on_bg, 15.0);
             let ctrl_t = ctrl.clone();
             hdr.register_hit(Arc::new(move || {
-                let o = ctrl_t.offset.get();
-                ctrl_t.offset.set([if o[0] > 0.5 { 0.0 } else { 1.0 }, o[1]]);
+                let o = ctrl_t.offset();
+                ctrl_t.scroll_to_raw([if o[0] > 0.5 { 0.0 } else { 1.0 }, o[1]]);
             }));
         }
 
@@ -533,8 +533,8 @@ impl Widget for DatePicker {
                 let ctrl_y = ctrl.clone();
                 let target_base = year_base + if back { -12 } else { 12 };
                 btn.register_hit(Arc::new(move || {
-                    let o = ctrl_y.offset.get();
-                    ctrl_y.offset.set([o[0], target_base as f32]);
+                    let o = ctrl_y.offset();
+                    ctrl_y.scroll_to_raw([o[0], target_base as f32]);
                 }));
             } else {
                 match &self.on_month_change {
@@ -551,7 +551,7 @@ impl Widget for DatePicker {
                 size: Size { width: r.size.width, height: r.size.height - HEADER_H },
             };
             // Persist the base so chevron paging is stable across frames.
-            if ctrl.offset.get()[1] as i32 == 0 { ctrl.offset.set([1.0, year_base as f32]); }
+            if ctrl.offset()[1] as i32 == 0 { ctrl.scroll_to_raw([1.0, year_base as f32]); }
             self.paint_years(ctx, body, year_base, &pal, &ctrl);
             ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Unknown).label(format!("Year picker, {label}")));
             return;

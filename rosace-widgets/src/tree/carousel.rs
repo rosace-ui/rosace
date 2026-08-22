@@ -112,7 +112,7 @@ impl Carousel {
     fn current_page(&self, ctrl: &crate::scroll::ScrollController, n: usize) -> usize {
         let raw = match self.page {
             Some(p) => p,
-            None => ctrl.offset.get()[1].max(0.0) as usize,
+            None => ctrl.offset()[1].max(0.0) as usize,
         };
         raw.min(n.saturating_sub(1))
     }
@@ -122,7 +122,7 @@ impl Carousel {
         if self.page != Some(p) {
             if let Some(f) = &self.on_page_change { f(p); }
         }
-        ctrl.offset.set([0.0, p as f32]);
+        ctrl.scroll_to_raw([0.0, p as f32]);
     }
 }
 
@@ -155,8 +155,8 @@ impl Widget for Carousel {
         ctx.on_press_at(move |x, y| {
             let (dx, _) = drag_ctrl.drag_delta(x, y);
             if dx != 0.0 {
-                let o = drag_ctrl.offset.get();
-                drag_ctrl.offset.set([o[0] + dx, o[1]]);
+                let o = drag_ctrl.offset();
+                drag_ctrl.scroll_to_raw([o[0] + dx, o[1]]);
             }
         });
 
@@ -171,10 +171,10 @@ impl Widget for Carousel {
         // MouseUp in a wheel gesture), handled below.
         let wheel_ctrl = ctrl.clone();
         ctx.register_scroll_target(r, super::ScrollAxes::X, std::sync::Arc::new(move |dx, _dy| {
-            let o = wheel_ctrl.offset.get();
+            let o = wheel_ctrl.offset();
             // Natural-scroll convention: content follows the fingers, the
             // same negation the pointer drag already applies.
-            wheel_ctrl.offset.set([o[0] - dx, o[1]]);
+            wheel_ctrl.scroll_to_raw([o[0] - dx, o[1]]);
             wheel_ctrl.mark_wheel_active();
         }));
 
@@ -188,7 +188,7 @@ impl Widget for Carousel {
         let was_pressed = ctrl.was_pressed();
         let mut cur = self.current_page(&ctrl, n);
         if !is_pressed && was_pressed {
-            let dx = ctrl.offset.get()[0];
+            let dx = ctrl.offset()[0];
             // Seed the eased value to the CURRENT visual position (old page
             // minus the live finger offset) before retargeting — otherwise
             // `animate_to` below starts from the stale pre-drag page and the
@@ -207,13 +207,13 @@ impl Widget for Carousel {
         if !is_pressed {
             let dt = rosace_animate::frame_dt().max(0.0001);
             ctrl.advance_wheel_idle(dt);
-            let dx = ctrl.offset.get()[0];
+            let dx = ctrl.offset()[0];
             if dx != 0.0 {
                 if !ctrl.wheel_recently_active() {
                     ctx.set_anim(cur as f32 - dx / r.size.width);
                     cur = snap_page(cur, dx, n, SWIPE_THRESHOLD);
                     self.set_page(&ctrl, cur);
-                    ctrl.offset.set([0.0, ctrl.offset.get()[1]]);
+                    ctrl.scroll_to_raw([0.0, ctrl.offset()[1]]);
                     ctrl.end_drag();
                 } else {
                     // Keep frames coming while the gesture settles.
@@ -230,7 +230,7 @@ impl Widget for Carousel {
 
         // Eased page position + live finger offset while dragging.
         let eased = ctx.animate_to(cur as f32, 0.0);
-        let drag_dx = ctrl.offset.get()[0];
+        let drag_dx = ctrl.offset()[0];
         let pw = r.size.width;
 
         // Pages, clipped to the viewport (only near-visible ones painted).

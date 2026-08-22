@@ -29,7 +29,7 @@ impl ScrollView {
     /// Create a new `ScrollView` sized to the given viewport dimensions.
     pub fn new(viewport_w: f32, viewport_h: f32) -> Self {
         let controller = ScrollController::new();
-        controller.viewport_size.set([viewport_w, viewport_h]);
+        controller.set_viewport_size([viewport_w, viewport_h]);
         Self {
             direction: ScrollDirection::Vertical,
             physics: ScrollPhysics::default(),
@@ -65,7 +65,7 @@ impl ScrollView {
     pub fn content_size(mut self, w: f32, h: f32) -> Self {
         self.content_width = w;
         self.content_height = h;
-        self.controller.content_size.set([w, h]);
+        self.controller.set_content_size([w, h]);
         self
     }
 

@@ -1339,9 +1339,7 @@ impl<'a> PaintCtx<'a> {
         // than replaying, because their rects change as the content moves and
         // `paint_child` compares `cached_rect`.
         let n = self.node;
-        c.offset.set_on_change(move |_, _| mark_node_dirty(n));
-        c.content_size.set_on_change(move |_, _| mark_node_dirty(n));
-        c.viewport_size.set_on_change(move |_, _| mark_node_dirty(n));
+        c.on_invalidate(move || mark_node_dirty(n));
         node.scroll_ctrl = Some(c.clone());
         c
     }

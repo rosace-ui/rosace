@@ -212,14 +212,29 @@ impl ScrollView {
     }
 
     /// A scroll view driven by an explicit [`ScrollController`] —
-    /// programmatic scroll_to / scroll_by / scroll_to_top / scroll_to_bottom.
-    /// Create the controller with `ScrollController::for_ctx(ctx)`.
+    /// programmatic `scroll_to`/`scroll_by`/`scroll_to_top`/`scroll_to_bottom`,
+    /// and `on_scroll` to observe the position.
+    ///
+    /// Persist the controller with `ctx.state(ScrollController::new()).get()`
+    /// so the position survives rebuilds.
     pub fn controlled(child: impl Widget + 'static, controller: ScrollController) -> Self {
         Self { controller: Some(controller), ..Self::new(child) }
     }
 
     /// Attach an explicit controller (same as [`ScrollView::controlled`]).
     pub fn controller(mut self, c: ScrollController) -> Self {
+        self.controller = Some(c);
+        self
+    }
+
+    /// Report the scroll position whenever it CHANGES.
+    ///
+    /// Sugar over attaching a controller and calling
+    /// [`ScrollController::on_scroll`] — for the common case of driving a
+    /// position indicator or a scrubber from the list.
+    pub fn on_scroll(mut self, f: impl Fn([f32; 2]) + Send + Sync + 'static) -> Self {
+        let c = self.controller.clone().unwrap_or_default();
+        c.on_scroll(f);
         self.controller = Some(c);
         self
     }
@@ -334,9 +349,9 @@ impl ScrollView {
         // Publish extents so `apply_momentum`/`coast` can clamp (guarded — an
         // unconditional atom write during paint would dirty every frame).
         let vp_s = [vp.size.width, vp.size.height];
-        if ctrl.viewport_size.get() != vp_s { ctrl.viewport_size.set(vp_s); }
+        if ctrl.viewport_size() != vp_s { ctrl.set_viewport_size(vp_s); }
         let cs = [child_size.width, child_size.height];
-        if ctrl.content_size.get() != cs { ctrl.content_size.set(cs); }
+        if ctrl.content_size() != cs { ctrl.set_content_size(cs); }
 
         // Momentum drive — identical to `paint_base`: track drag velocity
         // while pressed, coast / spring-back once released (unless wheel input
@@ -373,7 +388,7 @@ impl ScrollView {
 
         // Live (post-coast) offset drives BOTH this frame's transform and the
         // compositor's offscreen sample position (via the mirrored channel).
-        let off = ctrl.offset.get();
+        let off = ctrl.offset();
         rosace_state::set_scroll_offset(node_id, off);
 
         // Record the content at (0,0) into its own node/picture (D090).
@@ -441,7 +456,7 @@ impl ScrollView {
 
         let (scroll_x, scroll_y) = match (&ctrl, self.fixed_offset) {
             (Some(c), _) => {
-                let [x, y] = c.offset.get();
+                let [x, y] = c.offset();
                 (x, y)
             }
             (None, Some(o)) => match self.axis {
@@ -480,9 +495,9 @@ impl ScrollView {
         // would dirty the component every frame) and route wheel input.
         if let Some(ctrl) = &ctrl {
             let vp_s = [vp.size.width, vp.size.height];
-            if ctrl.viewport_size.get() != vp_s { ctrl.viewport_size.set(vp_s); }
+            if ctrl.viewport_size() != vp_s { ctrl.set_viewport_size(vp_s); }
             let cs = [child_size.width, child_size.height];
-            if ctrl.content_size.get() != cs { ctrl.content_size.set(cs); }
+            if ctrl.content_size() != cs { ctrl.set_content_size(cs); }
 
             let axes = match self.axis {
                 ScrollAxis::Vertical   => super::ScrollAxes::Y,
@@ -643,7 +658,7 @@ impl ScrollView {
         // it's supposed to track (most visible during a fast momentum
         // coast, where a frame's movement is largest).
         let fresh = match &ctrl {
-            Some(c) => c.offset.get(),
+            Some(c) => c.offset(),
             None => [scroll_x, scroll_y],
         };
         self.draw_scrollbars(ctx, vp, child_size, fresh, ctrl.as_ref(), ctx.pressed());

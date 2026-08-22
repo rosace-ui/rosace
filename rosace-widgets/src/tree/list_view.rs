@@ -105,12 +105,12 @@ impl Widget for ListView {
         let ctrl = ctx.scroll_controller();
         let content_h = self.count as f32 * self.item_extent;
         let max_scroll = (content_h - vp.size.height).max(0.0);
-        let scroll = ctrl.offset.get()[1].clamp(0.0, max_scroll);
+        let scroll = ctrl.offset()[1].clamp(0.0, max_scroll);
         // Publish extents (guarded) so programmatic scroll_to can clamp.
         let vp_s = [vp.size.width, vp.size.height];
-        if ctrl.viewport_size.get() != vp_s { ctrl.viewport_size.set(vp_s); }
+        if ctrl.viewport_size() != vp_s { ctrl.set_viewport_size(vp_s); }
         let cs = [vp.size.width, content_h];
-        if ctrl.content_size.get() != cs { ctrl.content_size.set(cs); }
+        if ctrl.content_size() != cs { ctrl.set_content_size(cs); }
 
         // Quality Bar §5. Rows outside the viewport are never built (that is
         // the whole point of this widget), so assistive tech has no way to

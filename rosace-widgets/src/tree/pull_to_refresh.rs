@@ -128,7 +128,7 @@ impl Widget for PullToRefresh {
         let released_this_frame = was_pressed && !is_pressed;
         ctrl.set_was_pressed(is_pressed);
 
-        let pull = (-ctrl.offset.get()[1]).max(0.0);
+        let pull = (-ctrl.offset()[1]).max(0.0);
 
         if released_this_frame && !self.refreshing && pull >= TRIGGER_DISTANCE {
             if let Some(cb) = &self.on_refresh {

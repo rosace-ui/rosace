@@ -1,50 +1,10 @@
+use std::sync::{Arc, Mutex};
 use crate::scroll::physics::ScrollPhysics;
-use rosace_state::Atom;
 
 /// Controls a [`ScrollView`] programmatically.
 ///
 /// All clones share the same underlying atoms so that separate handles can
 /// observe and mutate the scroll position from different call sites.
-#[derive(Clone)]
-pub struct ScrollController {
-    /// Current scroll offset `[x, y]` in pixels.
-    pub offset: Atom<[f32; 2]>,
-    pub content_size: Atom<[f32; 2]>,
-    pub viewport_size: Atom<[f32; 2]>,
-    /// Drag-to-pan + momentum bookkeeping (D108/Phase 26 Step 2). Internal —
-    /// deliberately NOT subscribed to the owning component in `for_ctx`
-    /// (unlike `offset`/`content_size`/`viewport_size`): these are written
-    /// every frame during a drag/momentum decay, and the visible repaint
-    /// already flows through `offset`'s own subscribed writes — subscribing
-    /// these too would dirty the whole component every frame for no benefit.
-    /// Absolute screen point of the last streamed drag position, `None`
-    /// when not currently dragging.
-    last_drag_point: Atom<Option<[f32; 2]>>,
-    /// The drag's DOWN point, kept until [`Self::DRAG_SLOP`] is exceeded.
-    drag_origin: Atom<Option<[f32; 2]>>,
-    /// The real, currently-tracked drag/momentum velocity in px/s — computed
-    /// from the actual offset delta each frame while dragging, never a
-    /// fixed/assumed constant.
-    velocity: Atom<[f32; 2]>,
-    /// `offset` as of the last frame, used to derive `velocity` this frame.
-    last_offset_for_velocity: Atom<[f32; 2]>,
-    /// Whether this controller was `pressed` (per `PaintCtx::pressed()`) as
-    /// of the last frame — detects the true→false transition that seeds
-    /// momentum from the tracked velocity.
-    was_pressed: Atom<bool>,
-    /// Real elapsed time (seconds) since the last wheel/trackpad event —
-    /// reset to 0 by the wheel callback, advanced each frame by
-    /// `advance_wheel_idle`. Used (not a per-frame boolean) because wheel
-    /// events don't arrive on a perfectly regular one-per-frame schedule —
-    /// an earlier per-frame flag version sprang back the instant a single
-    /// frame happened to have no fresh event, then got pushed forward again
-    /// by the next one, producing a visible jitter/oscillation right at the
-    /// boundary (found via real trackpad testing — described as "vibration,
-    /// scroll a little up and down"). A short real-time grace period
-    /// (`WHEEL_IDLE_GRACE`) instead of a single-frame check absorbs that
-    /// irregularity.
-    wheel_idle_time: Atom<f32>,
-}
 
 /// How long (real seconds) with no wheel event before a gesture is
 /// considered truly over and momentum/spring-back are allowed to run.
@@ -75,84 +35,182 @@ pub const MAX_VELOCITY: f32 = 2500.0;
 /// ~0.35s-0.7s (confirmed by direct calculation), instead of 1.2s-1.9s+.
 pub const COAST_STOP_THRESHOLD: f32 = 15.0;
 
+/// Everything one scroll view is tracking, behind a single lock.
+///
+/// This was nine separate `Atom`s. Six of them were documented as
+/// deliberately NOT subscribed to anything — they were reached for purely as
+/// a `Clone + Send + Sync` cell, because `paint(&self)` cannot mutate and the
+/// controller is cloned into callbacks, and `Atom` was the only such
+/// primitive available when this was written. `mark_node_dirty` and
+/// `widget_state` did not exist yet.
+///
+/// The three that WERE subscribed had a worse problem: `Atom` notifies
+/// COMPONENTS, and there is exactly one component in the tree — so every
+/// wheel notch dirtied the root, re-ran `build()`, and made the frame
+/// structural, which disables every per-node cache in the framework.
+#[derive(Default)]
+struct ScrollState {
+    offset: [f32; 2],
+    content_size: [f32; 2],
+    viewport_size: [f32; 2],
+    /// Absolute screen point of the last streamed drag position, `None` when
+    /// not currently dragging.
+    last_drag_point: Option<[f32; 2]>,
+    /// The drag's DOWN point, kept until [`ScrollController::DRAG_SLOP`] is
+    /// exceeded.
+    drag_origin: Option<[f32; 2]>,
+    /// The real, currently-tracked drag/momentum velocity in px/s — computed
+    /// from the actual offset delta each frame, never a fixed constant.
+    velocity: [f32; 2],
+    /// `offset` as of the last frame, used to derive `velocity` this frame.
+    last_offset_for_velocity: [f32; 2],
+    /// Whether this controller was pressed as of the last frame — detects the
+    /// true→false transition that seeds momentum from the tracked velocity.
+    was_pressed: bool,
+    /// Real elapsed seconds since the last wheel/trackpad event. A duration
+    /// rather than a per-frame flag because wheel events do not arrive one
+    /// per frame — a flag sprang back the instant a single frame had no fresh
+    /// event and produced visible jitter (found on a real trackpad).
+    wheel_idle_time: f32,
+    /// Repaint hook, installed by `PaintCtx::scroll_controller`. Marks the
+    /// owning NODE — not a component.
+    on_invalidate: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// App-facing notification, installed by [`ScrollController::on_scroll`].
+    on_scroll: Option<Arc<dyn Fn([f32; 2]) + Send + Sync>>,
+}
+
+/// Scroll position and physics for one scrollable region.
+///
+/// All clones share the same state, so separate handles can observe and drive
+/// the same scroll position.
+#[derive(Clone)]
+pub struct ScrollController(Arc<Mutex<ScrollState>>);
+
 impl ScrollController {
-    /// Create (or retrieve) a controller persisted in component state — the
-    /// scroll position survives rebuilds. Follows the hook rules: call
-    /// unconditionally in `build()`, stable order.
-    pub fn for_ctx(ctx: &mut rosace_core::Context) -> Self {
-        let ctrl = ctx.state(Self::new()).get();
-        // The inner atoms are framework-created (use_atom) — nothing
-        // subscribes to them by default, so a scroll_to/wheel write would
-        // request a frame that repaints NOTHING (cache-hit). Subscribing the
-        // owning component makes controller writes dirty it like ctx.state
-        // atoms do. (Duplicate subscribes are ignored.)
-        let id = ctx.component_id();
-        ctrl.offset.subscribe(id);
-        ctrl.content_size.subscribe(id);
-        ctrl.viewport_size.subscribe(id);
-        ctrl
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(ScrollState {
+            wheel_idle_time: f32::MAX,
+            ..Default::default()
+        })))
     }
 
-    pub fn new() -> Self {
-        Self {
-            offset: rosace_state::use_atom([0.0f32; 2]),
-            content_size: rosace_state::use_atom([0.0f32; 2]),
-            viewport_size: rosace_state::use_atom([0.0f32; 2]),
-            last_drag_point: rosace_state::use_atom(None),
-            drag_origin: rosace_state::use_atom(None),
-            velocity: rosace_state::use_atom([0.0f32; 2]),
-            last_offset_for_velocity: rosace_state::use_atom([0.0f32; 2]),
-            was_pressed: rosace_state::use_atom(false),
-            wheel_idle_time: rosace_state::use_atom(f32::MAX),
-        }
+    fn s(&self) -> std::sync::MutexGuard<'_, ScrollState> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Called with `[x, y]` whenever the offset CHANGES.
+    ///
+    /// Change-gated deliberately: momentum decay writes the offset every
+    /// frame, and once it settles those writes are all the same value. Firing
+    /// on every write would call this 60×/s forever on a stationary list.
+    ///
+    /// During a real fling the offset genuinely does change each frame, so
+    /// this genuinely fires each frame. Read it and render from it; storing it
+    /// into reactive state re-dirties the app every frame, which is the cost
+    /// this whole controller exists to avoid.
+    pub fn on_scroll(&self, f: impl Fn([f32; 2]) + Send + Sync + 'static) {
+        self.s().on_scroll = Some(Arc::new(f));
+    }
+
+    /// Set the offset with NO clamping — for widgets that drive the offset
+    /// themselves and have already decided what is valid (`Carousel` snapping
+    /// to a page, `Dismissible` tracking a swipe, `TextArea` following its
+    /// caret). [`Self::scroll_to`] is the clamped, app-facing form.
+    pub fn scroll_to_raw(&self, v: [f32; 2]) { self.set_offset(v); }
+
+    /// Content extent as last measured by the scroll view.
+    pub fn content_size(&self) -> [f32; 2] { self.s().content_size }
+    /// Viewport extent as last measured by the scroll view.
+    pub fn viewport_size(&self) -> [f32; 2] { self.s().viewport_size }
+    /// Published by the scroll view each paint.
+    pub fn set_content_size(&self, v: [f32; 2]) { self.set_measured(Some(v), None); }
+    /// Published by the scroll view each paint.
+    pub fn set_viewport_size(&self, v: [f32; 2]) { self.set_measured(None, Some(v)); }
+
+    /// Repaint hook — see [`ScrollState::on_invalidate`].
+    pub(crate) fn on_invalidate(&self, f: impl Fn() + Send + Sync + 'static) {
+        self.s().on_invalidate = Some(Arc::new(f));
+    }
+
+    /// The single write path for `offset`: clamps nothing, dedups equal
+    /// writes, and notifies.
+    fn set_offset(&self, v: [f32; 2]) {
+        let (invalidate, notify) = {
+            let mut st = self.s();
+            if st.offset == v {
+                return;
+            }
+            st.offset = v;
+            (st.on_invalidate.clone(), st.on_scroll.clone())
+        };
+        // Callbacks run OUTSIDE the lock: an app handler that reads the
+        // controller back would otherwise deadlock on its own notification.
+        if let Some(f) = invalidate { f(); }
+        if let Some(f) = notify { f(v); }
+    }
+
+    fn set_measured(&self, content: Option<[f32; 2]>, viewport: Option<[f32; 2]>) {
+        let invalidate = {
+            let mut st = self.s();
+            let mut changed = false;
+            if let Some(c) = content {
+                if st.content_size != c { st.content_size = c; changed = true; }
+            }
+            if let Some(v) = viewport {
+                if st.viewport_size != v { st.viewport_size = v; changed = true; }
+            }
+            if !changed { return; }
+            st.on_invalidate.clone()
+        };
+        if let Some(f) = invalidate { f(); }
     }
 
     /// Jump to an absolute position, clamped to valid bounds.
     pub fn scroll_to(&self, x: f32, y: f32) {
-        let [cw, ch] = self.content_size.get();
-        let [vw, vh] = self.viewport_size.get();
+        let [cw, ch] = self.s().content_size;
+        let [vw, vh] = self.s().viewport_size;
         let nx = x.clamp(0.0, (cw - vw).max(0.0));
         let ny = y.clamp(0.0, (ch - vh).max(0.0));
-        self.offset.set([nx, ny]);
+        self.set_offset([nx, ny]);
     }
 
     /// Scroll to the top (y = 0), preserving x.
     pub fn scroll_to_top(&self) {
-        let [x, _] = self.offset.get();
-        self.offset.set([x, 0.0]);
+        let [x, _] = self.s().offset;
+        self.set_offset([x, 0.0]);
     }
 
     /// Scroll to the bottom (y = content_height − viewport_height), preserving x.
     pub fn scroll_to_bottom(&self) {
-        let [x, _] = self.offset.get();
-        let [_, ch] = self.content_size.get();
-        let [_, vh] = self.viewport_size.get();
-        self.offset.set([x, (ch - vh).max(0.0)]);
+        let [x, _] = self.s().offset;
+        let [_, ch] = self.s().content_size;
+        let [_, vh] = self.s().viewport_size;
+        self.set_offset([x, (ch - vh).max(0.0)]);
     }
 
     /// Add `(dx, dy)` to the current offset, clamped to valid bounds.
     pub fn scroll_by(&self, dx: f32, dy: f32) {
-        let [ox, oy] = self.offset.get();
-        let [cw, ch] = self.content_size.get();
-        let [vw, vh] = self.viewport_size.get();
+        let [ox, oy] = self.s().offset;
+        let [cw, ch] = self.s().content_size;
+        let [vw, vh] = self.s().viewport_size;
         let new_x = (ox + dx).clamp(0.0, (cw - vw).max(0.0));
         let new_y = (oy + dy).clamp(0.0, (ch - vh).max(0.0));
-        self.offset.set([new_x, new_y]);
+        self.set_offset([new_x, new_y]);
     }
 
     /// Returns the current `[offset_x, offset_y]`.
     pub fn offset(&self) -> [f32; 2] {
-        self.offset.get()
+        self.s().offset
     }
 
     /// Snapshot the current position for later restoration.
     pub fn save_position(&self) -> [f32; 2] {
-        self.offset.get()
+        self.s().offset
     }
 
     /// Restore a previously saved position.
     pub fn restore_position(&self, pos: [f32; 2]) {
-        self.offset.set(pos);
+        self.set_offset(pos);
     }
 
     // ── Drag-to-pan + momentum (D108/Phase 26 Step 2) ──────────────────────
@@ -172,17 +230,22 @@ impl ScrollController {
     /// stays within [`Self::DRAG_SLOP`] of the down point — see its doc.
     /// Call `end_drag` on release so the next drag starts fresh.
     pub fn drag_delta(&self, x: f32, y: f32) -> (f32, f32) {
-        let prev = self.last_drag_point.get();
-        self.last_drag_point.set(Some([x, y]));
+        let prev = self.s().last_drag_point;
+        self.s().last_drag_point = Some([x, y]);
         let Some([px, py]) = prev else {
-            self.drag_origin.set(Some([x, y]));
+            self.s().drag_origin = Some([x, y]);
             return (0.0, 0.0);
         };
-        if let Some([ox, oy]) = self.drag_origin.get() {
+        // Read the origin and RELEASE the lock before doing anything else.
+        // `if let Some(..) = self.s().drag_origin { .. }` holds the guard for
+        // the whole body in edition 2021, so the write below deadlocked
+        // against the read that opened the block.
+        let origin = self.s().drag_origin;
+        if let Some([ox, oy]) = origin {
             if (x - ox).hypot(y - oy) <= Self::DRAG_SLOP {
                 return (0.0, 0.0); // still a click, not a drag
             }
-            self.drag_origin.set(None); // slop exceeded — drag is real
+            self.s().drag_origin = None; // slop exceeded — drag is real
         }
         (x - px, y - py)
     }
@@ -190,8 +253,8 @@ impl ScrollController {
     /// Clears drag-position tracking — call on release so the next drag
     /// doesn't diff against a stale point.
     pub fn end_drag(&self) {
-        self.last_drag_point.set(None);
-        self.drag_origin.set(None);
+        self.s().last_drag_point = None;
+        self.s().drag_origin = None;
     }
 
     /// Recomputes `velocity` from the real offset delta since the last call,
@@ -202,17 +265,17 @@ impl ScrollController {
         if dt <= 0.0 {
             return;
         }
-        let now = self.offset.get();
-        let prev = self.last_offset_for_velocity.get();
+        let now = self.s().offset;
+        let prev = self.s().last_offset_for_velocity;
         let vx = ((now[0] - prev[0]) / dt).clamp(-MAX_VELOCITY, MAX_VELOCITY);
         let vy = ((now[1] - prev[1]) / dt).clamp(-MAX_VELOCITY, MAX_VELOCITY);
-        self.velocity.set([vx, vy]);
-        self.last_offset_for_velocity.set(now);
+        self.s().velocity = [vx, vy];
+        self.s().last_offset_for_velocity = now;
     }
 
     /// The most recently tracked velocity (px/s) — see `track_velocity`.
     pub fn velocity(&self) -> [f32; 2] {
-        self.velocity.get()
+        self.s().velocity
     }
 
     /// Sets the tracked velocity directly (px/s) — for input sources that
@@ -221,31 +284,31 @@ impl ScrollController {
     /// speed to decay from once the events stop arriving. Clamped to
     /// `MAX_VELOCITY` — see its doc comment for why.
     pub fn set_velocity(&self, v: [f32; 2]) {
-        self.velocity.set([v[0].clamp(-MAX_VELOCITY, MAX_VELOCITY), v[1].clamp(-MAX_VELOCITY, MAX_VELOCITY)]);
+        self.s().velocity = [v[0].clamp(-MAX_VELOCITY, MAX_VELOCITY), v[1].clamp(-MAX_VELOCITY, MAX_VELOCITY)];
     }
 
     /// Whether this controller was `pressed` as of the last frame — used to
     /// detect the true→false transition that hands off to momentum.
     pub fn was_pressed(&self) -> bool {
-        self.was_pressed.get()
+        self.s().was_pressed
     }
 
     pub fn set_was_pressed(&self, v: bool) {
-        self.was_pressed.set(v);
+        self.s().was_pressed = v;
     }
 
     /// Called by a wheel/trackpad scroll callback when it fires — resets
     /// the idle clock to 0.
     pub fn mark_wheel_active(&self) {
-        self.wheel_idle_time.set(0.0);
+        self.s().wheel_idle_time = 0.0;
     }
 
     /// Advances the wheel-idle clock by one real frame — call once per
     /// frame regardless of whether a wheel event landed.
     pub fn advance_wheel_idle(&self, dt: f32) {
-        let t = self.wheel_idle_time.get();
+        let t = self.s().wheel_idle_time;
         if t < f32::MAX / 2.0 {
-            self.wheel_idle_time.set(t + dt);
+            self.s().wheel_idle_time = t + dt;
         }
     }
 
@@ -255,14 +318,14 @@ impl ScrollController {
     /// stopped, not just "no event in this exact frame" (see
     /// `wheel_idle_time`'s doc comment for why a single-frame check jittered).
     pub fn wheel_recently_active(&self) -> bool {
-        self.wheel_idle_time.get() < WHEEL_IDLE_GRACE
+        self.s().wheel_idle_time < WHEEL_IDLE_GRACE
     }
 
     /// Current drag/momentum speed (px/s), for callers that just need "is
     /// this still visibly moving" (e.g. an auto-hiding scrollbar) without
     /// caring about direction. Zero once `coast` has fully settled.
     pub fn velocity_magnitude(&self) -> f32 {
-        let [vx, vy] = self.velocity.get();
+        let [vx, vy] = self.s().velocity;
         (vx * vx + vy * vy).sqrt()
     }
 
@@ -271,9 +334,9 @@ impl ScrollController {
     /// while something else (e.g. a still-live wheel-idle gate) is holding
     /// off the rest of `coast`'s own logic.
     pub fn is_overscrolled(&self) -> bool {
-        let [ox, oy] = self.offset.get();
-        let [cw, ch] = self.content_size.get();
-        let [vw, vh] = self.viewport_size.get();
+        let [ox, oy] = self.s().offset;
+        let [cw, ch] = self.s().content_size;
+        let [vw, vh] = self.s().viewport_size;
         let max_x = (cw - vw).max(0.0);
         let max_y = (ch - vh).max(0.0);
         ox < 0.0 || ox > max_x || oy < 0.0 || oy > max_y
@@ -297,15 +360,15 @@ impl ScrollController {
         // "scroll, blank space, ~1 second pause, then springs back."
         if let ScrollPhysics::Bounce { spring_stiffness, .. } = physics {
             if self.is_overscrolled() {
-                self.velocity.set([0.0, 0.0]);
+                self.s().velocity = [0.0, 0.0];
                 return self.settle_bounce(spring_stiffness, dt);
             }
         }
-        let [vx, vy] = self.velocity.get(); // px/s
+        let [vx, vy] = self.s().velocity; // px/s
         if vx.abs() > COAST_STOP_THRESHOLD || vy.abs() > COAST_STOP_THRESHOLD {
             let friction = match physics {
                 ScrollPhysics::Momentum { friction } | ScrollPhysics::Bounce { friction, .. } => friction,
-                _ => { self.velocity.set([0.0, 0.0]); return false; }
+                _ => { self.s().velocity = [0.0, 0.0]; return false; }
             };
             let dt = dt.max(0.0001);
             // Move by the real per-frame distance at the CURRENT velocity —
@@ -325,7 +388,7 @@ impl ScrollController {
             // animate_to` already uses elsewhere for the same reason.
             let decay = friction.powf(dt / (1.0 / 60.0));
             let (nvx, nvy) = (vx * decay, vy * decay);
-            self.velocity.set(if nvx.abs() < COAST_STOP_THRESHOLD && nvy.abs() < COAST_STOP_THRESHOLD { [0.0, 0.0] } else { [nvx, nvy] });
+            self.s().velocity = if nvx.abs() < COAST_STOP_THRESHOLD && nvy.abs() < COAST_STOP_THRESHOLD { [0.0, 0.0] } else { [nvx, nvy] };
             return true;
         }
         if let ScrollPhysics::Bounce { spring_stiffness, .. } = physics {
@@ -338,7 +401,7 @@ impl ScrollController {
     /// bounds — used when animations are globally disabled, so release
     /// never coasts or bounces.
     pub fn stop_coasting(&self) {
-        self.velocity.set([0.0, 0.0]);
+        self.s().velocity = [0.0, 0.0];
         self.scroll_by(0.0, 0.0);
     }
 
@@ -347,21 +410,21 @@ impl ScrollController {
     /// moving further out; moving back toward bounds is full-speed. Every
     /// other physics hard-clamps, identical to `scroll_by`.
     pub fn apply_momentum(&self, dx: f32, dy: f32, physics: ScrollPhysics) {
-        let [ox, oy] = self.offset.get();
-        let [cw, ch] = self.content_size.get();
-        let [vw, vh] = self.viewport_size.get();
+        let [ox, oy] = self.s().offset;
+        let [cw, ch] = self.s().content_size;
+        let [vw, vh] = self.s().viewport_size;
         let max_x = (cw - vw).max(0.0);
         let max_y = (ch - vh).max(0.0);
         match physics {
             ScrollPhysics::Bounce { .. } => {
                 let nx = bounce_axis(ox, dx, max_x);
                 let ny = bounce_axis(oy, dy, max_y);
-                self.offset.set([nx, ny]);
+                self.set_offset([nx, ny]);
             }
             _ => {
                 let nx = (ox + dx).clamp(0.0, max_x);
                 let ny = (oy + dy).clamp(0.0, max_y);
-                self.offset.set([nx, ny]);
+                self.set_offset([nx, ny]);
             }
         }
     }
@@ -376,9 +439,9 @@ impl ScrollController {
     /// enclosing scrollable ancestor: keep walking outward until one
     /// reports `true`, or the chain runs out.
     pub fn try_apply_delta(&self, dx: f32, dy: f32, physics: ScrollPhysics) -> bool {
-        let before = self.offset.get();
+        let before = self.s().offset;
         self.apply_momentum(dx, dy, physics);
-        self.offset.get() != before
+        self.s().offset != before
     }
 
     /// Eases an out-of-bounds offset back to the nearest valid bound —
@@ -387,23 +450,23 @@ impl ScrollController {
     /// Returns `true` while still settling (caller should keep requesting
     /// frames); `false` once within bounds (nothing left to do).
     pub fn settle_bounce(&self, spring_stiffness: f32, dt: f32) -> bool {
-        let [ox, oy] = self.offset.get();
-        let [cw, ch] = self.content_size.get();
-        let [vw, vh] = self.viewport_size.get();
+        let [ox, oy] = self.s().offset;
+        let [cw, ch] = self.s().content_size;
+        let [vw, vh] = self.s().viewport_size;
         let max_x = (cw - vw).max(0.0);
         let max_y = (ch - vh).max(0.0);
         let target_x = ox.clamp(0.0, max_x);
         let target_y = oy.clamp(0.0, max_y);
         if (ox - target_x).abs() < 0.5 && (oy - target_y).abs() < 0.5 {
             if ox != target_x || oy != target_y {
-                self.offset.set([target_x, target_y]);
+                self.set_offset([target_x, target_y]);
             }
             return false;
         }
         let alpha = 1.0 - (-dt * spring_stiffness).exp();
         let nx = ox + (target_x - ox) * alpha;
         let ny = oy + (target_y - oy) * alpha;
-        self.offset.set([nx, ny]);
+        self.set_offset([nx, ny]);
         true
     }
 }
@@ -450,8 +513,8 @@ mod tests {
 
     fn controller_with_size(content_w: f32, content_h: f32, vp_w: f32, vp_h: f32) -> ScrollController {
         let c = ScrollController::new();
-        c.content_size.set([content_w, content_h]);
-        c.viewport_size.set([vp_w, vp_h]);
+        c.set_content_size([content_w, content_h]);
+        c.set_viewport_size([vp_w, vp_h]);
         c
     }
 
@@ -618,7 +681,7 @@ mod tests {
     #[test]
     fn settle_bounce_eases_an_overscrolled_offset_back_to_the_bound() {
         let c = controller_with_size(500.0, 800.0, 300.0, 400.0);
-        c.offset.set([0.0, -20.0]); // simulate an overscroll above the top
+        c.scroll_to_raw([0.0, -20.0]); // simulate an overscroll above the top
         let mut still_settling = true;
         for _ in 0..200 {
             still_settling = c.settle_bounce(12.0, 0.05);
@@ -633,7 +696,7 @@ mod tests {
     #[test]
     fn settle_bounce_is_a_no_op_when_already_in_bounds() {
         let c = controller_with_size(500.0, 800.0, 300.0, 400.0);
-        c.offset.set([50.0, 100.0]);
+        c.scroll_to_raw([50.0, 100.0]);
         assert!(!c.settle_bounce(12.0, 0.05));
         assert_eq!(c.offset(), [50.0, 100.0]);
     }
@@ -648,7 +711,7 @@ mod tests {
         // before any spring-back motion began at all. Real platforms spring
         // back the instant the edge is crossed, independent of velocity.
         let c = controller_with_size(500.0, 800.0, 300.0, 400.0);
-        c.offset.set([0.0, -60.0]); // already overscrolled above the top
+        c.scroll_to_raw([0.0, -60.0]); // already overscrolled above the top
         c.set_velocity([0.0, -400.0]); // still carrying a lot of speed
         let physics = ScrollPhysics::Bounce { friction: 0.92, spring_stiffness: 12.0 };
 

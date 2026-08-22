@@ -5225,14 +5225,21 @@ mod tests {
     }
     impl Component for OneFormTextInput {
         fn build(&self, ctx: &mut Context) -> BoxedWidget {
-            let field = rosace_widgets::forms::FormField::for_ctx(ctx, "name").rule(rosace_widgets::forms::Required);
+            let field = ctx.state(rosace_widgets::forms::FormField::new("name")).get()
+                .rule(rosace_widgets::forms::Required);
             let _ = self.captured_field.set(field.clone());
-            // `.rule()` on a fresh `FormField::for_ctx` result each build
-            // would rebuild the validator list every frame harmlessly
-            // (same rules, re-pushed) — real apps typically build the
-            // field once via `ctx.state`-backed `for_ctx` and DON'T
-            // re-add rules every build; captured here only so the test
-            // can read it back.
+
+            // The submit button below gates on `form.is_valid()`, which lives
+            // in a DIFFERENT widget — marking the field's own node repaints
+            // the input but cannot repaint the button. So the app owns that
+            // dependency: the field reports a change, and this bumps state the
+            // component reads, which rebuilds.
+            let revision = ctx.state(0u32);
+            field.on_change({
+                let r = revision.clone();
+                move || r.set(r.get().wrapping_add(1))
+            });
+            let _ = revision.get();
             let form = rosace_widgets::forms::Form::new().field(field.clone());
             let submitted = self.submitted.clone();
             Column::new()

@@ -292,12 +292,12 @@ impl Widget for TextArea {
 
         let ctrl = ctx.scroll_controller();
         let vp_s = [r.size.width, r.size.height];
-        if ctrl.viewport_size.get() != vp_s { ctrl.viewport_size.set(vp_s); }
+        if ctrl.viewport_size() != vp_s { ctrl.set_viewport_size(vp_s); }
         let cs = [r.size.width, content_extent];
-        if ctrl.content_size.get() != cs { ctrl.content_size.set(cs); }
+        if ctrl.content_size() != cs { ctrl.set_content_size(cs); }
 
         let max_scroll = (content_extent - r.size.height).max(0.0);
-        let mut scroll_y = ctrl.offset.get()[1].clamp(0.0, max_scroll);
+        let mut scroll_y = ctrl.offset()[1].clamp(0.0, max_scroll);
 
         let state = ctx.text_edit();
         let cursor = state.cursor();
@@ -323,8 +323,8 @@ impl Widget for TextArea {
             }
             scroll_y = scroll_y.clamp(0.0, max_scroll);
         }
-        if ctrl.offset.get()[1] != scroll_y {
-            ctrl.offset.set([ctrl.offset.get()[0], scroll_y]);
+        if ctrl.offset()[1] != scroll_y {
+            ctrl.scroll_to_raw([ctrl.offset()[0], scroll_y]);
         }
 
         // `- PAD`: a line whose bottom pokes into the top padding band is
@@ -481,7 +481,7 @@ impl Widget for TextArea {
         // rather than the `scroll_y` captured above, which predates this
         // frame's wheel/scroll-into-view update).
         if self.show_scrollbar {
-            let fresh_y = ctrl.offset.get()[1].clamp(0.0, max_scroll);
+            let fresh_y = ctrl.offset()[1].clamp(0.0, max_scroll);
             let ratio = (r.size.height / content_extent.max(1.0)).min(1.0);
             if ratio < 1.0 {
                 let bar_h = r.size.height * ratio;

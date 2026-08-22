@@ -177,6 +177,20 @@ impl TextInput {
     /// both update live as the user types — not just on submit. Calling
     /// `.on_change()` again AFTER `.field()` overrides this binding;
     /// call `.field()` last if you need both.
+    /// The value to render THIS PAINT.
+    ///
+    /// A bound `FormField` is the source of truth and is read live, because a
+    /// field write now marks one NODE rather than dirtying the component — so
+    /// `build()` does not re-run on a keystroke and the string captured at
+    /// build time is a frame stale. Previously every keystroke rebuilt the
+    /// whole app, which hid this.
+    fn live_value(&self) -> String {
+        match &self.field {
+            Some(f) => f.get(),
+            None => self.value.clone(),
+        }
+    }
+
     pub fn field(mut self, f: crate::forms::FormField) -> Self {
         self.value = f.get();
         let bound = f.clone();
@@ -256,9 +270,9 @@ impl Widget for TextInput {
         // Platform convention for a secure field is to announce presence,
         // never content, so we send a bullet run of the same length.
         let announced = if self.obscure {
-            "•".repeat(self.value.chars().count())
+            "•".repeat(self.live_value().chars().count())
         } else {
-            self.value.clone()
+            self.live_value()
         };
         ctx.semantics(super::SemanticsProps::new(rosace_core::Role::TextInput)
             .label(&self.placeholder).value(&announced));
@@ -285,12 +299,13 @@ impl Widget for TextInput {
         draw_rounded_rect_pub(ctx, r, bg, self.radius);
         ctx.stroke_rrect(r, self.radius, border, if is_focused { 1.5 } else { 1.0 });
 
-        let has_value = !self.value.is_empty();
+        let live = self.live_value();
+        let has_value = !live.is_empty();
         let display = if has_value {
             if self.obscure {
-                "•".repeat(self.value.chars().count())
+                "•".repeat(live.chars().count())
             } else {
-                self.value.clone()
+                live.clone()
             }
         } else {
             self.placeholder.clone()
@@ -378,7 +393,7 @@ impl Widget for TextInput {
         };
 
         ctx.register_editable(EditableDecl {
-            value: self.value.clone(),
+            value: self.live_value(),
             rect: r,
             multiline: false,
             obscure: self.obscure,
@@ -553,6 +568,12 @@ impl Widget for TextInput {
         // `Role::Alert` matches the one other place this framework
         // surfaces an error message (`Toast::error`).
         if let Some(field) = &self.field {
+            // Repaint THIS NODE when the field changes. Field writes used to
+            // subscribe the owning component, so every keystroke rebuilt the
+            // app and made the frame structural; this marks one node and the
+            // frame stays targeted.
+            let n = ctx.node_id();
+            field.bind(move || super::mark_node_dirty(n));
             if field.is_touched() {
                 if let Some(err) = field.errors().first() {
                     ctx.semantics(super::SemanticsProps::new(rosace_core::Role::Alert).label(&err.message));

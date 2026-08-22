@@ -132,26 +132,26 @@ impl Widget for Dismissible {
         ctx.on_press_at(move |x, y| {
             let (dx, _) = drag_ctrl.drag_delta(x, y);
             if dx != 0.0 {
-                let o = drag_ctrl.offset.get();
-                drag_ctrl.offset.set([o[0] + dx, o[1]]);
+                let o = drag_ctrl.offset();
+                drag_ctrl.scroll_to_raw([o[0] + dx, o[1]]);
             }
         });
 
         let is_pressed = ctx.pressed();
         let was_pressed = ctrl.was_pressed();
-        let mut dx = ctrl.offset.get()[0];
+        let mut dx = ctrl.offset()[0];
 
         if !is_pressed && was_pressed {
             let commit = dx.abs() >= r.size.width * self.threshold && self.allows(dx);
             if commit {
                 let target = if dx < 0.0 { -r.size.width } else { r.size.width };
-                ctrl.offset.set([target, 0.0]);
+                ctrl.scroll_to_raw([target, 0.0]);
                 dx = target;
                 if let Some(cb) = &self.on_dismissed {
                     cb();
                 }
             } else {
-                ctrl.offset.set([0.0, 0.0]);
+                ctrl.scroll_to_raw([0.0, 0.0]);
                 dx = 0.0;
             }
             ctrl.end_drag();
