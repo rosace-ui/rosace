@@ -686,6 +686,69 @@ pub struct EditableDecl {
     pub layout: TextLayoutSnapshot,
     /// Input filters (D116 Step 8) — see the module section above.
     pub filters: Vec<InputFilter>,
+    /// App-supplied context-menu items, appended after the built-ins.
+    pub menu_items: Vec<ContextMenuItem>,
+    /// Rewrites the finished item list before it is shown — reorder, remove
+    /// a built-in (a read-only field hiding Paste), or insert in the middle.
+    pub menu_transform: Option<Arc<dyn Fn(&mut Vec<ContextMenuItem>) + Send + Sync>>,
+}
+
+/// What an app-supplied context-menu item is handed when it runs.
+///
+/// The framework supplies the selection and a way to write back; the APP
+/// supplies the meaning. That split is deliberate: "bold" means something
+/// different in every document format, and a framework that guessed would be
+/// wrong for most of them.
+///
+/// Read-only items (Search, Share, Look up) use `selected_text` and ignore
+/// `controller`. Mutating items (Bold, Uppercase) drive
+/// [`EditController::replace_range`] — the same path a toolbar button already
+/// uses to edit a field from outside the widget tree.
+#[derive(Clone)]
+pub struct ContextMenuTarget {
+    /// The field's full text.
+    pub value: String,
+    /// Selected character range, if any.
+    pub selection: Option<(usize, usize)>,
+    /// The selected text, if any.
+    pub selected_text: Option<String>,
+    /// Programmatic handle for writing back. Present only when the field was
+    /// given a controller.
+    pub controller: Option<EditController>,
+}
+
+/// One entry in the text context menu.
+#[derive(Clone)]
+pub struct ContextMenuItem {
+    pub label: String,
+    /// Hidden when there is no selection — how Cut and Copy already behave
+    /// (hidden rather than greyed, since `Menu` has no disabled-item concept).
+    pub needs_selection: bool,
+    pub action: Arc<dyn Fn(&ContextMenuTarget) + Send + Sync>,
+}
+
+impl ContextMenuItem {
+    pub fn new(
+        label: impl Into<String>,
+        action: impl Fn(&ContextMenuTarget) + Send + Sync + 'static,
+    ) -> Self {
+        Self { label: label.into(), needs_selection: false, action: Arc::new(action) }
+    }
+
+    /// Show this item only while text is selected.
+    pub fn needs_selection(mut self) -> Self {
+        self.needs_selection = true;
+        self
+    }
+}
+
+impl std::fmt::Debug for ContextMenuItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContextMenuItem")
+            .field("label", &self.label)
+            .field("needs_selection", &self.needs_selection)
+            .finish()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -2540,6 +2540,8 @@ mod tests {
             controller: None,
             layout: Default::default(),
             filters: Vec::new(),
+            menu_items: Vec::new(),
+            menu_transform: None,
         });
         t.node_mut(behind).scrolls.push((r, ScrollAxes::BOTH, Arc::new(|_, _| {})));
 

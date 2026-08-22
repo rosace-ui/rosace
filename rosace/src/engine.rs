@@ -696,6 +696,24 @@ impl FrameEngine {
     /// `drain_context_menu` reaches the real edit/clipboard, which is
     /// this step's actual point, without brittle "click at exactly this
     /// row's y" pixel math.
+    /// Test-only: the target the engine would hand a context-menu item right
+    /// now. Lets a test drive an app-supplied item with the REAL selection and
+    /// controller instead of a hand-built stand-in, without the brittle "click
+    /// at exactly this menu row's y" pixel math.
+    #[cfg(test)]
+    fn test_context_menu_target(&self) -> Option<text_edit::ContextMenuTarget> {
+        let (node_id, _) = self.context_menu?;
+        let (value, state) = self.editable_at(node_id)?;
+        let controller = self.render_tree.borrow()
+            .node(node_id).editable.as_ref().and_then(|e| e.controller.clone());
+        Some(text_edit::ContextMenuTarget {
+            selected_text: text_edit::selected_text(&value, &state),
+            selection: state.selection_range(),
+            value,
+            controller,
+        })
+    }
+
     #[cfg(test)]
     fn test_enqueue_context_menu_action(&self, action: ContextMenuAction) {
         self.context_menu_actions.lock().unwrap().push(action);
@@ -1060,19 +1078,60 @@ impl FrameEngine {
         // not just grayed out, since `Menu` has no disabled-item concept).
         if let Some((node_id, (mx, my))) = self.context_menu {
             if let Some((value, state)) = self.editable_at(node_id) {
-                let has_selection = text_edit::selected_text(&value, &state).is_some();
+                let selected = text_edit::selected_text(&value, &state);
+                let has_selection = selected.is_some();
                 let actions = self.context_menu_actions.clone();
+
+                // Built-ins first, expressed as ordinary items so the app's
+                // transform hook can reorder or drop them — a read-only field
+                // hiding Paste, say — exactly like its own additions.
+                let builtin = |label: &str, needs_sel: bool, act: ContextMenuAction| {
+                    let a = actions.clone();
+                    text_edit::ContextMenuItem {
+                        label: label.to_string(),
+                        needs_selection: needs_sel,
+                        action: Arc::new(move |_| a.lock().unwrap().push(act)),
+                    }
+                };
+                let mut items = vec![
+                    builtin("Cut", true, ContextMenuAction::Cut),
+                    builtin("Copy", true, ContextMenuAction::Copy),
+                    builtin("Paste", false, ContextMenuAction::Paste),
+                    builtin("Select All", false, ContextMenuAction::SelectAll),
+                ];
+
+                // The field's own declaration carries its extra items and its
+                // transform, so customisation is scoped to the widget rather
+                // than living in a global registry.
+                let (extra, transform, controller) = {
+                    let tree = self.render_tree.borrow();
+                    match tree.node(node_id).editable.as_ref() {
+                        Some(e) => (e.menu_items.clone(), e.menu_transform.clone(), e.controller.clone()),
+                        None => (Vec::new(), None, None),
+                    }
+                };
+                items.extend(extra);
+                if let Some(f) = &transform { f(&mut items); }
+                items.retain(|i| !i.needs_selection || has_selection);
+
+                let target = text_edit::ContextMenuTarget {
+                    value: value.clone(),
+                    selection: state.selection_range(),
+                    selected_text: selected.clone(),
+                    controller,
+                };
+
                 let mut menu = Menu::new();
-                if has_selection {
-                    let a = actions.clone();
-                    menu = menu.item("Cut", move || a.lock().unwrap().push(ContextMenuAction::Cut));
-                    let a = actions.clone();
-                    menu = menu.item("Copy", move || a.lock().unwrap().push(ContextMenuAction::Copy));
+                for item in items {
+                    let target = target.clone();
+                    let action = Arc::clone(&item.action);
+                    let dismiss = actions.clone();
+                    menu = menu.item(item.label.clone(), move || {
+                        action(&target);
+                        // Any item closes the menu, app-supplied or not.
+                        dismiss.lock().unwrap().push(ContextMenuAction::Dismiss);
+                    });
                 }
-                let a = actions.clone();
-                menu = menu.item("Paste", move || a.lock().unwrap().push(ContextMenuAction::Paste));
-                let a = actions.clone();
-                menu = menu.item("Select All", move || a.lock().unwrap().push(ContextMenuAction::SelectAll));
                 let dismiss_actions = actions.clone();
                 chrome.push(crate::ChromeLayer {
                     position: LayerPosition::Absolute(rosace_core::types::Point { x: mx, y: my }),
@@ -5050,6 +5109,130 @@ mod tests {
         engine.paint(&mut canvas, &mut overlay, &[]);
         engine.paint(&mut canvas, &mut overlay, &[key(rosace_platform::Key::Backspace)]);
         assert_eq!(atom.get().unwrap().get(), "", "Select All via the context menu must select the whole field, so Backspace clears it entirely");
+    }
+
+    /// The framework supplies the selection and a way to write back; the APP
+    /// supplies what an item MEANS. Both halves are exercised here: a
+    /// read-only item that just observes the selection (the "Search the web"
+    /// shape) and a mutating one that edits through the controller (the
+    /// "Bold" shape).
+    #[test]
+    fn an_app_can_add_context_menu_items_and_reshape_the_built_ins() {
+        use rosace_widgets::tree::text_edit::{ContextMenuItem, EditController};
+        use std::sync::Mutex;
+        let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // What the read-only item observed when it ran.
+        let observed: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        // The items the menu actually offered, in order — captured through
+        // the transform hook, which the engine hands the finished list.
+        let offered: Arc<Mutex<Vec<ContextMenuItem>>> = Arc::new(Mutex::new(Vec::new()));
+
+        struct App {
+            captured: Arc<OnceLock<rosace_state::Atom<String>>>,
+            controller: EditController,
+            observed: Arc<Mutex<Option<String>>>,
+            offered: Arc<Mutex<Vec<ContextMenuItem>>>,
+        }
+        impl Component for App {
+            fn build(&self, ctx: &mut Context) -> BoxedWidget {
+                let name: rosace_state::Atom<String> = ctx.state(String::new());
+                let _ = self.captured.set(name.clone());
+                let observed = Arc::clone(&self.observed);
+                let offered = Arc::clone(&self.offered);
+                let ctrl = self.controller.clone();
+                TextInput::new()
+                    .value(name.get())
+                    .controller(self.controller.clone())
+                    .on_change({ let name = name.clone(); move |v| name.set(v) })
+                    // Read-only: looks at the selection, writes nothing.
+                    .context_menu_item(
+                        ContextMenuItem::new("Search the web", move |t| {
+                            *observed.lock().unwrap() = t.selected_text.clone();
+                        })
+                        .needs_selection(),
+                    )
+                    // Mutating: edits through the controller, the same path a
+                    // toolbar button uses.
+                    .context_menu_item(
+                        ContextMenuItem::new("Bold", move |t| {
+                            if let (Some((s, e)), Some(sel)) = (t.selection, t.selected_text.clone()) {
+                                ctrl.replace_range(s, e, format!("**{sel}**"));
+                            }
+                        })
+                        .needs_selection(),
+                    )
+                    // A read-only field would drop Paste this way.
+                    .context_menu(move |items| {
+                        items.retain(|i| i.label != "Paste");
+                        *offered.lock().unwrap() = items.clone();
+                    })
+                    .boxed()
+            }
+        }
+
+        let captured = Arc::new(OnceLock::new());
+        let controller = EditController::new();
+        let mut engine = FrameEngine::new(
+            Box::new(App {
+                captured: captured.clone(),
+                controller: controller.clone(),
+                observed: Arc::clone(&observed),
+                offered: Arc::clone(&offered),
+            }),
+            rosace_render::FontCache::embedded(),
+        );
+        let (mut canvas, mut overlay) = (SkiaCanvas::new(200, 60), SkiaCanvas::new(200, 60));
+
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        engine.paint(&mut canvas, &mut overlay, &[click(20.0, 18.0)]);
+        type_str(&mut engine, &mut canvas, &mut overlay, "hi");
+
+        // Select the text THROUGH the menu — `drain_context_menu` ignores
+        // actions while no menu is open, so it has to be opened first. This
+        // also closes it again.
+        engine.paint(&mut canvas, &mut overlay, &[right_down(20.0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[right_up(20.0, 18.0)]);
+        engine.test_enqueue_context_menu_action(ContextMenuAction::SelectAll);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        // Reopen it, now with a live selection, so selection-gated items show.
+        engine.paint(&mut canvas, &mut overlay, &[right_down(20.0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[right_up(20.0, 18.0)]);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+
+        let items = offered.lock().unwrap().clone();
+        let labels: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
+        assert!(
+            labels.iter().any(|l| l == "Search the web") && labels.iter().any(|l| l == "Bold"),
+            "the app's own items are missing from the menu: {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l == "Paste"),
+            "the transform hook removed Paste but it is still offered: {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Cut"),
+            "built-ins the app did not remove must survive: {labels:?}"
+        );
+
+        // Run the app's items against the target the ENGINE built — the real
+        // selection and the real controller, not a stand-in.
+        let target = engine.test_context_menu_target().expect("a target while the menu is open");
+        (items.iter().find(|i| i.label == "Search the web").expect("present").action)(&target);
+        assert_eq!(
+            observed.lock().unwrap().as_deref(),
+            Some("hi"),
+            "a read-only item must see the live selection"
+        );
+
+        (items.iter().find(|i| i.label == "Bold").expect("present").action)(&target);
+        engine.paint(&mut canvas, &mut overlay, &[]);
+        assert_eq!(
+            captured.get().unwrap().get(),
+            "**hi**",
+            "a mutating item must reach the real field through the controller"
+        );
     }
 
     #[test]

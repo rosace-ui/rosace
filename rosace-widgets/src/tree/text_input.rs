@@ -46,6 +46,8 @@ pub struct TextInput {
     keyboard_type: rosace_core::KeyboardType,
     field: Option<crate::forms::FormField>,
     filters: Vec<super::text_edit::InputFilter>,
+    menu_items: Vec<super::text_edit::ContextMenuItem>,
+    menu_transform: Option<std::sync::Arc<dyn Fn(&mut Vec<super::text_edit::ContextMenuItem>) + Send + Sync>>,
     leading: Option<super::BoxedWidget>,
     trailing: Option<super::BoxedWidget>,
     on_trailing: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -72,6 +74,8 @@ impl TextInput {
             keyboard_type: rosace_core::KeyboardType::default(),
             field: None,
             filters: Vec::new(),
+            menu_items: Vec::new(),
+            menu_transform: None,
             padding: None,
             leading: None,
             trailing: None,
@@ -194,6 +198,29 @@ impl TextInput {
     /// See [`super::text_edit::InputFilter`].
     pub fn filters(mut self, filters: Vec<super::text_edit::InputFilter>) -> Self {
         self.filters = filters;
+        self
+    }
+
+    /// Add an item to this field's text context menu.
+    ///
+    /// The callback is handed a [`ContextMenuTarget`] — the selection, the
+    /// full value, and a controller to write back with. The framework places
+    /// and styles the item; what it MEANS is the app's business, which is why
+    /// "bold" is an example in the docs rather than a built-in.
+    ///
+    /// [`ContextMenuTarget`]: super::text_edit::ContextMenuTarget
+    pub fn context_menu_item(mut self, item: super::text_edit::ContextMenuItem) -> Self {
+        self.menu_items.push(item);
+        self
+    }
+
+    /// Rewrite the finished context-menu list before it is shown — reorder,
+    /// or drop a built-in (a read-only field hiding Paste).
+    pub fn context_menu(
+        mut self,
+        f: impl Fn(&mut Vec<super::text_edit::ContextMenuItem>) + Send + Sync + 'static,
+    ) -> Self {
+        self.menu_transform = Some(std::sync::Arc::new(f));
         self
     }
 
@@ -359,6 +386,8 @@ impl Widget for TextInput {
             controller: self.controller.clone(),
             layout: layout.clone(),
             filters: self.filters.clone(),
+            menu_items: self.menu_items.clone(),
+            menu_transform: self.menu_transform.clone(),
         });
 
         // Clip content to the field so scrolled-out glyphs (and any

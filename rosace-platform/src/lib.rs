@@ -9,6 +9,8 @@ pub mod ime;
 
 pub mod app;
 pub mod event;
+/// Hand a URL to the OS's default handler (D116 context-menu items).
+pub mod open_url;
 pub mod scroll_layer;
 
 #[cfg(target_arch = "wasm32")]
@@ -22,4 +24,5 @@ pub mod a11y_bridge;
 
 pub use app::PlatformWindow;
 pub use event::{InputEvent, MouseButton, Key};
+pub use open_url::{encode_query, open_url};
 pub use scroll_layer::{ScrollLayer, publish_scroll_layers, take_scroll_layers};
