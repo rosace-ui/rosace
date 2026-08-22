@@ -784,8 +784,9 @@ impl<'a> PaintCtx<'a> {
         self.tree.borrow_mut().node_mut(node).promoted = Some(render_tree::PromotedLayer {
             picture,
             rect: screen_rect,
-            // The bare primitive has no scrim, so nothing to dismiss.
+            // The bare primitive has no scrim and no input policy.
             on_dismiss: None,
+            blocks_input: false,
         });
     }
 
@@ -904,10 +905,19 @@ impl<'a> PaintCtx<'a> {
             },
             LayerPosition::Fill => Point { x: 0.0, y: 0.0 },
         };
-        // Window-aware: anchored menus never render off-screen.
-        let origin = Point {
-            x: origin.x.min((win_w - size.width - 8.0).max(0.0)).max(0.0),
-            y: origin.y.min((win_h - size.height - 8.0).max(0.0)).max(0.0),
+        // Window-aware: an anchored menu near the edge never renders
+        // off-screen. Only for positions the CALLER chose a point for —
+        // `BottomAnchored`/`BottomCenter`/`Centered`/`Fill` are resolved
+        // against the window already, and clamping them fought their own
+        // definition: a bottom sheet computes `win_h - h` and the clamp then
+        // pulled it 8px up, so every sheet floated off the bottom edge with
+        // the scrim showing underneath it.
+        let origin = match position {
+            LayerPosition::Absolute(_) | LayerPosition::AboveCentered(_) => Point {
+                x: origin.x.min((win_w - size.width - 8.0).max(0.0)).max(0.0),
+                y: origin.y.min((win_h - size.height - 8.0).max(0.0)).max(0.0),
+            },
+            _ => origin,
         };
         let content = Rect { origin, size };
 
@@ -923,20 +933,38 @@ impl<'a> PaintCtx<'a> {
             if let Some(scrim) = &opts.scrim {
                 cctx.fill_rect(window, scrim.color);
             }
-            // Input barrier and scrim dismissal are the same declaration: a
-            // hit region covering everything the content does not.
+            // ABSORB and DISMISS are two different regions, and conflating
+            // them was a bug: the barrier covered everything EXCEPT the
+            // content, so a click on the dialog's own background — its
+            // padding, or the gap between its buttons — matched nothing on
+            // this layer and fell through to the app underneath. A modal that
+            // leaks clicks through its own surface is not modal.
+            //
+            // Declared in this order because later declarations win
+            // (`hits.iter().rev()`), and a painted CHILD wins over both:
+            //   1. absorber   — the whole window, catches everything
+            //   2. dismissers — outside the content, and outside any
+            //                   excluded rect
+            //   3. the content's own hit regions, as a child
             if spans_window {
-                let dismiss = opts.scrim.as_ref().and_then(|s| s.on_tap.clone());
-                for r in surround(window, opts.scrim.as_ref()
-                    .and_then(|s| s.exclude_rect)
-                    .map(|e| union(content, e))
-                    .unwrap_or(content))
-                {
-                    match &dismiss {
-                        Some(cb) => { let cb = Arc::clone(cb); cctx.register_hit_rect(r, Arc::new(move || cb())); }
-                        // Block with no scrim still absorbs — a modal must not
-                        // leak clicks to the page under it.
-                        None => cctx.register_hit_rect(r, Arc::new(|| {})),
+                cctx.register_hit_rect(window, Arc::new(|| {}));
+
+                if let Some(cb) = opts.scrim.as_ref().and_then(|s| s.on_tap.clone()) {
+                    // Two holes, punched separately. Unioning them made the
+                    // whole bounding box between trigger and menu a dead
+                    // zone — and a dropdown's menu is normally WIDER than its
+                    // trigger, so the strip beside the trigger was dead in the
+                    // common case, dismissing nothing and absorbing nothing.
+                    let mut regions = surround(window, content);
+                    if let Some(exclude) = opts.scrim.as_ref().and_then(|s| s.exclude_rect) {
+                        regions = regions
+                            .into_iter()
+                            .flat_map(|r| surround(r, exclude))
+                            .collect();
+                    }
+                    for r in regions {
+                        let cb = Arc::clone(&cb);
+                        cctx.register_hit_rect(r, Arc::new(move || cb()));
                     }
                 }
             }
@@ -959,6 +987,7 @@ impl<'a> PaintCtx<'a> {
                 picture,
                 rect: layer_rect,
                 on_dismiss: opts.scrim.as_ref().and_then(|s| s.on_tap.clone()),
+                blocks_input: opts.input == InputBehavior::Block,
             });
             n.focus_behavior = opts.focus;
         }
@@ -2501,15 +2530,6 @@ pub struct PromoteOpts {
     pub input: InputBehavior,
     /// How Tab traversal treats this layer.
     pub focus: FocusBehavior,
-}
-
-/// The smallest rect containing both.
-fn union(a: Rect, b: Rect) -> Rect {
-    let x0 = a.origin.x.min(b.origin.x);
-    let y0 = a.origin.y.min(b.origin.y);
-    let x1 = (a.origin.x + a.size.width).max(b.origin.x + b.size.width);
-    let y1 = (a.origin.y + a.size.height).max(b.origin.y + b.size.height);
-    Rect { origin: Point { x: x0, y: y0 }, size: Size { width: x1 - x0, height: y1 - y0 } }
 }
 
 /// The four rects of `outer` that lie outside `hole` — top strip, bottom

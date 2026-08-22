@@ -941,7 +941,20 @@ impl RenderTree {
         // Replacing with a default is how the memory is actually reclaimed:
         // cached pictures and widget state dominate a node's footprint, and
         // an empty TreeNode is small.
+        //
+        // The parent link is RESTORED afterwards, and that is not cosmetic. A
+        // default node has `parent: None`, but this node may still be reachable
+        // from its parent's `keyed_children` map — which `dispose` does not
+        // clear, deliberately, so a keyed child that stops painting keeps its
+        // slot. When that key comes back, `keyed_slot` hands out this same node
+        // with a severed parent, and `mark_dirty_with_ancestors` walks `parent`
+        // upward and stops dead at it. Everything inside then dispatches
+        // clicks, mutates state, and never schedules a frame: UI that is alive
+        // and frozen. This is the same failure `keyed_slot`'s own doc records
+        // fixing once before, arriving by a different route.
+        let parent = self.nodes[node].parent;
         self.nodes[node] = TreeNode::default();
+        self.nodes[node].parent = parent;
     }
 
     /// Like [`Self::node_mut`], but tolerates an id that no longer exists.
@@ -1398,10 +1411,23 @@ impl RenderTree {
         -> Option<HitHandler>
     {
         let mut candidates: Vec<(ScrollAxes, HitHandler)> = Vec::new();
+        let mut blocked = false;
         for node in self.promoted_nodes().into_iter().rev() {
             self.scroll_candidates(node, x, y, &mut candidates);
+            // A modal absorbs the WHEEL as well as the click. Its barrier is
+            // declared as hit regions, and `scroll_candidates` does not
+            // consult those — only `pointer_mode == 2` stops it — so without
+            // this the page behind an open dialog scrolled under it.
+            if let Some(p) = &self.nodes[node].promoted {
+                if p.blocks_input && contains(&p.rect, x, y) {
+                    blocked = true;
+                    break;
+                }
+            }
         }
-        self.scroll_candidates(Self::ROOT, x, y, &mut candidates);
+        if !blocked {
+            self.scroll_candidates(Self::ROOT, x, y, &mut candidates);
+        }
         // `scroll_candidates` stops collecting at a barrier, so `candidates`
         // already excludes anything behind it.
         select_scroll_handler(&candidates, dx, dy)
@@ -1693,8 +1719,20 @@ impl RenderTree {
         walk: impl Fn(NodeId, f32, f32) -> Walk<T>,
     ) -> Option<T> {
         for node in self.promoted_nodes().into_iter().rev() {
-            if let Some(hit) = walk(node, x, y).hit() {
-                return Some(hit);
+            // `Blocked` is not `Miss`. An `AbsorbPointer` inside a promoted
+            // layer must stop the walk, not let it continue into the main
+            // tree — discarding it here made a barrier inside an overlay
+            // block nothing for hover, long-press, zoom and editable.
+            match walk(node, x, y) {
+                Walk::Hit(t) => return Some(t),
+                Walk::Blocked => return None,
+                Walk::Miss => {}
+            }
+            // A modal absorbs everything its content did not take.
+            if let Some(p) = &self.nodes[node].promoted {
+                if p.blocks_input && contains(&p.rect, x, y) {
+                    return None;
+                }
             }
         }
         walk(Self::ROOT, x, y).hit()
@@ -1705,10 +1743,20 @@ impl RenderTree {
     /// Drives Back and Escape: one press closes the dialog rather than the
     /// screen underneath it.
     pub fn topmost_dismisser(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        self.promoted_nodes()
-            .into_iter()
-            .rev()
-            .find_map(|n| self.nodes[n].promoted.as_ref().and_then(|p| p.on_dismiss.clone()))
+        for n in self.promoted_nodes().into_iter().rev() {
+            let p = self.nodes[n].promoted.as_ref()?;
+            if let Some(cb) = p.on_dismiss.clone() {
+                return Some(cb);
+            }
+            // Stop AT a blocking layer rather than searching past it. A modal
+            // with no dismisser of its own is not a hole to reach through —
+            // skipping it let Escape close the dialog UNDERNEATH the thing
+            // actually on top.
+            if p.blocks_input {
+                return None;
+            }
+        }
+        None
     }
 
     /// Every promoted node, in declaration (paint) order — so the LAST is
@@ -2012,6 +2060,14 @@ pub struct PromotedLayer {
     /// be looked up that way. Recorded here for those two, exactly as the
     /// engine's old flattened `OverlayRoute::on_tap` was.
     pub on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Pointer events that miss this layer's content are absorbed rather than
+    /// falling through — `InputBehavior::Block`.
+    ///
+    /// Needed as a FLAG, not just as hit regions: the click walk consults
+    /// `hits`, but `scroll_candidates` never does (only `pointer_mode == 2`
+    /// stops it), so a modal expressed purely as hit regions still let the
+    /// wheel scroll the page behind it.
+    pub blocks_input: bool,
 }
 
 impl std::fmt::Debug for PromotedLayer {

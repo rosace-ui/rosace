@@ -191,8 +191,6 @@ impl Dialog {
         }
     }
 
-    /// Compose the inner content tree from the stored parts.
-    ///
     /// Present this dialog while `open`, from a host widget's paint.
     ///
     /// The only path to the `non_modal()` and `full_page()` presentations —
@@ -214,6 +212,8 @@ impl Dialog {
         ctx.promote_at(position, &self, opts);
     }
 
+    /// Compose the inner content tree from the stored parts.
+    ///
     /// Rebuilt on each layout/paint call — construction is a few allocations,
     /// far below the cost of the paint itself.
     fn build_inner(&self) -> BoxedWidget {

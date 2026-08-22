@@ -1112,6 +1112,7 @@ impl FrameEngine {
                 }
                 let dismiss_actions = actions.clone();
                 chrome.push(crate::ChromeLayer {
+                    kind: crate::ChromeKind::ContextMenu,
                     position: LayerPosition::Absolute(rosace_core::types::Point { x: mx, y: my }),
                     widget: std::sync::Arc::new(menu),
                     input: InputBehavior::Block,
@@ -1138,6 +1139,7 @@ impl FrameEngine {
             let events = rosace_trace::flight_recorder().map(|r| r.snapshot()).unwrap_or_default();
             let rows = self.trace_panel.rows_for(&events, rosace_devtools::DEVTOOLS_TAB.get(), 200);
             chrome.push(crate::ChromeLayer {
+                kind:     crate::ChromeKind::DevTools,
                 position: LayerPosition::Fill,
                 widget:   rosace_devtools::devtools_overlay(rows),
                 scrim:    None,

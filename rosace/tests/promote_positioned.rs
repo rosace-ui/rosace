@@ -311,3 +311,169 @@ fn the_scrim_exempts_the_rect_that_opened_it() {
     h.click(200.0, 380.0);
     assert_eq!(h.dismissals.load(Ordering::SeqCst), 1, "the rest of the scrim must still dismiss");
 }
+
+/// A modal must absorb clicks on its OWN SURFACE, not just around it.
+///
+/// The barrier used to be "everything except the content", so a click on the
+/// dialog's background — its padding, or the gap between its buttons — matched
+/// nothing on the promoted layer and fell straight through to the app
+/// underneath. A modal that leaks clicks through itself is not modal.
+///
+/// The earlier test missed this because its panel registered a hit over its
+/// whole rect, leaving no inert surface to click. This one deliberately has a
+/// small button in a large panel.
+#[test]
+fn a_modal_absorbs_a_click_on_its_own_inert_surface() {
+    let _guard = exclusive();
+
+    /// 100x50, but only the top-left 20x20 is clickable.
+    struct PartlyClickable(Arc<AtomicUsize>);
+    impl Widget for PartlyClickable {
+        fn layout(&self, _c: &LayoutCtx) -> Size { Size { width: 100.0, height: 50.0 } }
+        fn paint(&self, ctx: &mut PaintCtx) {
+            ctx.fill_rect(ctx.rect, Color::rgb(200, 40, 40));
+            let hits = Arc::clone(&self.0);
+            let r = Rect {
+                origin: ctx.rect.origin,
+                size: Size { width: 20.0, height: 20.0 },
+            };
+            ctx.register_hit_rect(r, Arc::new(move || { hits.fetch_add(1, Ordering::SeqCst); }));
+        }
+    }
+    struct ModalHost(Arc<AtomicUsize>);
+    impl Widget for ModalHost {
+        fn layout(&self, c: &LayoutCtx) -> Size {
+            Size { width: c.constraints.max_width_f32(), height: 10.0 }
+        }
+        fn paint(&self, ctx: &mut PaintCtx) {
+            ctx.promote_at(
+                LayerPosition::Centered,
+                &PartlyClickable(Arc::clone(&self.0)),
+                PromoteOpts {
+                    scrim: Some(ScrimConfig {
+                        color: Color::rgba(0, 0, 0, 120),
+                        on_tap: None,
+                        exclude_rect: None,
+                    }),
+                    input: InputBehavior::Block,
+                    focus: FocusBehavior::Trap,
+                },
+            );
+        }
+    }
+    struct ModalApp { panel: Arc<AtomicUsize>, beneath: Arc<AtomicUsize> }
+    impl Component for ModalApp {
+        fn build(&self, _c: &mut Context) -> BoxedWidget {
+            Column::new()
+                .child(Beneath(Arc::clone(&self.beneath)))
+                .child(ModalHost(Arc::clone(&self.panel)))
+                .boxed()
+        }
+    }
+
+    let (panel, beneath) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let mut e = FrameEngine::new(
+        Box::new(ModalApp { panel: Arc::clone(&panel), beneath: Arc::clone(&beneath) }),
+        FontCache::embedded(),
+    );
+    let (mut a, mut b) = (SkiaCanvas::new(WIN_W, WIN_H), SkiaCanvas::new(WIN_W, WIN_H));
+    e.paint(&mut a, &mut b, &[]);
+
+    let r = e.inspect_tree().iter()
+        .find(|n| n.tag.ends_with("::PartlyClickable")).and_then(|n| n.rect)
+        .expect("the panel painted");
+
+    // Inside the panel, but past its 20x20 button — its inert surface.
+    let (x, y) = (r.origin.x + 60.0, r.origin.y + 40.0);
+    e.paint(&mut a, &mut b, &[
+        rosace_platform::InputEvent::MouseDown { x, y, button: rosace_platform::MouseButton::Left },
+        rosace_platform::InputEvent::MouseUp   { x, y, button: rosace_platform::MouseButton::Left },
+    ]);
+
+    assert_eq!(panel.load(Ordering::SeqCst), 0, "the click was not on the button");
+    assert_eq!(
+        beneath.load(Ordering::SeqCst),
+        0,
+        "a click on the modal's own surface reached the page underneath it"
+    );
+}
+
+/// The wheel must not scroll the page behind a modal either.
+///
+/// The barrier is declared as hit regions, and the scroll walk never consults
+/// those — only `AbsorbPointer`'s pointer_mode stops it — so a modal blocked
+/// clicks and let the page scroll under it.
+#[test]
+fn a_modal_absorbs_the_wheel() {
+    let _guard = exclusive();
+
+    struct ScrollPage(Arc<AtomicUsize>);
+    impl Widget for ScrollPage {
+        fn layout(&self, c: &LayoutCtx) -> Size {
+            Size { width: c.constraints.max_width_f32(), height: 200.0 }
+        }
+        fn paint(&self, ctx: &mut PaintCtx) {
+            ctx.fill_rect(ctx.rect, Color::rgb(20, 60, 20));
+            let n = Arc::clone(&self.0);
+            ctx.on_scroll(move |_, _| { n.fetch_add(1, Ordering::SeqCst); });
+        }
+    }
+    struct Host;
+    impl Widget for Host {
+        fn layout(&self, c: &LayoutCtx) -> Size {
+            Size { width: c.constraints.max_width_f32(), height: 10.0 }
+        }
+        fn paint(&self, ctx: &mut PaintCtx) {
+            ctx.promote_at(
+                LayerPosition::Centered,
+                &Panel(Arc::new(AtomicUsize::new(0))),
+                PromoteOpts {
+                    scrim: Some(ScrimConfig {
+                        color: Color::rgba(0, 0, 0, 120),
+                        on_tap: None,
+                        exclude_rect: None,
+                    }),
+                    input: InputBehavior::Block,
+                    focus: FocusBehavior::Trap,
+                },
+            );
+        }
+    }
+    struct App2(Arc<AtomicUsize>);
+    impl Component for App2 {
+        fn build(&self, _c: &mut Context) -> BoxedWidget {
+            Column::new().child(ScrollPage(Arc::clone(&self.0))).child(Host).boxed()
+        }
+    }
+
+    let scrolls = Arc::new(AtomicUsize::new(0));
+    let mut e = FrameEngine::new(Box::new(App2(Arc::clone(&scrolls))), FontCache::embedded());
+    let (mut a, mut b) = (SkiaCanvas::new(WIN_W, WIN_H), SkiaCanvas::new(WIN_W, WIN_H));
+    e.paint(&mut a, &mut b, &[]);
+    e.paint(&mut a, &mut b, &[rosace_platform::InputEvent::Scroll {
+        x: 150.0, y: 40.0, delta_x: 0.0, delta_y: -50.0,
+    }]);
+
+    assert_eq!(
+        scrolls.load(Ordering::SeqCst),
+        0,
+        "the wheel scrolled the page behind an open modal"
+    );
+}
+
+/// A bottom sheet docks to the edge. The on-screen clamp is for anchored
+/// menus near an edge, and it used to pull every edge-docked position 8px up —
+/// so every sheet floated off the bottom with the scrim showing underneath.
+#[test]
+fn bottom_anchored_reaches_the_bottom_edge() {
+    let _guard = exclusive();
+    let mut h = harness(plain(LayerPosition::BottomAnchored));
+    h.frame();
+
+    let r = h.panel_rect();
+    assert_eq!(
+        r.origin.y + r.size.height,
+        WIN_H as f32,
+        "a BottomAnchored sheet must touch the bottom edge, got {r:?}"
+    );
+}

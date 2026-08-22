@@ -307,8 +307,24 @@ fn persist_db_path(app_title: &str) -> Result<std::path::PathBuf, String> {
 
 // ── Engine chrome ─────────────────────────────────────────────────────────────
 
+/// Which piece of framework UI a chrome layer is.
+///
+/// A stable identity, NOT a position. `chrome` is built conditionally — the
+/// context menu is only pushed while one is open, DevTools only in a dev
+/// build — so an enumeration index means DevTools is key 1 with a menu open
+/// and key 0 without. `promote_keyed` would then hand it a different node
+/// each way, wiping the panel's tab selection and scroll every time you
+/// right-clicked text. This is exactly the positional-identity trap
+/// `promote_keyed` exists to avoid, walked into by its own caller.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChromeKind {
+    ContextMenu = 1,
+    DevTools    = 2,
+}
+
 /// One piece of framework-drawn UI, promoted above the app.
 pub(crate) struct ChromeLayer {
+    pub kind: ChromeKind,
     pub position: rosace_widgets::tree::LayerPosition,
     pub widget:   rosace_widgets::tree::BoxedWidget,
     pub scrim:    Option<rosace_widgets::tree::ScrimConfig>,
@@ -336,12 +352,12 @@ impl rosace_widgets::tree::Widget for RootChrome {
     fn paint(&self, ctx: &mut rosace_widgets::tree::PaintCtx) {
         let rect = ctx.rect;
         ctx.paint_child(rect, &*self.app);
-        for (i, c) in self.chrome.iter().enumerate() {
-            // Keyed, not positional: chrome appears and disappears
-            // independently (a context menu opens while DevTools is closed),
-            // and positional slots would hand one piece another's node.
+        for c in &self.chrome {
+            // Keyed by WHAT it is, not where it sits in the list: chrome
+            // appears and disappears independently, so an index is a position
+            // and would hand one piece another's node.
             ctx.promote_keyed(
-                i as u64,
+                c.kind as u64,
                 c.position.clone(),
                 &*c.widget,
                 rosace_widgets::tree::PromoteOpts {
