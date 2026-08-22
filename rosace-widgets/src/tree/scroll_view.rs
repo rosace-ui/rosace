@@ -451,7 +451,18 @@ impl ScrollView {
         let ctrl = if self.fixed_offset.is_some() {
             None
         } else {
-            Some(self.controller.clone().unwrap_or_else(|| ctx.scroll_controller()))
+            match self.controller.clone() {
+                // An EXPLICIT controller has to be recorded on the node too,
+                // not just used. Anything that looks for a scrollable
+                // ancestor structurally — `reveal`, and DevTools — walks the
+                // tree, and a controller held only by the widget is invisible
+                // to that walk: `ScrollView::controlled` was unreachable.
+                Some(c) => {
+                    ctx.adopt_scroll_controller(c.clone());
+                    Some(c)
+                }
+                None => Some(ctx.scroll_controller()),
+            }
         };
 
         let (scroll_x, scroll_y) = match (&ctrl, self.fixed_offset) {

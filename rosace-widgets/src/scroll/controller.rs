@@ -498,6 +498,57 @@ fn bounce_axis(offset: f32, delta: f32, max: f32) -> f32 {
     next.clamp(-MAX_OVERSCROLL, max + MAX_OVERSCROLL)
 }
 
+/// Where a revealed child should sit in the viewport.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ScrollAlign {
+    /// Scroll the minimum distance to bring it fully into view, and do
+    /// nothing if it already is. What "reveal the field with the error"
+    /// means, and the right default.
+    #[default]
+    Nearest,
+    /// Align the child's leading edge with the viewport's.
+    Start,
+    /// Centre it.
+    Center,
+    /// Align trailing edges.
+    End,
+}
+
+impl ScrollController {
+    /// Scroll so that `child` — a rect in CONTENT space — sits in view.
+    ///
+    /// Returns the offset it moved to, or `None` when the viewport has not
+    /// been measured yet (nothing has painted, so there is no viewport to
+    /// reveal into) — deliberately not a silent scroll to zero.
+    pub fn reveal(&self, child: rosace_core::types::Rect, align: ScrollAlign) -> Option<[f32; 2]> {
+        let vp = self.viewport_size();
+        if vp[0] <= 0.0 || vp[1] <= 0.0 {
+            return None;
+        }
+        let cur = self.offset();
+        let axis = |lead: f32, extent: f32, view: f32, cur: f32| -> f32 {
+            match align {
+                ScrollAlign::Start  => lead,
+                ScrollAlign::End    => lead + extent - view,
+                ScrollAlign::Center => lead + (extent - view) / 2.0,
+                ScrollAlign::Nearest => {
+                    if lead < cur {
+                        lead                       // off the leading edge
+                    } else if lead + extent > cur + view {
+                        lead + extent - view       // off the trailing edge
+                    } else {
+                        cur                        // already fully visible
+                    }
+                }
+            }
+        };
+        let x = axis(child.origin.x, child.size.width, vp[0], cur[0]);
+        let y = axis(child.origin.y, child.size.height, vp[1], cur[1]);
+        self.scroll_to(x, y);
+        Some(self.offset())
+    }
+}
+
 impl Default for ScrollController {
     fn default() -> Self {
         Self::new()

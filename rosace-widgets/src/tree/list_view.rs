@@ -43,6 +43,33 @@ pub struct ListView {
 }
 
 impl ListView {
+    /// Scroll `controller` so row `index` comes into view.
+    ///
+    /// A virtualized list's off-screen rows have no node and no rect — they
+    /// were never built — so this cannot go through `reveal`. It does not need
+    /// to: every row is exactly `item_extent` tall, so the row's position is
+    /// arithmetic, and exact.
+    ///
+    /// Returns `false` if the index is out of range, or if the list has not
+    /// been measured yet.
+    pub fn scroll_to_index(
+        controller: &crate::scroll::ScrollController,
+        count: usize,
+        item_extent: f32,
+        index: usize,
+        align: crate::scroll::ScrollAlign,
+    ) -> bool {
+        if index >= count {
+            return false;
+        }
+        let extent = item_extent.max(1.0);
+        let row = rosace_core::types::Rect {
+            origin: rosace_core::types::Point { x: 0.0, y: index as f32 * extent },
+            size: rosace_core::types::Size { width: 0.0, height: extent },
+        };
+        controller.reveal(row, align).is_some()
+    }
+
     /// A virtualized list of `count` rows, each `item_extent` logical pixels
     /// tall. Scroll position is implicit per-node state (D101).
     pub fn builder(

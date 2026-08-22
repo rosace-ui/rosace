@@ -1776,6 +1776,47 @@ impl RenderTree {
         }
     }
 
+    /// Scroll every enclosing scroll view so `target` comes into view.
+    ///
+    /// Returns `true` if a scrollable ancestor was found and asked to reveal
+    /// it. `false` means either there is no scroll view above it, or nothing
+    /// has painted yet so there is no geometry to reveal into — reported
+    /// rather than silently scrolling to zero.
+    ///
+    /// The rect is read from the node, so this only works for a child that
+    /// HAS painted. A virtualized list's off-screen items have no node at
+    /// all; those are reached by index instead, from their fixed extent.
+    ///
+    /// Walks outward, so a child inside nested scroll views is revealed in
+    /// each of them — revealing it in the inner one alone would leave the
+    /// inner view itself off-screen in the outer.
+    pub fn reveal(&self, target: NodeId, align: crate::scroll::ScrollAlign) -> bool {
+        let Some(child) = self.nodes.get(target).and_then(|n| n.cached_rect) else {
+            return false;
+        };
+        let mut path = Vec::new();
+        if !self.path_to(Self::ROOT, target, &mut path) {
+            return false;
+        }
+
+        // Nearest enclosing scrollable first, then outward.
+        let mut revealed = false;
+        let mut rect = child;
+        for &id in path.iter().rev().skip(1) {
+            let Some(ctrl) = self.nodes[id].scroll_ctrl.as_ref() else { continue };
+            if ctrl.reveal(rect, align).is_some() {
+                revealed = true;
+            }
+            // Continue outward in THIS view's own coordinate space: to the
+            // next scrollable up, this whole scroll view is the thing that
+            // has to become visible.
+            if let Some(r) = self.nodes[id].cached_rect {
+                rect = r;
+            }
+        }
+        revealed
+    }
+
     /// Derive the compositing layer tree from the node tree.
     ///
     /// One pre-order walk resolves, for every layer at once, what the flat

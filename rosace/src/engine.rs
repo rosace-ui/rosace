@@ -495,6 +495,15 @@ impl FrameEngine {
         self.render_tree.borrow().inspect()
     }
 
+    /// Scroll every scroll view above `node` so it comes into view.
+    ///
+    /// The engine owns the tree, so this is how an app reaches
+    /// `RenderTree::reveal` from outside a widget's own paint — after a
+    /// validation failure, say, or to follow a selection.
+    pub fn reveal(&self, node: rosace_widgets::tree::NodeId, align: rosace_widgets::scroll::ScrollAlign) -> bool {
+        self.render_tree.borrow().reveal(node, align)
+    }
+
     /// The compositing layers derived from the current tree, in paint order.
     ///
     /// Each carries its enclosing layer, its screen placement and its

@@ -993,6 +993,35 @@ impl<'a> PaintCtx<'a> {
         }
     }
 
+    /// Record an app-supplied controller on this node.
+    ///
+    /// `scroll_controller()` creates and stores one; a widget handed an
+    /// explicit controller must still put it on the node, or nothing walking
+    /// the tree for a scrollable ancestor can find it.
+    pub fn adopt_scroll_controller(&self, c: crate::scroll::ScrollController) {
+        let n = self.node;
+        c.on_invalidate(move || mark_node_dirty(n));
+        self.tree.borrow_mut().node_mut(self.node).scroll_ctrl = Some(c);
+    }
+
+    /// Scroll this widget into view in every scroll view above it.
+    ///
+    /// The framework already knows where every painted child is, so an app
+    /// never has to measure item heights and compute an offset — the thing
+    /// every other toolkit makes you do.
+    ///
+    /// ```rust,ignore
+    /// // Reveal the field that failed validation.
+    /// if field.is_invalid() { ctx.reveal(ScrollAlign::Nearest); }
+    /// ```
+    ///
+    /// Returns `false` when there is no scrollable ancestor, or when nothing
+    /// has painted yet so there is no geometry to reveal into.
+    pub fn reveal(&self, align: crate::scroll::ScrollAlign) -> bool {
+        let node = self.node;
+        self.tree.borrow().reveal(node, align)
+    }
+
     /// Impose a clip on this node and everything beneath it.
     ///
     /// Records it on the node as well as on the context, which is what lets

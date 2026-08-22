@@ -25,7 +25,7 @@ pub mod physics;
 pub mod scrollbar;
 pub mod scroll_view;
 
-pub use controller::ScrollController;
+pub use controller::{ScrollAlign, ScrollController};
 pub use physics::{
     clamp_offset, snap_to_page, MomentumState, ScrollDirection, ScrollPhysics, ScrollStyle,
 };
