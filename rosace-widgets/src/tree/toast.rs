@@ -1,6 +1,5 @@
 use rosace_core::types::{Point, Size};
 use rosace_render::Color;
-use rosace_state::Atom;
 use super::{EdgeInsets, Widget, LayoutCtx, PaintCtx};
 use super::container::draw_rounded_rect_pub;
 
@@ -63,19 +62,22 @@ impl Toast {
         self.font_size.unwrap_or(theme.typography.body_medium.size)
     }
 
-    /// Open the toast and auto-dismiss after `secs` seconds.
+    /// Call `on_dismiss` after `secs` seconds — the auto-dismiss half of
+    /// showing a toast.
     ///
-    /// Spawns a timer thread; the closing `atom.set(false)` wakes the event
-    /// loop via the registered frame-request hook, so the toast disappears
-    /// without any user input.
-    pub fn show(open: &Atom<bool>, secs: f32) {
-        open.set(true);
-        let open = open.clone();
+    /// Opening it is the app's own business (it already knows it is opening
+    /// one); this schedules the close. The callback wakes the event loop via
+    /// the registered frame-request hook, so the toast disappears with no user
+    /// input.
+    ///
+    /// ```rust,ignore
+    /// open.set(true);
+    /// Toast::dismiss_after(3.0, move || open.set(false));
+    /// ```
+    pub fn dismiss_after(secs: f32, on_dismiss: impl Fn() + Send + Sync + 'static) {
         // Web-safe timer (setTimeout on wasm; a timer thread on native) — a raw
         // `thread::spawn` aborts the whole module on wasm32.
-        rosace_state::fire_after_ms((secs * 1000.0) as u64, move || {
-            open.set(false);
-        });
+        rosace_state::fire_after_ms((secs * 1000.0) as u64, on_dismiss);
     }
 
     fn resolve_accent(&self, ctx: &PaintCtx) -> Color {

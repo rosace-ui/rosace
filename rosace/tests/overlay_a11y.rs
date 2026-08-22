@@ -45,7 +45,7 @@ impl Component for App {
                 Container::new()
                     .width(100.0)
                     .height(40.0)
-                    .dialog(self.open.clone(), || Body.boxed()),
+                    .dialog(self.open.get(), || Body.boxed()),
             )
             .boxed()
     }

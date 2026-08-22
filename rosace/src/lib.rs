@@ -538,20 +538,6 @@ impl AppBarNavExt for AppBar {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Flattened dispatch data for one overlay entry (D092). Built by the overlay
-/// pass each frame from the entry's per-entry render tree.
-#[derive(Clone)]
-struct OverlayRoute {
-    rect: rosace_core::types::Rect,
-    input: rosace_widgets::tree::InputBehavior,
-    on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
-    /// A rect exempt from `on_tap` (see `ScrimConfig::exclude_rect`) — a
-    /// click there falls through instead of dismissing this overlay.
-    on_tap_exclude: Option<rosace_core::types::Rect>,
-    hits: Vec<(rosace_core::types::Rect, Arc<dyn Fn() + Send + Sync>)>,
-    scrolls: Vec<(rosace_core::types::Rect, rosace_widgets::tree::ScrollAxes, rosace_widgets::tree::HitHandler)>,
-}
-
 /// Grow a rect by `m` logical pixels on every side.
 fn inflate_rect(r: rosace_core::types::Rect, m: f32) -> rosace_core::types::Rect {
     use rosace_core::types::{Point, Rect, Size};
@@ -625,8 +611,7 @@ pub use rosace_widgets::{
     RepaintBoundary,
     Responsive, breakpoint, WillPopScope,
     TransformLayer,
-    OverlayEntry, LayerId, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
-    push_overlay,
+    LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
     Row, Scaffold, ScrollView, ScrollAxis, Sheet,
     Slider, Spacer, Stack, Switch,
     Tab, TabBar, Text, TextArea, TextInput, Toast, ToastKind, Tooltip,
@@ -726,8 +711,8 @@ pub mod prelude {
     pub use rosace_platform::{InputEvent, MouseButton, Key};
     pub use rosace_widgets::prelude::*;
     pub use rosace_widgets::{
-        OverlayEntry, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
-        push_overlay, OverlayApi, OverlayKind,
+        LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
+        OverlayApi, OverlayKind,
     };
     pub use rosace_core::a11y::FocusNode;
     // `Semantics` is exported below but its `.role(..)` argument was not, so

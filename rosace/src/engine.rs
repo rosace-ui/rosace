@@ -15,12 +15,12 @@ use rosace_widgets::Component;
 use rosace_core::types::Rect;
 use rosace_render::SkiaCanvas;
 use rosace_widgets::tree::{
-    clear_overlays, drain_overlays, text_edit, FocusBehavior, InputBehavior,
+    text_edit, FocusBehavior, InputBehavior,
     LayerPosition, Menu, NodeId, ScrimConfig,
 };
 use rosace_widgets::clipboard::ClipboardProvider as _;
 
-use crate::{inflate_rect, paint_root, rect_contains, theme_color, OverlayRoute};
+use crate::{inflate_rect, paint_root, theme_color};
 
 /// Translate a physical key + modifiers into a [`text_edit::Command`]
 /// (D116 layer 4 — the abstract vocabulary a keymap produces). `word_mod`
@@ -242,21 +242,7 @@ pub struct FrameEngine {
     /// Overlays emitted during BUILD (`Dialog::emit`/`Snackbar::emit`) —
     /// kept until the next rebuild so they survive cache-hit frames (see
     /// the clear-before-build comment in `paint`).
-    build_overlays: Vec<rosace_widgets::tree::OverlayEntry>,
     render_tree: Rc<RefCell<rosace_widgets::tree::RenderTree>>,
-    /// Retained render trees for KEYED overlays, by `OverlayEntry::key`.
-    ///
-    /// Overlays are otherwise painted into a throwaway tree rebuilt every
-    /// frame, which silently destroys per-node retained state — `animate_to`
-    /// reads `node.anim` as `None` each frame, snaps to its target, and never
-    /// animates. Worse, it then never settles, so anything driving it
-    /// requests frames forever (the permanent repaint loop D123's
-    /// "event-driven, never frame-driven" rule exists to prevent).
-    ///
-    /// Entries are dropped when their overlay stops being emitted, so a
-    /// closed sheet does not leak its tree — and reopening genuinely starts
-    /// fresh rather than resuming a half-finished animation.
-    overlay_trees: std::collections::HashMap<u64, Rc<RefCell<rosace_widgets::tree::RenderTree>>>,
 
     // ── Focus + input state ─────────────────────────────────────────────
     focus_manager: rosace_core::a11y::FocusManager,
@@ -356,7 +342,6 @@ pub struct FrameEngine {
     /// registry only on frames its OWNER repainted — clean frames must
     /// keep the previous routes (and the overlay canvas's previous
     /// pixels) or an open menu flickers out one present after it opens.
-    overlay_routes: Vec<OverlayRoute>,
     /// DevTools element inspector (D123/O2). F12 toggles it; while on,
     /// hovering highlights the widget under the cursor and clicking selects
     /// it (both via `RenderTree::pick`), and a panel shows the selected
@@ -392,9 +377,7 @@ impl FrameEngine {
             root_mounted: false,
             root_component_id,
             last_back_handled: false,
-            build_overlays: Vec::new(),
             render_tree: Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
-            overlay_trees: std::collections::HashMap::new(),
             focus_manager: rosace_core::a11y::FocusManager::new(),
             shift_held: false,
             ctrl_held: false,
@@ -417,7 +400,6 @@ impl FrameEngine {
             context_menu_actions: Arc::new(std::sync::Mutex::new(Vec::new())),
             pending_long_press_select: Arc::new(std::sync::Mutex::new(None)),
             handle_drag: None,
-            overlay_routes: Vec::new(),
             // `ROSACE_DEVTOOLS=1` boots the element inspector already open —
             // handy when the thing you want to inspect is on the very first
             // frame, or when a window manager eats the F12 toggle.
@@ -467,8 +449,6 @@ impl FrameEngine {
         // Drop everything that can retain a module closure.
         self.built = None;
         self.root_mounted = false;
-        self.build_overlays.clear();
-        self.overlay_routes.clear();
         *self.render_tree.borrow_mut() = rosace_widgets::tree::RenderTree::new();
         self.active_drag = None;
         self.text_drag = None;
@@ -905,7 +885,6 @@ impl FrameEngine {
         // build only runs when dirty, so per-frame draining alone would
         // make a dialog vanish on the first clean frame. Paint-time
         // pushers (Dropdown, Menu, Drawer) still drain per-frame below.
-        clear_overlays();
 
         let widget = if root_is_dirty || self.built.is_none() {
             // Attribute atom writes that happen DURING this build to this
@@ -941,7 +920,6 @@ impl FrameEngine {
                 });
             }
             self.built = Some(std::sync::Arc::clone(&widget));
-            self.build_overlays = drain_overlays();
             widget
         } else {
             std::sync::Arc::clone(self.built.as_ref().unwrap())
@@ -1155,19 +1133,18 @@ impl FrameEngine {
         // DevTools (dev builds): a real widget tree (FAB + tabbed panel), so it
         // is laid out, painted, hit-tested and damage-tracked exactly like any
         // dialog — no hand-drawn chrome. Content comes from the always-on
-        // flight recorder. `devtools_overlay` still returns an `OverlayEntry`;
-        // it is unpacked here rather than changing a DevTools API that the
-        // `OverlayEntry` removal in 8.5 will revisit anyway.
+        // flight recorder.
         if devtools_fab_enabled() {
             let events = rosace_trace::flight_recorder().map(|r| r.snapshot()).unwrap_or_default();
             let rows = self.trace_panel.rows_for(&events, rosace_devtools::DEVTOOLS_TAB.get(), 200);
-            let e = rosace_devtools::devtools_overlay(rows);
             chrome.push(crate::ChromeLayer {
-                position: e.position,
-                widget:   e.widget,
-                scrim:    e.scrim,
-                input:    e.input,
-                focus:    e.focus,
+                position: LayerPosition::Fill,
+                widget:   rosace_devtools::devtools_overlay(rows),
+                scrim:    None,
+                // PassThrough: the panel and FAB take their own clicks, and
+                // everything else must reach the app underneath.
+                input:    InputBehavior::PassThrough,
+                focus:    FocusBehavior::PassThrough,
             });
         }
 
@@ -1243,34 +1220,24 @@ impl FrameEngine {
         }
         } // needs_paint
 
-        // ── Overlay pass — second recorder into overlay_canvas (D076) ───
-        // Entries come from the render tree (D091 — they persist on
-        // clean frames and clear when their owner repaints), plus the
-        // legacy thread-local registry for direct push_overlay users.
-        // Overlay widgets repaint every frame; each gets a throwaway
-        // per-entry tree whose regions become an OverlayRoute for
-        // structural input routing (D092) — no scrim hit strips.
-        let legacy_overlays = drain_overlays();
-        let bottom_inset = rosace_widgets::tree::take_bottom_overlay_inset();
-        let build_overlays = &self.build_overlays;
-        let mut overlay_routes: Vec<OverlayRoute> = Vec::new();
-        // Keys of the overlays actually emitted this frame; anything retained
-        // but absent below is a closed overlay whose tree must be released.
-        let mut live_overlay_keys: Vec<Option<u64>> = Vec::new();
+        // ── Composite pass — promoted layers into overlay_canvas ────────
+        // Promoted content was painted during the main walk into its own
+        // picture and deliberately NOT spliced into its parent's stream; it is
+        // replayed here, above the base canvas, in declaration order.
+        //
+        // This used to be a second LAYOUT AND PAINT of a parallel overlay
+        // stack, with a throwaway render tree per entry and a flattened route
+        // list for input. All of that is gone: overlays are nodes now, so they
+        // are laid out, painted, hit-tested, damage-tracked and read by
+        // assistive tech through the one tree, and this is left doing nothing
+        // but blitting pictures.
+        let _ = rosace_widgets::tree::take_bottom_overlay_inset();
         let mut overlay_pass_ran = false;
         {
-            use rosace_core::types::{Point, Rect, Size};
-
             let tree_ref = self.render_tree.borrow();
-            let overlay_ids = tree_ref.overlay_ids();
             let promoted = tree_ref.promoted_nodes();
 
-            if !overlay_ids.is_empty() || !legacy_overlays.is_empty() || !build_overlays.is_empty()
-                || !promoted.is_empty()
-                || self.dev.enabled
-                || self.trace_panel.enabled
-                || devtools_fab_enabled()
-            {
+            if !promoted.is_empty() || self.dev.enabled || self.trace_panel.enabled {
                 overlay_pass_ran = true;
                 // The engine owns the overlay clear (2026-07-19): fresh
                 // entries repaint the canvas from scratch this frame.
@@ -1302,125 +1269,6 @@ impl FrameEngine {
                     }
                 }
 
-                // Tree-attached entries carry their owning node so
-                // content-space Absolute anchors can be remapped to
-                // window space (Phase 32 tooltip-position fix); build/
-                // legacy entries are window-space already.
-                let entries = overlay_ids.iter()
-                    .map(|&(n, i)| (Some(n), &tree_ref.node(n).overlays[i]))
-                    .chain(build_overlays.iter().map(|e| (None, e)))
-                    .chain(legacy_overlays.iter().map(|e| (None, e)))
-                    .chain(std::iter::empty());
-
-                for (owner_node, entry) in entries {
-                    if let Some(scrim) = &entry.scrim {
-                        let scrim_rect = Rect {
-                            origin: Point { x: 0.0, y: 0.0 },
-                            size: Size { width: win_w, height: win_h },
-                        };
-                        ov_recorder.push(rosace_render::DrawCommand::FillRect {
-                            rect: scrim_rect,
-                            color: scrim.color,
-                        });
-                    }
-
-                    // A `Fill` overlay must be laid out TIGHT to the window so
-                    // its content (e.g. the DevTools FAB `Positioned` bottom-
-                    // right) resolves against the full window, not against its
-                    // own collapsed content size. Loose constraints let a Stack
-                    // shrink to its child — which put the FAB's hit region at
-                    // the top-left over app content and stole clicks (live bug).
-                    let layout_c = if matches!(entry.position, LayerPosition::Fill) {
-                        rosace_layout::Constraints::tight(win_w, win_h)
-                    } else {
-                        rosace_layout::Constraints::loose(win_w, win_h)
-                    };
-                    let lctx = rosace_widgets::tree::LayoutCtx::new(
-                        layout_c, font, &current_theme,
-                    );
-                    let widget_size = entry.widget.layout(&lctx);
-                    let origin = match &entry.position {
-                        LayerPosition::Absolute(p) => match owner_node {
-                            Some(node) => tree_ref.content_to_screen(node, *p),
-                            None => *p,
-                        },
-                        LayerPosition::AboveCentered(anchor) => {
-                            let top_left = match owner_node {
-                                Some(node) => tree_ref.content_to_screen(node, anchor.origin),
-                                None => anchor.origin,
-                            };
-                            Point {
-                                x: top_left.x + (anchor.size.width - widget_size.width) / 2.0,
-                                y: top_left.y - widget_size.height - 8.0,
-                            }
-                        }
-                        LayerPosition::Centered => Point {
-                            x: ((win_w - widget_size.width) / 2.0).max(0.0),
-                            y: ((win_h - widget_size.height) / 2.0).max(0.0),
-                        },
-                        LayerPosition::BottomAnchored => Point {
-                            x: 0.0,
-                            // Docked above the Scaffold's bottom bar when
-                            // present (Android snackbar convention).
-                            y: (win_h - widget_size.height - bottom_inset).max(0.0),
-                        },
-                        LayerPosition::BottomCenter => Point {
-                            x: ((win_w - widget_size.width) / 2.0).max(0.0),
-                            // Float above the Scaffold's bottom bar, not
-                            // over it (user-reported: the snackbar sat on
-                            // top of the bottom navigation).
-                            y: (win_h - widget_size.height - 16.0 - bottom_inset).max(0.0),
-                        },
-                        LayerPosition::Fill => Point { x: 0.0, y: 0.0 },
-                    };
-                    // Window-aware: clamp the overlay inside the
-                    // window with an 8px margin so anchored menus
-                    // never render off-screen.
-                    let origin = Point {
-                        x: origin.x.min((win_w - widget_size.width - 8.0).max(0.0)).max(0.0),
-                        y: origin.y.min((win_h - widget_size.height - 8.0).max(0.0)).max(0.0),
-                    };
-                    let widget_rect = Rect { origin, size: widget_size };
-
-                    // A KEYED overlay paints into a tree retained across
-                    // frames, so its per-node state (animation, scroll, drag)
-                    // survives; an unkeyed one keeps the original throwaway
-                    // tree. Its regions are flattened into the dispatch route
-                    // either way.
-                    let ov_tree = match entry.key {
-                        Some(k) => Rc::clone(
-                            self.overlay_trees.entry(k).or_insert_with(|| {
-                                Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new()))
-                            }),
-                        ),
-                        None => Rc::new(RefCell::new(rosace_widgets::tree::RenderTree::new())),
-                    };
-                    // Retained trees must be told a new frame started, or the
-                    // per-paint declarations (hits, scrolls, semantics) from
-                    // the previous frame pile up instead of being replaced.
-                    ov_tree.borrow_mut().start_frame();
-                    live_overlay_keys.push(entry.key);
-                    let mut ov_ctx = rosace_widgets::tree::PaintCtx::root(
-                        &mut ov_recorder,
-                        widget_rect,
-                        font,
-                        current_theme.clone(),
-                        Rc::clone(&ov_tree),
-                    );
-                    entry.widget.paint(&mut ov_ctx);
-                    drop(ov_ctx);
-
-                    let ov_tree = ov_tree.borrow();
-                    overlay_routes.push(OverlayRoute {
-                        rect: widget_rect,
-                        input: entry.input,
-                        on_tap: entry.scrim.as_ref().and_then(|s| s.on_tap.clone()),
-                        on_tap_exclude: entry.scrim.as_ref().and_then(|s| s.exclude_rect),
-                        hits: ov_tree.collect_hits(),
-                        scrolls: ov_tree.collect_scrolls(),
-                    });
-                }
-
                 // ── DevTools inspector chrome (D123/O2) ──────────────────
                 // Drawn LAST, above app overlays. Reads the same read-only
                 // `inspect()` snapshot the picker uses, so what it outlines
@@ -1433,44 +1281,22 @@ impl FrameEngine {
                     );
                 }
 
-                // Release trees for overlays that are no longer emitted. A
-                // closed sheet must not keep its tree (a leak), and reopening
-                // should genuinely start fresh rather than resume a
-                // half-finished animation from last time it was open.
-                self.overlay_trees.retain(|k, _| live_overlay_keys.contains(&Some(*k)));
-
-                // (The DevTools FAB + panel are now a real widget overlay,
-                // injected above via `devtools_entry` and rendered through the
-                // normal overlay pipeline — no hand-drawn chrome here.)
-
                 // Play overlay picture into the dedicated overlay canvas (D078).
                 let ov_picture = ov_recorder.finish();
                 overlay_canvas.play_picture(&ov_picture, font);
             }
         }
-        // Retained-overlay update (2026-07-19, see `overlay_routes` field):
-        // a frame that ran the pass replaces routes; a CONTENT-CHANGED
-        // frame (an atom write — e.g. the dropdown's `open` flipping
-        // false) whose widgets declared no overlays clears the leftovers;
-        // every other frame — engine-skipped animated presents, resize
-        // and hover frames whose picture-cache replay never re-runs the
-        // owner's paint — keeps pixels + routes so an open menu survives.
-        // (Keyed on `content_changed`, NOT `needs_paint`: startup/resize
-        // frames repaint from cached pictures without re-running widget
-        // paint, so a paint-time `push_overlay` can't recur there — found
-        // live as the dropdown flickering out one present after opening.
-        // Known honest gap: an atom write that repaints an UNRELATED
-        // subtree while a menu is open also clears it — acceptable until
-        // overlays are tree-retained like every other declaration.)
-        if overlay_pass_ran {
-            self.overlay_routes = overlay_routes;
-        } else if content_changed {
-            self.overlay_routes.clear();
-            if overlay_canvas.has_drawn() {
-                overlay_canvas.clear_transparent();
-            }
+        // A frame that composited nothing must clear the overlay canvas, or
+        // the last promoted layer stays on screen after it closes.
+        //
+        // This used to be an elaborate rule about when to keep or drop a
+        // flattened route list, with a documented gap (an unrelated atom write
+        // could clear an open menu). Promoted layers made it obsolete: they
+        // live on their nodes, so they persist and disappear exactly when
+        // their declaring widget does, with nothing to reconcile.
+        if !overlay_pass_ran && content_changed && overlay_canvas.has_drawn() {
+            overlay_canvas.clear_transparent();
         }
-        let overlay_routes = self.overlay_routes.clone();
 
         // ── TransformLayer pass (D088/D090) ─────────────────────────────
         // Each entry's content is rendered ONCE into its own content-
@@ -1653,46 +1479,13 @@ impl FrameEngine {
                     if let Some(c) = &self.lp_cancel {
                         c.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
+                    // Overlays used to be dispatched here, from a flattened
+                    // route list, ahead of the main tree. They are promoted
+                    // nodes now and `hit_test` tries promoted layers first, so
+                    // the ordinary path below already gives them priority —
+                    // including press DEFERRAL, since `pending_press` defers
+                    // every hit to MouseUp regardless of where it came from.
                     let mut handled = false;
-                    for route in overlay_routes.iter().rev() {
-                        if let Some((_, cb)) = route.hits.iter().rev()
-                            .find(|(r, _)| rect_contains(r, *x, *y))
-                        {
-                            // Deferred to MouseUp (see `pending_overlay_press`'s
-                            // doc comment) — a button inside a Dialog/Dropdown/
-                            // menu overlay must not fire on touch-down either.
-                            self.pending_overlay_press = Some(cb.clone());
-                            handled = true;
-                            break;
-                        }
-                        if rect_contains(&route.rect, *x, *y)
-                            && route.input == rosace_widgets::tree::InputBehavior::Block
-                        {
-                            handled = true; // a MODAL overlay's surface absorbs;
-                            break;          // PassThrough (e.g. the DevTools FAB
-                        }                   // overlay) must let misses fall through
-                        if let Some(on_tap) = &route.on_tap {
-                            let excluded = route.on_tap_exclude
-                                .is_some_and(|r| rect_contains(&r, *x, *y));
-                            if !excluded {
-                                on_tap();
-                                if route.input == rosace_widgets::tree::InputBehavior::Block {
-                                    handled = true;
-                                    break;
-                                }
-                                // PassThrough: dismissing this overlay does
-                                // NOT consume the click — e.g. clicking a
-                                // different Dropdown's trigger while this
-                                // one is open must both close this one AND
-                                // still reach that trigger's own hit region
-                                // below, in the same click.
-                            }
-                        }
-                        if route.input == rosace_widgets::tree::InputBehavior::Block {
-                            handled = true;
-                            break;
-                        }
-                    }
                     // Selection-handle grab (D116 Step 7) takes priority
                     // over a normal click/drag — landing within
                     // `HANDLE_HIT_RADIUS` of either selection endpoint's
@@ -2074,26 +1867,7 @@ impl FrameEngine {
                     }
                 }
                 rosace_platform::InputEvent::Scroll { x, y, delta_x, delta_y } => {
-                    let mut handled = false;
-                    for route in overlay_routes.iter().rev() {
-                        let candidates: Vec<_> = route.scrolls.iter().rev()
-                            .filter(|(r, _, _)| rect_contains(r, *x, *y))
-                            .map(|(_, a, cb)| (*a, cb.clone()))
-                            .collect();
-                        if let Some(cb) = rosace_widgets::tree::render_tree::select_scroll_handler(
-                            &candidates, *delta_x, *delta_y,
-                        ) {
-                            cb(*delta_x, *delta_y);
-                            handled = true;
-                            break;
-                        }
-                        if rect_contains(&route.rect, *x, *y)
-                            && route.input == rosace_widgets::tree::InputBehavior::Block
-                        {
-                            handled = true;
-                            break;
-                        }
-                    }
+                    let handled = false;
                     if !handled {
                         let cb = self.render_tree.borrow().scroll_test(*x, *y, *delta_x, *delta_y);
                         if let Some(cb) = cb {
@@ -2115,11 +1889,7 @@ impl FrameEngine {
                     // Overlays first is what stops the classic bug of a
                     // single back press closing a dialog AND the screen
                     // underneath it.
-                    let dismissed = overlay_routes.iter().rev()
-                        .find_map(|r| r.on_tap.clone())
-                        // Promoted overlays declare their dismisser on the
-                        // node; they are not in the flattened route list.
-                        .or_else(|| self.render_tree.borrow().topmost_dismisser())
+                    let dismissed = self.render_tree.borrow().topmost_dismisser()
                         .map(|on_tap| { on_tap(); true })
                         .unwrap_or(false);
                     let handled = dismissed || rosace_core::nav_back::dispatch_back();
@@ -2130,10 +1900,7 @@ impl FrameEngine {
                 } => {
                     // Dismiss the topmost overlay that has a scrim
                     // dismisser (dialog, sheet, dropdown).
-                    if let Some(on_tap) = overlay_routes.iter().rev()
-                        .find_map(|r| r.on_tap.clone())
-                        .or_else(|| self.render_tree.borrow().topmost_dismisser())
-                    {
+                    if let Some(on_tap) = self.render_tree.borrow().topmost_dismisser() {
                         on_tap();
                     }
                 }
@@ -3377,7 +3144,8 @@ mod tests {
                 use rosace_widgets::tree::OverlayApi;
                 let o = self.0.clone();
                 w::Text::new("host")
-                    .sheet(o, || Arc::new(w::Text::new("sheet body")))
+                    .sheet(o.get(), || Arc::new(w::Text::new("sheet body")))
+                    .on_open_change({ let o = o.clone(); move |v| o.set(v) })
                     .boxed()
             }
         }
@@ -3418,7 +3186,10 @@ mod tests {
         struct Host(rosace_state::Atom<bool>);
         impl w::Widget for Host {
             fn paint(&self, ctx: &mut w::PaintCtx) {
-                w::Drawer::new(self.0.clone(), || Arc::new(w::Text::new("drawer body"))).emit();
+                let open = self.0.clone();
+                w::Drawer::new(open.get(), || Arc::new(w::Text::new("drawer body")))
+                    .on_open_change(move |v| open.set(v))
+                    .emit(ctx);
                 let _ = ctx;
             }
         }
@@ -3461,7 +3232,7 @@ mod tests {
             fn build(&self, _ctx: &mut Context) -> BoxedWidget {
                 use rosace_widgets::tree::OverlayApi;
                 w::Text::new("host")
-                    .dialog(self.0.clone(), || Arc::new(w::Text::new("must choose")))
+                    .dialog(self.0.get(), || Arc::new(w::Text::new("must choose")))
                     .non_dismissible()
                     .boxed()
             }
@@ -3530,7 +3301,7 @@ mod tests {
                 use rosace_widgets::tree::OverlayApi;
                 let seen = Arc::clone(&self.1);
                 w::Text::new("host")
-                    .sheet(self.0.clone(), move || Arc::new(Probe(Arc::clone(&seen))))
+                    .sheet(self.0.get(), move || Arc::new(Probe(Arc::clone(&seen))))
                     .boxed()
             }
         }
@@ -4749,24 +4520,32 @@ mod tests {
 
     // ── Build-time overlay emission (Phase 32 bug fix) ───────────────────
 
-    /// The gallery pattern: a snackbar/dialog emitted from `build()` while
-    /// an atom is open.
+    /// The gallery pattern, in its supported form: the overlay is DECLARED in
+    /// `build()` and promoted during paint.
+    ///
+    /// It used to be emitted from `build()` directly, through a thread-local
+    /// registry. Promotion needs a `PaintCtx`, which `build()` has not got, so
+    /// that entry point is gone — but the invariant it existed for is the one
+    /// this test is really about, and it now holds for free: a promoted node
+    /// survives a cache-hit frame because a replaying parent never resets it.
     struct BuildEmitsSnackbar {
         captured: Arc<OnceLock<rosace_state::Atom<bool>>>,
     }
     impl Component for BuildEmitsSnackbar {
         fn build(&self, ctx: &mut Context) -> BoxedWidget {
+            use rosace_widgets::tree::OverlayApi;
             let open = ctx.state(false);
             let _ = self.captured.set(open.clone());
-            if open.get() {
-                rosace_widgets::tree::Snackbar::new("saved").emit();
-            }
-            rosace_widgets::tree::Text::new("body").boxed()
+            rosace_widgets::tree::Text::new("body")
+                .toast(open.get(), || {
+                    Arc::new(rosace_widgets::tree::Snackbar::new("saved"))
+                })
+                .boxed()
         }
     }
 
     #[test]
-    fn a_snackbar_emitted_from_build_paints_and_survives_cache_hit_frames() {
+    fn a_declared_snackbar_paints_and_survives_cache_hit_frames() {
         let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let captured = Arc::new(OnceLock::new());
         let mut engine = FrameEngine::new(
@@ -4782,10 +4561,11 @@ mod tests {
         captured.get().unwrap().set(true);
         overlay.clear_transparent();
         engine.paint(&mut canvas, &mut overlay, &[]);
-        assert!(overlay.has_drawn(), "open (dirty frame): the build-emitted snackbar must paint");
+        assert!(overlay.has_drawn(), "open (dirty frame): the declared snackbar must paint");
 
-        // A cache-hit frame (nothing dirty) must KEEP showing it — build
-        // doesn't rerun, so the engine's persisted build_overlays carry it.
+        // A cache-hit frame (nothing dirty) must KEEP showing it: build does
+        // not rerun, and the promoted node persists because its replaying
+        // parent never resets it.
         overlay.clear_transparent();
         engine.paint(&mut canvas, &mut overlay, &[]);
         assert!(overlay.has_drawn(), "open (cache-hit frame): the snackbar must persist");
@@ -5627,9 +5407,10 @@ mod tests {
                 let o = open.clone();
                 rosace_widgets::tree::Button::new("Open")
                     .on_press(move || o.set(true))
-                    .dialog(open.clone(), || Arc::new(
+                    .dialog(open.get(), || Arc::new(
                         rosace_widgets::tree::Dialog::new("Hi").message("there"),
                     ))
+                    .on_open_change({ let open = open.clone(); move |v| open.set(v) })
                     .boxed()
             }
         }

@@ -152,7 +152,7 @@ pub fn panel_lines(snapshot: &[InspectNode], node: NodeId) -> Option<Vec<String>
     let mut flags = Vec::new();
     if n.hit_count > 0 { flags.push(format!("hits {}", n.hit_count)); }
     if n.scroll_count > 0 { flags.push(format!("scroll {}", n.scroll_count)); }
-    if n.overlay_count > 0 { flags.push(format!("overlay {}", n.overlay_count)); }
+    if n.promoted { flags.push("promoted".to_string()); }
     if n.has_editable { flags.push("editable".to_string()); }
     if !flags.is_empty() {
         lines.push(flags.join("  "));

@@ -1,7 +1,6 @@
 use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::PictureRecorder;
-use rosace_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx, TransformLayerEntry};
 
 /// Captures a child widget into an independent Picture and applies a 2D scroll
@@ -14,9 +13,9 @@ use super::{Widget, LayoutCtx, PaintCtx, TransformLayerEntry};
 pub struct TransformLayer<W: Widget + Send + Sync + 'static> {
     pub child:      W,
     /// Scroll offset in **logical** pixels, positive = scroll down.
-    pub scroll_y:   Atom<f32>,
+    pub scroll_y:   f32,
     /// Horizontal scroll offset in logical pixels.
-    pub scroll_x:   Atom<f32>,
+    pub scroll_x:   f32,
     /// Viewport height in logical pixels — content beyond this is clipped.
     pub viewport_h: f32,
 }
@@ -60,14 +59,12 @@ fn clamp_to_texture_cap(size: Size) -> Size {
 }
 
 impl<W: Widget + Send + Sync + 'static> TransformLayer<W> {
-    pub fn new(child: W, viewport_h: f32, scroll_y: Atom<f32>) -> Self {
-        Self {
-            child,
-            scroll_y,
-            scroll_x: rosace_state::use_atom(0.0_f32),
-            viewport_h,
-        }
+    pub fn new(child: W, viewport_h: f32, scroll_y: f32) -> Self {
+        Self { child, scroll_y, scroll_x: 0.0, viewport_h }
     }
+
+    /// Horizontal offset, for a layer that scrolls on both axes.
+    pub fn scroll_x(mut self, x: f32) -> Self { self.scroll_x = x; self }
 }
 
 impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
@@ -85,8 +82,7 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
-        let scroll_y = self.scroll_y.get();
-        let scroll_x = self.scroll_x.get();
+        let (scroll_y, scroll_x) = (self.scroll_y, self.scroll_x);
         let vp_rect  = ctx.rect;
 
         // Measure child with unconstrained height to get its natural size.

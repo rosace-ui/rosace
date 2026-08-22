@@ -6,21 +6,6 @@ use super::BoxedWidget;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct LayerId(pub u64);
-
-impl LayerId {
-    pub fn new() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        LayerId(COUNTER.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl Default for LayerId {
-    fn default() -> Self { LayerId::new() }
-}
-
 /// Where the overlay widget is placed in window-pixel space.
 #[derive(Clone, Debug)]
 pub enum LayerPosition {
@@ -88,75 +73,10 @@ impl std::fmt::Debug for ScrimConfig {
     }
 }
 
-/// A single entry in the overlay stack.
-///
-/// Entries are painted top-to-bottom in insertion order (last = topmost).
-/// See D058 in DECISIONS.md for the full architecture.
-pub struct OverlayEntry {
-    pub id:       LayerId,
-    /// Stable identity ACROSS FRAMES, unlike `id` (a fresh counter value on
-    /// every `OverlayEntry::new`, i.e. every frame the overlay is re-emitted).
-    ///
-    /// When set, the engine retains this overlay's render tree between frames
-    /// instead of painting into a throwaway one — which is what makes
-    /// per-node retained state (`animate_to`'s eased value, scroll offsets,
-    /// drag offsets) survive at all inside an overlay. Callers pass something
-    /// genuinely stable; the overlay APIs use their `open` atom's id.
-    ///
-    /// `None` keeps the original throwaway behaviour, so nothing that does
-    /// not opt in changes.
-    pub key:      Option<u64>,
-    pub position: LayerPosition,
-    pub widget:   BoxedWidget,
-    pub input:    InputBehavior,
-    pub focus:    FocusBehavior,
-    pub scrim:    Option<ScrimConfig>,
-}
-
-impl OverlayEntry {
-    /// Give this overlay a cross-frame identity so its render tree is
-    /// retained — see [`OverlayEntry::key`].
-    pub fn key(mut self, key: u64) -> Self {
-        self.key = Some(key);
-        self
-    }
-
-    pub fn new(position: LayerPosition, widget: impl super::Widget + 'static) -> Self {
-        Self {
-            id: LayerId::new(),
-            key: None,
-            position,
-            widget: Arc::new(widget),
-            input: InputBehavior::PassThrough,
-            focus: FocusBehavior::PassThrough,
-            scrim: None,
-        }
-    }
-
-    pub fn input(mut self, b: InputBehavior) -> Self { self.input = b; self }
-    pub fn focus(mut self, b: FocusBehavior) -> Self { self.focus = b; self }
-    pub fn scrim(mut self, s: ScrimConfig) -> Self { self.scrim = Some(s); self }
-}
-
-// ── Thread-local registry ─────────────────────────────────────────────────────
-
-thread_local! {
-    static OVERLAY_ENTRIES: RefCell<Vec<OverlayEntry>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Push an overlay entry from within a widget's `paint()` call.
-/// The entry will be composited above the main tree for this frame.
-pub fn push_overlay(entry: OverlayEntry) {
-    OVERLAY_ENTRIES.with(|v| v.borrow_mut().push(entry));
-}
-
-/// Drain all pending overlay entries. Called once per frame by the render loop
-/// after the main paint pass, before the second (overlay) recorder pass.
-pub fn drain_overlays() -> Vec<OverlayEntry> {
-    OVERLAY_ENTRIES.with(|v| v.borrow_mut().drain(..).collect())
-}
-
-/// Clear any leftover overlay entries from the previous frame.
-pub fn clear_overlays() {
-    OVERLAY_ENTRIES.with(|v| v.borrow_mut().clear());
-}
+// The overlay ENTRY type and its thread-local registry are gone. An overlay is
+// a promoted node now: `PaintCtx::promote_at` places it, the node carries its
+// focus policy and dismisser, and the render tree lays it out, paints it,
+// hit-tests it and hands it to assistive tech like anything else. A parallel
+// stack with its own retained trees and its own dispatch list was the third
+// compositing mechanism in the engine; this is the commit where it stops
+// existing.

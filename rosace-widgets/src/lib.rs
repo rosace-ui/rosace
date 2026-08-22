@@ -72,9 +72,8 @@ pub use tree::RectReader;
 pub use tree::RepaintBoundary;
 pub use tree::TransformLayer;
 pub use tree::{
-    OverlayEntry, LayerId, LayerPosition,
+    LayerPosition,
     InputBehavior, FocusBehavior, ScrimConfig,
-    push_overlay, drain_overlays, clear_overlays,
 };
 pub use tree::{OverlayApi, OverlayKind};
 pub use tree::FocusApi;

@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use rosace_core::types::{Point, Rect, Size};
 use rosace_render::Color;
-use rosace_state::Atom;
 
 use super::container::draw_rounded_rect_pub;
 use super::{EdgeInsets, LayoutCtx, PaintCtx, Widget};
@@ -79,29 +78,29 @@ impl Snackbar {
     /// declared). Call while your open-atom is true; same per-frame
     /// re-push convention as `Drawer::emit`. Clicks outside it pass
     /// through; the action button still receives its own hits.
-    pub fn emit(self) {
-        use super::overlay::{push_overlay, InputBehavior, FocusBehavior, LayerPosition, OverlayEntry};
-        // Android-convention docked bar (user-specified): full width,
-        // flush with the Scaffold's bottom — the engine raises
-        // BottomAnchored overlays above the bottom nav bar when one is
-        // present (bottom-overlay-inset channel).
-        push_overlay(
-            OverlayEntry::new(LayerPosition::BottomAnchored, self)
-                .input(InputBehavior::PassThrough)
-                .focus(FocusBehavior::Inert),
+    pub fn emit(self, ctx: &mut PaintCtx) {
+        use super::overlay::{InputBehavior, FocusBehavior, LayerPosition};
+        // Android-convention docked bar (user-specified): full width, flush
+        // with the Scaffold's bottom — a `BottomAnchored` promotion sits above
+        // the bottom nav bar when one is present (bottom-overlay-inset
+        // channel).
+        ctx.promote_at(
+            LayerPosition::BottomAnchored,
+            &self,
+            super::PromoteOpts {
+                scrim: None,
+                input: InputBehavior::PassThrough,
+                focus: FocusBehavior::Inert,
+            },
         );
     }
 
-    /// Open the snackbar and auto-dismiss after `secs` seconds — same
-    /// timer model as [`super::Toast::show`].
-    pub fn show(open: &Atom<bool>, secs: f32) {
-        open.set(true);
-        let open = open.clone();
-        // Web-safe timer (see [`super::Toast::show`]) — `thread::spawn` aborts
-        // the module on wasm32.
-        rosace_state::fire_after_ms((secs * 1000.0) as u64, move || {
-            open.set(false);
-        });
+    /// Call `on_dismiss` after `secs` seconds — same timer model as
+    /// [`super::Toast::dismiss_after`].
+    pub fn dismiss_after(secs: f32, on_dismiss: impl Fn() + Send + Sync + 'static) {
+        // Web-safe timer (see [`super::Toast::dismiss_after`]) —
+        // `thread::spawn` aborts the module on wasm32.
+        rosace_state::fire_after_ms((secs * 1000.0) as u64, on_dismiss);
     }
 }
 

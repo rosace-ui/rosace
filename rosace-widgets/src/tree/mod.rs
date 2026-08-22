@@ -127,8 +127,7 @@ pub use list_tile::ListTile;
 pub use list_view::ListView;
 pub use nav_rail::{NavItem, NavRail};
 pub use overlay::{
-    LayerId, LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
-    OverlayEntry, push_overlay, drain_overlays, clear_overlays,
+    LayerPosition, InputBehavior, FocusBehavior, ScrimConfig,
 };
 pub use overlay_api::{OverlayApi, OverlayKind, WithOverlay};
 pub use padding::EdgeInsets;
@@ -1553,13 +1552,6 @@ impl<'a> PaintCtx<'a> {
         for cmd in &picture.commands {
             self.recorder.push(cmd.morph(src.origin, dst.origin, sx, sy));
         }
-    }
-
-        /// Attach an overlay entry to this node (called from `WithOverlay::paint`).
-    /// The entry persists on the node across cache-hit frames and is cleared
-    /// when the node repaints — open overlays cannot vanish on clean frames.
-    pub fn attach_overlay(&self, entry: OverlayEntry) {
-        self.tree.borrow_mut().node_mut(self.node).overlays.push(entry);
     }
 
     /// Attach a transform-layer entry to this node (called from

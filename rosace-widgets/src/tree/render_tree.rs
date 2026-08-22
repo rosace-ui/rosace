@@ -32,7 +32,6 @@ use rosace_core::types::{Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Picture;
 
-use super::overlay::OverlayEntry;
 use super::TransformLayerEntry;
 
 pub type NodeId = usize;
@@ -159,7 +158,6 @@ pub struct TreeNode {
     pub scrolls:    Vec<ScrollRegion>,
     pub zooms:      Vec<ZoomRegion>,
     pub focus:      Vec<rosace_core::a11y::FocusNode>,
-    pub overlays:   Vec<OverlayEntry>,
     pub transforms: Vec<TransformLayerEntry>,
     /// The clip this node IMPOSES on itself and everything beneath it, in the
     /// coordinate space its own rect is declared in.
@@ -574,7 +572,6 @@ impl RenderTree {
         n.scrolls.clear();
         n.zooms.clear();
         n.focus.clear();
-        n.overlays.clear();
         n.transforms.clear();
         n.clip = None;
         n.promoted = None;
@@ -1856,22 +1853,6 @@ impl RenderTree {
         false
     }
 
-    pub fn overlay_ids(&self) -> Vec<(NodeId, usize)> {
-        let mut out = Vec::new();
-        self.overlay_ids_node(Self::ROOT, &mut out);
-        out
-    }
-
-    fn overlay_ids_node(&self, id: NodeId, out: &mut Vec<(NodeId, usize)>) {
-        let n = &self.nodes[id];
-        for i in 0..n.overlays.len() {
-            out.push((id, i));
-        }
-        for &child in &n.children {
-            self.overlay_ids_node(child, out);
-        }
-    }
-
     /// All transform-layer entries in tree order.
     pub fn transform_ids(&self) -> Vec<(NodeId, usize)> {
         let mut out = Vec::new();
@@ -1919,7 +1900,7 @@ impl RenderTree {
                 .collect(),
             hit_count: n.hits.len() + n.hits_at.len() + n.long_hits.len(),
             scroll_count: n.scrolls.len(),
-            overlay_count: n.overlays.len(),
+            promoted: n.promoted.is_some(),
             has_editable: n.editable.is_some(),
             hovered: n.hovered,
             pressed: n.pressed,
@@ -1984,7 +1965,9 @@ pub struct InspectNode {
     pub semantics: Vec<(rosace_core::Role, Option<String>)>,
     pub hit_count: usize,
     pub scroll_count: usize,
-    pub overlay_count: usize,
+    /// This node composites at the root layer — a dialog, menu, toast or
+    /// any other portal.
+    pub promoted: bool,
     pub has_editable: bool,
     pub hovered: bool,
     pub pressed: bool,

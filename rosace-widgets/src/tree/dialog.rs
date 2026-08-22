@@ -4,14 +4,13 @@ use rosace_core::types::Size;
 use rosace_layout::Constraints;
 use rosace_render::Color;
 use rosace_shader::ShaderMaterial;
-use rosace_state::Atom;
 use super::{Widget, LayoutCtx, PaintCtx, BoxedWidget};
 use super::button::{Button, ButtonVariant};
 use super::column::Column;
 use super::container::draw_rounded_rect_pub;
 use super::material::{resolve_material, DialogMaterial};
 use super::overlay::{
-    FocusBehavior, InputBehavior, LayerPosition, OverlayEntry, ScrimConfig, push_overlay,
+    FocusBehavior, InputBehavior, LayerPosition, ScrimConfig,
 };
 use super::padding::EdgeInsets;
 use super::row::Row;
@@ -139,56 +138,57 @@ impl Dialog {
     /// to the barrier (scrim tap / Escape) where the presentation has one;
     /// [`DialogPresentation::NonModal`] has no barrier, so `on_dismiss` is
     /// simply unused there.
-    pub fn overlay_entry(self, on_dismiss: impl Fn() + Send + Sync + 'static) -> OverlayEntry {
+    /// The pure presentation→placement mapping: what position and policy this
+    /// dialog is promoted with. `on_dismiss` is wired to the barrier (scrim
+    /// tap / Escape) where the presentation has one; `NonModal` has no
+    /// barrier, so it is simply unused there.
+    fn promote_spec(
+        &self,
+        on_dismiss: Arc<dyn Fn() + Send + Sync>,
+    ) -> (LayerPosition, super::PromoteOpts) {
         match self.presentation {
-            DialogPresentation::Modal => {
-                OverlayEntry::new(LayerPosition::Centered, self)
-                    .input(InputBehavior::Block)
-                    .focus(FocusBehavior::Trap)
-                    .scrim(ScrimConfig {
+            DialogPresentation::Modal => (
+                LayerPosition::Centered,
+                super::PromoteOpts {
+                    scrim: Some(ScrimConfig {
                         // A modal scrim is black in every theme by design
-                        // (Material specifies black at a fixed opacity) —
-                        // it dims whatever is behind it rather than
-                        // participating in the palette. Deliberate constant,
-                        // not an unswept literal.
+                        // (Material specifies black at a fixed opacity) — it
+                        // dims what is behind it rather than participating in
+                        // the palette. Deliberate constant, not an unswept
+                        // literal.
                         color: Color::rgba(0, 0, 0, 160),
-                        on_tap: Some(Arc::new(on_dismiss)),
+                        on_tap: Some(on_dismiss),
                         exclude_rect: None,
-                    })
-            }
-            DialogPresentation::NonModal => {
-                OverlayEntry::new(LayerPosition::Centered, self)
-                    .input(InputBehavior::PassThrough)
-                    .focus(FocusBehavior::PassThrough)
-            }
-            DialogPresentation::FullPage => {
-                // The transparent scrim draws nothing visible and can never
-                // be tapped (the page covers the window), but it carries the
-                // dismisser so Escape still closes the page — same dismissal
-                // key the modal presentation honors.
-                OverlayEntry::new(LayerPosition::Fill, self)
-                    .input(InputBehavior::Block)
-                    .focus(FocusBehavior::Trap)
-                    .scrim(ScrimConfig {
+                    }),
+                    input: InputBehavior::Block,
+                    focus: FocusBehavior::Trap,
+                },
+            ),
+            DialogPresentation::NonModal => (
+                LayerPosition::Centered,
+                super::PromoteOpts {
+                    scrim: None,
+                    input: InputBehavior::PassThrough,
+                    focus: FocusBehavior::PassThrough,
+                },
+            ),
+            // The transparent scrim draws nothing visible and can never be
+            // tapped (the page covers the window), but it carries the
+            // dismisser so Escape still closes the page — the same key the
+            // modal presentation honours.
+            DialogPresentation::FullPage => (
+                LayerPosition::Fill,
+                super::PromoteOpts {
+                    scrim: Some(ScrimConfig {
                         color: Color::TRANSPARENT,
-                        on_tap: Some(Arc::new(on_dismiss)),
+                        on_tap: Some(on_dismiss),
                         exclude_rect: None,
-                    })
-            }
+                    }),
+                    input: InputBehavior::Block,
+                    focus: FocusBehavior::Trap,
+                },
+            ),
         }
-    }
-
-    /// Present via the overlay stack while `open` is true — same per-frame
-    /// re-push convention as [`Drawer::emit`] / [`Snackbar::emit`]: call from
-    /// a host widget's paint (or the app's build) every frame the dialog
-    /// should be visible. The barrier dismisser sets `open` to false.
-    ///
-    /// [`Drawer::emit`]: super::drawer::Drawer::emit
-    /// [`Snackbar::emit`]: super::snackbar::Snackbar::emit
-    pub fn emit(self, open: &Atom<bool>) {
-        if !open.get() { return; }
-        let close = open.clone();
-        push_overlay(self.overlay_entry(move || close.set(false)));
     }
 
     /// Compose the inner content tree from the stored parts.
@@ -292,36 +292,40 @@ impl Widget for Dialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::overlay::{clear_overlays, drain_overlays};
     use rosace_layout::Constraints;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn spec(d: Dialog) -> (LayerPosition, super::super::PromoteOpts) {
+        d.promote_spec(Arc::new(|| {}))
+    }
 
     #[test]
     fn modal_maps_to_centered_block_trap_with_dismissable_scrim() {
-        let e = Dialog::new("t").overlay_entry(|| {});
-        assert!(matches!(e.position, LayerPosition::Centered));
-        assert_eq!(e.input, InputBehavior::Block);
-        assert_eq!(e.focus, FocusBehavior::Trap);
-        let scrim = e.scrim.expect("modal must have a barrier scrim");
+        let (position, opts) = spec(Dialog::new("t"));
+        assert!(matches!(position, LayerPosition::Centered));
+        assert_eq!(opts.input, InputBehavior::Block);
+        assert_eq!(opts.focus, FocusBehavior::Trap);
+        let scrim = opts.scrim.expect("modal must have a barrier scrim");
         assert!(scrim.color.a > 0, "modal barrier must be visible");
         assert!(scrim.on_tap.is_some(), "modal barrier must dismiss on tap");
     }
 
     #[test]
     fn non_modal_maps_to_pass_through_with_no_scrim() {
-        let e = Dialog::new("t").non_modal().overlay_entry(|| {});
-        assert!(matches!(e.position, LayerPosition::Centered));
-        assert_eq!(e.input, InputBehavior::PassThrough);
-        assert_eq!(e.focus, FocusBehavior::PassThrough);
-        assert!(e.scrim.is_none(), "non-modal must leave the background interactive");
+        let (position, opts) = spec(Dialog::new("t").non_modal());
+        assert!(matches!(position, LayerPosition::Centered));
+        assert_eq!(opts.input, InputBehavior::PassThrough);
+        assert_eq!(opts.focus, FocusBehavior::PassThrough);
+        assert!(opts.scrim.is_none(), "non-modal must leave the background interactive");
     }
 
     #[test]
     fn full_page_maps_to_fill_block_trap_with_invisible_escape_scrim() {
-        let e = Dialog::new("t").full_page().overlay_entry(|| {});
-        assert!(matches!(e.position, LayerPosition::Fill));
-        assert_eq!(e.input, InputBehavior::Block);
-        assert_eq!(e.focus, FocusBehavior::Trap);
-        let scrim = e.scrim.expect("full-page carries the Escape dismisser");
+        let (position, opts) = spec(Dialog::new("t").full_page());
+        assert!(matches!(position, LayerPosition::Fill));
+        assert_eq!(opts.input, InputBehavior::Block);
+        assert_eq!(opts.focus, FocusBehavior::Trap);
+        let scrim = opts.scrim.expect("full-page carries the Escape dismisser");
         assert_eq!(scrim.color.a, 0, "full-page barrier must be invisible");
         assert!(scrim.on_tap.is_some());
     }
@@ -341,19 +345,18 @@ mod tests {
     }
 
     #[test]
-    fn emit_respects_the_open_atom_and_wires_dismiss_to_it() {
-        clear_overlays();
-        let open = rosace_state::use_atom(false);
-        Dialog::new("t").emit(&open);
-        assert!(drain_overlays().is_empty(), "closed dialog must push nothing");
-
-        open.set(true);
-        Dialog::new("t").emit(&open);
-        let entries = drain_overlays();
-        assert_eq!(entries.len(), 1);
-        let on_tap = entries[0].scrim.as_ref().unwrap().on_tap.as_ref().unwrap().clone();
+    fn the_barrier_dismisser_reports_a_close_request() {
+        // `emit` needs a live `PaintCtx`, which is the engine's to hand out —
+        // what is testable in isolation is the mapping it drives, and that the
+        // dismisser it installs reports back.
+        let closed = Arc::new(AtomicBool::new(false));
+        let c = Arc::clone(&closed);
+        let (_, opts) = Dialog::new("t").promote_spec(Arc::new(move || {
+            c.store(true, Ordering::SeqCst);
+        }));
+        let on_tap = opts.scrim.expect("modal barrier").on_tap.expect("dismisser");
         on_tap();
-        assert!(!open.get(), "barrier tap must close the dialog");
+        assert!(closed.load(Ordering::SeqCst), "a barrier tap must request a close");
     }
 
     #[test]

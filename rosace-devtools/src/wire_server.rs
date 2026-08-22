@@ -409,7 +409,7 @@ mod tests {
         server.publish_tree(TreeSnapshot { nodes: Vec::new() });
         server.publish_tree(TreeSnapshot { nodes: vec![WireNode {
             id: 9, parent: None, children: vec![], tag: "Marker", rect: None,
-            semantics: vec![], hit_count: 0, scroll_count: 0, overlay_count: 0,
+            semantics: vec![], hit_count: 0, scroll_count: 0, promoted: false,
             has_editable: false, hovered: false, pressed: false,
         }] });
         let body = get(server.port(), "/tree");

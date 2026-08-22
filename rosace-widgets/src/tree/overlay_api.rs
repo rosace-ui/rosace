@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use rosace_core::types::{Point, Rect};
 use rosace_render::Color;
-use rosace_state::Atom;
 use super::{Widget, PaintCtx, BoxedWidget};
 use super::PromoteOpts;
 use super::overlay::{
@@ -28,7 +27,12 @@ pub enum OverlayKind {
 
 struct OverlayConfig {
     kind:    OverlayKind,
-    open:    Atom<bool>,
+    /// Whether this overlay is showing. A VALUE, not a cell the widget owns:
+    /// the app holds the state and is told when it should change.
+    open:    bool,
+    /// Called with `false` when the overlay asks to close (a scrim tap, or
+    /// Back/Escape). `None` means it cannot be dismissed that way.
+    on_open_change: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     content: Arc<dyn Fn() -> BoxedWidget + Send + Sync>,
     /// Whether a tap on the scrim closes this overlay. `true` by default —
     /// the common case, and what every overlay did unconditionally before.
@@ -51,11 +55,22 @@ impl<W: Widget + 'static> WithOverlay<W> {
         Self { inner, overlays: Vec::new() }
     }
 
-    fn push(mut self, kind: OverlayKind, open: Atom<bool>,
+    fn push(mut self, kind: OverlayKind, open: bool,
             content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
         self.overlays.push(OverlayConfig {
-            kind, open, content: Arc::new(content), dismissible: true,
+            kind, open, on_open_change: None, content: Arc::new(content), dismissible: true,
         });
+        self
+    }
+
+    /// Called when the most recently attached overlay wants to close.
+    ///
+    /// Without one, a scrim tap and Back/Escape have nowhere to report to, so
+    /// the overlay is effectively non-dismissible.
+    pub fn on_open_change(mut self, f: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        if let Some(last) = self.overlays.last_mut() {
+            last.on_open_change = Some(Arc::new(f));
+        }
         self
     }
 
@@ -78,19 +93,19 @@ impl<W: Widget + 'static> WithOverlay<W> {
     }
 
     /// Attach a dropdown overlay to this widget.
-    pub fn dropdown(self, open: Atom<bool>,
+    pub fn dropdown(self, open: bool,
                     content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
         self.push(OverlayKind::Dropdown, open, content)
     }
 
     /// Attach a bottom sheet overlay to this widget.
-    pub fn sheet(self, open: Atom<bool>,
+    pub fn sheet(self, open: bool,
                  content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
         self.push(OverlayKind::Sheet, open, content)
     }
 
     /// Attach a modal dialog overlay to this widget.
-    pub fn dialog(self, open: Atom<bool>,
+    pub fn dialog(self, open: bool,
                   content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
         self.push(OverlayKind::Dialog, open, content)
     }
@@ -99,16 +114,16 @@ impl<W: Widget + 'static> WithOverlay<W> {
     /// the closure builds any widget, not just a text label). The everyday
     /// string tooltip is the ergonomic [`super::WidgetExt::tooltip`].
     pub fn rich_tooltip(self, content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
-        // Tooltip uses a permanent-true open atom — visibility is controlled by hover (Phase 14)
-        let open = rosace_state::use_atom(true);
-        self.push(OverlayKind::Tooltip, open, content)
+        // Always "open" — a tooltip's visibility is driven by hover, not by
+        // app state (Phase 14).
+        self.push(OverlayKind::Tooltip, true, content)
     }
 
     /// Attach a toast overlay to this widget. Use [`Toast::show`] to open it
     /// with auto-dismiss.
     ///
     /// [`Toast::show`]: super::toast::Toast::show
-    pub fn toast(self, open: Atom<bool>,
+    pub fn toast(self, open: bool,
                  content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> Self {
         self.push(OverlayKind::Toast, open, content)
     }
@@ -124,15 +139,17 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
         let anchor: Rect = ctx.rect;
 
         for (i, cfg) in self.overlays.iter().enumerate() {
-            if !cfg.open.get() { continue; }
+            if !cfg.open { continue; }
 
             let content = (cfg.content)();
-            let open_atom = cfg.open.clone();
-            // `None` here means "no scrim tap-to-dismiss" — a missing `on_tap`
+            // `None` means "no scrim tap-to-dismiss" — a missing `on_tap`
             // already means exactly that, so non-dismissible needs no new path.
-            let dismissible = cfg.dismissible;
-            let dismiss = Arc::new(move || open_atom.set(false));
-            let on_tap = dismissible.then_some(dismiss as Arc<dyn Fn() + Send + Sync>);
+            let on_tap: Option<Arc<dyn Fn() + Send + Sync>> = match
+                (cfg.dismissible, cfg.on_open_change.clone())
+            {
+                (true, Some(cb)) => Some(Arc::new(move || cb(false))),
+                _ => None,
+            };
 
             let (position, opts) = match cfg.kind {
                 OverlayKind::Dropdown => (
@@ -245,17 +262,17 @@ impl<W: Widget + Send + Sync + 'static> Widget for WithOverlay<W> {
 ///     })
 /// ```
 pub trait OverlayApi: Widget + Sized + Send + Sync + 'static {
-    fn dropdown(self, open: Atom<bool>,
+    fn dropdown(self, open: bool,
                 content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> WithOverlay<Self> {
         WithOverlay::new(self).dropdown(open, content)
     }
 
-    fn sheet(self, open: Atom<bool>,
+    fn sheet(self, open: bool,
              content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> WithOverlay<Self> {
         WithOverlay::new(self).sheet(open, content)
     }
 
-    fn dialog(self, open: Atom<bool>,
+    fn dialog(self, open: bool,
               content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> WithOverlay<Self> {
         WithOverlay::new(self).dialog(open, content)
     }
@@ -265,7 +282,7 @@ pub trait OverlayApi: Widget + Sized + Send + Sync + 'static {
         WithOverlay::new(self).rich_tooltip(content)
     }
 
-    fn toast(self, open: Atom<bool>,
+    fn toast(self, open: bool,
              content: impl Fn() -> BoxedWidget + Send + Sync + 'static) -> WithOverlay<Self> {
         WithOverlay::new(self).toast(open, content)
     }

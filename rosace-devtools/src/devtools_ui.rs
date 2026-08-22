@@ -11,7 +11,7 @@
 use rosace_state::GlobalAtom;
 use rosace_trace::event::AtomId;
 use rosace_widgets::tree::{
-    Column, Container, FloatingActionButton, LayerPosition, OverlayEntry, Positioned,
+    BoxedWidget, Column, Container, FloatingActionButton, Positioned,
     ScrollView, Stack, Tab, TabBar, Text, Widget,
 };
 use rosace_render::Color;
@@ -64,8 +64,9 @@ fn poke() {
 
 /// Build the DevTools overlay for this frame. `rows` are the pre-formatted
 /// activity lines for the current tab (the engine reads the flight recorder and
-/// filters via [`TracePanel::rows_for`]). Returns a full-screen `OverlayEntry`.
-pub fn devtools_overlay(rows: Vec<String>) -> OverlayEntry {
+/// filters via [`TracePanel::rows_for`]). Returns the full-screen widget the
+/// engine promotes to the root layer.
+pub fn devtools_overlay(rows: Vec<String>) -> BoxedWidget {
     let open = DEVTOOLS_OPEN.get();
 
     // This overlay is `LayerPosition::Fill` — the FULL viewport, including
@@ -79,7 +80,7 @@ pub fn devtools_overlay(rows: Vec<String>) -> OverlayEntry {
     // `Stack::new()` defaults to `StackFit::Loose` (shrink to the largest
     // child) — under that fit it ignores the TIGHT win_w×win_h constraints
     // the engine deliberately passes a `Fill` overlay (see the comment at
-    // its `entry.widget.layout` call site) and collapses to the FAB's own
+    // a `Fill` promotion (see `promote_at`) and collapses to the FAB's own
     // 40×40 size instead. `Positioned`'s `.bottom()/.left()` then resolve
     // against that tiny collapsed rect pinned at the window's top-left,
     // not the real window — the FAB rendered top-left over the traffic
@@ -119,7 +120,7 @@ pub fn devtools_overlay(rows: Vec<String>) -> OverlayEntry {
             .height(FAB_SIZE),
     );
 
-    OverlayEntry::new(LayerPosition::Fill, stack)
+    std::sync::Arc::new(stack)
 }
 
 /// The panel body: a `TabBar` over a scrolling list of the current tab's rows.
