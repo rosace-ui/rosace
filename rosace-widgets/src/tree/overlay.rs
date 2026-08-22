@@ -1,8 +1,6 @@
-use std::cell::RefCell;
 use std::sync::Arc;
 use rosace_core::types::{Point, Rect};
 use rosace_render::Color;
-use super::BoxedWidget;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
