@@ -40,9 +40,23 @@ pub struct ListView {
     /// `None` = the theme's `outline`. This used to be a hardcoded
     /// dark-theme blue-grey that was wrong in a light theme.
     pub scrollbar_color: Option<Color>,
+    /// App-supplied controller, for driving the list programmatically and
+    /// observing its position. `None` = the implicit per-node one.
+    controller: Option<crate::scroll::ScrollController>,
 }
 
 impl ListView {
+    /// Drive this list from an app-held controller — programmatic
+    /// `scroll_to`/`scroll_to_index`, and `on_scroll` to observe its
+    /// position.
+    ///
+    /// Persist it with `ctx.state(ScrollController::new()).get()` so the
+    /// position survives rebuilds.
+    pub fn controller(mut self, c: crate::scroll::ScrollController) -> Self {
+        self.controller = Some(c);
+        self
+    }
+
     /// Scroll `controller` so row `index` comes into view.
     ///
     /// A virtualized list's off-screen rows have no node and no rect — they
@@ -83,6 +97,7 @@ impl ListView {
             builder: Arc::new(builder),
             show_scrollbar: true,
             scrollbar_color: None,
+            controller: None,
             padding: None,
         }
     }
@@ -129,7 +144,10 @@ impl Widget for ListView {
 
     fn paint(&self, ctx: &mut PaintCtx) {
         let vp = ctx.rect;
-        let ctrl = ctx.scroll_controller();
+        let ctrl = match self.controller.clone() {
+            Some(c) => { ctx.adopt_scroll_controller(c.clone()); c }
+            None => ctx.scroll_controller(),
+        };
         let content_h = self.count as f32 * self.item_extent;
         let max_scroll = (content_h - vp.size.height).max(0.0);
         let scroll = ctrl.offset()[1].clamp(0.0, max_scroll);
