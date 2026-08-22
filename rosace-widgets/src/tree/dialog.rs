@@ -193,6 +193,27 @@ impl Dialog {
 
     /// Compose the inner content tree from the stored parts.
     ///
+    /// Present this dialog while `open`, from a host widget's paint.
+    ///
+    /// The only path to the `non_modal()` and `full_page()` presentations —
+    /// `widget.dialog(open, ..)` is always modal.
+    ///
+    /// ```rust,ignore
+    /// Dialog::new("Discard?")
+    ///     .full_page()
+    ///     .emit(ctx, open.get(), move || open.set(false));
+    /// ```
+    pub fn emit(
+        self,
+        ctx: &mut PaintCtx,
+        open: bool,
+        on_close: impl Fn() + Send + Sync + 'static,
+    ) {
+        if !open { return; }
+        let (position, opts) = self.promote_spec(Arc::new(on_close));
+        ctx.promote_at(position, &self, opts);
+    }
+
     /// Rebuilt on each layout/paint call — construction is a few allocations,
     /// far below the cost of the paint itself.
     fn build_inner(&self) -> BoxedWidget {
