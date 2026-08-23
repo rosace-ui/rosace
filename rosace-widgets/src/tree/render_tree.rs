@@ -349,6 +349,10 @@ pub struct TreeNode {
     /// (a spinner, a shimmer). Such a node must never replay its cached
     /// picture: replaying skips the request, and the animation stops.
     pub self_animating: bool,
+    /// This node's paint CAPTURES a picture for something outside its own
+    /// subtree — a Hero flight, a RepaintBoundary. Painting it has a side
+    /// effect, so it can never be replaced by re-blitting a cached picture.
+    pub captures: bool,
     /// This node's `cached_picture` is stale — re-run `paint`.
     ///
     /// A superset of [`Self::needs_layout`] in practice: anything that
@@ -523,6 +527,7 @@ impl RenderTree {
         n.needs_layout = true;
         n.needs_paint = true;
         n.self_animating = false;
+        n.captures = false;
 
         // Persistent widget state. A different widget type must never inherit
         // these: an edit buffer belonging to a TextField appearing inside a
@@ -1757,6 +1762,50 @@ impl RenderTree {
             }
         }
         None
+    }
+
+    /// Translate everything a subtree declared, so a moved widget's
+    /// clickable regions follow its pixels.
+    ///
+    /// This is the half that sank replay-on-move the first time
+    /// (`fd5529d`, reverted in `bf6b1b9`). Re-blitting a cached picture at a
+    /// new offset moves what you SEE; hit regions, scroll viewports, focus
+    /// rects and `cached_rect` are declared during paint and stay where they
+    /// were. The result is a widget you can see and cannot click — and
+    /// nothing catches it, because the pixels are right.
+    ///
+    /// Every positional declaration has to move together. Missing one is
+    /// silent, so they are listed exhaustively here rather than filtered.
+    pub fn translate_subtree(&mut self, node: NodeId, dx: f32, dy: f32) {
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        let shift = |r: &mut Rect| {
+            r.origin.x += dx;
+            r.origin.y += dy;
+        };
+
+        let n = &mut self.nodes[node];
+        for (r, _) in n.hits.iter_mut()           { shift(r); }
+        for (r, _) in n.hits_at.iter_mut()        { shift(r); }
+        for (r, _) in n.long_hits.iter_mut()      { shift(r); }
+        for (r, _) in n.nested_scrolls.iter_mut() { shift(r); }
+        for r in n.hover_regions.iter_mut()       { shift(r); }
+        for reg in n.scrolls.iter_mut()           { shift(&mut reg.0); }
+        for reg in n.zooms.iter_mut()             { shift(&mut reg.0); }
+        // `focus` carries no rect — a FocusNode is id/next/prev/focused, so
+        // the Tab cycle is order, not geometry. Nothing to translate.
+        if let Some(r) = n.cached_rect.as_mut()   { shift(r); }
+        if let Some(r) = n.clip.as_mut()          { shift(r); }
+        if let Some(e) = n.editable.as_mut()      { shift(&mut e.rect); }
+        // A transform host's viewport is where its LAYER is placed, so it
+        // moves with the host.
+        for t in n.transforms.iter_mut()          { shift(&mut t.viewport_rect); }
+
+        let children = n.children.clone();
+        for c in children {
+            self.translate_subtree(c, dx, dy);
+        }
     }
 
     /// Every promoted node, in declaration (paint) order — so the LAST is

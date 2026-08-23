@@ -1164,30 +1164,56 @@ impl<'a> PaintCtx<'a> {
 
         let retagged = self.tree.borrow_mut().adopt_tag(node, child.type_tag());
 
-        let replay = !retagged
+        // Same CONTENT is the requirement; same PLACE is not. A widget whose
+        // size is unchanged and whose origin moved can be re-blitted
+        // translated instead of re-recorded — which is most of a scroll
+        // frame's work, since scrolling moves every visible child at once.
+        let reusable = !retagged
             && !is_structural_frame()
             && {
                 let t = self.tree.borrow();
                 let n = t.node(node);
                 !n.needs_paint
                     && n.cached_picture.is_some()
-                    // Same place as well as same content. A moved widget could
-                    // in principle be re-blitted with `replay_offset`, but its
-                    // hit regions are world-space and declared during paint, so
-                    // moving the pixels without re-running would leave the
-                    // clickable area behind. Re-record until that is handled.
-                    && n.cached_rect == Some(rect)
                     // A widget that drives its own animation asks for the next
                     // frame from inside `paint`. If it replays it stops asking
                     // and freezes mid-animation.
                     && !n.self_animating
+                    // A widget whose paint CAPTURES for something outside its
+                    // subtree (Hero) must actually run — replaying leaves the
+                    // consumer with nothing.
+                    && !n.captures
             };
 
-        if replay {
+        // How far it moved, if the size is identical. `None` = re-record.
+        let delta = if !reusable {
+            None
+        } else {
+            let t = self.tree.borrow();
+            match t.node(node).cached_rect {
+                Some(old) if old.size == rect.size => Some((
+                    rect.origin.x - old.origin.x,
+                    rect.origin.y - old.origin.y,
+                )),
+                _ => None,
+            }
+        };
+
+        if let Some((dx, dy)) = delta {
             let pic = self.tree.borrow().node(node).cached_picture.clone()
                 .expect("checked above");
-            for cmd in &pic.commands {
-                self.recorder.push(cmd.clone());
+            if dx == 0.0 && dy == 0.0 {
+                for cmd in &pic.commands {
+                    self.recorder.push(cmd.clone());
+                }
+            } else {
+                // The pixels AND everything the subtree declared move
+                // together. Translating one without the other is what sank
+                // the first attempt at this (`fd5529d`, reverted in
+                // `bf6b1b9`): a widget you can see and cannot click, with no
+                // failing test, because the pixels were right.
+                self.replay_offset(&pic, dx, dy);
+                self.tree.borrow_mut().translate_subtree(node, dx, dy);
             }
             return;
         }
@@ -1561,6 +1587,12 @@ impl<'a> PaintCtx<'a> {
     /// used by RepaintBoundary to cache an expensive subtree. Runs on a fresh
     /// child slot so interactive regions declared inside still register.
     pub fn capture(&mut self, rect: Rect, paint: impl FnOnce(&mut PaintCtx)) -> rosace_render::Picture {
+        // A capture is a SIDE EFFECT of painting — the picture is handed to
+        // something outside this subtree (a Hero flight, a RepaintBoundary).
+        // Re-blitting a moved node skips its paint, and with it the capture,
+        // so the consumer is left holding nothing. Same reason
+        // `self_animating` cannot replay.
+        self.tree.borrow_mut().node_mut(self.node).captures = true;
         let node = self.tree.borrow_mut().slot(self.node, true);
         self.capture_into(node, rect, paint)
     }

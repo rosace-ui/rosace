@@ -267,6 +267,46 @@ fn scrolling_does_not_rebuild_the_component() {
     );
 }
 
+/// Scrolling re-blits moved children instead of re-recording them.
+///
+/// Guarded by an assertion that the list ACTUALLY MOVED, because otherwise
+/// this metric improves when scrolling breaks entirely — a paint count of
+/// zero is the reward both for a perfect cache and for a dead scroll view.
+#[test]
+fn scrolling_replays_moved_children_instead_of_repainting_them() {
+    let _guard = exclusive();
+    let mut h = harness();
+    h.settle();
+
+    let first = h.e.inspect_tree().iter()
+        .find(|n| n.tag.ends_with("::BadgeFace")).and_then(|n| n.rect)
+        .expect("the badge painted");
+
+    let (_, _, paints_before) = h.counts.snapshot();
+    for _ in 0..10 {
+        h.scroll(-40.0);
+        h.frame();
+    }
+    let (_, _, paints_after) = h.counts.snapshot();
+
+    let moved = h.e.inspect_tree().iter()
+        .find(|n| n.tag.ends_with("::BadgeFace")).and_then(|n| n.rect)
+        .expect("the badge is still in the tree");
+    assert!(
+        (moved.origin.y - first.origin.y).abs() > 50.0,
+        "the content did not actually scroll ({} -> {}), so a low paint count \
+         proves nothing",
+        first.origin.y, moved.origin.y
+    );
+
+    let painted = paints_after - paints_before;
+    assert!(
+        painted < ROWS,
+        "{painted} probe paints across ten scroll frames — moved children are being \
+         re-recorded rather than re-blitted ({ROWS} rows exist)"
+    );
+}
+
 /// An idle frame must do nothing at all — no build, no layout, no paint.
 #[test]
 fn an_idle_frame_is_free() {
