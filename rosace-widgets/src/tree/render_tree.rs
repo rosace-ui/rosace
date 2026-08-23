@@ -1772,9 +1772,50 @@ impl RenderTree {
         if dx == 0.0 && dy == 0.0 {
             return;
         }
+        self.transform_subtree(node, dx, dy, 1.0, 1.0);
+    }
+
+    /// Transform a subtree's declarations to match a picture replayed from
+    /// `src` to `dst` — the declaration half of
+    /// [`super::PaintCtx::replay_morphed`].
+    ///
+    /// Takes the same two rects the pixels do, deliberately: deriving the
+    /// scale and offset separately is how the two drift apart, and a drift
+    /// here is a widget that is crisp in the new place and clickable in the
+    /// old one.
+    pub fn morph_subtree(&mut self, node: NodeId, src: Rect, dst: Rect) {
+        let sx = if src.size.width.abs()  > f32::EPSILON { dst.size.width  / src.size.width  } else { 1.0 };
+        let sy = if src.size.height.abs() > f32::EPSILON { dst.size.height / src.size.height } else { 1.0 };
+        self.transform_subtree(
+            node,
+            dst.origin.x - src.origin.x * sx,
+            dst.origin.y - src.origin.y * sy,
+            sx,
+            sy,
+        );
+    }
+
+    /// [`Self::translate_subtree`] with a scale as well.
+    ///
+    /// A widget replayed MORPHED — `InteractiveViewer` drawing its child at a
+    /// zoom, `Hero` flying between two sizes — moves and resizes its pixels.
+    /// Its declared regions have to follow both, or the content is crisp at
+    /// the new size and clickable at the old one.
+    ///
+    /// This is what lets a zooming viewer avoid rasterizing to a texture: the
+    /// child records once at natural size, and both its pixels and its
+    /// declarations are transformed on the way out. No offscreen bitmap, no
+    /// size cap, and no permanent second coordinate space for everything
+    /// underneath it to live in.
+    pub fn transform_subtree(&mut self, node: NodeId, dx: f32, dy: f32, sx: f32, sy: f32) {
+        if dx == 0.0 && dy == 0.0 && sx == 1.0 && sy == 1.0 {
+            return;
+        }
         let shift = |r: &mut Rect| {
-            r.origin.x += dx;
-            r.origin.y += dy;
+            r.origin.x = r.origin.x * sx + dx;
+            r.origin.y = r.origin.y * sy + dy;
+            r.size.width *= sx;
+            r.size.height *= sy;
         };
 
         let n = &mut self.nodes[node];
@@ -1796,7 +1837,7 @@ impl RenderTree {
 
         let children = n.children.clone();
         for c in children {
-            self.translate_subtree(c, dx, dy);
+            self.transform_subtree(c, dx, dy, sx, sy);
         }
     }
 

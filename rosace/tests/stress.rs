@@ -524,3 +524,69 @@ fn texture_vs_replay() {
     println!("\n  composited list (60 rows)   composited={gpu_composited}  {gpu_us} us / 60 scroll frames  ({} us/frame)", gpu_us / 60);
     println!("  CPU-path list  (400 rows)   composited={cpu_composited}  {cpu_us} us / 60 scroll frames  ({} us/frame)\n", cpu_us / 60);
 }
+
+/// Does a scroll frame on the GPU path actually SKIP work, or does node
+/// marking defeat it?
+///
+/// D090's claim was that the composited path costs nothing per scroll frame:
+/// the offset lives in a non-reactive channel the compositor reads, so the
+/// engine skips build, walk and raster entirely. Stage 4a-i later made a
+/// scroll write call `mark_node_dirty` so the implicit path would repaint at
+/// all. If that marking also fires on the composited path, the frame is no
+/// longer skipped and D090's property is gone.
+///
+/// `cargo test -p rosace --test stress -- --nocapture gpu_path_skips_work`
+#[test]
+fn gpu_path_skips_work() {
+    let _guard = exclusive();
+
+    fn run(rows: usize, label: &str) {
+        let counts = Arc::new(Counts::default());
+        struct L { counts: Arc<Counts>, rows: usize }
+        impl Component for L {
+            fn build(&self, _c: &mut Context) -> BoxedWidget {
+                let mut col = Column::new().spacing(2.0);
+                for i in 0..self.rows { col = col.child(row(&self.counts, i)); }
+                ScrollView::new(col).boxed()
+            }
+        }
+        let mut e = FrameEngine::new(
+            Box::new(L { counts: Arc::clone(&counts), rows }),
+            FontCache::embedded(),
+        );
+        let (mut a, mut b) = (SkiaCanvas::new(WIN_W, WIN_H), SkiaCanvas::new(WIN_W, WIN_H));
+        for _ in 0..4 { e.paint(&mut a, &mut b, &[]); }
+
+        let composited = e.inspect_layers().iter().any(|l| matches!(
+            l.kind, rosace::widgets::tree::LayerKind::Transform(_)
+        ));
+
+        // `paint` reports whether the frame produced new pixels. A skipped
+        // frame is the whole claim.
+        // Baseline AFTER settling, so the counts are the scroll cost alone.
+        let (_, l0, p0) = counts.snapshot();
+        let _ = rosace_platform::take_scroll_layers();
+
+        // How many scroll frames RE-PUBLISH the layer's content texture.
+        // D090's claim was that a composited scroll costs none: the offset
+        // lives in a non-reactive channel the compositor reads, so the frame
+        // is skipped entirely.
+        let mut republished = 0;
+        let t = std::time::Instant::now();
+        for _ in 0..60 {
+            e.paint(&mut a, &mut b, &[rosace_platform::InputEvent::Scroll {
+                x: 200.0, y: 300.0, delta_x: 0.0, delta_y: -8.0,
+            }]);
+            if rosace_platform::take_scroll_layers().is_some() { republished += 1; }
+        }
+        let us = t.elapsed().as_micros();
+        let (_, l1, p1) = counts.snapshot();
+        println!("  {label:<26} composited={composited:<5} republish={republished}/60  \
+{us} us ({} us/frame)  layout={} paint={}", us / 60, l1 - l0, p1 - p0);
+    }
+
+    println!();
+    run(60, "short list (composites)");
+    run(400, "long list (CPU path)");
+    println!();
+}
