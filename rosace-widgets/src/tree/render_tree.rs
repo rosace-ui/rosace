@@ -1557,6 +1557,22 @@ impl RenderTree {
     /// All focus nodes in tree (paint) order — feeds the Tab cycle each frame,
     /// including cache-hit frames where no widget was repainted.
     pub fn collect_focus(&self) -> Vec<rosace_core::a11y::FocusNode> {
+        // A TRAPPING layer IS the Tab cycle while it is open. Returning only
+        // its focus nodes is what "trap" means: Tab cannot walk out of a modal
+        // into the page behind it.
+        //
+        // Every overlay widget has set a `FocusBehavior` since overlays
+        // existed and nothing ever read it — so `Trap` trapped nothing, and a
+        // dialog's Tab order ran straight through into the content it was
+        // covering. Topmost wins, so a dialog over a dialog traps in the one
+        // actually on top.
+        for node in self.promoted_nodes().into_iter().rev() {
+            if self.nodes[node].focus_behavior == super::FocusBehavior::Trap {
+                let mut out = Vec::new();
+                self.collect_focus_node(node, &mut out);
+                return out;
+            }
+        }
         let mut out = Vec::new();
         self.collect_focus_node(Self::ROOT, &mut out);
         out
@@ -1564,6 +1580,11 @@ impl RenderTree {
 
     fn collect_focus_node(&self, id: NodeId, out: &mut Vec<rosace_core::a11y::FocusNode>) {
         let n = &self.nodes[id];
+        // `Inert` declares nothing focusable — a toast or tooltip must never
+        // appear in the Tab cycle, however much is inside it.
+        if n.promoted.is_some() && n.focus_behavior == super::FocusBehavior::Inert {
+            return;
+        }
         out.extend(n.focus.iter().cloned());
         for &child in &n.children {
             self.collect_focus_node(child, out);

@@ -15,7 +15,7 @@ use rosace::widgets::tree::{LayoutCtx, OverlayApi, PaintCtx};
 use rosace::FrameEngine;
 use rosace_render::{FontCache, SkiaCanvas};
 use rosace_state::Atom;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 static FRAME_STATE: Mutex<()> = Mutex::new(());
 fn exclusive() -> MutexGuard<'static, ()> {
@@ -96,5 +96,66 @@ fn an_open_dialog_is_announced_to_assistive_tech() {
         seen.iter().any(|l| l == "Delete everything"),
         "an OPEN dialog is missing from the semantics tree — a screen reader would read the \
          page behind it and never announce the dialog. Saw {seen:?}"
+    );
+}
+
+// ── Keyboard focus ───────────────────────────────────────────────────────────
+
+/// A modal must TRAP Tab focus.
+///
+/// `FocusBehavior::Trap` was set by every overlay widget since overlays
+/// existed and read by nothing, so Tab walked straight out of a dialog into
+/// the page it was covering — and until the overlay migration, overlay content
+/// was not in the Tab cycle at all.
+struct Focusable(&'static str);
+impl Widget for Focusable {
+    fn layout(&self, _c: &LayoutCtx) -> Size { Size { width: 80.0, height: 24.0 } }
+    fn paint(&self, ctx: &mut PaintCtx) {
+        ctx.fill_rect(ctx.rect, Color::rgb(60, 60, 80));
+        let node = ctx.focus_node();
+        ctx.register_focus(node);
+    }
+}
+
+struct FocusApp {
+    open: Atom<bool>,
+}
+impl Component for FocusApp {
+    fn build(&self, _ctx: &mut Context) -> BoxedWidget {
+        Column::new()
+            .child(Focusable("page-a"))
+            .child(Focusable("page-b"))
+            .child(
+                Container::new()
+                    .width(60.0)
+                    .height(20.0)
+                    .dialog(self.open.get(), || {
+                        Arc::new(Column::new().child(Focusable("dialog-a")))
+                    }),
+            )
+            .boxed()
+    }
+}
+
+fn focus_count(open: bool) -> usize {
+    let atom = Atom::new(rosace_state::next_atom_id(), open);
+    let mut e = FrameEngine::new(Box::new(FocusApp { open: atom }), FontCache::embedded());
+    let (mut a, mut b) = (SkiaCanvas::new(300, 400), SkiaCanvas::new(300, 400));
+    e.paint(&mut a, &mut b, &[]);
+    e.paint(&mut a, &mut b, &[]);
+    e.focus_node_count()
+}
+
+#[test]
+fn an_open_modal_traps_tab_focus_to_itself() {
+    let _guard = exclusive();
+    let closed = focus_count(false);
+    assert!(closed >= 2, "the page's own controls should be focusable, got {closed}");
+
+    let open = focus_count(true);
+    assert!(
+        open < closed,
+        "with a modal open the Tab cycle still contains {open} nodes (page had {closed}) — \
+         focus can walk out of the dialog into the page behind it"
     );
 }

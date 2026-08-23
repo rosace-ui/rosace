@@ -495,6 +495,14 @@ impl FrameEngine {
         self.render_tree.borrow().inspect()
     }
 
+    /// How many nodes are in the Tab cycle right now.
+    ///
+    /// A trapping overlay narrows this to its own subtree, which is what
+    /// makes a modal modal for keyboard users.
+    pub fn focus_node_count(&self) -> usize {
+        self.render_tree.borrow().collect_focus().len()
+    }
+
     /// Scroll every scroll view above `node` so it comes into view.
     ///
     /// The engine owns the tree, so this is how an app reaches
