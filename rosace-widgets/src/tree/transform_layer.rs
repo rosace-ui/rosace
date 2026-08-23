@@ -113,7 +113,6 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
             theme: ctx.theme.clone(),
             tree: ctx.tree.clone(),
             node: sub_node,
-            owner: ctx.owner,
             clip_rect: None,
         };
         self.child.paint(&mut sub_ctx);

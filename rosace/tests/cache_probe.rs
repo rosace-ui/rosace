@@ -122,17 +122,24 @@ fn a_clean_frame_does_no_widget_work_at_all() {
     assert_eq!(h.counts.read(), after_first, "and must keep not touching them");
 }
 
-/// TODAY'S DEFICIENCY, pinned so the fix is visible.
+/// An APP-level atom write is structural, and that is correct.
 ///
-/// One atom change marks the root dirty, `subtree_dirty` propagates to every
-/// node, and both caches consult it — `!needs_layout` for the size, `!needs_paint`
-/// — so every widget re-layouts and re-records, however far it is from the
-/// thing that changed.
+/// This was pinned as a deficiency — "MUST fail when Stage 2 lands" — on the
+/// assumption that per-node caching would narrow it. It does not, and should
+/// not: an atom write marks the component, `build()` re-runs, and every widget
+/// object in the tree is BRAND NEW. A node cannot tell a fresh-but-identical
+/// widget from one whose content changed, so matching constraints prove
+/// nothing about the size and a cached picture proves nothing about the
+/// pixels. Trusting either produced a rebuilt `Text` that kept its old width —
+/// output that looks plausible and is wrong.
 ///
-/// **This test MUST fail when Stage 2 lands.** Rewrite it then to assert
-/// that only the refreshed node re-runs; do not make it pass again.
+/// What the refactor actually changed is which interactions take this path.
+/// Scrolling, hover, press, `refresh_state()` and `widget_state` writes now
+/// mark a NODE and the frame stays targeted — see `stress.rs`, where ten wheel
+/// notches cost zero rebuilds. Only an app rebuilding its own state comes
+/// through here.
 #[test]
-fn one_atom_change_currently_reprocesses_every_widget() {
+fn an_app_state_change_reprocesses_every_widget_because_build_reran() {
     let mut h = harness();
     h.frame();
     let (l0, p0) = h.counts.read();
@@ -142,8 +149,9 @@ fn one_atom_change_currently_reprocesses_every_widget() {
     let (l1, p1) = h.counts.read();
 
     assert_eq!(p1 - p0, PROBES,
-        "every probe repainted — Stage 2 should reduce this to the changed one");
-    assert!(l1 > l0, "and every probe re-laid-out");
+        "a rebuild must re-record every widget: the objects are all new, so no \
+         cached picture can be trusted");
+    assert!(l1 > l0, "and re-measure them, for the same reason");
 }
 
 /// Layout runs ONCE per widget per frame.

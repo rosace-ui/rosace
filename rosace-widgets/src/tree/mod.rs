@@ -653,15 +653,12 @@ pub struct PaintCtx<'a> {
     pub font: &'a FontCache,
     pub theme: ThemeData,
     /// The persistent render tree (D091) — sole owner of retained per-node
-    /// state. Widgets *declare* hit/scroll regions, focus nodes, overlays,
-    /// and transform layers onto `node`; the frame pipeline derives dispatch
-    /// order and the overlay stack from the tree.
+    /// state. Widgets *declare* hit/scroll regions, focus nodes and transform
+    /// layers onto `node`; the frame pipeline derives dispatch order and the
+    /// layer tree from it.
     pub tree: Rc<RefCell<RenderTree>>,
     /// The tree node this widget declares onto.
     pub node: NodeId,
-    /// The component that owns this paint subtree — node-created state
-    /// (default scroll controllers, D101) subscribes it so writes repaint.
-    pub owner: rosace_core::types::ComponentId,
     /// Current clip viewport in world-space logical pixels. `None` means no clip.
     /// Set by `ScrollView` so that `register_hit` ignores targets outside the
     /// visible area, preventing phantom clicks in other panels below the fold.
@@ -694,7 +691,6 @@ impl<'a> PaintCtx<'a> {
             theme,
             tree,
             node: RenderTree::ROOT,
-            owner: rosace_core::types::ComponentId(0),
             clip_rect: None,
         }
     }
@@ -719,7 +715,6 @@ impl<'a> PaintCtx<'a> {
             theme: self.theme.clone(),
             tree: Rc::clone(&self.tree),
             node,
-            owner: self.owner,
             clip_rect: self.clip_rect,
         }
     }
@@ -759,7 +754,6 @@ impl<'a> PaintCtx<'a> {
                 theme: self.theme.clone(),
                 tree: Rc::clone(&self.tree),
                 node,
-                owner: self.owner,
                 // Escapes its ancestors' clips — including for hit regions.
                 // `register_hit` narrows what it declares to `clip_rect`, so
                 // inheriting one here would produce a widget that is visible
@@ -869,7 +863,6 @@ impl<'a> PaintCtx<'a> {
             theme: self.theme.clone(),
             tree: Rc::clone(&self.tree),
             node,
-            owner: self.owner,
             // Escapes its ancestors' clips — including for hit regions.
             // `register_hit` narrows what it declares to `clip_rect`, so
             // inheriting one here would produce a widget that is visible and
@@ -1232,7 +1225,6 @@ impl<'a> PaintCtx<'a> {
                 theme: self.theme.clone(),
                 tree: Rc::clone(&self.tree),
                 node,
-                owner: self.owner,
                 clip_rect: self.clip_rect,
             };
             child.paint(&mut cctx);
@@ -1281,7 +1273,6 @@ impl<'a> PaintCtx<'a> {
             theme: self.theme.clone(),
             tree: Rc::clone(&self.tree),
             node,
-            owner: self.owner,
             clip_rect: self.clip_rect,
         }
     }
@@ -1613,7 +1604,6 @@ impl<'a> PaintCtx<'a> {
                 theme: self.theme.clone(),
                 tree: Rc::clone(&self.tree),
                 node,
-                owner: self.owner,
                 clip_rect: self.clip_rect,
             };
             paint(&mut cctx);

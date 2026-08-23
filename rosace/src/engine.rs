@@ -1055,7 +1055,6 @@ impl FrameEngine {
             theme: current_theme.clone(),
             tree: Rc::clone(&self.render_tree),
             node: rosace_widgets::tree::RenderTree::ROOT,
-            owner: root_component_id,
             clip_rect: None,
         };
 

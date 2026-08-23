@@ -492,7 +492,6 @@ fn paint_root(
                 theme: ctx.theme.clone(),
                 tree: Rc::clone(&ctx.tree),
                 node: node_id,
-                owner: ctx.owner,
                 clip_rect: ctx.clip_rect,
             };
             widget.paint(&mut child_ctx);

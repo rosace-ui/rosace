@@ -1523,36 +1523,7 @@ impl RenderTree {
         Walk::Miss
     }
 
-    /// All hit regions in tree (paint) order — used by the overlay pass to
-    /// flatten a per-entry subtree into a dispatch list.
-    pub fn collect_hits(&self) -> Vec<HitRegion> {
-        let mut out = Vec::new();
-        self.collect_hits_node(Self::ROOT, &mut out);
-        out
-    }
 
-    fn collect_hits_node(&self, id: NodeId, out: &mut Vec<HitRegion>) {
-        let n = &self.nodes[id];
-        out.extend(n.hits.iter().cloned());
-        for &child in &n.children {
-            self.collect_hits_node(child, out);
-        }
-    }
-
-    /// All scroll regions in tree (paint) order.
-    pub fn collect_scrolls(&self) -> Vec<ScrollRegion> {
-        let mut out = Vec::new();
-        self.collect_scrolls_node(Self::ROOT, &mut out);
-        out
-    }
-
-    fn collect_scrolls_node(&self, id: NodeId, out: &mut Vec<ScrollRegion>) {
-        let n = &self.nodes[id];
-        out.extend(n.scrolls.iter().cloned());
-        for &child in &n.children {
-            self.collect_scrolls_node(child, out);
-        }
-    }
 
     /// All focus nodes in tree (paint) order — feeds the Tab cycle each frame,
     /// including cache-hit frames where no widget was repainted.
@@ -2012,22 +1983,6 @@ impl RenderTree {
         false
     }
 
-    /// All transform-layer entries in tree order.
-    pub fn transform_ids(&self) -> Vec<(NodeId, usize)> {
-        let mut out = Vec::new();
-        self.transform_ids_node(Self::ROOT, &mut out);
-        out
-    }
-
-    fn transform_ids_node(&self, id: NodeId, out: &mut Vec<(NodeId, usize)>) {
-        let n = &self.nodes[id];
-        for i in 0..n.transforms.len() {
-            out.push((id, i));
-        }
-        for &child in &n.children {
-            self.transform_ids_node(child, out);
-        }
-    }
 
     /// Read-only snapshot of the live tree (D123/O2) — plain data, safe to
     /// hand to a DevTools overlay: no callbacks, no `Arc<dyn Fn>`, nothing
