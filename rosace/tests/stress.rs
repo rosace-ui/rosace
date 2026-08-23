@@ -454,3 +454,73 @@ fn report() {
              after_scroll.1 - before_scroll.1,
              after_scroll.2 - before_scroll.2);
 }
+
+/// Does the GPU texture path still earn its place now that a moved widget is
+/// re-blitted instead of re-recorded?
+///
+/// Replay removed WIDGET work (0 `paint()` calls per scroll frame). It did not
+/// remove RASTER work: the cached commands are still pushed and still drawn.
+/// The texture path removes both — a scroll is a UV shift over an existing
+/// texture. So the question is what that second saving is actually worth.
+///
+/// Times `engine.paint` over scroll frames for a composited list against a
+/// CPU-path one.
+///
+/// **This cannot decide the question, and the numbers mislead if read as if it
+/// could.** Headless, the engine still rasterizes the transform layer's
+/// content into an offscreen canvas on every publish frame, but there is no
+/// GPU to do the part that justifies the texture path — scrolling as a UV
+/// shift with no drawing at all. So this run pays the texture path's cost and
+/// gives it none of its benefit, and the composited list duly looks slower
+/// while holding a seventh of the rows.
+///
+/// Kept as a regression guard on CPU-path scroll cost, which it does measure
+/// honestly. Deciding whether the texture path still earns its place needs the
+/// showcase running against the real compositor — which is how D090 measured
+/// it in the first place.
+///
+/// `cargo test -p rosace --test stress -- --nocapture texture_vs_replay`
+#[test]
+fn texture_vs_replay() {
+    let _guard = exclusive();
+
+    /// `rows` short enough to composite, or long enough to fall to the CPU
+    /// path — the 4096px texture cap is what decides.
+    fn run(rows: usize) -> (u128, bool) {
+        let counts = Arc::new(Counts::default());
+        struct L { counts: Arc<Counts>, rows: usize }
+        impl Component for L {
+            fn build(&self, _c: &mut Context) -> BoxedWidget {
+                let mut col = Column::new().spacing(2.0);
+                for i in 0..self.rows {
+                    col = col.child(row(&self.counts, i));
+                }
+                ScrollView::new(col).boxed()
+            }
+        }
+        let mut e = FrameEngine::new(
+            Box::new(L { counts: Arc::clone(&counts), rows }),
+            FontCache::embedded(),
+        );
+        let (mut a, mut b) = (SkiaCanvas::new(WIN_W, WIN_H), SkiaCanvas::new(WIN_W, WIN_H));
+        for _ in 0..4 { e.paint(&mut a, &mut b, &[]); }
+
+        let composited = e.inspect_layers().iter().any(|l| matches!(
+            l.kind, rosace::widgets::tree::LayerKind::Transform(_)
+        ));
+
+        let t = std::time::Instant::now();
+        for _ in 0..60 {
+            e.paint(&mut a, &mut b, &[rosace_platform::InputEvent::Scroll {
+                x: 200.0, y: 300.0, delta_x: 0.0, delta_y: -8.0,
+            }]);
+        }
+        (t.elapsed().as_micros(), composited)
+    }
+
+    let (gpu_us, gpu_composited) = run(60);
+    let (cpu_us, cpu_composited) = run(400);
+
+    println!("\n  composited list (60 rows)   composited={gpu_composited}  {gpu_us} us / 60 scroll frames  ({} us/frame)", gpu_us / 60);
+    println!("  CPU-path list  (400 rows)   composited={cpu_composited}  {cpu_us} us / 60 scroll frames  ({} us/frame)\n", cpu_us / 60);
+}
