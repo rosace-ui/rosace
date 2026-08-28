@@ -301,6 +301,15 @@ pub struct TreeNode {
     pub cached_size: Option<Size>,
     /// Display list from the last paint pass.
     pub cached_picture: Option<Arc<Picture>>,
+    /// The rect `cached_picture` was RECORDED at.
+    ///
+    /// Distinct from `cached_rect`, which tracks where the node is NOW. A
+    /// re-blitted picture has to be offset from where its commands were
+    /// recorded, not from where the node was last frame — applying only the
+    /// per-frame delta leaves the pixels at `recorded + last_step` instead of
+    /// `recorded + total`, so anything that moves repeatedly (a screen sliding
+    /// in) ends up stranded wherever its final step put it.
+    pub picture_rect: Option<Rect>,
     /// World-space rect of the last paint (also the damage extent).
     pub cached_rect: Option<Rect>,
     /// This node's `cached_size` is stale — re-run `layout`.
@@ -523,6 +532,7 @@ impl RenderTree {
         n.last_constraints = None;
         n.cached_size = None;
         n.cached_picture = None;
+        n.picture_rect = None;
         n.cached_rect = None;
         n.needs_layout = true;
         n.needs_paint = true;

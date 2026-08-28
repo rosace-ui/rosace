@@ -1178,36 +1178,49 @@ impl<'a> PaintCtx<'a> {
                     && !n.captures
             };
 
-        // How far it moved, if the size is identical. `None` = re-record.
-        let delta = if !reusable {
+        // TWO different deltas, and conflating them was a real bug:
+        //
+        //   * the PIXELS are offset from where the picture was RECORDED
+        //     (`picture_rect`) — cumulative, because the commands never move;
+        //   * the DECLARATIONS are offset from where the node was LAST FRAME
+        //     (`cached_rect`) — incremental, because they were already moved
+        //     on every previous frame.
+        //
+        // Using the incremental delta for both left the pixels at
+        // `recorded + last_step` rather than `recorded + total`, so a screen
+        // sliding in over several frames rendered stranded near its final
+        // step — visible as content bunched into a sliver of the window,
+        // snapping into place as soon as anything forced a re-record.
+        let deltas = if !reusable {
             None
         } else {
             let t = self.tree.borrow();
-            match t.node(node).cached_rect {
-                Some(old) if old.size == rect.size => Some((
-                    rect.origin.x - old.origin.x,
-                    rect.origin.y - old.origin.y,
+            let n = t.node(node);
+            match (n.picture_rect, n.cached_rect) {
+                (Some(pic_at), Some(was)) if pic_at.size == rect.size => Some((
+                    (rect.origin.x - pic_at.origin.x, rect.origin.y - pic_at.origin.y),
+                    (rect.origin.x - was.origin.x,    rect.origin.y - was.origin.y),
                 )),
                 _ => None,
             }
         };
 
-        if let Some((dx, dy)) = delta {
+        if let Some(((px, py), (dx, dy))) = deltas {
             let pic = self.tree.borrow().node(node).cached_picture.clone()
                 .expect("checked above");
-            if dx == 0.0 && dy == 0.0 {
+            if px == 0.0 && py == 0.0 {
                 for cmd in &pic.commands {
                     self.recorder.push(cmd.clone());
                 }
             } else {
-                // The pixels AND everything the subtree declared move
-                // together. Translating one without the other is what sank
-                // the first attempt at this (`fd5529d`, reverted in
-                // `bf6b1b9`): a widget you can see and cannot click, with no
-                // failing test, because the pixels were right.
-                self.replay_offset(&pic, dx, dy);
-                self.tree.borrow_mut().translate_subtree(node, dx, dy);
+                self.replay_offset(&pic, px, py);
             }
+            // The pixels AND everything the subtree declared move together.
+            // Translating one without the other is what sank the first attempt
+            // at this (`fd5529d`, reverted in `bf6b1b9`): a widget you can see
+            // and cannot click, with no failing test, because the pixels were
+            // right.
+            self.tree.borrow_mut().translate_subtree(node, dx, dy);
             return;
         }
 
@@ -1253,6 +1266,9 @@ impl<'a> PaintCtx<'a> {
         let mut t = self.tree.borrow_mut();
         let n = t.node_mut(node);
         n.cached_picture = Some(Arc::new(pic));
+        // Where these commands were recorded — a re-blit offsets from HERE,
+        // not from wherever the node was last frame.
+        n.picture_rect = Some(rect);
         n.needs_paint = false;
         n.self_animating = animating;
     }

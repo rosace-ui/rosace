@@ -16,7 +16,7 @@
 //! of them is correct.
 
 use rosace::prelude::*;
-use rosace::widgets::tree::{InteractiveViewer, LayoutCtx, PaintCtx};
+use rosace::widgets::tree::{LayoutCtx, PaintCtx};
 use rosace::FrameEngine;
 use rosace_render::{FontCache, SkiaCanvas};
 use std::sync::{Mutex, MutexGuard};
@@ -53,7 +53,12 @@ impl Component for App {
             Container::new()
                 .width(200.0)
                 .height(150.0)
-                .child(InteractiveViewer::new(
+                // A nested COMPOSITED host. This used to be an
+                // `InteractiveViewer`; that zooms by morphed replay now and is
+                // deliberately not a layer at all, so a short inner
+                // `ScrollView` — small enough to stay under the texture cap —
+                // is what still produces one.
+                .child(ScrollView::new(
                     Container::new().width(400.0).height(400.0),
                 )),
         );

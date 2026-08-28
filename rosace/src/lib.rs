@@ -516,6 +516,7 @@ fn paint_root(
         let mut tree = ctx.tree.borrow_mut();
         let node = tree.node_mut(node_id);
         node.cached_picture = Some(Arc::new(picture));
+        node.picture_rect   = Some(child_rect);
         node.cached_rect    = Some(child_rect);
         node.needs_paint    = false;
     }
