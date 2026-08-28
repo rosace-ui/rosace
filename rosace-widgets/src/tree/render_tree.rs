@@ -1784,6 +1784,24 @@ impl RenderTree {
     /// here is a widget that is crisp in the new place and clickable in the
     /// old one.
     pub fn morph_subtree(&mut self, node: NodeId, src: Rect, dst: Rect) {
+        self.morph_subtree_clipped(node, src, dst, None)
+    }
+
+    /// [`Self::morph_subtree`], with the result confined to `clip`.
+    ///
+    /// A viewport that PANS its content needs this. The texture path got
+    /// clipping for free — a placed layer draws into exactly its `dest`, so
+    /// content panned out of view simply was not sampled. Replaying the
+    /// commands instead means the pixels are clipped by a `PushClip`, but the
+    /// declared regions are not: a row panned off the top would keep a
+    /// clickable rect floating above the viewport.
+    pub fn morph_subtree_clipped(
+        &mut self,
+        node: NodeId,
+        src: Rect,
+        dst: Rect,
+        clip: Option<Rect>,
+    ) {
         let sx = if src.size.width.abs()  > f32::EPSILON { dst.size.width  / src.size.width  } else { 1.0 };
         let sy = if src.size.height.abs() > f32::EPSILON { dst.size.height / src.size.height } else { 1.0 };
         self.transform_subtree(
@@ -1793,6 +1811,31 @@ impl RenderTree {
             sx,
             sy,
         );
+        if let Some(c) = clip {
+            self.clip_subtree(node, c);
+        }
+    }
+
+    /// Drop or trim every declared region of a subtree to `clip`.
+    fn clip_subtree(&mut self, node: NodeId, clip: Rect) {
+        {
+            let n = &mut self.nodes[node];
+            let keep = |r: &mut Rect| match super::intersect_rect(*r, clip) {
+                Some(i) => { *r = i; true }
+                None => false,
+            };
+            n.hits.retain_mut(|(r, _)| keep(r));
+            n.hits_at.retain_mut(|(r, _)| keep(r));
+            n.long_hits.retain_mut(|(r, _)| keep(r));
+            n.nested_scrolls.retain_mut(|(r, _)| keep(r));
+            n.hover_regions.retain_mut(keep);
+            n.scrolls.retain_mut(|reg| keep(&mut reg.0));
+            n.zooms.retain_mut(|reg| keep(&mut reg.0));
+        }
+        let children = self.nodes[node].children.clone();
+        for c in children {
+            self.clip_subtree(c, clip);
+        }
     }
 
     /// [`Self::translate_subtree`] with a scale as well.

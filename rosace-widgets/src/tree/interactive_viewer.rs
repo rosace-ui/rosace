@@ -3,7 +3,7 @@ use rosace_core::types::{Point, Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::PictureRecorder;
 use crate::scroll::controller::{MAX_VELOCITY, COAST_STOP_THRESHOLD};
-use super::{Widget, LayoutCtx, PaintCtx, TransformLayerEntry, avail_w, avail_h};
+use super::{Widget, LayoutCtx, PaintCtx, avail_w, avail_h};
 use super::container::draw_rounded_rect_pub;
 
 /// A large 2D plane with pan + zoom, driven by wheel/drag and +/- controls
@@ -112,14 +112,36 @@ impl<W: Widget + Send + Sync + 'static> Widget for InteractiveViewer<W> {
         self.child.paint(&mut sub_ctx);
         let picture = sub_rec.finish();
 
-        ctx.attach_transform(TransformLayerEntry {
-            picture,
-            child_size,
-            viewport_rect: vp_rect,
-            zoom,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-        });
+        // Draw the recorded child SCALED into the viewport, instead of
+        // rasterizing it into an offscreen texture and compositing that.
+        //
+        // This is Flutter's model: the transform is applied when the commands
+        // are drawn, so vectors and glyphs come out at the zoomed size rather
+        // than a bitmap being stretched — `DrawCommand::morph` scales `px` on
+        // text, so type re-renders crisp. What it buys is everything the
+        // texture could not do: no 4096px cap, so content of any size zooms;
+        // no offscreen allocation; and no permanent second coordinate space
+        // for everything underneath to live in, which is where the nested-clip
+        // and screen-vs-content defects came from.
+        let off = rosace_state::scroll_offset(ctx.node as u64);
+        let dst = Rect {
+            origin: Point {
+                x: vp_rect.origin.x - off[0] * zoom,
+                y: vp_rect.origin.y - off[1] * zoom,
+            },
+            size: Size {
+                width: child_size.width * zoom,
+                height: child_size.height * zoom,
+            },
+        };
+        ctx.record(rosace_render::DrawCommand::PushClip { rect: vp_rect });
+        ctx.replay_morphed(&picture, child_rect, dst);
+        ctx.record(rosace_render::DrawCommand::PopClip);
+
+        // The declarations follow the pixels, and are confined to the
+        // viewport — the texture path got that clipping for free from its
+        // `dest` rect; replayed commands need it stated.
+        ctx.tree.borrow_mut().morph_subtree_clipped(sub_node, child_rect, dst, Some(vp_rect));
 
         // Visible content window shrinks (in content-native px) as zoom
         // increases — the same relationship `child_coords` inverts.
