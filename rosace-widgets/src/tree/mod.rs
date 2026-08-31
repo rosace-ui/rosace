@@ -1176,6 +1176,24 @@ impl<'a> PaintCtx<'a> {
                     // subtree (Hero) must actually run — replaying leaves the
                     // consumer with nothing.
                     && !n.captures
+                    // While a Hero role is active, painting has a SIDE EFFECT:
+                    // a `.hero_tag`'d widget captures itself into the hero
+                    // registry instead of painting in place, and
+                    // `ScreenTransitionView` pairs the two sides afterwards.
+                    // Replay reproduces the pixels and skips the capture, so a
+                    // cached screen contributed nothing to the registry.
+                    //
+                    // That is precisely the outgoing screen, which by
+                    // definition has been painted before: its Hero never
+                    // registered, no pair matched, and both captures were
+                    // dropped — so the element vanished for the whole
+                    // transition and reappeared at the destination. `captures`
+                    // alone cannot fix this: it is only set once a node HAS
+                    // captured, and the outgoing screen never gets that far.
+                    //
+                    // Only in force mid-transition, which is also the only
+                    // time both screens are painted at once.
+                    && hero::active_role().is_none()
                     // A picture is only reusable under the clip it was
                     // recorded beneath. Not for the pixels — those are
                     // re-clipped on replay — but for the DECLARATIONS, which
