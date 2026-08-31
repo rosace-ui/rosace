@@ -1176,6 +1176,13 @@ impl<'a> PaintCtx<'a> {
                     // subtree (Hero) must actually run — replaying leaves the
                     // consumer with nothing.
                     && !n.captures
+                    // A picture is only reusable under the clip it was
+                    // recorded beneath. Not for the pixels — those are
+                    // re-clipped on replay — but for the DECLARATIONS, which
+                    // `register_hit` intersected with the clip at declaration
+                    // time and which replay only ever translates. See
+                    // `TreeNode::picture_clip`.
+                    && n.picture_clip == self.clip_rect
             };
 
         // TWO different deltas, and conflating them was a real bug:
@@ -1263,12 +1270,14 @@ impl<'a> PaintCtx<'a> {
         for cmd in &pic.commands {
             self.recorder.push(cmd.clone());
         }
+        let clip_at_record = self.clip_rect;
         let mut t = self.tree.borrow_mut();
         let n = t.node_mut(node);
         n.cached_picture = Some(Arc::new(pic));
         // Where these commands were recorded — a re-blit offsets from HERE,
         // not from wherever the node was last frame.
         n.picture_rect = Some(rect);
+        n.picture_clip = clip_at_record;
         n.needs_paint = false;
         n.self_animating = animating;
     }

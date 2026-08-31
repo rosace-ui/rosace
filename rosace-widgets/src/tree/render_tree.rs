@@ -310,6 +310,22 @@ pub struct TreeNode {
     /// `recorded + total`, so anything that moves repeatedly (a screen sliding
     /// in) ends up stranded wherever its final step put it.
     pub picture_rect: Option<Rect>,
+    /// The clip in force when `cached_picture` was RECORDED.
+    ///
+    /// A picture is only valid under the clip it was recorded beneath, and not
+    /// because of the pixels — those are re-clipped on replay. It is the
+    /// DECLARATIONS: `register_hit` and friends intersect the rects they
+    /// declare with the clip at declaration time, and replaying translates
+    /// those rects without ever re-declaring them. So a subtree first recorded
+    /// while narrowly clipped keeps that narrow hit region no matter how wide
+    /// it is later drawn.
+    ///
+    /// Which is exactly what a screen transition does: the incoming screen's
+    /// first frame is clipped to a sliver, and every later frame replayed. The
+    /// rows rendered full width and were clickable only in the leftmost ~50px
+    /// — a tap on the rest fell through to the scrollable underneath, so
+    /// tapping a list item scrolled it instead of opening it.
+    pub picture_clip: Option<Rect>,
     /// World-space rect of the last paint (also the damage extent).
     pub cached_rect: Option<Rect>,
     /// This node's `cached_size` is stale — re-run `layout`.
@@ -533,6 +549,7 @@ impl RenderTree {
         n.cached_size = None;
         n.cached_picture = None;
         n.picture_rect = None;
+        n.picture_clip = None;
         n.cached_rect = None;
         n.needs_layout = true;
         n.needs_paint = true;

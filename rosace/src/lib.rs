@@ -513,10 +513,12 @@ fn paint_root(
         for cmd in &picture.commands {
             ctx.recorder.push(cmd.clone());
         }
+        let clip_at_record = ctx.clip_rect;
         let mut tree = ctx.tree.borrow_mut();
         let node = tree.node_mut(node_id);
         node.cached_picture = Some(Arc::new(picture));
         node.picture_rect   = Some(child_rect);
+        node.picture_clip   = clip_at_record;
         node.cached_rect    = Some(child_rect);
         node.needs_paint    = false;
     }
