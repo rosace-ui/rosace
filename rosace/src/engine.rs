@@ -294,6 +294,19 @@ pub struct FrameEngine {
     /// invoked on `MouseUp` otherwise. Positional hits (sliders, on_press_at)
     /// are unaffected — those still fire immediately on down, see
     /// `active_drag`'s doc comment.
+    /// Last pointer position seen, so hover can be re-resolved when the
+    /// CONTENT moves under a stationary cursor.
+    ///
+    /// The composited scroll path used to make this unnecessary: it remapped
+    /// the pointer through `child_coords` on every walk, so hover was
+    /// recomputed from scratch each time. Painting scrolled content directly
+    /// means the hovered node simply translates away with everything else,
+    /// taking its highlight with it, while the row now under the cursor stays
+    /// unlit.
+    last_pointer: Option<(f32, f32)>,
+    /// A scroll moved content this frame; hover must be re-resolved once the
+    /// new rects exist.
+    needs_rehover: bool,
     pending_press: Option<Arc<dyn Fn(f32, f32) + Send + Sync>>,
     /// Same deferral as `pending_press`, for overlay-hosted widgets
     /// (buttons inside a Dialog/Drawer/Dropdown/menu overlay).
@@ -392,6 +405,8 @@ impl FrameEngine {
             forced_repaint: false,
             lp_cancel: None,
             press_origin: None,
+            last_pointer: None,
+            needs_rehover: false,
             pending_press: None,
             pending_overlay_press: None,
             pending_scroll_chain: Vec::new(),
@@ -1189,6 +1204,20 @@ impl FrameEngine {
         );
         self.render_tree.borrow_mut().finalize();
 
+        // Content that moved under a stationary cursor changes what is
+        // hovered, and only now are the new rects in place. Inlined rather
+        // than a `&mut self` method: `root` is still borrowed here, and a
+        // whole-self borrow would collide with it.
+        if std::mem::take(&mut self.needs_rehover) {
+            if let Some((hx, hy)) = self.last_pointer {
+                let target = self.render_tree.borrow().hover_test(hx, hy);
+                if self.render_tree.borrow_mut().set_hover(target) {
+                    self.forced_repaint = true;
+                    rosace_state::request_frame();
+                }
+            }
+        }
+
         // Self-animating widgets (spinner, shimmer) asked to keep going.
         if rosace_widgets::tree::take_animation_request() {
             self.forced_repaint = true;
@@ -1812,6 +1841,7 @@ impl FrameEngine {
                         self.forced_repaint = true;
                         rosace_state::request_frame();
                     }
+                    self.last_pointer = Some((*x, *y));
                     // Hover tracking — repaints only the changed nodes.
                     let target = self.render_tree.borrow().hover_test(*x, *y);
                     let changed = self.render_tree.borrow_mut().set_hover(target);
@@ -1892,6 +1922,11 @@ impl FrameEngine {
                             cb(*delta_x, *delta_y);
                         }
                     }
+                    // Re-resolve hover AFTER this frame paints: the offset has
+                    // changed but the rects have not moved yet, so testing now
+                    // would just re-find the row the cursor is already on.
+                    self.last_pointer = Some((*x, *y));
+                    self.needs_rehover = true;
                 }
                 rosace_platform::InputEvent::Pinch { x, y, delta } => {
                     if let Some(cb) = self.render_tree.borrow().zoom_test(*x, *y) {

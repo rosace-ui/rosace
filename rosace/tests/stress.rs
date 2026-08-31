@@ -207,11 +207,11 @@ impl H {
     }
 }
 
-/// The fixture must actually be deep and composited, or every assertion below
-/// is measuring the wrong shape of tree — which is the exact failure this file
-/// exists to prevent.
+/// The fixture must actually be deep, or every assertion below is measuring
+/// the wrong shape of tree — which is the exact failure this file exists to
+/// prevent.
 #[test]
-fn the_fixture_is_deep_and_composited() {
+fn the_fixture_is_deep_and_uses_the_one_scroll_path() {
     let _guard = exclusive();
     let mut h = harness();
     h.settle();
@@ -233,11 +233,16 @@ fn the_fixture_is_deep_and_composited() {
     };
     assert!(depth >= 6, "tree is only {depth} deep — not app-shaped");
 
+    // A ScrollView used to composite into an offscreen texture and publish a
+    // transform layer, which put everything beneath it into a second
+    // coordinate space. Replay-on-move gives the same zero-repaint scroll
+    // frame without one, so there is a single path and a single space.
     assert!(
-        h.e.inspect_layers().iter().any(|l| matches!(
+        !h.e.inspect_layers().iter().any(|l| matches!(
             l.kind, rosace::widgets::tree::LayerKind::Transform(_)
         )),
-        "the ScrollView must be GPU-composited, or the content-space paths are untested"
+        "a ScrollView is still publishing a transform layer — the texture path \
+         was supposed to be gone, and with it the content-vs-screen split"
     );
 }
 

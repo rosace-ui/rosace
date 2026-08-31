@@ -144,7 +144,6 @@ pub struct ScrollView {
     /// automatic default (see struct docs) already enables it when it helps;
     /// this flag is now an override for the exceptional case, not the only
     /// way to get the GPU path.
-    gpu_layer: bool,
     /// Explicit physics override (D108/Phase 26 Step 2). `None` resolves via
     /// [`resolve_physics`] — the app's theme `ext` value, else a per-platform
     /// default. Always the highest-priority source when set.
@@ -175,7 +174,6 @@ impl ScrollView {
             controller: None,
             axis: ScrollAxis::Vertical,
             scrollbar: ScrollbarStyle::default(),
-            gpu_layer: false,
             physics: None,
         }
     }
@@ -188,17 +186,6 @@ impl ScrollView {
         self.physics = Some(p);
         self
     }
-
-    /// Force the GPU-layer path on regardless of the automatic size
-    /// heuristic (see struct docs — [`ScrollView::new`] already auto-detects
-    /// the common case). Content is capped at [`MAX_TL_DIM`]; taller content
-    /// silently falls back to the base path (windowing is not yet built).
-    pub fn gpu(child: impl Widget + 'static) -> Self {
-        Self { gpu_layer: true, ..Self::new(child) }
-    }
-
-    /// Force GPU-layer compositing on (see [`ScrollView::gpu`]).
-    pub fn gpu_layer(mut self) -> Self { self.gpu_layer = true; self }
 
     /// A horizontal scroll view — carousels, chip rows, code blocks.
     pub fn horizontal(child: impl Widget + 'static) -> Self {
@@ -301,151 +288,7 @@ impl ScrollView {
     /// content fits in a single placed texture ([`MAX_TL_DIM`] — taller
     /// content needs re-render windowing, not yet built, so it must stay on
     /// the base path rather than silently mis-render).
-    fn should_auto_gpu(&self, vp: Size, child_size: Size) -> bool {
-        let (overflow, extent) = match self.axis {
-            ScrollAxis::Vertical => (child_size.height > vp.height, child_size.height),
-            ScrollAxis::Horizontal => (child_size.width > vp.width, child_size.width),
-            ScrollAxis::Both => (
-                child_size.height > vp.height || child_size.width > vp.width,
-                child_size.height.max(child_size.width),
-            ),
-        };
-        // PHYSICAL fit: the offscreen texture is allocated at `extent * scale`
-        // and hard-capped at `MAX_TL_DIM` (engine.rs). A logical-only check
-        // (`extent <= MAX_TL_DIM`) passes content that then can't fit its
-        // texture on a 2x/3x display, clipping the bottom. Gate on the physical
-        // size so taller-than-cap content falls to the CPU (base) path — which
-        // re-renders only the visible slice and has no single-texture limit.
-        overflow && extent * rosace_state::render_scale() <= MAX_TL_DIM
-    }
 
-    /// GPU-layer paint path (D090). Records the content once into its own
-    /// sub-tree/picture at content-local `(0,0)`, attaches it as a
-    /// TransformLayer entry (the platform composites it as a placed layer), and
-    /// registers wheel scrolling straight into the non-reactive offset channel
-    /// so a scroll tick is a compositor UV shift with no component repaint.
-    /// `child_size` is measured once by the caller ([`Widget::paint`]) and
-    /// passed in — this never re-measures.
-    fn paint_gpu(&self, ctx: &mut PaintCtx, child_size: Size) {
-        use super::TransformLayerEntry;
-        let vp = ctx.rect;
-        let node_id = ctx.node as u64;
-
-        // Controller-backed offset (D101) — the SAME model `paint_base` uses,
-        // so the GPU path gets real drag + flick momentum instead of wheel
-        // only. This path composites the content as an offscreen texture and
-        // shifts its sample offset each frame, so the live offset is also
-        // mirrored to the non-reactive channel the compositor reads
-        // (`scroll_offset`): the controller is the source of truth.
-        let ctrl = ctx.scroll_controller();
-        let axes = match self.axis {
-            ScrollAxis::Vertical   => super::ScrollAxes::Y,
-            ScrollAxis::Horizontal => super::ScrollAxes::X,
-            ScrollAxis::Both       => super::ScrollAxes::BOTH,
-        };
-        let (ax, ay) = (axes.x, axes.y);
-        let physics = resolve_physics(&ctx.theme, self.physics);
-
-        // Publish extents so `apply_momentum`/`coast` can clamp (guarded — an
-        // unconditional atom write during paint would dirty every frame).
-        let vp_s = [vp.size.width, vp.size.height];
-        if ctrl.viewport_size() != vp_s { ctrl.set_viewport_size(vp_s); }
-        let cs = [child_size.width, child_size.height];
-        if ctrl.content_size() != cs { ctrl.set_content_size(cs); }
-
-        // Momentum drive — identical to `paint_base`: track drag velocity
-        // while pressed, coast / spring-back once released (unless wheel input
-        // is still live). See `paint_base` for the wheel-idle-grace rationale.
-        let dt = rosace_animate::frame_dt().max(0.0001);
-        let is_pressed = ctx.pressed();
-        let was_pressed = ctrl.was_pressed();
-        ctrl.advance_wheel_idle(dt);
-        if is_pressed {
-            // A press that begins after a wheel scroll, `scroll_to` or
-            // `reveal` must not measure that movement as this gesture's
-            // speed — see `begin_velocity_sample`.
-            if !was_pressed { ctrl.begin_velocity_sample(); }
-            ctrl.track_velocity(dt);
-        } else if ctrl.wheel_recently_active() {
-            // A `Bounce` spring must keep recovering even while the OS's
-            // native momentum-phase wheel events are still arriving — see
-            // the long comment on this same branch in `paint_base` for why
-            // waiting for them to stop first produced a visible "pause,
-            // then snap back" that grew with flick speed. Heavily damped
-            // (`CONCURRENT_BOUNCE_DT_SCALE`) — see that constant's own doc
-            // comment for why a full-strength spring here visibly vibrated.
-            if let ScrollPhysics::Bounce { spring_stiffness, .. } = physics {
-                if ctrl.is_overscrolled() {
-                    ctrl.settle_bounce(spring_stiffness, dt * CONCURRENT_BOUNCE_DT_SCALE);
-                }
-            }
-            ctx.request_animation();
-        } else {
-            if was_pressed { ctrl.end_drag(); }
-            if !ctx.theme.animation.enabled {
-                ctrl.stop_coasting();
-            } else if ctrl.coast(physics, dt) {
-                ctx.request_animation();
-            }
-        }
-        ctrl.set_was_pressed(is_pressed);
-
-        // Live (post-coast) offset drives BOTH this frame's transform and the
-        // compositor's offscreen sample position (via the mirrored channel).
-        let off = ctrl.offset();
-        rosace_state::set_scroll_offset(node_id, off);
-
-        // Record the content at (0,0) into its own node/picture (D090).
-        let sub_node = ctx.tree.borrow_mut().slot(ctx.node, true);
-        let mut sub_rec = rosace_render::PictureRecorder::new();
-        let child_rect = Rect { origin: Point { x: 0.0, y: 0.0 }, size: child_size };
-        let mut sub_ctx = PaintCtx {
-            recorder: &mut sub_rec,
-            rect: child_rect,
-            font: ctx.font,
-            theme: ctx.theme.clone(),
-            tree: ctx.tree.clone(),
-            node: sub_node,
-            clip_rect: None,
-        };
-        self.child.paint(&mut sub_ctx);
-        let picture = sub_rec.finish();
-
-        ctx.attach_transform(TransformLayerEntry {
-            picture,
-            child_size,
-            viewport_rect: vp,
-            zoom: 1.0,
-            scroll_x: off[0],
-            scroll_y: off[1],
-        });
-
-        // Wheel/trackpad → `apply_momentum` (respects Bounce overscroll),
-        // marks wheel active so coast holds off while it's live.
-        let wheel_ctrl = ctrl.clone();
-        ctx.register_scroll_target(vp, axes, Arc::new(move |dx, dy| {
-            wheel_ctrl.apply_momentum(if ax { -dx } else { 0.0 }, if ay { -dy } else { 0.0 }, physics);
-            wheel_ctrl.mark_wheel_active();
-        }));
-
-        // Touch/mouse drag-to-pan (GPU-path parity): a finger produces no
-        // wheel event, so without this the GPU scroll path could not scroll on
-        // touch devices at all (the gallery was frozen on iOS, fine on the
-        // Mac trackpad). Nested-scroll-chain-aware (D-NESTED-SCROLL,
-        // 2026-08-02) — see the base path's own registration for why this
-        // is `register_nested_scroll`, not `on_press_at`.
-        let pan_ctrl = ctrl.clone();
-        ctx.register_nested_scroll(move |dx, dy| {
-            pan_ctrl.try_apply_delta(if ax { -dx } else { 0.0 }, if ay { -dy } else { 0.0 }, physics)
-        });
-
-        // Scrollbar drawn into the base canvas from the live channel offset.
-        self.draw_scrollbars(ctx, vp, child_size, off, Some(&ctrl), is_pressed);
-    }
-
-    /// Base (CPU-painted) path: content painted directly into the main
-    /// canvas at the scroll offset, clipped to the viewport. `child_size` is
-    /// measured once by the caller ([`Widget::paint`]) and passed in.
     fn paint_base(&self, ctx: &mut PaintCtx, child_size: Size) {
         let vp = ctx.rect;
 
@@ -845,20 +688,12 @@ impl Widget for ScrollView {
         let vp = ctx.rect;
         let child_size = ctx.measure_child(self.child_constraints(vp), &*self.child);
 
-        // `::fixed` and `::controlled` always use the base path — exact,
-        // un-composited semantics for programmatic control and snapshots.
-        // Otherwise: explicit `.gpu_layer()` forces the GPU path on; plain
-        // `ScrollView::new` auto-detects it via the size heuristic (D090
-        // transparent default).
-        let eligible = self.fixed_offset.is_none() && self.controller.is_none();
-        let use_gpu = eligible
-            && (self.gpu_layer || self.should_auto_gpu(vp.size, child_size));
-
-        if use_gpu {
-            self.paint_gpu(ctx, child_size);
-        } else {
-            self.paint_base(ctx, child_size);
-        }
+        // One path. Scrolling used to fork between an offscreen texture whose
+        // UVs shifted (D090) and this CPU path; replay-on-move now gives the
+        // same zero-repaint scroll frame without a texture, so the fork — and
+        // the second coordinate space it forced on everything beneath it — is
+        // gone. See `paint_base`.
+        self.paint_base(ctx, child_size);
     }
 }
 
@@ -868,49 +703,6 @@ mod widget_tests {
     use rosace_core::types::Point;
 
     fn sz(w: f32, h: f32) -> Size { Size { width: w, height: h } }
-
-    /// The GPU-vs-CPU decision is made in PHYSICAL pixels.
-    ///
-    /// The offscreen scroll texture is allocated at `extent * render_scale`
-    /// and capped, so a logical-only check passes content that then cannot
-    /// fit its texture on a 2x display — and the bottom of a long list is
-    /// silently clipped. This is the one place where "it looked fine on my
-    /// machine" is guaranteed, because the developer's display scale decides.
-    #[test]
-    fn the_gpu_path_is_gated_on_physical_pixels_not_logical() {
-        let sv = ScrollView::new(super::super::Spacer::new(1.0));
-        let vp = sz(400.0, 800.0);
-        let tall = sz(400.0, 3000.0); // fits at 1x, does NOT at 2x
-
-        rosace_state::set_render_scale(1.0);
-        assert!(sv.should_auto_gpu(vp, tall), "3000px fits the cap at 1x");
-
-        rosace_state::set_render_scale(2.0);
-        assert!(!sv.should_auto_gpu(vp, tall),
-            "3000 logical is 6000 physical at 2x — past the cap, so CPU");
-
-        rosace_state::set_render_scale(1.0);
-    }
-
-    /// No overflow means nothing to scroll, so no offscreen texture either.
-    #[test]
-    fn content_that_fits_never_takes_the_gpu_path() {
-        let sv = ScrollView::new(super::super::Spacer::new(1.0));
-        rosace_state::set_render_scale(1.0);
-        assert!(!sv.should_auto_gpu(sz(400.0, 800.0), sz(400.0, 500.0)));
-    }
-
-    /// `Both` must consider whichever axis is larger — gating on height
-    /// alone would send a very wide horizontal scroller down a path whose
-    /// texture cannot hold it.
-    #[test]
-    fn a_two_axis_view_gates_on_the_larger_extent() {
-        let sv = ScrollView::new(super::super::Spacer::new(1.0)).axis(ScrollAxis::Both);
-        rosace_state::set_render_scale(1.0);
-        assert!(!sv.should_auto_gpu(sz(400.0, 800.0), sz(9000.0, 900.0)),
-            "9000px wide is past the cap even though the height is modest");
-        rosace_state::set_render_scale(1.0);
-    }
 
     /// Padding narrows the CHILD, never the viewport — the scrollbar has to
     /// keep tracking the full height, and content must not slide under it.
