@@ -1183,6 +1183,7 @@ impl<'a> PaintCtx<'a> {
                     // time and which replay only ever translates. See
                     // `TreeNode::picture_clip`.
                     && n.picture_clip == self.clip_rect
+
             };
 
         // TWO different deltas, and conflating them was a real bug:
@@ -1332,14 +1333,19 @@ impl<'a> PaintCtx<'a> {
     /// intersected with it. Targets fully outside the clip are silently dropped
     /// so they cannot intercept clicks in other panels below the fold.
     pub fn register_hit(&self, callback: Arc<dyn Fn() + Send + Sync>) {
-        let hit_rect = if let Some(clip) = self.clip_rect {
-            match intersect_rect(self.rect, clip) {
-                Some(r) => r,
-                None    => return, // widget is outside the visible scroll viewport
-            }
-        } else {
-            self.rect
-        };
+        // Declared in FULL, unclipped. The clip is applied by the pointer
+        // walk instead (`child_coords` prunes any subtree whose clipping
+        // ancestor does not contain the point), which is the only way this
+        // can survive replay-on-move.
+        //
+        // Truncating here destroyed information a translation cannot restore:
+        // a list row below the viewport declared NOTHING, so when the list
+        // scrolled it into view, replay translated that nothing and the row
+        // was visible and dead — while rows that had been on screen kept
+        // regions that rode off the top. A list ended up clickable only where
+        // it stood at the last full repaint, which is why toggling the theme
+        // appeared to fix it.
+        let hit_rect = self.rect;
         // Bind the owning widget INTO the handler, so `refresh_state()` called
         // inside an `on_press` resolves to the widget that registered it.
         //

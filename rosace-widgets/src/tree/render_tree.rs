@@ -1163,6 +1163,14 @@ impl RenderTree {
     /// the viewport (children receive nothing — content is clipped to it).
     /// Non-transform nodes pass coords through unchanged.
     fn child_coords(&self, n: &TreeNode, id: NodeId, x: f32, y: f32) -> (f32, f32, bool) {
+        // A node that imposed a clip hides everything beneath it from the
+        // pointer exactly as it does from the eye. This is what lets
+        // `register_hit` declare full, untruncated rects — see its comment.
+        if let Some(c) = n.clip {
+            if !contains(&c, x, y) {
+                return (x, y, true);
+            }
+        }
         let Some(entry) = n.transforms.first() else { return (x, y, false); };
         let vp = entry.viewport_rect;
         if !contains(&vp, x, y) {
