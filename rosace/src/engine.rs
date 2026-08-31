@@ -1345,73 +1345,11 @@ impl FrameEngine {
             overlay_canvas.clear_transparent();
         }
 
-        // ── TransformLayer pass (D088/D090) ─────────────────────────────
-        // Each entry's content is rendered ONCE into its own content-
-        // sized canvas and published as a placed GPU compositor layer
-        // (D090) — the compositor samples it at the scroll offset, so
-        // scrolling is a UV shift rather than a base-canvas re-raster.
-        // Published only on repaint frames; the platform retains the
-        // set across clean frames (persists through frame-skip).
-        if needs_paint {
-            // Physical-pixel cap for a content texture (D082).
-            const MAX_TL_DIM: u32 = 4096;
-            let scale = canvas.scale();
-            let mut scroll_layers: Vec<rosace_platform::ScrollLayer> = Vec::new();
-            let tree_ref = self.render_tree.borrow();
-            for layer in tree_ref.layer_tree().layers {
-                // Placement and clip are already resolved: `layer_tree` walks
-                // the node tree once and hands back each layer's screen rect
-                // (mapped through every transform host above it) narrowed by
-                // every clip above it, plus the sample bias that turns the
-                // crop into a clip rather than a shift.
-                //
-                // Both were previously re-derived here per entry, which is
-                // what a flat `Vec<ScrollLayer>` forces: it has no parent and
-                // no clip, so "clipped by my ancestor" is not in the format.
-                // Promoted layers are pictures replayed above the base canvas
-                // by the overlay pass, not content textures — nothing to
-                // rasterize or hand to the compositor here.
-                let rosace_widgets::tree::LayerKind::Transform(i) = layer.kind else { continue };
-                let (n, entry) = (layer.node, &tree_ref.node(layer.node).transforms[i]);
-                let vp = layer.dest;
-
-                let content_scale = scale * entry.zoom;
-                let cw = ((entry.child_size.width  * content_scale).ceil() as u32).clamp(1, MAX_TL_DIM);
-                let ch = ((entry.child_size.height * content_scale).ceil() as u32).clamp(1, MAX_TL_DIM);
-                let mut content = rosace_render::SkiaCanvas::new_hidpi(cw, ch, content_scale);
-                // GPU-shapes mode propagates to scroll content (D109 C2):
-                // shapes become quads, text becomes segments, and the
-                // compositor renders them into the offscreen scroll
-                // texture — no full content-buffer CPU raster or copy.
-                content.set_gpu_shapes(canvas.gpu_shapes());
-                content.play_picture(&entry.picture, font);
-
-                let (pixels, items) = if canvas.gpu_shapes() {
-                    (Vec::new(), content.take_frame_items())
-                } else {
-                    (content.pixels().to_vec(), Vec::new())
-                };
-                scroll_layers.push(rosace_platform::ScrollLayer {
-                    id: n as u64,
-                    pixels,
-                    width:  cw,
-                    height: ch,
-                    dest: (
-                        vp.origin.x * scale, vp.origin.y * scale,
-                        vp.size.width * scale, vp.size.height * scale,
-                    ),
-                    zoom: entry.zoom,
-                    src_bias: (
-                        layer.src_bias.0 * scale * entry.zoom,
-                        layer.src_bias.1 * scale * entry.zoom,
-                    ),
-                    items,
-                });
-            }
-            drop(tree_ref);
-            rosace_platform::publish_scroll_layers(scroll_layers);
-        }
-
+        // The TransformLayer pass lived here: every transform entry was
+        // rendered into its own content-sized canvas and published as a
+        // placed GPU layer the compositor sampled at a scroll offset. One
+        // scroll path records into the ordinary paint stream now, so nothing
+        // produces entries and there is nothing to publish.
 
         // ── Sync focus manager from the render tree ─────────────────────
         // Collected from persistent nodes, so the Tab cycle survives

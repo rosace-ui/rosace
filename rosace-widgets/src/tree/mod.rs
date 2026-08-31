@@ -165,7 +165,7 @@ pub use semantics::Semantics;
 pub use row::Row;
 pub use scaffold::Scaffold;
 pub use screen_transition_view::ScreenTransitionView;
-pub use scroll_view::{ScrollView, ScrollAxis, MAX_TL_DIM};
+pub use scroll_view::{ScrollView, ScrollAxis};
 pub use slider::Slider;
 pub use spacer::{Expanded, Spacer};
 pub use stack::Stack;
