@@ -118,6 +118,10 @@ impl Widget for PullToRefresh {
         let is_pressed = ctx.pressed();
         let was_pressed = ctrl.was_pressed();
         if is_pressed {
+            // A press that begins after a wheel scroll, `scroll_to` or
+            // `reveal` must not measure that movement as this gesture's
+            // speed — see `begin_velocity_sample`.
+            if !was_pressed { ctrl.begin_velocity_sample(); }
             ctrl.track_velocity(dt);
         } else {
             if was_pressed { ctrl.end_drag(); }

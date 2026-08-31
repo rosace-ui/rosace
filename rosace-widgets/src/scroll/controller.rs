@@ -273,6 +273,29 @@ impl ScrollController {
         self.s().last_offset_for_velocity = now;
     }
 
+    /// Start a fresh velocity sample at the CURRENT offset, measuring
+    /// nothing. Call on the frame a press begins.
+    ///
+    /// `track_velocity` measures the offset delta since its own last call,
+    /// and it is only called while pressed. So the baseline it diffs against
+    /// is wherever the offset was when the last gesture ended — and every
+    /// wheel notch, `scroll_to` and `reveal` in between moves the offset
+    /// without updating it. The first press frame after any of those
+    /// measured the WHOLE intervening scroll as if it had happened in one
+    /// frame: a 500px wheel scroll became ~31000 px/s, clamped to
+    /// `MAX_VELOCITY`, and release handed that to `coast`. Tapping a
+    /// stationary list flung it to the far end, in whichever direction it
+    /// had last been scrolled.
+    ///
+    /// Zeroing the velocity here is the other half, and is the behaviour
+    /// touch UIs are expected to have anyway: putting a finger down on a
+    /// coasting list stops it.
+    pub fn begin_velocity_sample(&self) {
+        let now = self.s().offset;
+        self.s().last_offset_for_velocity = now;
+        self.s().velocity = [0.0, 0.0];
+    }
+
     /// The most recently tracked velocity (px/s) — see `track_velocity`.
     pub fn velocity(&self) -> [f32; 2] {
         self.s().velocity

@@ -361,6 +361,10 @@ impl ScrollView {
         let was_pressed = ctrl.was_pressed();
         ctrl.advance_wheel_idle(dt);
         if is_pressed {
+            // A press that begins after a wheel scroll, `scroll_to` or
+            // `reveal` must not measure that movement as this gesture's
+            // speed — see `begin_velocity_sample`.
+            if !was_pressed { ctrl.begin_velocity_sample(); }
             ctrl.track_velocity(dt);
         } else if ctrl.wheel_recently_active() {
             // A `Bounce` spring must keep recovering even while the OS's
@@ -576,7 +580,11 @@ impl ScrollView {
             // release.
             ctrl.advance_wheel_idle(dt);
             if is_pressed {
-                ctrl.track_velocity(dt);
+                // A press that begins after a wheel scroll, `scroll_to` or
+            // `reveal` must not measure that movement as this gesture's
+            // speed — see `begin_velocity_sample`.
+            if !was_pressed { ctrl.begin_velocity_sample(); }
+            ctrl.track_velocity(dt);
             } else if ctrl.wheel_recently_active() {
                 // Real trackpad testing (2026-08-01): a fast flick's native
                 // momentum-phase wheel-event tail can run for a while — this
