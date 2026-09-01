@@ -235,14 +235,15 @@ fn the_fixture_is_deep_and_uses_the_one_scroll_path() {
 
     // A ScrollView used to composite into an offscreen texture and publish a
     // transform layer, which put everything beneath it into a second
-    // coordinate space. Replay-on-move gives the same zero-repaint scroll
-    // frame without one, so there is a single path and a single space.
+    // coordinate space. That is now unrepresentable — `LayerKind` has no
+    // Transform variant — so the property is enforced by the type system.
+    // What is still worth asserting is that scrolling content composites
+    // nothing of its own: the only layers in an app are portals (promoted
+    // nodes), here the engine's own chrome.
     assert!(
-        !h.e.inspect_layers().iter().any(|l| matches!(
-            l.kind, rosace::widgets::tree::LayerKind::Transform(_)
-        )),
-        "a ScrollView is still publishing a transform layer — the texture path \
-         was supposed to be gone, and with it the content-vs-screen split"
+        h.e.inspect_layers().iter().all(|l| l.kind == rosace::widgets::tree::LayerKind::Promoted),
+        "something other than a portal is compositing separately: {:?}",
+        h.e.inspect_layers().iter().map(|l| l.kind).collect::<Vec<_>>(),
     );
 }
 
@@ -510,9 +511,9 @@ fn texture_vs_replay() {
         let (mut a, mut b) = (SkiaCanvas::new(WIN_W, WIN_H), SkiaCanvas::new(WIN_W, WIN_H));
         for _ in 0..4 { e.paint(&mut a, &mut b, &[]); }
 
-        let composited = e.inspect_layers().iter().any(|l| matches!(
-            l.kind, rosace::widgets::tree::LayerKind::Transform(_)
-        ));
+        // There is one scroll path now; kept so the printed line still
+        // distinguishes the two fixtures at a glance.
+        let composited = false;
 
         let t = std::time::Instant::now();
         for _ in 0..60 {
@@ -562,9 +563,9 @@ fn gpu_path_skips_work() {
         let (mut a, mut b) = (SkiaCanvas::new(WIN_W, WIN_H), SkiaCanvas::new(WIN_W, WIN_H));
         for _ in 0..4 { e.paint(&mut a, &mut b, &[]); }
 
-        let composited = e.inspect_layers().iter().any(|l| matches!(
-            l.kind, rosace::widgets::tree::LayerKind::Transform(_)
-        ));
+        // There is one scroll path now; kept so the printed line still
+        // distinguishes the two fixtures at a glance.
+        let composited = false;
 
         // `paint` reports whether the frame produced new pixels. A skipped
         // frame is the whole claim.

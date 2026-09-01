@@ -32,7 +32,6 @@ use rosace_core::types::{Rect, Size};
 use rosace_layout::Constraints;
 use rosace_render::Picture;
 
-use super::TransformLayerEntry;
 
 pub type NodeId = usize;
 
@@ -158,7 +157,6 @@ pub struct TreeNode {
     pub scrolls:    Vec<ScrollRegion>,
     pub zooms:      Vec<ZoomRegion>,
     pub focus:      Vec<rosace_core::a11y::FocusNode>,
-    pub transforms: Vec<TransformLayerEntry>,
     /// The clip this node IMPOSES on itself and everything beneath it, in the
     /// coordinate space its own rect is declared in.
     ///
@@ -604,7 +602,6 @@ impl RenderTree {
         n.scrolls.clear();
         n.zooms.clear();
         n.focus.clear();
-        n.transforms.clear();
         n.clip = None;
         n.promoted = None;
         n.focus_behavior = super::FocusBehavior::PassThrough;
@@ -1072,28 +1069,16 @@ impl RenderTree {
         self.screen_rect(id)
     }
 
-    /// A node's painted rect in SCREEN space.
+    /// A node's painted rect in screen space.
     ///
-    /// `cached_rect` is written by whichever context painted the node, and
-    /// inside a GPU transform host (`ScrollView`'s composited path,
-    /// `InteractiveViewer`, `TransformLayer`) that context is CONTENT space —
-    /// the host paints its child at `(0, 0)` into an independent texture and
-    /// the pointer walks remap on the way down. Anything that reads a rect
-    /// without remapping is comparing two different coordinate systems: an
-    /// a11y focus ring lands in the wrong place, a synthesized tap lands on
-    /// the wrong widget, and inside a scrolled page a content coordinate can
-    /// `contains`-match a completely unrelated widget elsewhere on screen.
+    /// Every rect in the arena IS screen-space now. This used to remap:
+    /// inside a GPU transform host, `cached_rect` was content-space and a
+    /// reader that skipped the remap compared two coordinate systems — an
+    /// a11y focus ring in the wrong place, a synthesized tap on the wrong
+    /// widget. Kept as a named accessor so those call sites still say what
+    /// they mean.
     pub fn screen_rect(&self, id: NodeId) -> Option<Rect> {
-        let r = self.nodes.get(id)?.cached_rect?;
-        let o = self.content_to_screen(id, r.origin);
-        let far = self.content_to_screen(id, rosace_core::types::Point {
-            x: r.origin.x + r.size.width,
-            y: r.origin.y + r.size.height,
-        });
-        Some(Rect {
-            origin: o,
-            size: Size { width: far.x - o.x, height: far.y - o.y },
-        })
+        self.nodes.get(id)?.cached_rect
     }
 
     pub fn node(&self, id: NodeId) -> &TreeNode {
@@ -1155,33 +1140,24 @@ impl RenderTree {
         (leaf, chain)
     }
 
-    /// Map screen coords into the content space of a node hosting a placed
-    /// scroll layer (D090). A transform node's children declare their hit
-    /// regions at content-local coords `(0,0)`-based, but the content is drawn
-    /// at the viewport scrolled by the live channel offset. Returns the coords
-    /// to descend into children with, and `true` when the point falls OUTSIDE
-    /// the viewport (children receive nothing — content is clipped to it).
-    /// Non-transform nodes pass coords through unchanged.
-    fn child_coords(&self, n: &TreeNode, id: NodeId, x: f32, y: f32) -> (f32, f32, bool) {
-        // A node that imposed a clip hides everything beneath it from the
-        // pointer exactly as it does from the eye. This is what lets
-        // `register_hit` declare full, untruncated rects — see its comment.
-        if let Some(c) = n.clip {
-            if !contains(&c, x, y) {
-                return (x, y, true);
-            }
+    /// Does `n`'s own clip exclude this point, so its subtree cannot be hit?
+    ///
+    /// This also used to remap the pointer from screen space into the CONTENT
+    /// space of a node hosting a placed scroll layer, because such a node's
+    /// children declared their hit regions at content-local coordinates. There
+    /// is one coordinate space now — every rect in the arena is screen-space —
+    /// so only the clip test remains.
+    ///
+    /// The clip test itself is load-bearing: it is what lets `register_hit`
+    /// declare full, untruncated rects, which is the only form that survives
+    /// replay-on-move. See its comment.
+    ///
+    /// Keeps the `(x, y, clipped)` shape so every pointer walk reads the same.
+    fn child_coords(&self, n: &TreeNode, _id: NodeId, x: f32, y: f32) -> (f32, f32, bool) {
+        match n.clip {
+            Some(c) if !contains(&c, x, y) => (x, y, true),
+            _ => (x, y, false),
         }
-        let Some(entry) = n.transforms.first() else { return (x, y, false); };
-        let vp = entry.viewport_rect;
-        if !contains(&vp, x, y) {
-            return (x, y, true);
-        }
-        let off = rosace_state::scroll_offset(id as u64);
-        // `offset` lives in content-native (unzoomed) pixels — a screen
-        // delta maps to a SMALLER content delta at higher zoom (the view is
-        // magnified), matching InteractiveViewer's pan-by-drag divisor.
-        let z = entry.zoom;
-        ((x - vp.origin.x) / z + off[0], (y - vp.origin.y) / z + off[1], false)
     }
 
     /// Walks the SAME recursion `hit_test`/`nested_scroll_chain` both need,
@@ -1242,32 +1218,7 @@ impl RenderTree {
                     continue;
                 }
                 if let Some((cb, positional)) = self.hit_test_node(child, cx, cy, chain) {
-                    // Wrap so LATER invocations are remapped too, not just this
-                    // one. `child_coords` only converts the coordinates used to
-                    // find the hit; the returned callback was previously handed
-                    // straight to the caller, which re-invokes it directly with
-                    // raw SCREEN coords on every subsequent MouseMove during a
-                    // drag (`active_drag` in rosace/src/lib.rs — the callback
-                    // is never re-hit-tested once a drag starts). A positional
-                    // widget (e.g. Slider) declared inside a GPU-composited
-                    // scroll view (D090) expects content-space coordinates on
-                    // every call, so bake the SAME remap into the callback
-                    // itself whenever this node is a transform host — it then
-                    // self-corrects on every future invocation, not just the
-                    // first. Composes for nested transforms: each ancestor
-                    // wraps once more as the recursion unwinds.
-                    let wrapped: HitHandler = match n.transforms.first() {
-                        Some(entry) => {
-                            let vp = entry.viewport_rect;
-                            let z = entry.zoom;
-                            Arc::new(move |sx: f32, sy: f32| {
-                                let off = rosace_state::scroll_offset(id as u64);
-                                cb((sx - vp.origin.x) / z + off[0], (sy - vp.origin.y) / z + off[1]);
-                            })
-                        }
-                        None => cb,
-                    };
-                    leaf = Some((wrapped, positional));
+                    leaf = Some((cb, positional));
                     break;
                 }
             }
@@ -1299,15 +1250,7 @@ impl RenderTree {
         // scrollable ancestor along the real visual path, not just the
         // ones "under" wherever the leaf tap/drag happened to resolve.
         if let Some((_, handler)) = n.nested_scrolls.iter().rev().find(|(r, _)| contains(r, x, y)) {
-            let handler = handler.clone();
-            let wrapped: ScrollHandler = match n.transforms.first() {
-                Some(entry) => {
-                    let z = entry.zoom;
-                    Arc::new(move |dx: f32, dy: f32| handler(dx / z, dy / z))
-                }
-                None => handler,
-            };
-            chain.push(wrapped);
+            chain.push(handler.clone());
         }
         leaf
     }
@@ -1648,7 +1591,7 @@ impl RenderTree {
     /// content anywhere below them are pruned.
     pub fn collect_semantics(&self) -> rosace_core::SemanticNode {
         let mut root = rosace_core::SemanticNode::new();
-        self.collect_semantics_node(Self::ROOT, &mut root, ContentToScreen::IDENTITY);
+        self.collect_semantics_node(Self::ROOT, &mut root);
         root
     }
 
@@ -1656,7 +1599,6 @@ impl RenderTree {
         &self,
         id: NodeId,
         parent: &mut rosace_core::SemanticNode,
-        to_screen: ContentToScreen,
     ) {
         let n = &self.nodes[id];
         // `Semantics::exclude()` — prune here and the whole subtree goes with
@@ -1675,7 +1617,7 @@ impl RenderTree {
             sn = sn.id(((id as u64) << 8) | (i as u64 & 0xff));
             // Platform a11y wants a SCREEN rect. Accumulated on the way down
             // rather than resolved per node, so this stays one walk.
-            if let Some(r) = n.cached_rect { sn = sn.bounds(to_screen.apply(r)); }
+            if let Some(r) = n.cached_rect { sn = sn.bounds(r); }
             if let Some(l) = &s.label { sn = sn.label(l.clone()); }
             // `value`/`heading_level`/`href` were silently dropped here before
             // D107/Phase 25 — a real gap for a `TextInput`'s current text, a
@@ -1702,44 +1644,12 @@ impl RenderTree {
             let last = parent.children.len() - 1;
             &mut parent.children[last]
         };
-        // A host remaps its CHILDREN, not itself.
-        let child_transform = match n.transforms.first() {
-            Some(entry) => to_screen.push(entry, rosace_state::scroll_offset(id as u64)),
-            None => to_screen,
-        };
         for &child in &n.children {
-            self.collect_semantics_node(child, target, child_transform);
+            self.collect_semantics_node(child, target);
         }
     }
 
     /// All overlay entries in tree order (insertion order = z-order, D058).
-    /// Map a point expressed in `target`'s CONTENT space to window/screen
-    /// space, applying the inverse of every transform-host remap on the
-    /// path from the root (each is a pure translation: + viewport origin
-    /// − scroll offset). Phase 32 bug fix (user-reported): an overlay
-    /// anchored by a widget inside a GPU scroll layer (e.g. a Tooltip's
-    /// `Absolute` position) carried content coords into the window-space
-    /// overlay pass and rendered far from its anchor.
-    pub fn content_to_screen(&self, target: NodeId, p: rosace_core::types::Point) -> rosace_core::types::Point {
-        let mut path = Vec::new();
-        if !self.path_to(Self::ROOT, target, &mut path) {
-            return p;
-        }
-        let mut out = p;
-        for &id in &path {
-            if id == target {
-                continue; // a host remaps its CHILDREN, not itself
-            }
-            let n = &self.nodes[id];
-            if let Some(entry) = n.transforms.first() {
-                let off = rosace_state::scroll_offset(id as u64);
-                // Inverse of child_coords' `(screen - vp.origin)/zoom + offset`.
-                out.x = (out.x - off[0]) * entry.zoom + entry.viewport_rect.origin.x;
-                out.y = (out.y - off[1]) * entry.zoom + entry.viewport_rect.origin.y;
-            }
-        }
-        out
-    }
 
     /// Run a pointer walk over the promoted layers first (topmost first),
     /// falling back to the main tree. Promoted content composites above
@@ -1911,7 +1821,6 @@ impl RenderTree {
         if let Some(e) = n.editable.as_mut()      { shift(&mut e.rect); }
         // A transform host's viewport is where its LAYER is placed, so it
         // moves with the host.
-        for t in n.transforms.iter_mut()          { shift(&mut t.viewport_rect); }
 
         let children = n.children.clone();
         for c in children {
@@ -1934,6 +1843,21 @@ impl RenderTree {
         for &child in &self.nodes[id].children {
             self.promoted_nodes_at(child, out);
         }
+    }
+
+    /// Root-to-`target` node path, or `false` if unreachable.
+    fn path_to(&self, cur: NodeId, target: NodeId, path: &mut Vec<NodeId>) -> bool {
+        path.push(cur);
+        if cur == target {
+            return true;
+        }
+        for &child in &self.nodes[cur].children {
+            if self.path_to(child, target, path) {
+                return true;
+            }
+        }
+        path.pop();
+        false
     }
 
     /// Scroll every enclosing scroll view so `target` comes into view.
@@ -1994,14 +1918,21 @@ impl RenderTree {
     /// a silent change to it.
     pub fn layer_tree(&self) -> LayerTree {
         let mut tree = LayerTree::default();
-        self.layers_node(Self::ROOT, ContentToScreen::IDENTITY, None, None, &mut tree);
+        self.layers_node(Self::ROOT, None, None, &mut tree);
         tree
     }
 
+    /// Walks the node tree collecting compositing layers.
+    ///
+    /// Only promoted nodes are layers now. Transform hosts used to be too —
+    /// a ScrollView or TransformLayer published its content as a placed
+    /// texture, which is what put its descendants into a second coordinate
+    /// space and required the accumulated `ContentToScreen` this walk once
+    /// carried. One scroll path means one space, so the walk only has to find
+    /// portals.
     fn layers_node(
         &self,
         id: NodeId,
-        to_screen: ContentToScreen,
         clip: Option<Rect>,
         parent: Option<usize>,
         out: &mut LayerTree,
@@ -2010,13 +1941,12 @@ impl RenderTree {
 
         // A clip this node imposes applies to itself and everything beneath.
         let clip = match n.clip {
-            Some(c) => Some(narrow_rect(clip, to_screen.apply(c))),
+            Some(c) => Some(narrow_rect(clip, c)),
             None => clip,
         };
 
         // A promoted node is a layer ROOT: composited against the window,
-        // outside every clip and transform above it. Its subtree was painted
-        // in screen space, so its descendants start from identity too.
+        // outside every clip above it.
         if let Some(p) = &n.promoted {
             out.layers.push(Layer {
                 node: id,
@@ -2028,78 +1958,14 @@ impl RenderTree {
             });
             let index = out.layers.len() - 1;
             for &child in &n.children {
-                self.layers_node(child, ContentToScreen::IDENTITY, None, Some(index), out);
+                self.layers_node(child, None, Some(index), out);
             }
             return;
         }
 
-        let mut child_to_screen = to_screen;
-        let mut child_clip = clip;
-        let mut child_parent = parent;
-
-        for (i, entry) in n.transforms.iter().enumerate() {
-            let origin = to_screen.apply_point(entry.viewport_rect.origin);
-            let vp = Rect { origin, size: entry.viewport_rect.size };
-            let (dest, src_bias, culled) = match clip {
-                Some(c) => match super::intersect_rect(vp, c) {
-                    Some(cropped) => (
-                        cropped,
-                        (cropped.origin.x - vp.origin.x, cropped.origin.y - vp.origin.y),
-                        false,
-                    ),
-                    // Entirely outside its clip. A zero-area dest keeps the
-                    // layer's slot alive — so its texture is not re-uploaded
-                    // when it scrolls back into view — while drawing nothing.
-                    None => (
-                        Rect { origin: vp.origin, size: Size { width: 0.0, height: 0.0 } },
-                        (0.0, 0.0),
-                        true,
-                    ),
-                },
-                None => (vp, (0.0, 0.0), false),
-            };
-
-            let index = out.layers.len();
-            out.layers.push(Layer {
-                node: id,
-                kind: LayerKind::Transform(i),
-                parent,
-                dest,
-                src_bias,
-                culled,
-            });
-
-            // Descend under the FIRST entry only, matching `content_to_screen`.
-            // A node attaching several transform entries would be a widget
-            // compositing more than one layer from one node, which nothing
-            // does — the loop exists so such an entry is still published, not
-            // so it can nest.
-            if i == 0 {
-                child_to_screen = to_screen.push(entry, rosace_state::scroll_offset(id as u64));
-                // A host clips its subtree by construction: nothing outside
-                // its viewport is ever sampled.
-                child_clip = Some(narrow_rect(clip, vp));
-                child_parent = Some(index);
-            }
-        }
-
         for &child in &n.children {
-            self.layers_node(child, child_to_screen, child_clip, child_parent, out);
+            self.layers_node(child, clip, parent, out);
         }
-    }
-
-    fn path_to(&self, cur: NodeId, target: NodeId, path: &mut Vec<NodeId>) -> bool {
-        path.push(cur);
-        if cur == target {
-            return true;
-        }
-        for &child in &self.nodes[cur].children {
-            if self.path_to(child, target, path) {
-                return true;
-            }
-        }
-        path.pop();
-        false
     }
 
 
@@ -2277,24 +2143,14 @@ fn narrow_rect(clip: Option<Rect>, c: Rect) -> Rect {
 /// What makes a node a compositing layer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LayerKind {
-    /// Hosts a [`TransformLayerEntry`] — a scrollable or zoomable region whose
-    /// content is rasterized once into its own texture and moved by shifting
-    /// the sample origin. The payload indexes the node's `transforms`.
-    Transform(usize),
-    /// Promoted to the root — a portal. Its content is a recorded picture on
-    /// the node, not a texture.
     Promoted,
 }
 
-/// One compositing layer: content presented to the GPU independently of the
-/// picture its ancestors painted into.
+/// One compositing layer: content presented independently of the picture its
+/// ancestors painted into.
 ///
-/// Derived from the node tree rather than declared — a widget says "I am a
-/// transform host" by attaching a [`TransformLayerEntry`], and the structure
-/// above it decides where the layer sits and what clips it. That derivation is
-/// the point: a flat list cannot express "clipped by my ancestor", so anything
-/// reading a flat list has to re-derive the ancestry per entry, which is where
-/// the nested-clip defect lived.
+/// Derived from the node tree rather than declared. Transform hosts used to
+/// produce these too; only promoted nodes (portals) do now.
 #[derive(Clone, Debug)]
 pub struct Layer {
     /// The node that attached this layer's transform entry.
@@ -2321,58 +2177,6 @@ pub struct LayerTree {
     pub layers: Vec<Layer>,
 }
 
-/// Accumulated content-space → screen-space transform for one downward walk.
-///
-/// `screen = content * scale + translate`, per axis. Composing on the way down
-/// keeps a whole-tree pass one walk instead of resolving each node's ancestry
-/// separately — the same mapping [`RenderTree::content_to_screen`] performs
-/// point by point.
-#[derive(Clone, Copy)]
-struct ContentToScreen {
-    scale: [f32; 2],
-    translate: [f32; 2],
-}
-
-impl ContentToScreen {
-    const IDENTITY: Self = Self { scale: [1.0, 1.0], translate: [0.0, 0.0] };
-
-    /// Compose with one transform host's remap, given its current scroll
-    /// offset. Inverse of `child_coords`' `(screen - vp.origin)/zoom + offset`.
-    fn push(self, entry: &TransformLayerEntry, off: [f32; 2]) -> Self {
-        let mut out = self;
-        for a in 0..2 {
-            let vp = if a == 0 {
-                entry.viewport_rect.origin.x
-            } else {
-                entry.viewport_rect.origin.y
-            };
-            out.translate[a] = (vp - off[a] * entry.zoom) * self.scale[a] + self.translate[a];
-            out.scale[a] = entry.zoom * self.scale[a];
-        }
-        out
-    }
-
-    fn apply_point(self, p: rosace_core::types::Point) -> rosace_core::types::Point {
-        rosace_core::types::Point {
-            x: p.x * self.scale[0] + self.translate[0],
-            y: p.y * self.scale[1] + self.translate[1],
-        }
-    }
-
-    fn apply(self, r: Rect) -> Rect {
-        Rect {
-            origin: rosace_core::types::Point {
-                x: r.origin.x * self.scale[0] + self.translate[0],
-                y: r.origin.y * self.scale[1] + self.translate[1],
-            },
-            size: Size {
-                width: r.size.width * self.scale[0],
-                height: r.size.height * self.scale[1],
-            },
-        }
-    }
-}
-
 #[inline]
 fn contains(r: &Rect, x: f32, y: f32) -> bool {
     x >= r.origin.x
@@ -2390,200 +2194,6 @@ mod tests {
         Rect { origin: Point { x, y }, size: Size { width: w, height: h } }
     }
 
-    #[test]
-    fn hits_persist_on_unpainted_subtree() {
-        let mut t = RenderTree::new();
-        t.start_frame();
-        let a = t.slot(RenderTree::ROOT, true);
-        t.node_mut(a).hits.push((rect(0.0, 0.0, 10.0, 10.0), Arc::new(|| {})));
-        t.finalize();
-
-        // Next frame: root repaints but the child slot is kept (cache hit).
-        t.start_frame();
-        let a2 = t.slot(RenderTree::ROOT, false);
-        t.finalize();
-
-        assert_eq!(a, a2);
-        assert!(t.hit_test(5.0, 5.0).0.is_some(), "hit must survive the clean frame");
-    }
-
-    #[test]
-    fn set_pressed_clears_the_previous_target_and_reports_whether_it_changed() {
-        let mut t = RenderTree::new();
-        t.start_frame();
-        let a = t.slot(RenderTree::ROOT, true);
-        let b = t.slot(RenderTree::ROOT, true);
-        t.finalize();
-
-        assert!(t.set_pressed(Some(a)), "unset -> Some(a) is a change");
-        assert!(t.node(a).pressed);
-        assert!(!t.node(b).pressed);
-
-        assert!(!t.set_pressed(Some(a)), "Some(a) -> Some(a) is not a change");
-
-        assert!(t.set_pressed(Some(b)), "Some(a) -> Some(b) is a change");
-        assert!(!t.node(a).pressed, "old target must be cleared");
-        assert!(t.node(b).pressed);
-
-        assert!(t.set_pressed(None), "Some(b) -> None is a change");
-        assert!(!t.node(b).pressed);
-    }
-
-    #[test]
-    fn repaint_clears_declared_data() {
-        let mut t = RenderTree::new();
-        t.start_frame();
-        let a = t.slot(RenderTree::ROOT, true);
-        t.node_mut(a).hits.push((rect(0.0, 0.0, 10.0, 10.0), Arc::new(|| {})));
-        t.finalize();
-
-        t.start_frame();
-        let _a = t.slot(RenderTree::ROOT, true); // fresh repaint, declares nothing
-        t.finalize();
-
-        assert!(t.hit_test(5.0, 5.0).0.is_none(), "repaint must clear stale hits");
-    }
-
-    #[test]
-    fn later_siblings_win_hit_test() {
-        let mut t = RenderTree::new();
-        t.start_frame();
-        let first = t.slot(RenderTree::ROOT, true);
-        let hit_first = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let hf = hit_first.clone();
-        t.node_mut(first).hits.push((rect(0.0, 0.0, 10.0, 10.0), Arc::new(move || {
-            hf.store(true, std::sync::atomic::Ordering::SeqCst);
-        })));
-        let second = t.slot(RenderTree::ROOT, true);
-        t.node_mut(second).hits.push((rect(0.0, 0.0, 10.0, 10.0), Arc::new(|| {})));
-        t.finalize();
-
-        // Overlapping rects: the later sibling (painted on top) must win.
-        let (cb, _) = t.hit_test(5.0, 5.0).0.unwrap();
-        cb(0.0, 0.0);
-        assert!(!hit_first.load(std::sync::atomic::Ordering::SeqCst));
-    }
-
-    #[test]
-    fn content_to_screen_inverts_the_scroll_layer_remap() {
-        // Same fixture shape as hit_test_maps_through_scroll_layer_offset:
-        // viewport at (50,50), scrolled 200 down. A content point at
-        // (0, 240) must map to screen (50, 90) — the exact inverse of the
-        // hit-test's screen→content mapping (Phase 32 tooltip-position fix).
-        let mut t = RenderTree::new();
-        t.start_frame();
-        let tl = t.slot(RenderTree::ROOT, true);
-        t.node_mut(tl).transforms.push(TransformLayerEntry {
-            picture: rosace_render::PictureRecorder::new().finish(),
-            child_size: Size { width: 100.0, height: 1000.0 },
-            viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
-            zoom: 1.0,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-        });
-        let child = t.slot(tl, true);
-        t.finalize();
-        rosace_state::set_scroll_offset(tl as u64, [0.0, 200.0]);
-
-        let p = t.content_to_screen(child, rosace_core::types::Point { x: 0.0, y: 240.0 });
-        assert_eq!((p.x, p.y), (50.0, 90.0), "content→screen must invert child_coords");
-
-        // A node OUTSIDE any layer maps through unchanged.
-        let plain = t.content_to_screen(tl, rosace_core::types::Point { x: 7.0, y: 9.0 });
-        assert_eq!((plain.x, plain.y), (7.0, 9.0));
-
-        rosace_state::clear_scroll_offset(tl as u64);
-    }
-
-    #[test]
-    fn hit_test_maps_through_scroll_layer_offset() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        // A transform node with a 100×100 viewport at (50,50), scrolled 200px
-        // down. Its child declares a hit at content-local (0,300)-(100,340).
-        let mut t = RenderTree::new();
-        t.start_frame();
-        let tl = t.slot(RenderTree::ROOT, true);
-        t.node_mut(tl).transforms.push(TransformLayerEntry {
-            picture: rosace_render::PictureRecorder::new().finish(),
-            child_size: Size { width: 100.0, height: 1000.0 },
-            viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
-            zoom: 1.0,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-        });
-        let child = t.slot(tl, true);
-        let hit = Arc::new(AtomicBool::new(false));
-        let h = hit.clone();
-        // Content-local region visible at scroll 200 (content y 200..300).
-        t.node_mut(child).hits.push((rect(0.0, 220.0, 100.0, 40.0), Arc::new(move || {
-            h.store(true, Ordering::SeqCst);
-        })));
-        t.finalize();
-
-        // Live offset lives in the channel keyed by the transform node id.
-        rosace_state::set_scroll_offset(tl as u64, [0.0, 200.0]);
-
-        // Screen (75,90): inside the viewport (50..150); content y = 90-50+200
-        // = 240, which lands in the child's [220,260) region → hits.
-        let (cb, _) = t.hit_test(75.0, 90.0).0.expect("content region must be hit through the offset");
-        cb(0.0, 0.0);
-        assert!(hit.load(Ordering::SeqCst), "click mapped into scrolled content");
-
-        // Screen (75, 40): ABOVE the viewport → clipped, no hit.
-        assert!(t.hit_test(75.0, 40.0).0.is_none(), "clicks outside the viewport are clipped");
-
-        rosace_state::clear_scroll_offset(tl as u64);
-    }
-
-    #[test]
-    fn positional_hit_through_transform_remaps_every_invocation() {
-        // A positional widget (e.g. a Slider knob) declared inside a
-        // GPU-composited scroll view (D090). The app dispatch loop invokes
-        // the returned callback once at press time AND again on every
-        // subsequent MouseMove for the rest of the drag, WITHOUT re-running
-        // hit_test (see the `active_drag` mechanism in rosace/src/lib.rs) —
-        // so the callback itself must remap raw screen coords through the
-        // transform on every call, not just the one made at hit-test time.
-        let mut t = RenderTree::new();
-        t.start_frame();
-        let tl = t.slot(RenderTree::ROOT, true);
-        t.node_mut(tl).transforms.push(TransformLayerEntry {
-            picture: rosace_render::PictureRecorder::new().finish(),
-            child_size: Size { width: 100.0, height: 1000.0 },
-            viewport_rect: rect(50.0, 50.0, 100.0, 100.0),
-            zoom: 1.0,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-        });
-        let child = t.slot(tl, true);
-        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let r = received.clone();
-        t.node_mut(child).hits_at.push((rect(0.0, 220.0, 100.0, 40.0), Arc::new(move |cx, cy| {
-            r.lock().unwrap().push((cx, cy));
-        })));
-        t.finalize();
-
-        rosace_state::set_scroll_offset(tl as u64, [0.0, 200.0]);
-
-        // Screen (75,90): content = (75-50+0, 90-50+200) = (25, 240) → inside [220,260).
-        let (cb, positional) = t.hit_test(75.0, 90.0).0.expect("must hit the positional region");
-        assert!(positional, "hits_at region must report positional=true");
-        cb(75.0, 90.0); // initial press — dispatch calls back with the same raw coords used to find it
-
-        // Simulated drag continuation: fresh raw screen coords, same callback,
-        // no re-hit-test. Before this fix these would leak straight through
-        // unmapped.
-        cb(80.0, 95.0); // content = (80-50+0, 95-50+200) = (30, 245)
-
-        let got = received.lock().unwrap();
-        assert_eq!(
-            *got,
-            vec![(25.0, 240.0), (30.0, 245.0)],
-            "every invocation must be remapped through the transform, not just the first"
-        );
-
-        rosace_state::clear_scroll_offset(tl as u64);
-    }
 
     #[test]
     fn semantics_tree_nests_under_declaring_node() {

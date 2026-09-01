@@ -85,12 +85,15 @@ fn the_viewer_is_not_a_compositing_layer() {
     h.frame();
     h.frame();
 
+    // A transform layer is unrepresentable now — `LayerKind` has only
+    // `Promoted` — so this asserts the surviving form of the property: the
+    // viewer composites nothing of its own, and the only layers present are
+    // portals (the engine's chrome).
     assert!(
-        !h.e.inspect_layers().iter().any(|l| matches!(
-            l.kind, rosace::widgets::tree::LayerKind::Transform(_)
-        )),
-        "InteractiveViewer still publishes a transform layer — it should replay \
-         its child morphed instead of rasterizing it into a texture"
+        h.e.inspect_layers().iter().all(|l| l.kind == rosace::widgets::tree::LayerKind::Promoted),
+        "InteractiveViewer is compositing separately — it should replay its \
+         child morphed instead: {:?}",
+        h.e.inspect_layers().iter().map(|l| l.kind).collect::<Vec<_>>(),
     );
 }
 

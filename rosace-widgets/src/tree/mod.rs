@@ -197,7 +197,7 @@ pub(crate) fn shrink_axis(b: AxisBound, by: f32) -> AxisBound {
         other => other,
     }
 }
-use rosace_render::{Color, DrawCommand, FontCache, Picture, PictureRecorder};
+use rosace_render::{Color, DrawCommand, FontCache, PictureRecorder};
 use rosace_theme::ThemeData;
 
 // ── Continuous animation request (spinners, shimmer) ─────────────────────────
@@ -612,33 +612,6 @@ pub struct ScrollTarget {
     pub callback: Arc<dyn Fn(f32, f32) + Send + Sync>,
 }
 
-// ── TransformLayerEntry ──────────────────────────────────────────────────────
-
-/// A captured TransformLayer — child content recorded into a separate Picture
-/// (D087) that the platform replays into its own SkiaCanvas and presents as an
-/// additional GPU compositor layer (D088).
-#[derive(Clone)]
-pub struct TransformLayerEntry {
-    /// Recorded child draw commands — replay-able independently of the main pass.
-    pub picture:       Picture,
-    /// Natural (unconstrained) size of the child content in logical pixels.
-    pub child_size:    Size,
-    /// Viewport rect in screen-space logical pixels.
-    pub viewport_rect: Rect,
-    /// Content magnification factor — `1.0` for ordinary scrolling (all
-    /// existing consumers). `InteractiveViewer` (Phase 32) is the only
-    /// consumer that varies this: the offscreen content texture is
-    /// rasterized at `dpi_scale * zoom` (engine.rs), so the compositor's
-    /// existing UV-window math (`uv_span = dest / tex_size`) naturally
-    /// samples a smaller fraction of a bigger texture — real GPU-crisp
-    /// zoom with no compositor changes. Screen<->content coordinate remap
-    /// (`child_coords`/`content_to_screen`) must divide/multiply by this.
-    pub zoom:          f32,
-    /// Current horizontal scroll in logical pixels.
-    pub scroll_x:      f32,
-    /// Current vertical scroll in logical pixels.
-    pub scroll_y:      f32,
-}
 
 // ── PaintCtx ─────────────────────────────────────────────────────────────────
 
@@ -738,18 +711,14 @@ impl<'a> PaintCtx<'a> {
     /// once, in both the paint walk and the pointer walks.
     pub fn promote(&mut self, rect: Rect, widget: &dyn Widget) {
         let node = self.tree.borrow_mut().slot(self.node, true);
-        let screen_rect = {
-            let t = self.tree.borrow();
-            Rect { origin: t.content_to_screen(node, rect.origin), size: rect.size }
-        };
         self.tree.borrow_mut().adopt_tag(node, widget.type_tag());
-        self.tree.borrow_mut().node_mut(node).cached_rect = Some(screen_rect);
+        self.tree.borrow_mut().node_mut(node).cached_rect = Some(rect);
 
         let mut sub = PictureRecorder::new();
         {
             let mut cctx = PaintCtx {
                 recorder: &mut sub,
-                rect: screen_rect,
+                rect,
                 font: self.font,
                 theme: self.theme.clone(),
                 tree: Rc::clone(&self.tree),
@@ -777,7 +746,7 @@ impl<'a> PaintCtx<'a> {
         let picture = sub.finish();
         self.tree.borrow_mut().node_mut(node).promoted = Some(render_tree::PromotedLayer {
             picture,
-            rect: screen_rect,
+            rect,
             // The bare primitive has no scrim and no input policy.
             on_dismiss: None,
             blocks_input: false,
@@ -873,10 +842,10 @@ impl<'a> PaintCtx<'a> {
 
         let bottom_inset = bottom_overlay_inset();
         let origin = match &position {
-            LayerPosition::Absolute(p) => self.tree.borrow().content_to_screen(node, *p),
+            LayerPosition::Absolute(p) => *p,
             LayerPosition::AboveCentered(anchor) => {
                 // The anchor is in the ATTACHING widget's space.
-                let top_left = self.tree.borrow().content_to_screen(node, anchor.origin);
+                let top_left = anchor.origin;
                 Point {
                     x: top_left.x + (anchor.size.width - size.width) / 2.0,
                     y: top_left.y - size.height - 8.0,
@@ -1679,12 +1648,6 @@ impl<'a> PaintCtx<'a> {
         for cmd in &picture.commands {
             self.recorder.push(cmd.morph(src.origin, dst.origin, sx, sy));
         }
-    }
-
-    /// Attach a transform-layer entry to this node (called from
-    /// `TransformLayer::paint`). Persists like overlays (D087/D091).
-    pub fn attach_transform(&self, entry: TransformLayerEntry) {
-        self.tree.borrow_mut().node_mut(self.node).transforms.push(entry);
     }
 
     /// Convert a theme color (f32 0.0–1.0) to a render color (u8 0–255).
