@@ -140,6 +140,12 @@ impl Widget for ScreenTransitionView {
             ctx.record(DrawCommand::PopClip);
             ctx.request_animation();
         } else {
+            // The flight is over: release every endpoint before painting, so
+            // this frame renders them in place. They marked themselves dirty
+            // while hidden, so this frame re-records rather than replaying
+            // the empty pictures they cached mid-flight.
+            hero::end_flights();
+
             // Steady state — paint only the incoming screen at zero offset,
             // identical output to handing it straight to Scaffold::new(...).
             // No active role: `Hero`-tagged widgets are plain pass-throughs.

@@ -36,16 +36,35 @@ impl Widget for Hero {
     }
 
     fn paint(&self, ctx: &mut PaintCtx) {
+        let rect = ctx.rect;
         match hero::active_role() {
             Some(role) => {
-                // Suppressed on both sides for the duration of the flight —
-                // the promoted copy is the one on screen. Registering the
-                // widget itself (not a captured Picture) is what lets that
-                // copy be live.
-                hero::register(self.tag.clone(), role, ctx.rect, Arc::clone(&self.inner));
+                // Register either way: pairing is what decides whether a
+                // flight happens, and that is only known once BOTH sides have
+                // painted.
+                hero::register(self.tag.clone(), role, rect, Arc::clone(&self.inner));
+
+                if hero::is_flying(&self.tag) {
+                    // A flight is in the air, so stand aside — the promoted
+                    // copy is the one on screen.
+                    //
+                    // Marking this node dirty is not optional. A hidden node
+                    // caches a picture with nothing in it; the frame the
+                    // flight ends is an ordinary cache-hit frame, so an
+                    // ancestor would re-blit that empty picture and the
+                    // element would be gone for good. This is the explicit
+                    // invalidation Flutter gets from `setState` on the
+                    // endpoints when a flight starts and ends.
+                    super::mark_node_dirty(ctx.node);
+                } else {
+                    // No flight for this tag — either it has none on the other
+                    // side, or the pair has not formed yet. Paint normally: a
+                    // widget must never disappear just because some OTHER
+                    // hero is flying.
+                    ctx.paint_child(rect, &*self.inner);
+                }
             }
             None => {
-                let rect = ctx.rect;
                 ctx.paint_child(rect, &*self.inner);
             }
         }

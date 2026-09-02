@@ -1,16 +1,18 @@
 //! Hero / shared-element transitions.
 //!
 //! A `.hero_tag(id)`'d widget is a pass-through with zero behaviour change
-//! UNLESS it paints while `ScreenTransitionView` has a transition in flight.
-//! In that case it registers its world rect and a HANDLE TO ITSELF here under
-//! its tag, and does not paint in place. `ScreenTransitionView` — the only
-//! reader — pairs the two sides by tag after painting both screens and
-//! promotes ONE live instance to the root layer, laid out at a rect
-//! interpolated between the two by the transition's progress.
+//! outside a transition. While `ScreenTransitionView` has one running, it
+//! registers its world rect and a HANDLE TO ITSELF here under its tag.
+//! `ScreenTransitionView` — the only reader — pairs the two sides by tag after
+//! painting both screens and promotes ONE live instance to the root layer,
+//! laid out at a rect interpolated between the two ends.
 //!
-//! Entries present on only one side are dropped: there is nothing to morph
-//! between, so that widget simply does not render for the duration of the
-//! transition on that side. A documented limitation, not a crash.
+//! An endpoint stands aside only once its tag is ACTUALLY in the air, and it
+//! is told so (`is_flying`) rather than inferring it from "a transition is
+//! happening". A tag with no counterpart never pairs, so inferring made that
+//! widget vanish for the whole transition — and, once the empty frame was
+//! cached, for good. Same shape as Flutter, where the navigator starts the
+//! flight and the endpoints are notified.
 //!
 //! ## Why a widget and not a Picture
 //!
@@ -39,7 +41,7 @@
 //! and this is drained once per frame.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rosace_core::types::Rect;
 
@@ -63,6 +65,17 @@ struct HeroEnd {
 
 thread_local! {
     static ACTIVE_ROLE: RefCell<Option<HeroRole>> = const { RefCell::new(None) };
+    /// Tags with a flight ACTUALLY in the air right now.
+    ///
+    /// An endpoint hides itself only while its tag is in here, never merely
+    /// because a transition is running. A tag present on one side only never
+    /// pairs, so hiding on the strength of "a transition is happening" made
+    /// that widget invisible for the whole transition — and, once the frame
+    /// it was hidden on got cached, indefinitely afterwards.
+    ///
+    /// This is Flutter's shape: the flight is started by the navigator and
+    /// the endpoints are told, rather than each endpoint inferring it.
+    static FLYING: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static OUTGOING: RefCell<HashMap<String, HeroEnd>> = RefCell::new(HashMap::new());
     static INCOMING: RefCell<HashMap<String, HeroEnd>> = RefCell::new(HashMap::new());
 }
@@ -97,12 +110,29 @@ pub struct HeroFlight {
     pub widget: BoxedWidget,
 }
 
+/// Is a flight for `tag` in the air, so its endpoints should stand aside?
+pub fn is_flying(tag: &str) -> bool {
+    FLYING.with(|f| f.borrow().contains(tag))
+}
+
+/// The transition is over — every endpoint paints itself again.
+///
+/// Called on the first settled frame. Endpoints mark themselves dirty while
+/// hidden precisely so this frame re-records them: without that they would
+/// replay the cached picture they were hidden in, and the element would never
+/// come back.
+pub fn end_flights() {
+    FLYING.with(|f| f.borrow_mut().clear());
+    OUTGOING.with(|m| m.borrow_mut().clear());
+    INCOMING.with(|m| m.borrow_mut().clear());
+}
+
 /// Drain both sides, pairing tags present on BOTH. Unmatched entries are
 /// dropped — see the module docs.
 pub fn drain_pairs() -> Vec<HeroFlight> {
     let outgoing: HashMap<String, HeroEnd> = OUTGOING.with(|m| m.borrow_mut().drain().collect());
     let mut incoming: HashMap<String, HeroEnd> = INCOMING.with(|m| m.borrow_mut().drain().collect());
-    outgoing
+    let flights: Vec<HeroFlight> = outgoing
         .into_iter()
         .filter_map(|(tag, out)| {
             incoming.remove(&tag).map(|inc| HeroFlight {
@@ -112,5 +142,15 @@ pub fn drain_pairs() -> Vec<HeroFlight> {
                 widget: inc.widget,
             })
         })
-        .collect()
+        .collect();
+    // Only tags that actually PAIRED are in the air. Recorded for the next
+    // frame: on this one the endpoints have already painted themselves, and
+    // at t=0 the flight sits exactly on the source rect, so the overlap is
+    // invisible.
+    FLYING.with(|f| {
+        let mut set = f.borrow_mut();
+        set.clear();
+        for fl in &flights { set.insert(fl.tag.clone()); }
+    });
+    flights
 }
