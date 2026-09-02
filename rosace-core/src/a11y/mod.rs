@@ -22,6 +22,7 @@
 //! ```
 
 pub mod actions;
+pub mod announce;
 pub mod focus;
 pub mod focus_node;
 pub mod node;
@@ -32,4 +33,5 @@ pub use focus::FocusManager;
 pub use focus_node::FocusNode;
 pub use node::A11yNode;
 pub use role::Role;
+pub use announce::{announce, Politeness};
 pub use tree::A11yTree;

@@ -236,8 +236,13 @@ impl App {
                 // the same `content_changed` signal, and `sync` itself is a
                 // cheap no-op unless assistive tech has actually attached, so
                 // the common case never walks the tree at all.
+                //
+                // Also published when an announcement is waiting, even if the
+                // frame changed no pixels: "copied to clipboard" often moves
+                // nothing on screen, and gating purely on `content_changed`
+                // would silently drop exactly those.
                 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-                if content_changed {
+                if content_changed || rosace_core::a11y::announce::has_pending() {
                     rosace_platform::a11y_bridge::sync(&engine.semantics());
                 }
                 #[cfg(not(any(

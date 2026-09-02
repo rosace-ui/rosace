@@ -496,7 +496,32 @@ impl FrameEngine {
     pub fn back_was_handled(&self) -> bool { self.last_back_handled }
 
     pub fn semantics(&self) -> rosace_core::SemanticNode {
-        self.render_tree.borrow().collect_semantics()
+        let mut root = self.render_tree.borrow().collect_semantics();
+
+        // Pending announcements ride out as live-region children of the root.
+        //
+        // Appended here rather than declared by a widget because an
+        // announcement belongs to no widget: it is spoken once and is gone,
+        // and the thing that triggered it (a copy, a failed upload) often
+        // draws nothing at all. Assistive tech speaks a live region when it
+        // appears, so appearing in this tree IS the delivery.
+        //
+        // DRAINED, not read. Leaving them queued would re-speak every past
+        // announcement on every subsequent publish.
+        for (message, politeness) in rosace_core::a11y::announce::take() {
+            root.children.push(
+                // `Role::Text` rather than a dedicated status role: what
+                // makes this an announcement is `live`, not the role, and
+                // adding a variant would ripple through every exhaustive
+                // match (HTML mapping, AccessKit mapping) for no behavioural
+                // gain.
+                rosace_core::SemanticNode::new()
+                    .role(rosace_core::Role::Text)
+                    .label(message)
+                    .live(politeness),
+            );
+        }
+        root
     }
 
     /// A read-only projection of the render tree — structure, geometry, type

@@ -64,6 +64,13 @@ pub struct SemanticNode {
     /// `Slider`/`ProgressBar`'s numeric value as a string, ...) — distinct
     /// from `label`, which is the node's accessible NAME, not its content.
     pub value: Option<String>,
+    /// Marks this node a LIVE REGION: assistive technology speaks its
+    /// content when it appears or changes, wherever the user's cursor is.
+    ///
+    /// `None` for ordinary nodes, which are only read when navigated to.
+    /// Set on the nodes [`crate::a11y::announce`] injects, and available to
+    /// any widget that needs a status area read out without stealing focus.
+    pub live: Option<crate::a11y::Politeness>,
     /// `1..=6` for `Role::Heading` (`<h1>`-`<h6>`); `None` for every other
     /// role, including a heading whose level genuinely isn't known (falls
     /// back to `<h2>` at the HTML-mapping step, not here).
@@ -106,8 +113,15 @@ impl SemanticNode {
             href: None,
             id: None,
             bounds: None,
+            live: None,
             children: Vec::new(),
         }
+    }
+
+    /// Make this node a live region — see [`SemanticNode::live`].
+    pub fn live(mut self, politeness: crate::a11y::Politeness) -> Self {
+        self.live = Some(politeness);
+        self
     }
 
     /// Sets this node's stable identity (see [`SemanticNode::id`]).

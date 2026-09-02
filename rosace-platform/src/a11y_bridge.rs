@@ -241,6 +241,16 @@ fn push_node(node: &SemanticNode, out: &mut Vec<(NodeId, Node)>, siblings: &mut 
     if let Some(value) = &node.value {
         ak.set_value(value.clone());
     }
+    // A live region is spoken when it appears or changes, wherever the
+    // reader's cursor is — the mechanism behind `a11y::announce`. Without
+    // this the announcement node is published as an ordinary bit of static
+    // text that nothing ever navigates to, and is silent.
+    if let Some(p) = node.live {
+        ak.set_live(match p {
+            rosace_core::a11y::Politeness::Polite => accesskit::Live::Polite,
+            rosace_core::a11y::Politeness::Assertive => accesskit::Live::Assertive,
+        });
+    }
     if let Some(b) = node.bounds {
         // Window-relative, top-down, and PHYSICAL pixels — AccessKit's
         // documented contract. Our rect is logical, so it scales here.
