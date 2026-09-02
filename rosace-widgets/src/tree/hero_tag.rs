@@ -44,18 +44,26 @@ impl Widget for Hero {
                 // painted.
                 hero::register(self.tag.clone(), role, rect, Arc::clone(&self.inner));
 
+                // Keep THIS node out of the replay cache for the whole
+                // transition, and only this node.
+                //
+                // Two things depend on it. A replayed node never runs, so it
+                // would stop registering and the pair would dissolve
+                // mid-flight. And a node hidden for the flight caches an
+                // empty picture — the frame the flight ends is an ordinary
+                // cache-hit frame, so an ancestor would re-blit that emptiness
+                // and the element would be gone for good.
+                //
+                // This replaces a global ban on replay for the duration of any
+                // flight, which cost every other widget in BOTH screens a
+                // full re-record every frame: measured 1838 us/frame against
+                // 1170 settled, ~84 leaf paints per frame on a 40-row page.
+                // Flutter rebuilds the heroes, not the world.
+                super::mark_node_dirty(ctx.node);
+
                 if hero::is_flying(&self.tag) {
                     // A flight is in the air, so stand aside — the promoted
                     // copy is the one on screen.
-                    //
-                    // Marking this node dirty is not optional. A hidden node
-                    // caches a picture with nothing in it; the frame the
-                    // flight ends is an ordinary cache-hit frame, so an
-                    // ancestor would re-blit that empty picture and the
-                    // element would be gone for good. This is the explicit
-                    // invalidation Flutter gets from `setState` on the
-                    // endpoints when a flight starts and ends.
-                    super::mark_node_dirty(ctx.node);
                 } else {
                     // No flight for this tag — either it has none on the other
                     // side, or the pair has not formed yet. Paint normally: a
