@@ -50,6 +50,13 @@ impl Row {
         super::ScrollView::horizontal(self)
     }
 
+    /// Per-child sizes for a given constraint, for tests that need to observe
+    /// the measure pass directly — the cross-axis rules in particular, which a
+    /// containing widget may bound before they are reached.
+    pub fn layout_sizes_for_test(&self, ctx: &LayoutCtx) -> Vec<Size> {
+        self.measure(ctx)
+    }
+
     fn measure(&self, ctx: &LayoutCtx) -> Vec<Size> {
         let c = ctx.constraints;
         {
@@ -142,6 +149,60 @@ impl Row {
             }
         }).collect();
 
+
+        // `Stretch` means children FILL the cross axis. `layout_row` already
+        // sizes the container for it, but a child only becomes that tall if it
+        // is MEASURED that way — without this pass `Stretch` was declared in
+        // the enum and honoured nowhere, silently doing nothing.
+        //
+        // Only meaningful with a bounded cross axis. "Fill the available
+        // height" has no answer inside a vertical `ScrollView`, which offers
+        // infinity; Flutter raises on exactly this. Warn and leave the sizes
+        // alone rather than inventing a bound, and rather than staying silent
+        // — silence is what let a stretched `Row` holding a vertical `Divider`
+        // reach the layout assertion with `Size { height: inf }` and take the
+        // app down.
+        let sizes = if self.cross_axis_alignment == CrossAxisAlignment::Stretch
+            && !sizes.is_empty()
+        {
+            if max_h.is_finite() {
+                self.children.iter().enumerate().map(|(i, ch)| {
+                    // Main axis pinned to what it already resolved to; cross
+                    // axis tight. Re-running the main-axis decision here would
+                    // undo the flex distribution above.
+                    let s = ctx.layout_child_at(i, Constraints {
+                        min_width:  sizes[i].width,
+                        max_width:  rosace_core::AxisBound::Bounded(sizes[i].width),
+                        min_height: max_h,
+                        max_height: rosace_core::AxisBound::Bounded(max_h),
+                    }, &**ch);
+                    // The cross extent is the PARENT's decision under Stretch,
+                    // so take it rather than whatever the child returned. Tight
+                    // constraints alone are not enough: the `Widget` trait does
+                    // not force a child to honour its minimum, and a child that
+                    // only clamps to the maximum reports its natural size and
+                    // silently defeats the alignment.
+                    Size { width: s.width, height: max_h }
+                }).collect()
+            } else {
+                #[cfg(debug_assertions)]
+                {
+                    static WARNED_STRETCH: std::sync::Once = std::sync::Once::new();
+                    WARNED_STRETCH.call_once(|| {
+                        eprintln!(
+                            "[ROSACE] Row: CrossAxisAlignment::Stretch inside an \
+                             unbounded height (e.g. a vertical ScrollView) — there \
+                             is no available height to fill, so children keep their \
+                             own. Give the Row a bounded height, or size the child \
+                             explicitly."
+                        );
+                    });
+                }
+                sizes
+            }
+        } else {
+            sizes
+        };
         *self.measure_cache.lock().unwrap() = Some((super::frame_id(), c, sizes.clone()));
         sizes
     }
