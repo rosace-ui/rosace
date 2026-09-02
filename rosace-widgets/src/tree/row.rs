@@ -245,7 +245,21 @@ impl Widget for Row {
         let inner_rect = self.padding.shrink(ctx.rect);
         // Tight to the allotted rect — measure and paint agree on extra space.
         let inner_c = Constraints::tight(inner_rect.size.width, inner_rect.size.height);
-        let lctx = ctx.layout_ctx(inner_c);
+        // Measure against the OUTER rect, because `measure` subtracts the
+        // padding itself. Handing it `inner_c` — already shrunk here — made it
+        // subtract the padding a SECOND time, so paint and layout disagreed
+        // about every child's cross extent by exactly `padding.total()`.
+        //
+        // Which one you got depended on whether the frame-scoped measure cache
+        // had been filled by a layout pass first, so a widget being dragged —
+        // repainting without a full layout on alternate frames — visibly
+        // oscillated between the two widths. Reported as "all the sliders
+        // vibrate while I drag one".
+        //
+        // Using the same constraints as `layout()` also makes the cache key
+        // agree between the two paths, so they can no longer disagree at all.
+        let outer_c = Constraints::tight(ctx.rect.size.width, ctx.rect.size.height);
+        let lctx = ctx.layout_ctx(outer_c);
         let sizes = self.layout_sizes(&lctx);
         let result = layout_row(inner_c, &sizes,
             self.main_axis_alignment, self.cross_axis_alignment, self.spacing);
