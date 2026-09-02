@@ -709,6 +709,56 @@ impl<'a> PaintCtx<'a> {
     /// widget you can see and cannot click. That is the failure that sank
     /// replay-on-move; the coordinate space is reset at the boundary instead,
     /// once, in both the paint walk and the pointer walks.
+    /// [`PaintCtx::promote`], but LAYS THE WIDGET OUT at `rect` first.
+    ///
+    /// `promote` paints a widget into a rect without measuring it there, which
+    /// is right for an overlay: a dialog decides its own size and the rect is
+    /// derived from it. A hero flight is the opposite — the rect is
+    /// authoritative and changes every frame, and the widget has to actually
+    /// BE that size, so its content reflows rather than being scaled.
+    ///
+    /// Keyed, because promotion here is conditional: a flight exists only
+    /// while its pair does. Positional slots would hand a second hero the
+    /// first one's node the moment one landed.
+    pub fn promote_laid_out(&mut self, key: u64, rect: Rect, widget: &dyn Widget) {
+        let node = self.tree.borrow_mut().keyed_slot(self.node, key);
+        self.tree.borrow_mut().adopt_tag(node, widget.type_tag());
+
+        self.tree.borrow_mut().begin_layout(node);
+        let _ = widget.layout(&LayoutCtx::with_tree(
+            Constraints::tight(rect.size.width, rect.size.height),
+            self.font,
+            &self.theme,
+            Rc::clone(&self.tree),
+            node,
+        ));
+
+        self.tree.borrow_mut().node_mut(node).cached_rect = Some(rect);
+
+        let mut sub = PictureRecorder::new();
+        {
+            let mut cctx = PaintCtx {
+                recorder: &mut sub,
+                rect,
+                font: self.font,
+                theme: self.theme.clone(),
+                tree: Rc::clone(&self.tree),
+                node,
+                clip_rect: None,
+            };
+            widget.paint(&mut cctx);
+        }
+        let _ = self.tree.borrow_mut().close_state_scope(node);
+
+        let picture = sub.finish();
+        self.tree.borrow_mut().node_mut(node).promoted = Some(render_tree::PromotedLayer {
+            picture,
+            rect,
+            on_dismiss: None,
+            blocks_input: false,
+        });
+    }
+
     pub fn promote(&mut self, rect: Rect, widget: &dyn Widget) {
         let node = self.tree.borrow_mut().slot(self.node, true);
         self.tree.borrow_mut().adopt_tag(node, widget.type_tag());

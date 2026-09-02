@@ -119,13 +119,22 @@ impl Widget for ScreenTransitionView {
             self.incoming.paint(&mut child_ctx);
             hero::set_active_role(None);
 
-            // Paint each matched Hero pair once, on top of both screens,
-            // at a rect LERP'd between its outgoing and incoming captures
-            // by the transition's progress — the floating "flight" element.
+            // Promote each matched Hero once, above both screens, laid out at
+            // a rect LERP'd between its two ends by the transition's progress
+            // — the floating "flight" element. It is a LIVE widget: it
+            // reflows at each interpolated size and keeps animating.
+            //
+            // Keyed by tag so a flight keeps its node across frames. With
+            // positional slots, a screen with two heroes would hand the
+            // second one the first's node the moment either landed, and with
+            // it the first's animation state.
             let t = progress.clamp(0.0, 1.0);
-            for (_tag, out_rect, _out_pic, in_rect, in_pic) in hero::drain_pairs() {
-                let interp = lerp_rect(out_rect, in_rect, t);
-                ctx.replay_morphed(&in_pic, in_rect, interp);
+            for flight in hero::drain_pairs() {
+                let interp = lerp_rect(flight.from, flight.to, t);
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&flight.tag, &mut h);
+                let key = std::hash::Hasher::finish(&h);
+                ctx.promote_laid_out(key, interp, &*flight.widget);
             }
 
             ctx.record(DrawCommand::PopClip);

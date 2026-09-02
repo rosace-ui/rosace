@@ -1,46 +1,70 @@
-//! Hero / shared-element transition support (D108/Phase 26 Step 5).
+//! Hero / shared-element transitions.
 //!
-//! A `.hero_tag(id)`'d widget is a pass-through with zero behavior change
-//! UNLESS it paints while `ScreenTransitionView` has an active transition in
-//! flight — in that case it captures its own world rect + a standalone
-//! [`Picture`] instead of painting itself in place, and registers it here
-//! under its tag. `ScreenTransitionView` (the only reader of this registry)
-//! drains both sides after painting the outgoing and incoming screens for
-//! the frame, pairs up entries sharing a tag, and paints a single floating
-//! copy on top, LERP'd between the two captured rects by the transition's
-//! progress. Entries present on only one side (no matching tag) are simply
-//! dropped — there's nothing to morph between, so that widget just doesn't
-//! render for the duration of the transition on that side (an honest,
-//! documented limitation, not a crash).
+//! A `.hero_tag(id)`'d widget is a pass-through with zero behaviour change
+//! UNLESS it paints while `ScreenTransitionView` has a transition in flight.
+//! In that case it registers its world rect and a HANDLE TO ITSELF here under
+//! its tag, and does not paint in place. `ScreenTransitionView` — the only
+//! reader — pairs the two sides by tag after painting both screens and
+//! promotes ONE live instance to the root layer, laid out at a rect
+//! interpolated between the two by the transition's progress.
 //!
-//! Thread-local, mirroring `overlay.rs`'s own registry — paint always runs
-//! on one thread, and this is drained once per frame just like overlays.
+//! Entries present on only one side are dropped: there is nothing to morph
+//! between, so that widget simply does not render for the duration of the
+//! transition on that side. A documented limitation, not a crash.
+//!
+//! ## Why a widget and not a Picture
+//!
+//! This registry used to hold a captured `Picture` per side, and the flight
+//! was those dead pixels replayed morphed. That froze anything animating
+//! inside a hero, re-captured BOTH screens every frame, and made the
+//! transition depend on a paint side effect — a cached outgoing screen that
+//! replayed instead of repainting never registered, so the pair never formed
+//! and the element vanished for the whole flight (69e0cde).
+//!
+//! `BoxedWidget` is an `Arc<dyn Widget>`, so registering the widget itself is
+//! a refcount bump. The promoted copy then paints live, reflows at each
+//! interpolated size, and runs its own animations mid-flight.
+//!
+//! ## What does not travel
+//!
+//! The promoted copy is a fresh instance built from the same config, so
+//! per-node state does not survive the flight: a text field loses its cursor,
+//! a scroll offset resets. This is Flutter's documented Hero limitation and
+//! the same trade it makes. Carrying state across would mean reparenting the
+//! real node, which needs a deferred-disposal window — nodes dispose
+//! immediately on removal today, so the widget is destroyed before the layer
+//! could claim it. Recorded as separate work.
+//!
+//! Thread-local, mirroring the paint walk: paint always runs on one thread,
+//! and this is drained once per frame.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 use rosace_core::types::Rect;
-use rosace_render::Picture;
 
-/// Which side of an in-flight transition a `Hero`-tagged widget is
-/// currently painting on. Set by `ScreenTransitionView` immediately before
-/// painting each side, and cleared (`None`) the rest of the time — that
-/// `None` state is what makes `Hero` a zero-cost pass-through by default.
+use super::BoxedWidget;
+
+/// Which side of an in-flight transition a `Hero`-tagged widget is currently
+/// painting on. Set by `ScreenTransitionView` immediately before painting each
+/// side and cleared (`None`) the rest of the time — that `None` is what makes
+/// `Hero` a zero-cost pass-through by default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HeroRole {
     Outgoing,
     Incoming,
 }
 
-struct HeroCapture {
+/// One side's registration: where it is, and what to fly.
+struct HeroEnd {
     rect: Rect,
-    picture: Picture,
+    widget: BoxedWidget,
 }
 
 thread_local! {
     static ACTIVE_ROLE: RefCell<Option<HeroRole>> = const { RefCell::new(None) };
-    static OUTGOING: RefCell<HashMap<String, HeroCapture>> = RefCell::new(HashMap::new());
-    static INCOMING: RefCell<HashMap<String, HeroCapture>> = RefCell::new(HashMap::new());
+    static OUTGOING: RefCell<HashMap<String, HeroEnd>> = RefCell::new(HashMap::new());
+    static INCOMING: RefCell<HashMap<String, HeroEnd>> = RefCell::new(HashMap::new());
 }
 
 /// Marks (or clears) which side of a transition is about to be painted.
@@ -54,24 +78,39 @@ pub fn active_role() -> Option<HeroRole> {
 }
 
 /// Called by `Hero::paint` while a role is active.
-pub fn register(tag: String, role: HeroRole, rect: Rect, picture: Picture) {
-    let cap = HeroCapture { rect, picture };
+pub fn register(tag: String, role: HeroRole, rect: Rect, widget: BoxedWidget) {
+    let end = HeroEnd { rect, widget };
     match role {
-        HeroRole::Outgoing => OUTGOING.with(|m| { m.borrow_mut().insert(tag, cap); }),
-        HeroRole::Incoming => INCOMING.with(|m| { m.borrow_mut().insert(tag, cap); }),
-    }
+        HeroRole::Outgoing => OUTGOING.with(|m| { m.borrow_mut().insert(tag, end); }),
+        HeroRole::Incoming => INCOMING.with(|m| { m.borrow_mut().insert(tag, end); }),
+    };
 }
 
-/// Drain both sides' captures for this frame, pairing tags present on
-/// BOTH — `(tag, outgoing_rect, outgoing_picture, incoming_rect, incoming_picture)`.
-/// Unmatched entries (tag present on only one side) are dropped.
-pub fn drain_pairs() -> Vec<(String, Rect, Picture, Rect, Picture)> {
-    let outgoing: HashMap<String, HeroCapture> = OUTGOING.with(|m| m.borrow_mut().drain().collect());
-    let mut incoming: HashMap<String, HeroCapture> = INCOMING.with(|m| m.borrow_mut().drain().collect());
+/// One matched hero: where it starts, where it lands, and what flies.
+pub struct HeroFlight {
+    pub tag: String,
+    pub from: Rect,
+    pub to: Rect,
+    /// The INCOMING side's widget — the destination is what the user is
+    /// travelling towards, and it is what should be on screen when the
+    /// flight lands. Flutter's default flight shuttle makes the same choice.
+    pub widget: BoxedWidget,
+}
+
+/// Drain both sides, pairing tags present on BOTH. Unmatched entries are
+/// dropped — see the module docs.
+pub fn drain_pairs() -> Vec<HeroFlight> {
+    let outgoing: HashMap<String, HeroEnd> = OUTGOING.with(|m| m.borrow_mut().drain().collect());
+    let mut incoming: HashMap<String, HeroEnd> = INCOMING.with(|m| m.borrow_mut().drain().collect());
     outgoing
         .into_iter()
-        .filter_map(|(tag, out_cap)| {
-            incoming.remove(&tag).map(|in_cap| (tag, out_cap.rect, out_cap.picture, in_cap.rect, in_cap.picture))
+        .filter_map(|(tag, out)| {
+            incoming.remove(&tag).map(|inc| HeroFlight {
+                tag,
+                from: out.rect,
+                to: inc.rect,
+                widget: inc.widget,
+            })
         })
         .collect()
 }

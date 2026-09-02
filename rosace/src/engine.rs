@@ -3521,6 +3521,17 @@ mod tests {
             .count()
     }
 
+    /// Blue across BOTH canvases.
+    ///
+    /// A hero in flight is a PROMOTED layer, and promoted layers composite
+    /// into the overlay canvas — that is what "promoted to the root layer"
+    /// means. It used to be replayed straight into the main picture, so
+    /// counting only `canvas` was enough. Counting one canvas now reports
+    /// zero mid-flight and reads as "the hero never morphed".
+    fn blue_pixel_count_both(canvas: &SkiaCanvas, overlay: &SkiaCanvas) -> usize {
+        blue_pixel_count(canvas) + blue_pixel_count(overlay)
+    }
+
     #[test]
     fn hero_tagged_widget_morphs_position_and_size_across_a_push_transition() {
         let _guard = ANIMATION_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3544,7 +3555,7 @@ mod tests {
         let mut saw_intermediate = false;
         for _ in 0..90 {
             engine.paint(&mut canvas, &mut overlay, &[]);
-            let area = blue_pixel_count(&canvas);
+            let area = blue_pixel_count_both(&canvas, &overlay);
             if area > 600 && area < 6000 {
                 saw_intermediate = true;
             }
