@@ -77,7 +77,7 @@ pub use async_state::{AsyncError, AsyncState};
 pub use atom::Atom;
 pub use atom_id_gen::next_atom_id;
 pub use batch::{batch, is_batching, Priority};
-pub use dirty_set::{mark_dirty, is_global_dirty, take_dirty_components, reset_to_global_dirty};
+pub use dirty_set::{mark_dirty, is_global_dirty, take_dirty_components, reset_to_global_dirty, request_rebuild_from_any_thread};
 pub use frame_scheduler::{fire_after_ms, register_wakeup, request_frame, take_frame_requested};
 pub use global_atom::GlobalAtom;
 pub use refresh_engine::RefreshEngine;

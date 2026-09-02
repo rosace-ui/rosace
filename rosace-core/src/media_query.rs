@@ -98,7 +98,7 @@ pub fn set_media_query(mq: MediaQuery) {
     // reset for `is_dark`; doing it here directly makes `text_scale`,
     // `bold_text`, `reduce_motion`, and `always_24_hour_format` correct on
     // their own, independent of whatever else a caller happens to invoke.
-    rosace_state::reset_to_global_dirty();
+    rosace_state::request_rebuild_from_any_thread();
 }
 
 // ---------------------------------------------------------------------------

@@ -30,16 +30,33 @@ thread_local! {
     static DIRTY: RefCell<Option<HashSet<ComponentId>>> = const { RefCell::new(None) };
 }
 
-/// Cross-thread "rebuild everything" request.
+/// Cross-thread "rebuild everything" request, set ONLY by
+/// [`request_rebuild_from_any_thread`].
 ///
-/// [`reset_to_global_dirty`] can legitimately be called from a thread that
-/// owns no engine — a platform callback pushing an OS setting change
-/// (`set_media_query` on an iOS/Android configuration change). Marking only
-/// that thread's `DIRTY` would drop the request on the floor, so the intent
-/// is also recorded here where the UI thread can see it.
+/// A platform callback pushing an OS setting change (`set_media_query` on an
+/// iOS/Android configuration change) runs on a thread that owns no engine.
+/// Marking only that thread's `DIRTY` would drop the request on the floor, so
+/// the intent is recorded here where the UI thread can see it.
 ///
 /// Erring toward an EXTRA rebuild is safe; missing one loses user input.
-static FORCE_GLOBAL: AtomicBool = AtomicBool::new(true);
+///
+/// This used to be what `reset_to_global_dirty` wrote, which reintroduced on
+/// the force-everything path exactly the interference `DIRTY` above was made
+/// thread-local to remove — including its own second bullet, "merely
+/// CONSTRUCTING a second engine wiped the first one's pending work".
+/// `FrameEngine::new` calls `reset_to_global_dirty`, so with two engines alive
+/// on two threads, constructing one forced the other's next frame structural.
+/// Symptom: `a_lifecycle_event_re_renders_a_subscribed_component_with_the_new_state`
+/// failing about one run in four, only under the parallel suite, asserting an
+/// idle frame had rebuilt when it should have reused its cache.
+static FORCE_GLOBAL: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// "Rebuild everything on THIS thread's engine" — what
+    /// [`reset_to_global_dirty`] means for every caller that owns an engine:
+    /// `FrameEngine::new`, `set_root`, and hot reload.
+    static FORCE_LOCAL: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
 
 /// Marks that arrived from ANOTHER thread, addressed to the thread that owns
 /// the atom.
@@ -189,7 +206,9 @@ pub fn mark_dirty(ids: &[ComponentId]) {
 /// dirty set is recorded — e.g. first frame, or full-refresh event).
 pub fn is_global_dirty() -> bool {
     drain_inbox();
-    DIRTY.with(|d| d.borrow().is_none()) || FORCE_GLOBAL.load(Ordering::Relaxed)
+    DIRTY.with(|d| d.borrow().is_none())
+        || FORCE_LOCAL.with(|f| f.get())
+        || FORCE_GLOBAL.load(Ordering::Relaxed)
 }
 
 /// Drain and return the current dirty set, replacing it with an empty set.
@@ -201,6 +220,7 @@ pub fn is_global_dirty() -> bool {
 pub fn take_dirty_components() -> HashSet<ComponentId> {
     // Anything a worker thread addressed to us becomes part of THIS frame.
     drain_inbox();
+    FORCE_LOCAL.with(|f| f.set(false));
     FORCE_GLOBAL.store(false, Ordering::Relaxed);
     DIRTY.with(|d| {
         let mut guard = d.borrow_mut();
@@ -220,6 +240,17 @@ pub fn take_dirty_components() -> HashSet<ComponentId> {
 /// the element cache (e.g. a component type mismatch during reconciliation).
 pub fn reset_to_global_dirty() {
     DIRTY.with(|d| *d.borrow_mut() = None);
+    FORCE_LOCAL.with(|f| f.set(true));
+}
+
+/// Ask the UI thread's engine to rebuild everything, from a thread that owns
+/// no engine — a platform callback delivering an OS setting change.
+///
+/// Distinct from [`reset_to_global_dirty`], which means "rebuild MY engine"
+/// and must not reach across threads: every `FrameEngine::new` calls it, so a
+/// process-wide write there makes one engine's construction force another
+/// engine's next frame structural.
+pub fn request_rebuild_from_any_thread() {
     FORCE_GLOBAL.store(true, Ordering::Relaxed);
 }
 
