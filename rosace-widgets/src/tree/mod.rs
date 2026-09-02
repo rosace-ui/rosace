@@ -52,6 +52,7 @@ pub mod pressable;
 pub mod progress_bar;
 pub mod pull_to_refresh;
 pub mod rect_reader;
+pub mod size_reader;
 pub mod responsive;
 pub mod will_pop_scope;
 pub mod bottom_nav;
@@ -138,6 +139,7 @@ pub use pressable::{LongPressable, PressApi, Pressable};
 pub use progress_bar::ProgressBar;
 pub use pull_to_refresh::PullToRefresh;
 pub use rect_reader::RectReader;
+pub use size_reader::{BoundsReader, SizeApi, SizeReader};
 pub use responsive::{breakpoint, Responsive};
 pub use will_pop_scope::WillPopScope;
 pub use bottom_nav::{BottomNavItem, BottomNavigationBar};
@@ -2190,6 +2192,21 @@ impl<T> StateHandle<T> {
     pub fn set(&self, v: T) {
         *self.cell.lock().unwrap_or_else(|e| e.into_inner()) = v;
         mark_node_dirty(self.node);
+    }
+
+    /// Replace the value WITHOUT asking for a repaint.
+    ///
+    /// For state that RECORDS something already observed rather than changing
+    /// what is on screen — "the size I last reported", "the value I last
+    /// notified about". Those are written during paint, from the very frame
+    /// that produced them, so marking dirty would schedule a redundant frame
+    /// after every change and, for anything sampled every frame, never settle.
+    ///
+    /// The hazard is the obvious one: nothing repaints, so a value that DOES
+    /// affect appearance must use [`Self::set`]. This exists for
+    /// change-detection bookkeeping, not for state.
+    pub fn set_quietly(&self, v: T) {
+        *self.cell.lock().unwrap_or_else(|e| e.into_inner()) = v;
     }
 }
 

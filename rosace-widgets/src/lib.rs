@@ -69,6 +69,7 @@ pub use tree::PullToRefresh;
 pub use tree::Autocomplete;
 pub use tree::{Dismissible, DismissDirection};
 pub use tree::RectReader;
+pub use tree::{BoundsReader, SizeApi, SizeReader};
 pub use tree::RepaintBoundary;
 pub use tree::TransformLayer;
 pub use tree::{
