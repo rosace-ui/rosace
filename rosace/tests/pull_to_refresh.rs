@@ -6,20 +6,30 @@
 //! so found that it does not work at all over a bounce-physics `ScrollView`,
 //! which is what every real use wraps.
 //!
-//! NESTED-SCROLL PRECEDENCE, unresolved and deliberately left failing:
-//! the chain tries the innermost scrollable first, and a `ScrollView` with
-//! `Bounce` physics ALWAYS consumes a downward drag at its top by stretching
-//! — `try_apply_delta` reports true for resisted overscroll, which the
-//! controller's own unit tests pin as intended. So the delta never reaches
-//! the `PullToRefresh` above it, `pressed` is never attributed to it, and the
-//! release path never runs.
+//! NESTED-SCROLL PRECEDENCE: fixed (two-pass chain walk). The delta now
+//! reaches the widget — verified, the pull grows with the drag.
 //!
-//! Every mobile toolkit resolves this the same way: bounce is what you get
-//! when nothing ELSE wants the overscroll. That means a two-pass chain walk —
-//! offer the delta hard-clamped first, and only allow overscroll on a second
-//! pass if no link took it. That is a change to input dispatch and wants a
-//! decision, so the two tests that encode the working behaviour are
-//! `#[ignore]`d rather than deleted or weakened.
+//! PULL RESISTANCE: fixed. The pull used to go through Bounce's rubber-band
+//! resistance, which is proportional to how far out you already are, so it
+//! asymptoted: a 220px drag produced 20px of pull against a 70px trigger, and
+//! the gesture could not physically fire. It follows the finger now, damped.
+//!
+//! STILL BLOCKED — `ctx.pressed()` resolves to the INNERMOST node whose
+//! region contains the point, so for `PullToRefresh::new(ScrollView::new(..))`
+//! the press belongs to the ScrollView and the PullToRefresh above it sees
+//! `pressed = false` forever. Its release detection is
+//! `was_pressed && !is_pressed`, which therefore never fires. Instrumented
+//! and confirmed: `pressed=false` on every frame of a pull that is otherwise
+//! working perfectly.
+//!
+//! Fixing it means a press marking the whole nested-scroll chain rather than
+//! one node — both the inner view and the outer gesture legitimately need to
+//! know. That is a third change to input dispatch and wants a decision, so
+//! these two stay `#[ignore]`d rather than weakened.
+//!
+//! The second ignored test may be an independent defect: a widget with
+//! `refreshing(true)` repainted 0/10 frames, so the spinner would freeze.
+//! Not yet isolated, because the release path blocks reaching it naturally.
 
 use rosace::prelude::*;
 use rosace::widgets::tree::{LayoutCtx, PaintCtx};
@@ -69,7 +79,7 @@ impl H {
 }
 
 #[test]
-#[ignore = "blocked on nested-scroll precedence — see the module docs"]
+#[ignore = "ctx.pressed() resolves to the innermost node — see the module docs"]
 fn a_long_pull_fires_refresh_once() {
     let mut h = harness();
     for _ in 0..4 { h.frame(); }
@@ -95,7 +105,7 @@ fn a_short_pull_does_not_fire() {
 /// While `refreshing` is set the widget must keep animating, or the spinner
 /// freezes on the first frame.
 #[test]
-#[ignore = "blocked on nested-scroll precedence — see the module docs"]
+#[ignore = "ctx.pressed() resolves to the innermost node — see the module docs"]
 fn a_refreshing_widget_keeps_requesting_frames() {
     struct Spin;
     impl Component for Spin {

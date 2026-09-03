@@ -1515,7 +1515,7 @@ impl<'a> PaintCtx<'a> {
     /// child inside it (or on an inner nested `ScrollView`) can still
     /// reach it, and it in turn can hand off to whatever encloses IT once
     /// exhausted.
-    pub fn register_nested_scroll(&mut self, f: impl Fn(f32, f32) -> bool + Send + Sync + 'static) {
+    pub fn register_nested_scroll(&mut self, f: impl Fn(f32, f32, bool) -> bool + Send + Sync + 'static) {
         let hit_rect = if let Some(clip) = self.clip_rect {
             match intersect_rect(self.rect, clip) {
                 Some(r) => r,

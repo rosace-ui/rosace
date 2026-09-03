@@ -24,6 +24,11 @@ use super::{avail_h, avail_w, intersect_rect, BoxedWidget, Children, LayoutCtx, 
 
 /// Pull distance (logical px) past which a release triggers `on_refresh`.
 const TRIGGER_DISTANCE: f32 = 70.0;
+
+/// How much of the finger's travel becomes pull. Below 1.0 so the sheet feels
+/// weighted rather than glued to the cursor, but nothing like Bounce's
+/// distance-proportional resistance, which made the trigger unreachable.
+const PULL_DAMPING: f32 = 0.5;
 /// Indicator diameter (logical px).
 const INDICATOR_SIZE: f32 = 32.0;
 /// Gap between the indicator and the top edge once it's fully revealed.
@@ -112,7 +117,33 @@ impl Widget for PullToRefresh {
         let ctrl = ctx.scroll_controller();
 
         let drag_ctrl = ctrl.clone();
-        ctx.register_nested_scroll(move |_dx, dy| drag_ctrl.try_apply_delta(0.0, -dy, PHYSICS));
+        // A pull IS overscroll — the offset goes negative, past the top. So
+        // this declines the first pass entirely: anything that can scroll
+        // normally should do so before a drag becomes a refresh gesture.
+        ctx.register_nested_scroll(move |_dx, dy, allow_overscroll| {
+            if !allow_overscroll || dy == 0.0 {
+                return false;
+            }
+            // Applied DIRECTLY, not through `try_apply_delta`.
+            //
+            // That routes the delta through Bounce's rubber-band resistance,
+            // which is right for a scroll view being dragged past its end and
+            // wrong here: the resistance is proportional to how far out you
+            // already are, so the pull asymptotes. Measured before this: a
+            // 220px drag produced 20px of pull against a 70px trigger, i.e.
+            // the gesture could not physically fire.
+            //
+            // A pull follows the finger, lightly damped so it still feels
+            // weighted. Only downward-at-the-top pulls; upward past zero is
+            // just a scroll and belongs to the child.
+            let prev = drag_ctrl.offset()[1];
+            let next = (prev - dy * PULL_DAMPING).min(0.0);
+            if next == prev {
+                return false;
+            }
+            drag_ctrl.scroll_to_raw([drag_ctrl.offset()[0], next]);
+            true
+        });
 
         let dt = rosace_animate::frame_dt().max(0.0001);
         let is_pressed = ctx.pressed();
@@ -151,7 +182,16 @@ impl Widget for PullToRefresh {
         let mut child_ctx = ctx.child(child_rect);
         child_ctx.set_clip(Some(effective_clip));
         self.child.paint(&mut child_ctx);
-        ctx.record(DrawCommand::PopClip);
+
+        // The indicator, INSIDE the clip and after the content so it sits on
+        // top of it.
+        //
+        // It is positioned above the widget's own origin and slides down into
+        // view as the pull grows — which only reads as "sliding in" if the
+        // part still above the top is hidden. Drawn after `PopClip` it was
+        // simply unclipped, so at small pull distances it painted over
+        // whatever sat above: reported as the refresh spinner appearing on
+        // top of the AppBar.
 
         if self.refreshing {
             let cx = r.origin.x + r.size.width / 2.0;
@@ -165,6 +205,7 @@ impl Widget for PullToRefresh {
             let cy = r.origin.y - INDICATOR_SIZE / 2.0 + travel;
             draw_indicator(ctx, Point { x: cx, y: cy }, Some(progress), color);
         }
+        ctx.record(DrawCommand::PopClip);
     }
 }
 

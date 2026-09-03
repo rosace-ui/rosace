@@ -1839,9 +1839,34 @@ impl FrameEngine {
                         let (lx, ly) = self.last_chain_point.unwrap_or((*x, *y));
                         let (dx, dy) = (x - lx, y - ly);
                         if dx != 0.0 || dy != 0.0 {
-                            for handler in &self.pending_scroll_chain {
-                                if handler(dx, dy) {
-                                    break;
+                            // TWO PASSES.
+                            //
+                            // First, innermost outward, everyone hard-clamped
+                            // to their real bounds: a drag should scroll
+                            // whatever can actually scroll.
+                            //
+                            // Only if nobody could, again allowing overscroll
+                            // — and OUTERMOST FIRST this time. Overscroll is
+                            // what happens when nothing else wants the
+                            // movement, and the outer context should decide
+                            // what it means: a `PullToRefresh` wrapping a list
+                            // must get the pull rather than watch the list
+                            // rubber-band. Restarting pass two from the
+                            // innermost would hand it straight back to the
+                            // Bounce view and pull-to-refresh could never
+                            // fire, which is exactly what it did.
+                            //
+                            // A lone scrollable is unaffected: it declines
+                            // pass one at its edge and takes pass two itself.
+                            let consumed = self
+                                .pending_scroll_chain
+                                .iter()
+                                .any(|h| h(dx, dy, false));
+                            if !consumed {
+                                for handler in self.pending_scroll_chain.iter().rev() {
+                                    if handler(dx, dy, true) {
+                                        break;
+                                    }
                                 }
                             }
                             self.forced_repaint = true;

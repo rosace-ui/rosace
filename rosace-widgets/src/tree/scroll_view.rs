@@ -358,7 +358,13 @@ impl ScrollView {
             // `hover_test` walk Step 1's press state already resolves
             // through (`hover_test_node` checks `nested_scrolls` too).
             let drag_ctrl = ctrl.clone();
-            ctx.register_nested_scroll(move |dx, dy| {
+            ctx.register_nested_scroll(move |dx, dy, allow_overscroll| {
+                // On the first pass the chain asks everyone to move only
+                // within their real bounds. A Bounce view would otherwise
+                // absorb every drag at its edge by stretching — it reports
+                // that as "consumed", so an ancestor that wanted the pull
+                // (a PullToRefresh) never saw it.
+                let physics = if allow_overscroll { physics } else { ScrollPhysics::Clamped };
                 // Content follows the finger: dragging up (dy < 0) reveals
                 // what's below, i.e. INCREASES the offset — negate, exactly
                 // like the wheel-scroll callback above already does.

@@ -51,7 +51,15 @@ pub type HitHandler = Arc<dyn Fn(f32, f32) + Send + Sync>;
 /// the next link outward once the current one declines — so scrolling
 /// naturally "hands off" to an enclosing scrollable ancestor exactly when,
 /// and only when, the inner one has nothing left to give.
-pub type ScrollHandler = Arc<dyn Fn(f32, f32) -> bool + Send + Sync>;
+/// One link in the nested-scroll chain.
+///
+/// `(dx, dy, allow_overscroll) -> consumed`. The engine offers a delta to the
+/// chain TWICE: once with `allow_overscroll = false`, so every scrollable gets
+/// a chance to move within its real bounds, and only if nobody took it, again
+/// with `true`. Overscroll — a rubber-band stretch, a pull-to-refresh pull —
+/// is what happens when nothing else wants the movement, which is the rule
+/// every mobile toolkit uses.
+pub type ScrollHandler = Arc<dyn Fn(f32, f32, bool) -> bool + Send + Sync>;
 
 /// A click callback with its hit rect in window-space logical pixels.
 pub type HitRegion = (Rect, Arc<dyn Fn() + Send + Sync>);
