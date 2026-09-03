@@ -12,7 +12,7 @@
 //! `examples/ios_stub.rs` for the pattern). `Engine` is what that ~15 lines
 //! of per-app glue calls into.
 
-use rosace_compositor::{CompositorLayer, GpuPresenter, LayerRect};
+use rosace_compositor::{CompositorLayer, GpuPresenter};
 use rosace::widgets::Component;
 use rosace_render::SkiaCanvas;
 use rosace_theme::ThemeData;
@@ -25,7 +25,6 @@ pub struct Engine {
     presenter: GpuPresenter,
     canvas: SkiaCanvas,
     overlay_canvas: SkiaCanvas,
-    scroll_layers: Vec<rosace_platform::ScrollLayer>,
     pending_events: Vec<rosace_platform::InputEvent>,
     width: u32,
     height: u32,
@@ -114,7 +113,6 @@ impl Engine {
             presenter,
             canvas,
             overlay_canvas: SkiaCanvas::new_hidpi(width, height, scale),
-            scroll_layers: Vec::new(),
             pending_events: Vec::new(),
             width,
             height,
@@ -254,11 +252,6 @@ impl Engine {
         self.frame_engine.paint(&mut self.canvas, &mut self.overlay_canvas, &events);
 
         let base_dirty = self.canvas.take_frame_dirty();
-        let refreshed = rosace_platform::take_scroll_layers();
-        let scroll_dirty = refreshed.is_some();
-        if let Some(layers) = refreshed {
-            self.scroll_layers = layers;
-        }
 
         if self.canvas.gpu_shapes() {
             // GPU-shapes present path (D109 C1): the base is an ordered item
@@ -291,34 +284,6 @@ impl Engine {
                 .iter()
                 .map(|it| rosace_platform::app::canvas_item_to_frame(it, base_dirty))
                 .collect();
-            for sl in &self.scroll_layers {
-                let off = rosace_state::scroll_offset(sl.id);
-                let dest = LayerRect { x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3 };
-                // Content was rasterized at `scale * zoom`, so the live
-                // offset scales up by the same factor into texture space.
-                let src_offset = (off[0] * self.scale * sl.zoom, off[1] * self.scale * sl.zoom);
-                if !sl.items.is_empty() {
-                    // GPU-shapes scroll content (D109 C2): render the items
-                    // into the offscreen target on publish frames, then
-                    // sample it at the live scroll offset. `pixels` is empty
-                    // in this mode — reading it would over-run a 0-len slice.
-                    if scroll_dirty {
-                        let sub: Vec<rosace_compositor::FrameItem<'_>> = sl
-                            .items
-                            .iter()
-                            .map(|it| rosace_platform::app::canvas_item_to_frame(it, true))
-                            .collect();
-                        presenter.render_offscreen(sl.id, sl.width, sl.height, &sub);
-                    }
-                    items.push(rosace_compositor::FrameItem::Offscreen(
-                        rosace_compositor::OffscreenRef { key: sl.id, dest, src_offset, dirty: scroll_dirty },
-                    ));
-                } else {
-                    items.push(rosace_compositor::FrameItem::Pixels(CompositorLayer::placed(
-                        &sl.pixels, sl.width, sl.height, dest, src_offset, scroll_dirty,
-                    )));
-                }
-            }
             if self.overlay_canvas.has_drawn() {
                 items.push(rosace_compositor::FrameItem::Pixels(CompositorLayer::tracked(
                     self.overlay_canvas.pixels(), self.width, self.height, true,
@@ -335,15 +300,6 @@ impl Engine {
             let mut layers = vec![
                 CompositorLayer::tracked(self.canvas.pixels(), self.width, self.height, base_dirty),
             ];
-            for sl in &self.scroll_layers {
-                let off = rosace_state::scroll_offset(sl.id);
-                layers.push(CompositorLayer::placed(
-                    &sl.pixels, sl.width, sl.height,
-                    LayerRect { x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3 },
-                    (off[0] * self.scale, off[1] * self.scale),
-                    scroll_dirty,
-                ));
-            }
             if self.overlay_canvas.has_drawn() {
                 layers.push(CompositorLayer::tracked(self.overlay_canvas.pixels(), self.width, self.height, true));
             }

@@ -76,10 +76,19 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
             .unwrap_or(viewport);
         ctx.set_clip(Some(clip));
 
+        // The app-supplied offset PLUS whatever this layer scrolled itself.
+        //
+        // The wheel handler below writes into the non-reactive channel. On the
+        // old GPU path the compositor read that channel and shifted the
+        // texture's sample origin, so wheel scrolling worked without this
+        // widget knowing. Painting directly means nothing reads it unless this
+        // does — the registration would write to a channel with no consumer
+        // and a TransformLayer would silently ignore the wheel.
+        let own = rosace_state::scroll_offset(ctx.node as u64);
         let child_rect = Rect {
             origin: Point {
-                x: viewport.origin.x - self.scroll_x,
-                y: viewport.origin.y - self.scroll_y,
+                x: viewport.origin.x - self.scroll_x - own[0],
+                y: viewport.origin.y - self.scroll_y - own[1],
             },
             size: child_size,
         };
@@ -92,11 +101,19 @@ impl<W: Widget + Send + Sync + 'static> Widget for TransformLayer<W> {
         let node_id = ctx.node as u64;
         let max_x = (child_size.width - viewport.size.width).max(0.0);
         let max_y = (child_size.height - self.viewport_h).max(0.0);
+        // Marking the node dirty is the other half. The channel is
+        // non-reactive by design — on the GPU path a wheel tick moved the
+        // compositor's sample origin and deliberately repainted NOTHING. With
+        // the content painted directly, a write that schedules no repaint
+        // leaves the new offset sitting in the channel, read by nobody until
+        // something else happens to redraw.
+        let node = ctx.node;
         ctx.register_scroll_target(
             viewport,
             super::render_tree::ScrollAxes::BOTH,
             std::sync::Arc::new(move |dx, dy| {
                 rosace_state::scroll_offset_by(node_id, -dx, -dy, max_x, max_y);
+                super::mark_node_dirty(node);
             }),
         );
 

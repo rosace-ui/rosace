@@ -129,7 +129,6 @@ impl PlatformWindow {
                 cursor_y: 0.0,
                 mouse_down: false,
                 last_frame_time: None,
-                scroll_layers: Vec::new(),
                 shader_quads: Vec::new(),
                 frame_items: Vec::new(),
                 overlay_frame_items: Vec::new(),
@@ -174,7 +173,6 @@ struct AppState<F> {
     last_frame_time: Option<Instant>,
     // Retained scroll layers (D090) — refreshed when the frame loop publishes,
     // reused across clean frames so they persist without a re-upload.
-    scroll_layers: Vec<crate::scroll_layer::ScrollLayer>,
     // Retained GPU shader quads (D109) — refreshed on painted frames (the
     // canvas re-collects them on every `play_picture`), reused across clean
     // frames so quads persist through frame-skip like scroll layers do.
@@ -415,7 +413,6 @@ struct WebState {
     presenter:     Option<rosace_compositor::GpuPresenter>,
     canvas:        SkiaCanvas,
     overlay:       SkiaCanvas,
-    scroll_layers: Vec<crate::scroll_layer::ScrollLayer>,
     frame_items:   Vec<rosace_render::canvas::CanvasFrameItem>,
     width:         u32,
     height:        u32,
@@ -450,18 +447,12 @@ fn web_native_frame(s: &mut WebState) {
     if s.presenter.is_none() {
         (s.paint_fn)(&mut s.canvas, &mut s.overlay, &events);
         let _ = s.canvas.take_frame_dirty();
-        let _ = crate::scroll_layer::take_scroll_layers();
         return;
     }
 
     (s.paint_fn)(&mut s.canvas, &mut s.overlay, &events);
 
     let base_dirty = s.canvas.take_frame_dirty();
-    let refreshed = crate::scroll_layer::take_scroll_layers();
-    let scroll_dirty = refreshed.is_some();
-    if let Some(l) = refreshed {
-        s.scroll_layers = l;
-    }
 
     // GPU-shapes present, mirroring the mobile FFI engine's frame path.
     if base_dirty {
@@ -481,31 +472,6 @@ fn web_native_frame(s: &mut WebState) {
         .iter()
         .map(|it| canvas_item_to_frame(it, base_dirty))
         .collect();
-    for sl in &s.scroll_layers {
-        let off = rosace_state::scroll_offset(sl.id);
-        let dest = rosace_compositor::LayerRect { x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3 };
-        let src = (
-            off[0] * s.scale * sl.zoom + sl.src_bias.0,
-            off[1] * s.scale * sl.zoom + sl.src_bias.1,
-        );
-        if !sl.items.is_empty() {
-            if scroll_dirty {
-                let sub: Vec<rosace_compositor::FrameItem<'_>> =
-                    sl.items.iter().map(|it| canvas_item_to_frame(it, true)).collect();
-                presenter.render_offscreen(sl.id, sl.width, sl.height, &sub);
-            }
-            items.push(rosace_compositor::FrameItem::Offscreen(rosace_compositor::OffscreenRef {
-                key: sl.id,
-                dest,
-                src_offset: src,
-                dirty: scroll_dirty,
-            }));
-        } else {
-            items.push(rosace_compositor::FrameItem::Pixels(rosace_compositor::CompositorLayer::placed(
-                &sl.pixels, sl.width, sl.height, dest, src, scroll_dirty,
-            )));
-        }
-    }
     if s.overlay.has_drawn() {
         items.push(rosace_compositor::FrameItem::Pixels(rosace_compositor::CompositorLayer::tracked(
             s.overlay.pixels(),
@@ -561,7 +527,6 @@ fn run_web_native(
         presenter:     None,
         canvas:        SkiaCanvas::new_hidpi(phys_w, phys_h, dpr),
         overlay:       SkiaCanvas::new_hidpi(phys_w, phys_h, dpr),
-        scroll_layers: Vec::new(),
         frame_items:   Vec::new(),
         width:         phys_w,
         height:        phys_h,
@@ -867,31 +832,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                     }
                 }
             }
-            // Animated quads INSIDE retained scroll layers (D109 C2): patch
-            // them too, and remember which layers held one — those need
-            // their offscreen content re-rendered this frame (below), since
-            // a non-publish frame otherwise reuses the offscreen texture.
-            let mut animated_layers: std::collections::HashSet<u64> = std::collections::HashSet::new();
-            for sl in &mut self.scroll_layers {
-                for it in &mut sl.items {
-                    if let rosace_render::canvas::CanvasFrameItem::Shader(q) = it {
-                        if q.animate_time {
-                            rosace_shader::materials::patch_time(&mut q.uniforms, now);
-                            has_animated_quads = true;
-                            animated_layers.insert(sl.id);
-                        }
-                    }
-                }
-            }
 
-            // Refresh the retained scroll layers only when the frame
-            // loop published (it repainted). `None` = clean frame →
-            // keep the retained set so the layers persist unchanged.
-            let refreshed = crate::scroll_layer::take_scroll_layers();
-            let scroll_dirty = refreshed.is_some();
-            if let Some(layers) = refreshed {
-                self.scroll_layers = layers;
-            }
 
             // Composite bottom-to-top: base, shader quads (base-content
             // altitude, D109 Step 2 — full per-command interleaving is
@@ -923,54 +864,6 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                             uniforms: &q.uniforms,
                             clip:     q.clip,
                         },
-                    ));
-                }
-            }
-            for sl in &self.scroll_layers {
-                // Live scroll offset from the non-reactive channel
-                // (physical px). A wheel tick updates this without a
-                // repaint, so a scroll-only frame is a uniform write
-                // over the reused content texture (D090).
-                let off = rosace_state::scroll_offset(sl.id);
-                if !sl.items.is_empty() {
-                    // GPU-shapes scroll content (D109 C2): render the
-                    // items into the offscreen target on publish frames —
-                    // or every frame for a layer holding an animated quad
-                    // (its patched time uniform must reach the texture).
-                    let layer_dirty = scroll_dirty || animated_layers.contains(&sl.id);
-                    if layer_dirty {
-                        let sub: Vec<rosace_compositor::FrameItem<'_>> = sl.items
-                            .iter()
-                            .map(|it| canvas_item_to_frame(it, true))
-                            .collect();
-                        presenter.render_offscreen(sl.id, sl.width, sl.height, &sub);
-                    }
-                    items.push(rosace_compositor::FrameItem::Offscreen(
-                        rosace_compositor::OffscreenRef {
-                            key: sl.id,
-                            dest: rosace_compositor::LayerRect {
-                                x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
-                            },
-                            src_offset: (
-                                off[0] * scale * sl.zoom + sl.src_bias.0,
-                                off[1] * scale * sl.zoom + sl.src_bias.1,
-                            ),
-                            dirty: layer_dirty,
-                        },
-                    ));
-                } else {
-                    items.push(rosace_compositor::FrameItem::Pixels(
-                        rosace_compositor::CompositorLayer::placed(
-                            &sl.pixels, sl.width, sl.height,
-                            rosace_compositor::LayerRect {
-                                x: sl.dest.0, y: sl.dest.1, w: sl.dest.2, h: sl.dest.3,
-                            },
-                            (
-                                off[0] * scale * sl.zoom + sl.src_bias.0,
-                                off[1] * scale * sl.zoom + sl.src_bias.1,
-                            ),
-                            scroll_dirty,
-                        ),
                     ));
                 }
             }

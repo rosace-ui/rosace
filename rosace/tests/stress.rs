@@ -571,24 +571,21 @@ fn gpu_path_skips_work() {
         // frame is the whole claim.
         // Baseline AFTER settling, so the counts are the scroll cost alone.
         let (_, l0, p0) = counts.snapshot();
-        let _ = rosace_platform::take_scroll_layers();
 
-        // How many scroll frames RE-PUBLISH the layer's content texture.
-        // D090's claim was that a composited scroll costs none: the offset
-        // lives in a non-reactive channel the compositor reads, so the frame
-        // is skipped entirely.
-        let mut republished = 0;
+        // The "republish" column counted how many scroll frames re-published
+        // a layer's content texture — D090's claim that a composited scroll
+        // costs none. There are no content textures now, so it is gone rather
+        // than reported as a permanent zero that reads like a result.
         let t = std::time::Instant::now();
         for _ in 0..60 {
             e.paint(&mut a, &mut b, &[rosace_platform::InputEvent::Scroll {
                 x: 200.0, y: 300.0, delta_x: 0.0, delta_y: -8.0,
             }]);
-            if rosace_platform::take_scroll_layers().is_some() { republished += 1; }
         }
         let us = t.elapsed().as_micros();
         let (_, l1, p1) = counts.snapshot();
-        println!("  {label:<26} composited={composited:<5} republish={republished}/60  \
-{us} us ({} us/frame)  layout={} paint={}", us / 60, l1 - l0, p1 - p0);
+        println!("  {label:<26} composited={composited:<5} {us} us ({} us/frame)  \
+layout={} paint={}", us / 60, l1 - l0, p1 - p0);
     }
 
     println!();
