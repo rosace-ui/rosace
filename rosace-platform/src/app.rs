@@ -549,9 +549,9 @@ fn run_web_native(
                     let mut s = state.borrow_mut();
                     s.canvas.set_gpu_shapes(true);
                     s.presenter = Some(p);
-                    log::info!("rosace-platform(web): GPU compositor installed");
+                    rosace_trace::info!("rosace-platform(web): GPU compositor installed");
                 }
-                None => log::error!("rosace-platform(web): GPU init FAILED — no frames will present"),
+                None => rosace_trace::error!("rosace-platform(web): GPU init FAILED — no frames will present"),
             }
         });
     }
@@ -794,7 +794,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                 let overlay_quads = self.overlay_canvas.take_shader_quads();
                 if !overlay_quads.is_empty() && !self.shader_fallback_warned {
                     self.shader_fallback_warned = true;
-                    log::warn!(
+                    rosace_trace::warn!(
                         "rosace-platform: {} ShaderFill command(s) recorded in the \
                          OVERLAY pass were dropped (GPU shapes disabled)",
                         overlay_quads.len(),
@@ -920,7 +920,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> AppState<F> {
                 && !self.shader_fallback_warned
             {
                 self.shader_fallback_warned = true;
-                log::warn!(
+                rosace_trace::warn!(
                     "rosace-platform: DrawCommand::ShaderFill content dropped — \
                      GPU compositor unavailable (softbuffer fallback)",
                 );
@@ -1034,21 +1034,21 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
             self.config.height,
         );
         if presenter.is_some() {
-            log::info!("rosace-platform: using GPU compositor (wgpu)");
+            rosace_trace::info!("rosace-platform: using GPU compositor (wgpu)");
         } else {
             // No GPU: nothing will ever compile shader pipelines for this
             // window. Registrations queued before startup are dropped now,
             // loudly, instead of accumulating forever.
             let dropped = rosace_shader::take_pending_shaders();
             if !dropped.is_empty() {
-                log::warn!(
+                rosace_trace::warn!(
                     "rosace-platform: GPU unavailable — {} shader pipeline registration(s) \
                      dropped; DrawCommand::ShaderFill content will not render on the \
                      softbuffer fallback path",
                     dropped.len(),
                 );
             }
-            log::info!("rosace-platform: GPU compositor unavailable, using softbuffer");
+            rosace_trace::info!("rosace-platform: GPU compositor unavailable, using softbuffer");
             let context = softbuffer::Context::new(window.clone()).unwrap();
             let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
             self.context = Some(context);
@@ -1080,7 +1080,7 @@ impl<F: FnMut(&mut SkiaCanvas, &mut SkiaCanvas, &[InputEvent])> ApplicationHandl
                 p.set_glyph_gamma(rosace_render::canvas::text_gamma_lut());
                 self.canvas.set_gpu_shapes(true);
                 self.overlay_canvas.set_gpu_shapes(true);
-                log::info!("rosace-platform: GPU shapes enabled (ROSACE_CPU_SHAPES=1 to disable)");
+                rosace_trace::info!("rosace-platform: GPU shapes enabled (ROSACE_CPU_SHAPES=1 to disable)");
             }
             // Eager pipeline compilation (D109, the Impeller lesson):
             // everything queued before `App::run` — including the
