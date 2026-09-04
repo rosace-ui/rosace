@@ -161,7 +161,7 @@ pub use date_picker::{DatePicker, SimpleDate, SelectionMode, PageAxis};
 pub use time_picker::{TimePicker, SimpleTime, TimeUnit};
 pub use data_table::{DataTable, DataTableColumn, SortDirection};
 pub use stateful::{Stateful, StatefulExt, StatefulWidget};
-pub use render_tree::{HitHandler, InspectNode, Layer, LayerKind, LayerTree, NodeId, PromotedLayer, RenderTree, ScrollAxes, ScrollHandler, TreeNode};
+pub use render_tree::{HitHandler, InspectNode, Layer, LayerKind, LayerTree, NodeId, PromotedLayer, RenderTree, ScrollAxes, ScrollHandler, TreeNode, ScrollEndHandler};
 pub use repaint_boundary::RepaintBoundary;
 pub use semantics::Semantics;
 pub use row::Row;
@@ -1515,6 +1515,19 @@ impl<'a> PaintCtx<'a> {
     /// child inside it (or on an inner nested `ScrollView`) can still
     /// reach it, and it in turn can hand off to whatever encloses IT once
     /// exhausted.
+    /// Called when the drag gesture this node's scroll region took part in
+    /// ENDS — the finger lifted.
+    ///
+    /// The signal a scrollable actually needs, and the one it could not get:
+    /// widgets inferred it from `ctx.pressed()`, which reports which SINGLE
+    /// node is under the pointer. A wrapper is never that node, so a
+    /// `PullToRefresh` around a list saw `pressed = false` for an entire pull
+    /// and never fired. The engine knows exactly when the gesture ends — it
+    /// clears the scroll chain there — so it tells every link in that chain.
+    pub fn on_scroll_gesture_end(&mut self, f: impl Fn() + Send + Sync + 'static) {
+        self.tree.borrow_mut().node_mut(self.node).scroll_end.push(std::sync::Arc::new(f));
+    }
+
     pub fn register_nested_scroll(&mut self, f: impl Fn(f32, f32, bool) -> bool + Send + Sync + 'static) {
         let hit_rect = if let Some(clip) = self.clip_rect {
             match intersect_rect(self.rect, clip) {

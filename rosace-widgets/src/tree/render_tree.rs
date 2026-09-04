@@ -61,6 +61,9 @@ pub type HitHandler = Arc<dyn Fn(f32, f32) + Send + Sync>;
 /// every mobile toolkit uses.
 pub type ScrollHandler = Arc<dyn Fn(f32, f32, bool) -> bool + Send + Sync>;
 
+/// Notified when the drag gesture a scroll link took part in ends.
+pub type ScrollEndHandler = Arc<dyn Fn() + Send + Sync>;
+
 /// A click callback with its hit rect in window-space logical pixels.
 pub type HitRegion = (Rect, Arc<dyn Fn() + Send + Sync>);
 /// A positional click callback — receives the click point in window-space
@@ -162,6 +165,19 @@ pub struct TreeNode {
     /// definition, but a `ScrollView`'s pan needs to report exhaustion so
     /// an enclosing scrollable ancestor gets a turn.
     pub nested_scrolls: Vec<(Rect, ScrollHandler)>,
+    /// Called when the drag gesture this node took part in ENDS.
+    ///
+    /// A scrollable needs to know when the finger lifts — to hand off to
+    /// momentum, or to decide whether a pull became a refresh. Widgets used
+    /// to infer it from `ctx.pressed()`, which answers a different question:
+    /// which SINGLE node is under the pointer. A wrapper is never that node,
+    /// so `PullToRefresh` saw `pressed = false` for the whole gesture and its
+    /// release never fired.
+    ///
+    /// The engine already knows the answer exactly — it builds the scroll
+    /// chain on press and clears it on release — so it tells every link
+    /// rather than making each one guess.
+    pub scroll_end: Vec<ScrollEndHandler>,
     pub scrolls:    Vec<ScrollRegion>,
     pub zooms:      Vec<ZoomRegion>,
     pub focus:      Vec<rosace_core::a11y::FocusNode>,
@@ -607,6 +623,7 @@ impl RenderTree {
         n.hits.clear();
         n.hits_at.clear();
         n.nested_scrolls.clear();
+        n.scroll_end.clear();
         n.scrolls.clear();
         n.zooms.clear();
         n.focus.clear();
@@ -1132,20 +1149,26 @@ impl RenderTree {
     /// tap, or even a positional widget like a `Slider`), so touching
     /// blank scrollable space directly (no leaf hit at all) still yields
     /// a usable chain even though the first value is `None`.
-    pub fn hit_test(&self, x: f32, y: f32) -> (Option<(HitHandler, bool)>, Vec<ScrollHandler>) {
+    pub fn hit_test(
+        &self,
+        x: f32,
+        y: f32,
+    ) -> (Option<(HitHandler, bool)>, Vec<ScrollHandler>, Vec<ScrollEndHandler>) {
         let mut chain = Vec::new();
+        let mut ends = Vec::new();
         // Promoted layers first, topmost first — they composite above
         // everything, so they take the pointer first too. This is the
         // dispatch order the overlay stack already had; promotion just makes
         // it a property of the one tree instead of a parallel route list.
         for node in self.promoted_nodes().into_iter().rev() {
             let mut sub = Vec::new();
-            if let Some(leaf) = self.hit_test_node(node, x, y, &mut sub) {
-                return (Some(leaf), sub);
+            let mut sub_ends = Vec::new();
+            if let Some(leaf) = self.hit_test_node(node, x, y, &mut sub, &mut sub_ends) {
+                return (Some(leaf), sub, sub_ends);
             }
         }
-        let leaf = self.hit_test_node(Self::ROOT, x, y, &mut chain);
-        (leaf, chain)
+        let leaf = self.hit_test_node(Self::ROOT, x, y, &mut chain, &mut ends);
+        (leaf, chain, ends)
     }
 
     /// Does `n`'s own clip exclude this point, so its subtree cannot be hit?
@@ -1198,7 +1221,7 @@ impl RenderTree {
 
    /// `nested_scrolls` entry covering `(x, y)` onto `chain` as the
     /// recursion unwinds, innermost first.
-    fn hit_test_node(&self, id: NodeId, x: f32, y: f32, chain: &mut Vec<ScrollHandler>) -> Option<(HitHandler, bool)> {
+    fn hit_test_node(&self, id: NodeId, x: f32, y: f32, chain: &mut Vec<ScrollHandler>, ends: &mut Vec<ScrollEndHandler>) -> Option<(HitHandler, bool)> {
         let n = &self.nodes[id];
         // Pointer interceptors (IgnorePointer / AbsorbPointer widgets):
         // 1 = subtree transparent to hits; 2 = consume everything in rect.
@@ -1225,7 +1248,7 @@ impl RenderTree {
                 if self.nodes[child].promoted.is_some() {
                     continue;
                 }
-                if let Some((cb, positional)) = self.hit_test_node(child, cx, cy, chain) {
+                if let Some((cb, positional)) = self.hit_test_node(child, cx, cy, chain, ends) {
                     leaf = Some((cb, positional));
                     break;
                 }
@@ -1259,6 +1282,7 @@ impl RenderTree {
         // ones "under" wherever the leaf tap/drag happened to resolve.
         if let Some((_, handler)) = n.nested_scrolls.iter().rev().find(|(r, _)| contains(r, x, y)) {
             chain.push(handler.clone());
+            ends.extend(n.scroll_end.iter().cloned());
         }
         leaf
     }

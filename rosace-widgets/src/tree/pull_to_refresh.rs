@@ -145,31 +145,30 @@ impl Widget for PullToRefresh {
             true
         });
 
-        let dt = rosace_animate::frame_dt().max(0.0001);
-        let is_pressed = ctx.pressed();
-        let was_pressed = ctrl.was_pressed();
-        if is_pressed {
-            // A press that begins after a wheel scroll, `scroll_to` or
-            // `reveal` must not measure that movement as this gesture's
-            // speed — see `begin_velocity_sample`.
-            if !was_pressed { ctrl.begin_velocity_sample(); }
-            ctrl.track_velocity(dt);
-        } else {
-            if was_pressed { ctrl.end_drag(); }
-            if ctrl.coast(PHYSICS, dt) {
-                ctx.request_animation();
+        // Release is reported by the engine, not inferred from `pressed()`.
+        //
+        // `ctx.pressed()` names the ONE node under the pointer. This widget
+        // wraps the scrollable, so that node is always the child and this was
+        // false for the entire gesture — `was_pressed && !is_pressed` could
+        // never become true and a pull could never fire. The engine builds the
+        // scroll chain on press and clears it on release, so it knows exactly;
+        // it now says so.
+        let end_ctrl = ctrl.clone();
+        let on_refresh = self.on_refresh.clone();
+        let refreshing = self.refreshing;
+        ctx.on_scroll_gesture_end(move || {
+            let pull = (-end_ctrl.offset()[1]).max(0.0);
+            end_ctrl.end_drag();
+            if !refreshing && pull >= TRIGGER_DISTANCE {
+                if let Some(cb) = &on_refresh {
+                    cb();
+                }
             }
-        }
-        let released_this_frame = was_pressed && !is_pressed;
-        ctrl.set_was_pressed(is_pressed);
+            // Spring whatever pull remains back to rest.
+            end_ctrl.scroll_to_raw([end_ctrl.offset()[0], 0.0]);
+        });
 
         let pull = (-ctrl.offset()[1]).max(0.0);
-
-        if released_this_frame && !self.refreshing && pull >= TRIGGER_DISTANCE {
-            if let Some(cb) = &self.on_refresh {
-                cb();
-            }
-        }
 
         // Content translates down by the pull distance, revealing the
         // indicator above it — the standard mobile pull-to-refresh visual.

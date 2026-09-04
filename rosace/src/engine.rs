@@ -321,6 +321,9 @@ pub struct FrameEngine {
     /// see the `MouseMove` handler. Empty when nothing scrollable is near
     /// the touch point.
     pending_scroll_chain: Vec<rosace_widgets::tree::ScrollHandler>,
+    /// End-of-gesture callbacks for the same links, captured with the chain
+    /// and fired when the finger lifts. See `PaintCtx::on_scroll_gesture_end`.
+    pending_scroll_end: Vec<rosace_widgets::tree::ScrollEndHandler>,
     /// The point `pending_scroll_chain` was last walked from — each
     /// `MouseMove` feeds the chain `(x, y) - last_chain_point`, since
     /// `ScrollHandler` links take a DELTA, not an absolute position (see
@@ -410,6 +413,7 @@ impl FrameEngine {
             pending_press: None,
             pending_overlay_press: None,
             pending_scroll_chain: Vec::new(),
+            pending_scroll_end: Vec::new(),
             last_chain_point: None,
             context_menu: None,
             context_menu_actions: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -1556,12 +1560,13 @@ impl FrameEngine {
                     // which node/position to select if the press holds.
                     let mut editable_press: Option<(NodeId, usize)> = None;
                     if !handled {
-                        let (leaf, chain) = self.render_tree.borrow().hit_test(*x, *y);
+                        let (leaf, chain, scroll_end) = self.render_tree.borrow().hit_test(*x, *y);
                         // Always captured, regardless of what the leaf
                         // resolves to — see `pending_scroll_chain`'s own
                         // doc comment for why (blank scrollable space has
                         // no leaf at all but must still be draggable).
                         self.pending_scroll_chain = chain;
+                        self.pending_scroll_end = scroll_end;
                         self.last_chain_point = Some((*x, *y));
                         // Report what the hit-test resolved to. The gesture
                         // panel has shipped empty since D123, and "the tap
@@ -1880,6 +1885,15 @@ impl FrameEngine {
                     self.active_drag = None;
                     self.text_drag = None;
                     self.handle_drag = None;
+                    // Tell every scroll link the gesture is over BEFORE
+                    // dropping the chain. This is what a scrollable needs in
+                    // order to hand off to momentum, or to decide that a pull
+                    // became a refresh — and it is exactly what could not be
+                    // expressed while widgets had to infer it from
+                    // `ctx.pressed()`, which names one node, never a wrapper.
+                    for on_end in std::mem::take(&mut self.pending_scroll_end) {
+                        on_end();
+                    }
                     self.pending_scroll_chain.clear();
                     self.last_chain_point = None;
                     if let Some(c) = &self.lp_cancel { c.store(true, Ordering::Relaxed); }

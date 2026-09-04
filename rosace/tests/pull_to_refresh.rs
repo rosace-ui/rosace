@@ -6,30 +6,22 @@
 //! so found that it does not work at all over a bounce-physics `ScrollView`,
 //! which is what every real use wraps.
 //!
-//! NESTED-SCROLL PRECEDENCE: fixed (two-pass chain walk). The delta now
-//! reaches the widget — verified, the pull grows with the drag.
+//! Three defects had to be fixed before a pull could fire at all, and the
+//! last one is the interesting one:
 //!
-//! PULL RESISTANCE: fixed. The pull used to go through Bounce's rubber-band
-//! resistance, which is proportional to how far out you already are, so it
-//! asymptoted: a 220px drag produced 20px of pull against a 70px trigger, and
-//! the gesture could not physically fire. It follows the finger now, damped.
-//!
-//! STILL BLOCKED — `ctx.pressed()` resolves to the INNERMOST node whose
-//! region contains the point, so for `PullToRefresh::new(ScrollView::new(..))`
-//! the press belongs to the ScrollView and the PullToRefresh above it sees
-//! `pressed = false` forever. Its release detection is
-//! `was_pressed && !is_pressed`, which therefore never fires. Instrumented
-//! and confirmed: `pressed=false` on every frame of a pull that is otherwise
-//! working perfectly.
-//!
-//! Fixing it means a press marking the whole nested-scroll chain rather than
-//! one node — both the inner view and the outer gesture legitimately need to
-//! know. That is a third change to input dispatch and wants a decision, so
-//! these two stay `#[ignore]`d rather than weakened.
-//!
-//! The second ignored test may be an independent defect: a widget with
-//! `refreshing(true)` repainted 0/10 frames, so the spinner would freeze.
-//! Not yet isolated, because the release path blocks reaching it naturally.
+//! * NESTED-SCROLL PRECEDENCE — the chain tried the innermost scrollable
+//!   first, and a Bounce ScrollView always consumes a downward drag at its top
+//!   by stretching, so the pull never reached the wrapper. The chain offers a
+//!   delta hard-clamped first, then allows overscroll outermost-first.
+//! * RESISTANCE — the pull went through Bounce's rubber-band resistance,
+//!   which scales with how far out you already are, so it asymptoted: a 220px
+//!   drag gave 20px of pull against a 70px trigger.
+//! * RELEASE — the widget inferred "finger lifted" from `ctx.pressed()`,
+//!   which reports the ONE node under the pointer. A wrapper is never that
+//!   node, so it read false for the entire gesture. The engine builds the
+//!   scroll chain on press and clears it on release, so it knows exactly when
+//!   the gesture ends; `on_scroll_gesture_end` says so instead of making each
+//!   widget guess.
 
 use rosace::prelude::*;
 use rosace::widgets::tree::{LayoutCtx, PaintCtx};
@@ -79,7 +71,6 @@ impl H {
 }
 
 #[test]
-#[ignore = "ctx.pressed() resolves to the innermost node — see the module docs"]
 fn a_long_pull_fires_refresh_once() {
     let mut h = harness();
     for _ in 0..4 { h.frame(); }
@@ -102,10 +93,15 @@ fn a_short_pull_does_not_fire() {
     );
 }
 
-/// While `refreshing` is set the widget must keep animating, or the spinner
-/// freezes on the first frame.
+/// While `refreshing` is set the widget must keep ASKING for frames, or the
+/// spinner stops turning as soon as the app goes idle.
+///
+/// Asserted on the frame REQUEST, not on pixels changing. The spinner's angle
+/// comes from elapsed time, and a headless test advances almost none, so
+/// consecutive frames are legitimately identical — an earlier version of this
+/// counted repaints, saw 0/10 and read it as the widget being broken when it
+/// was the measurement that was wrong.
 #[test]
-#[ignore = "ctx.pressed() resolves to the innermost node — see the module docs"]
 fn a_refreshing_widget_keeps_requesting_frames() {
     struct Spin;
     impl Component for Spin {
@@ -119,10 +115,17 @@ fn a_refreshing_widget_keeps_requesting_frames() {
     let mut e = FrameEngine::new(Box::new(Spin), FontCache::embedded());
     let (mut a, mut b) = (SkiaCanvas::new(300, 300), SkiaCanvas::new(300, 300));
     for _ in 0..3 { e.paint(&mut a, &mut b, &[]); }
-    let painted = (0..10).filter(|_| e.paint(&mut a, &mut b, &[])).count();
+
+    let mut asked = 0;
+    for _ in 0..10 {
+        let _ = rosace::state::take_frame_requested();
+        e.paint(&mut a, &mut b, &[]);
+        if rosace::state::take_frame_requested() { asked += 1; }
+    }
     assert!(
-        painted >= 8,
-        "only {painted}/10 frames repainted while refreshing — the spinner \
-         needs a frame every frame to turn"
+        asked >= 8,
+        "only {asked}/10 refreshing frames asked for another — the spinner \
+         needs the app kept awake or it freezes the moment nothing else \
+         happens"
     );
 }
