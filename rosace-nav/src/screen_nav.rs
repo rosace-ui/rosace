@@ -191,6 +191,26 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
 
     /// Pop the top screen. No-ops at the root. Returns true if a pop occurred.
     /// Triggers the reverse of `push`'s transition (enter from the left).
+    /// Push the route a path names, or return `false` if nothing matches.
+    /// See [`Navigator::push_path`] — same rules, with this view's transition.
+    pub fn push_path(&self, path: &str) -> bool
+    where
+        R: crate::RoutePath,
+    {
+        match R::from_path(path) {
+            Some(route) => { self.push(route); true }
+            None => false,
+        }
+    }
+
+    /// The current route's path, if there is one.
+    pub fn current_path(&self) -> Option<String>
+    where
+        R: crate::RoutePath,
+    {
+        self.current().map(|r| r.to_path())
+    }
+
     pub fn pop(&self) -> bool {
         // The `WillPopScope` gate lives HERE, not in the back-intent
         // handler, so every route out of a screen passes through it: the

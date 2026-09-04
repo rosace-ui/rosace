@@ -70,6 +70,33 @@ impl<R: Route> Navigator<R> {
     /// Goes back one screen.
     ///
     /// Returns `false` if already at the root (cannot pop root).
+    /// Push the route a path names, or return `false` if nothing matches.
+    ///
+    /// The deep-link entry point: an OS URL scheme, an Android intent or a
+    /// browser address bar hands over a string, and either it resolves to a
+    /// typed route or it is refused here. Nothing downstream ever sees an
+    /// unparsed path — a screen is a value, not a string.
+    ///
+    /// Guards still apply: a deep link is navigation like any other, and an
+    /// auth guard that blocks a push must block a link to the same place.
+    pub fn push_path(&self, path: &str) -> bool
+    where
+        R: crate::RoutePath,
+    {
+        match R::from_path(path) {
+            Some(route) => self.push(route),
+            None => false,
+        }
+    }
+
+    /// The current route's path, if there is one.
+    pub fn current_path(&self) -> Option<String>
+    where
+        R: crate::RoutePath,
+    {
+        self.current().map(|r| r.to_path())
+    }
+
     pub fn pop(&self) -> bool {
         self.stack.pop()
     }

@@ -36,7 +36,7 @@ pub mod transition;
 pub use guard::{AllowAllGuard, BlockWhenGuard, NavigationGuard};
 pub use history::{HistoryEntry, KeepAliveRegistry};
 pub use navigator::Navigator;
-pub use route::{NavigationDecision, Route};
+pub use route::{NavigationDecision, Route, RoutePath};
 pub use screen_nav::ScreenNav;
 pub use stack::NavigationStack;
 pub use transition::{ScreenTransition, SlideDirection, TransitionStyle};

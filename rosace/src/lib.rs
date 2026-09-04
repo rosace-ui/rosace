@@ -690,6 +690,7 @@ pub mod state     { pub use rosace_state::*; pub use rosace_trace::event::AtomId
 pub mod animate   { pub use rosace_animate::*; }
 pub mod scroll    { pub use rosace_widgets::scroll::*; }
 pub mod nav       { pub use rosace_nav::*; }
+pub use rosace_macros::routes;
 pub mod nav_anim  { pub use rosace_nav::anim::*; }
 pub mod forms     { pub use rosace_widgets::forms::*; }
 pub mod gesture   { pub use rosace_platform::gesture::*; }

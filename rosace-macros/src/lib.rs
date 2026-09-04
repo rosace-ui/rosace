@@ -1,5 +1,6 @@
 extern crate proc_macro;
 
+mod routes;
 mod component;
 mod shader_uniforms;
 mod state;
@@ -91,6 +92,13 @@ pub fn view(input: TokenStream) -> TokenStream {
 /// }
 /// // .to_bytes() → center@0..8, radius@8..12, pad@12..16, color@16..32
 /// ```
+/// `#[routes]` — give an enum of screens a URL path form. See `routes.rs`.
+#[proc_macro_attribute]
+pub fn routes(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(item as syn::DeriveInput);
+    routes::expand(input).into()
+}
+
 #[proc_macro_derive(ShaderUniforms)]
 pub fn shader_uniforms(item: TokenStream) -> TokenStream {
     match syn::parse::<syn::DeriveInput>(item) {
