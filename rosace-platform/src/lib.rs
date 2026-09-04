@@ -12,6 +12,10 @@ pub mod event;
 /// Hand a URL to the OS's default handler (D116 context-menu items).
 pub mod open_url;
 
+/// Address-bar binding (D031). Declared unconditionally — it provides a
+/// no-op `install` off the web, so callers need no `cfg` of their own.
+pub mod web_history;
+
 #[cfg(target_arch = "wasm32")]
 pub mod web_seo_sync;
 

@@ -218,6 +218,12 @@ impl App {
         #[cfg(all(feature = "rsc-hot", target_arch = "wasm32"))]
         dev_reload::connect_hot_reload_socket();
 
+        // Before the first frame, so an app's very first `sync_url` already
+        // sees the URL the page was opened with — that is what makes a
+        // deep-linked or reloaded page open where it says instead of at the
+        // root.
+        install_url_binding();
+
         PlatformWindow::new()
             .title(self.title)
             .size(width, height)
@@ -689,6 +695,29 @@ pub mod core      { pub use rosace_core::*; }
 pub mod state     { pub use rosace_state::*; pub use rosace_trace::event::AtomId; }
 pub mod animate   { pub use rosace_animate::*; }
 pub mod scroll    { pub use rosace_widgets::scroll::*; }
+/// Connect a navigator to the browser's address bar (D031).
+///
+/// The umbrella does this because it is the only layer that knows both sides:
+/// `rosace-platform` owns the browser primitives and deliberately does not
+/// depend on `rosace-nav`, which sits above it. Same division as the a11y
+/// bridge.
+///
+/// Called automatically on web startup. Inert everywhere else — the platform
+/// primitives are no-ops off the web, and a navigator's `sync_url` simply
+/// finds no backend.
+pub fn install_url_binding() {
+    struct BrowserBar;
+    impl rosace_nav::url::UrlBackend for BrowserBar {
+        fn push(&self, path: &str) { rosace_platform::web_history::push_state(path); }
+        fn replace(&self, path: &str) { rosace_platform::web_history::replace_state(path); }
+        fn current(&self) -> Option<String> { rosace_platform::web_history::current_path() }
+    }
+    rosace_nav::url::install_backend(BrowserBar);
+    rosace_platform::web_history::on_popstate(|path| {
+        rosace_nav::url::deliver_browser_navigation(&path);
+    });
+}
+
 pub mod nav       { pub use rosace_nav::*; }
 pub use rosace_macros::routes;
 pub mod nav_anim  { pub use rosace_nav::anim::*; }

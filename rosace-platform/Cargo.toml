@@ -66,6 +66,8 @@ features = [
     # build-time export already attached to #rsc-seo (falls back to
     # attach_shadow if none exists, e.g. `rsc dev` without a build step).
     "ShadowRoot", "ShadowRootInit", "ShadowRootMode",
+    # D031 address-bar binding — history.pushState / popstate / location.
+    "History", "Location", "PopStateEvent",
 ]
 
 # Platform accessibility (D132). AccessKit bridges one semantic tree to

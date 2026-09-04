@@ -499,6 +499,7 @@ fn run_web_native(
     console_error_panic_hook::set_once();
     let _ = console_log::init_with_level(log::Level::Info);
 
+
     let web_win = web_sys::window().expect("no window");
     let document = web_win.document().expect("no document");
     let dpr = web_win.device_pixel_ratio() as f32;

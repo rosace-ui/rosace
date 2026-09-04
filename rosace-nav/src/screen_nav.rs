@@ -189,10 +189,9 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
         self.trigger_if_enabled(self.resolved_style(SlideDirection::Left));
     }
 
-    /// Pop the top screen. No-ops at the root. Returns true if a pop occurred.
-    /// Triggers the reverse of `push`'s transition (enter from the left).
     /// Push the route a path names, or return `false` if nothing matches.
-    /// See [`Navigator::push_path`] — same rules, with this view's transition.
+    /// See [`crate::Navigator::push_path`] — same rules, with this view's
+    /// transition.
     pub fn push_path(&self, path: &str) -> bool
     where
         R: crate::RoutePath,
@@ -200,6 +199,66 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
         match R::from_path(path) {
             Some(route) => { self.push(route); true }
             None => false,
+        }
+    }
+
+    /// Keep the address bar and this navigator in step (D031).
+    ///
+    /// Call it from `build`, every build. It RECONCILES rather than hooking
+    /// push and pop: if the navigator moved, the URL is updated; if the
+    /// browser moved, a listener has already applied that to the navigator and
+    /// the two now agree, so nothing happens.
+    ///
+    /// Reconciling is what keeps this free of the echo loop every hand-rolled
+    /// version has. Mirroring inside `push`/`pop` means a browser Back applies
+    /// to the navigator, which writes the URL back, which pushes a duplicate
+    /// history entry — the classic symptom being a Back button that needs two
+    /// presses, or never leaves the page.
+    ///
+    /// A no-op on every platform with no URL, so it is safe to call
+    /// unconditionally.
+    pub fn sync_url(&self)
+    where
+        R: crate::RoutePath,
+    {
+        let Some(backend) = crate::url::backend() else { return };
+
+        // Register the browser -> navigator direction once.
+        //
+        // Guarded on the ATOM's identity, not on this value: `ScreenNav` is
+        // rebuilt every frame, so an instance flag would re-register on every
+        // one and a single Back would be applied dozens of times. The atom is
+        // the thing that actually persists across builds, and keying on it
+        // also keeps two independent navigators independent.
+        let key = self.atom.id().0;
+        let first_time = {
+            static INSTALLED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<u64>>> =
+                std::sync::OnceLock::new();
+            let set = INSTALLED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+            let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
+            guard.insert(key)
+        };
+        if first_time {
+            let me = self.clone();
+            crate::url::on_browser_navigation(move |path| {
+                // Apply, and do NOT write back — the browser is already there.
+                if let Some(route) = R::from_path(path) {
+                    if me.current().as_ref() != Some(&route) {
+                        me.replace(route);
+                    }
+                }
+            });
+        }
+
+        let Some(want) = self.current_path() else { return };
+        match backend.current() {
+            // Already agreed — the common case, and every frame after the
+            // first.
+            Some(have) if have == want => {}
+            // First sync of this page: correct the entry rather than adding
+            // one, or a reload would leave an unreachable entry behind it.
+            None => backend.replace(&want),
+            Some(_) => backend.push(&want),
         }
     }
 
@@ -211,6 +270,8 @@ impl<R: Clone + Send + Sync + 'static> ScreenNav<R> {
         self.current().map(|r| r.to_path())
     }
 
+    /// Pop the top screen. No-ops at the root. Returns true if a pop occurred.
+    /// Triggers the reverse of `push`'s transition (enter from the left).
     pub fn pop(&self) -> bool {
         // The `WillPopScope` gate lives HERE, not in the back-intent
         // handler, so every route out of a screen passes through it: the
